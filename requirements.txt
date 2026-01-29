@@ -52,3 +52,8 @@ pillow~=11.1.0
 numpy~=2.2.2
 werkzeug # Added as Flask dependency, good to be explicit
 pytest # Added for unit testing
+
+# New Agent Dependencies
+claude-agent-sdk  # For codeAgent
+plotly  # For chart generation
+kaleido  # For plotly image export
