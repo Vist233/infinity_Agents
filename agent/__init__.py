@@ -5,7 +5,7 @@ This module provides three specialized agents:
 - codeAgent: Deep code analysis with Plotly visualization
 - paperAgent: Academic paper research with search and reading tools
 - traitAgent: Image classification using vision models
-"""
+
 
 from agent.codeAgent import CodeAgent, run_code_analysis
 from agent.paperAgent import create_paper_agent, get_paper_agent
@@ -22,3 +22,4 @@ __all__ = [
     "TraitAgent",
     "create_trait_agent",
 ]
+"""
