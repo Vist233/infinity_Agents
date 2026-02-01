@@ -228,7 +228,7 @@ PAPER_AGENT_INSTRUCTIONS = [
 def create_paper_agent(
     api_key: Optional[str] = None,
     base_url: str = "https://api.moonshot.cn/v1",
-    model_id: str = "kimi-k2.5",
+    model_id: str = "kimi-k2-thinking-turbo",
     enable_context_management: bool = True,
     force_regex_search: bool = False,
 ) -> Agent:

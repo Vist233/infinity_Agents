@@ -15,6 +15,8 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [assistantDone, setAssistantDone] = useState(false);
+  const [tokenInfo, setTokenInfo] = useState<{prompt:number,response:number,total:number}|null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -34,6 +36,8 @@ export default function ChatPage() {
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setIsLoading(true);
+    setAssistantDone(false);
+    setTokenInfo(null);
 
     setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
@@ -52,7 +56,31 @@ export default function ChatPage() {
         const { value, done } = await reader.read();
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
-        
+
+        // Detect server done notice and parse tokens
+        const doneRegex = /\[DONE\].*prompt:\s*(\d+),\s*response:\s*(\d+),\s*total:\s*(\d+)/s;
+        const doneMatch = chunk.match(doneRegex);
+
+        if (doneMatch) {
+          const prompt = parseInt(doneMatch[1], 10);
+          const responseTokens = parseInt(doneMatch[2], 10);
+          const total = parseInt(doneMatch[3], 10);
+          setTokenInfo({ prompt, response: responseTokens, total });
+
+          // remove the done notice from the chunk content before appending
+          const cleaned = chunk.replace(/\n*\[DONE\].*$/s, "");
+
+          setMessages((prev) => {
+            const lastMsg = prev[prev.length - 1];
+            const otherMsgs = prev.slice(0, -1);
+            return [...otherMsgs, { ...lastMsg, content: lastMsg.content + cleaned }];
+          });
+
+          setIsLoading(false);
+          setAssistantDone(true);
+          continue;
+        }
+
         setMessages((prev) => {
           const lastMsg = prev[prev.length - 1];
           const otherMsgs = prev.slice(0, -1);
@@ -61,7 +89,6 @@ export default function ChatPage() {
       }
     } catch (error) {
       console.error("Failed to fetch:", error);
-    } finally {
       setIsLoading(false);
     }
   };
@@ -115,8 +142,14 @@ export default function ChatPage() {
                         </span>
                         <div className={`text-[15px] leading-7 whitespace-pre-wrap ${m.role === "user" ? "text-zinc-700" : "text-zinc-900"}`}>
                           {m.content}
-                          {isLoading && i === messages.length - 1 && !m.content && (
+                          {/* Typing cursor while streaming */}
+                          {isLoading && i === messages.length - 1 && (
                             <span className="inline-block w-1.5 h-4 bg-zinc-900 animate-pulse ml-1 align-middle" />
+                          )}
+
+                          {/* When done, show token info */}
+                          {assistantDone && i === messages.length - 1 && tokenInfo && (
+                            <div className="text-xs text-zinc-400 mt-1">已完成 · Tokens: prompt {tokenInfo.prompt} · resp {tokenInfo.response} · total {tokenInfo.total}</div>
                           )}
                         </div>
                       </div>

@@ -37,3 +37,9 @@ venv/
 *.swp
 *~
 .DS_Store
+
+# Logs / Temporary files
+agent/__pycache__/
+agent/tools/__pycache__/
+agent/tools/cache/
+agent/tools/arxiv_pdfs/
