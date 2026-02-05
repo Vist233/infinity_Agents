@@ -47,6 +47,7 @@ openai
 arxiv
 pyinstaller # Added for EXE packaging
 requests
+asyncpg
 
 pillow~=11.1.0
 numpy~=2.2.2

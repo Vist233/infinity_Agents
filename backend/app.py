@@ -1,17 +1,25 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
 from agent.paperAgent import get_paper_agent
+from contextlib import asynccontextmanager
 import os
 import logging
 from agent.util import estimate_tokens, estimate_message_tokens
+import uuid
+from backend.db import insert_session, init_db, close_db, get_all_sessions, insert_message
 
 logging.basicConfig(level=logging.INFO)
-import logging
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app):
+    await init_db(app)
+    yield
+    await close_db(app)
+
+app = FastAPI(lifespan=lifespan)
 paper_agent = get_paper_agent()
 
 app.add_middleware(
@@ -22,13 +30,27 @@ app.add_middleware(
 )
 
 class ChatRequest(BaseModel):
+    session_id: str
     messages: List[Dict[str, Any]]
+
+@app.post("/api/sessions")
+async def create_session():
+    session_id = str(uuid.uuid4())
+    try:
+        pool = app.state.db_pool
+        await insert_session(pool, session_id)
+    except Exception:
+        logging.exception("Failed to create session")
+        raise HTTPException(status_code=500, detail="Failed to create session")
+
+    return {"session_id": session_id}
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     """
     PaperAgent Web API 接口
     """
+    session_id = request.session_id
     user_query = ""
     for m in reversed(request.messages):
         if m.get("role") == "user":
@@ -37,9 +59,11 @@ async def chat_endpoint(request: ChatRequest):
     
     async def event_generator():
         try:
-            logging.info("Incoming messages (truncated): %s", request.messages[-6:])
+            pool = app.state.db_pool
+            #logging.info("Incoming messages (truncated): %s", request.messages[-6:])
             prompt_tokens = estimate_message_tokens(request.messages)
 
+            await insert_message(pool, session_id, "user", user_query)
             response_stream = paper_agent.run(user_query, stream=True)
             #流式读取回复
             response_text = ""
@@ -50,6 +74,9 @@ async def chat_endpoint(request: ChatRequest):
                 if content:
                     response_text += content
                     yield content
+                    
+            if response_text:
+                await insert_message(pool, session_id, "assistant", response_text)
 
             # Token消耗统计
             response_tokens = estimate_tokens(response_text)

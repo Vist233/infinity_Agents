@@ -18,6 +18,7 @@ export default function ChatPage() {
   const [assistantDone, setAssistantDone] = useState(false);
   const [tokenInfo, setTokenInfo] = useState<{prompt:number,response:number,total:number}|null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -28,9 +29,22 @@ export default function ChatPage() {
     }
   }, [messages]);
 
+  useEffect(() => {
+    const initSession = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/api/sessions", { method: "POST" });
+        const data = await res.json();
+        setSessionId(data.session_id);
+      } catch (e) {
+        console.error("Failed to init session", e);
+      }
+    };
+    initSession();
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || !sessionId) return;
 
     const userMsg: Message = { role: "user", content: input };
     setMessages((prev) => [...prev, userMsg]);
@@ -45,19 +59,24 @@ export default function ChatPage() {
       const response = await fetch("http://localhost:8000/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [...messages, userMsg] }),
+        body: JSON.stringify({ 
+          session_id: sessionId, 
+          messages: [...messages, userMsg] 
+        }),
       });
 
       if (!response.body) return;
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+
+      let accumulatedResponse = ""; // 用于缓存当前回复的完整文本
       
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
 
-        // Detect server done notice and parse tokens
+        // 检查是否存在结束标记
         const doneRegex = /\[DONE\].*prompt:\s*(\d+),\s*response:\s*(\d+),\s*total:\s*(\d+)/s;
         const doneMatch = chunk.match(doneRegex);
 
@@ -67,13 +86,14 @@ export default function ChatPage() {
           const total = parseInt(doneMatch[3], 10);
           setTokenInfo({ prompt, response: responseTokens, total });
 
-          // remove the done notice from the chunk content before appending
+          // 移除标记，获取真正的文本内容
           const cleaned = chunk.replace(/\n*\[DONE\].*$/s, "");
+          accumulatedResponse += cleaned;
 
           setMessages((prev) => {
-            const lastMsg = prev[prev.length - 1];
-            const otherMsgs = prev.slice(0, -1);
-            return [...otherMsgs, { ...lastMsg, content: lastMsg.content + cleaned }];
+            const newMsgs = [...prev];
+            newMsgs[newMsgs.length - 1].content = accumulatedResponse;
+            return newMsgs;
           });
 
           setIsLoading(false);
@@ -81,10 +101,11 @@ export default function ChatPage() {
           continue;
         }
 
+        accumulatedResponse += chunk;
         setMessages((prev) => {
-          const lastMsg = prev[prev.length - 1];
-          const otherMsgs = prev.slice(0, -1);
-          return [...otherMsgs, { ...lastMsg, content: lastMsg.content + chunk }];
+          const newMsgs = [...prev];
+          newMsgs[newMsgs.length - 1].content = accumulatedResponse;
+          return newMsgs;
         });
       }
     } catch (error) {
