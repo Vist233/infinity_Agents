@@ -104,7 +104,6 @@ class PaperSearchTools(Toolkit):
         self,
         enable_search: bool = True,
         enable_read: bool = True,
-        enable_pubmed: bool = True,
         cache_middleware: Optional[CacheMiddleware] = None,
         size_middleware: Optional[SizeMiddleware] = None,
         download_dir: Optional[Path] = None,
@@ -120,30 +119,64 @@ class PaperSearchTools(Toolkit):
             tools.append(self.search_papers)
         if enable_read:
             tools.append(self.read_paper_content)
-        if enable_pubmed:
-            tools.append(self.search_pubmed)
 
         super().__init__(name="paper_search_tools", tools=tools, **kwargs)
 
-    def search_papers(self, query: str, num_results: int = 10, source: str = "arxiv") -> str:
-        """Search for academic papers on ArXiv.
+    def search_papers(self, query: str, num_results: int = 10) -> str:
+        """Search for academic papers on both ArXiv and PubMed.
 
         Args:
             query (str): The search query for finding papers.
             num_results (int, optional): Maximum number of results to return. Defaults to 10.
-            source (str, optional): Search source, currently only 'arxiv' supported. Defaults to 'arxiv'.
 
         Returns:
-            str: JSON array of papers with title, id, authors, pdf_url, summary.
+            str: JSON array of papers from both sources.
         """
         # Check cache first
-        cached = self.cache.get("search_papers", query, num_results, source)
+        cached = self.cache.get("combined_search", query, num_results)
         if cached:
             return cached
 
-        articles = []
-        log_debug(f"Searching {source} for: {query}")
+        # Calculate target counts (1:1 balance)
+        target_arxiv = num_results // 2
+        target_pubmed = num_results - target_arxiv
 
+        # Fetch ArXiv papers
+        arxiv_articles = self._get_arxiv_papers(query, target_arxiv)
+        
+        # Fetch PubMed papers
+        pubmed_articles = self._get_pubmed_papers(query, target_pubmed)
+
+        # Balancing logic: if one source is short, fill from the other
+        if len(arxiv_articles) < target_arxiv:
+            extra_pubmed = target_arxiv - len(arxiv_articles)
+            if extra_pubmed > 0:
+                more_pubmed = self._get_pubmed_papers(query, target_pubmed + extra_pubmed)
+                pubmed_articles = more_pubmed
+        
+        if len(pubmed_articles) < target_pubmed:
+            extra_arxiv = target_pubmed - len(pubmed_articles)
+            if extra_arxiv > 0:
+                more_arxiv = self._get_arxiv_papers(query, target_arxiv + extra_arxiv)
+                arxiv_articles = more_arxiv
+
+        # Combine results
+        all_articles = arxiv_articles + pubmed_articles
+        all_articles = self.size_limit.limit_articles(all_articles[:num_results])
+        
+        result = json.dumps(all_articles, indent=2)
+        result = self.size_limit.limit_response(result)
+
+        # Cache the result
+        self.cache.set("combined_search", result, query, num_results)
+        return result
+
+    def _get_arxiv_papers(self, query: str, num_results: int) -> List[Dict]:
+        """Internal helper to get ArXiv results."""
+        if num_results <= 0:
+            return []
+        
+        articles = []
         try:
             for result in self.arxiv_client.results(
                 search=arxiv.Search(
@@ -154,10 +187,11 @@ class PaperSearchTools(Toolkit):
                 )
             ):
                 article = {
+                    "source": "arxiv",
                     "title": result.title,
                     "id": result.get_short_id(),
                     "entry_id": result.entry_id,
-                    "authors": [author.name for author in result.authors][:5],  # Limit authors
+                    "authors": [author.name for author in result.authors][:5],
                     "primary_category": result.primary_category,
                     "published": result.published.isoformat() if result.published else None,
                     "pdf_url": result.pdf_url,
@@ -166,15 +200,62 @@ class PaperSearchTools(Toolkit):
                 articles.append(article)
         except Exception as e:
             logger.error(f"ArXiv search error: {e}")
-            return json.dumps({"error": str(e)})
+        return articles
 
-        articles = self.size_limit.limit_articles(articles)
-        result = json.dumps(articles, indent=2)
-        result = self.size_limit.limit_response(result)
+    def _get_pubmed_papers(self, query: str, num_results: int) -> List[Dict]:
+        """Internal helper to get PubMed results."""
+        if num_results <= 0:
+            return []
 
-        # Cache the result
-        self.cache.set("search_papers", result, query, num_results, source)
-        return result
+        try:
+            from Bio import Entrez
+        except ImportError:
+            return []
+
+        Entrez.email = "paper_agent@example.com"
+        articles = []
+        try:
+            handle = Entrez.esearch(db="pubmed", term=query, retmax=num_results)
+            record = Entrez.read(handle)
+            handle.close()
+
+            id_list = record.get("IdList", [])
+            if not id_list:
+                return []
+
+            handle = Entrez.efetch(db="pubmed", id=",".join(id_list), rettype="xml", retmode="xml")
+            records = Entrez.read(handle)
+            handle.close()
+
+            for article in records.get("PubmedArticle", []):
+                medline = article.get("MedlineCitation", {})
+                article_data = medline.get("Article", {})
+
+                title = article_data.get("ArticleTitle", "")
+                abstract = article_data.get("Abstract", {}).get("AbstractText", [""])
+                if isinstance(abstract, list):
+                    abstract = " ".join(str(a) for a in abstract)
+
+                authors = []
+                for author in article_data.get("AuthorList", [])[:5]:
+                    name = f"{author.get('ForeName', '')} {author.get('LastName', '')}".strip()
+                    if name:
+                        authors.append(name)
+
+                pmid = str(medline.get("PMID", ""))
+
+                articles.append({
+                    "source": "pubmed",
+                    "title": title,
+                    "id": pmid,
+                    "pmid": pmid,
+                    "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                    "authors": authors,
+                    "summary": abstract[:500] + "..." if len(abstract) > 500 else abstract,
+                })
+        except Exception as e:
+            logger.error(f"PubMed search error: {e}")
+        return articles
 
     def read_paper_content(
         self,
@@ -254,72 +335,3 @@ class PaperSearchTools(Toolkit):
         self.cache.set("read_paper_content", result, *cache_key_args)
         return result
 
-    def search_pubmed(self, query: str, num_results: int = 10) -> str:
-        """Search for papers on PubMed.
-
-        Args:
-            query (str): The search query.
-            num_results (int, optional): Maximum results. Defaults to 10.
-
-        Returns:
-            str: JSON array of papers with title, pmid, authors, abstract.
-        """
-        try:
-            from Bio import Entrez
-        except ImportError:
-            return json.dumps({"error": "biopython not installed. Run: pip install biopython"})
-
-        cached = self.cache.get("search_pubmed", query, num_results)
-        if cached:
-            return cached
-
-        Entrez.email = "paper_agent@example.com"
-
-        try:
-            # Search PubMed
-            handle = Entrez.esearch(db="pubmed", term=query, retmax=num_results)
-            record = Entrez.read(handle)
-            handle.close()
-
-            id_list = record.get("IdList", [])
-            if not id_list:
-                return json.dumps([])
-
-            # Fetch details
-            handle = Entrez.efetch(db="pubmed", id=",".join(id_list), rettype="xml", retmode="xml")
-            records = Entrez.read(handle)
-            handle.close()
-
-            articles = []
-            for article in records.get("PubmedArticle", []):
-                medline = article.get("MedlineCitation", {})
-                article_data = medline.get("Article", {})
-
-                title = article_data.get("ArticleTitle", "")
-                abstract = article_data.get("Abstract", {}).get("AbstractText", [""])
-                if isinstance(abstract, list):
-                    abstract = " ".join(str(a) for a in abstract)
-
-                authors = []
-                for author in article_data.get("AuthorList", [])[:5]:
-                    name = f"{author.get('ForeName', '')} {author.get('LastName', '')}".strip()
-                    if name:
-                        authors.append(name)
-
-                pmid = str(medline.get("PMID", ""))
-
-                articles.append({
-                    "title": title,
-                    "pmid": pmid,
-                    "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
-                    "authors": authors,
-                    "abstract": abstract[:500] + "..." if len(abstract) > 500 else abstract,
-                })
-
-            result = json.dumps(articles, indent=2)
-            self.cache.set("search_pubmed", result, query, num_results)
-            return result
-
-        except Exception as e:
-            logger.error(f"PubMed search error: {e}")
-            return json.dumps({"error": str(e)})

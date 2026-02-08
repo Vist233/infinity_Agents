@@ -17,6 +17,7 @@ from agno.models.openai import OpenAILike
 from agent.tools.paper_search import PaperSearchTools, CacheMiddleware, SizeMiddleware
 from agent.tools.paper_viewer import PaperViewerTools, RegexForceMiddleware
 from agent.tools.python_plotter import PythonPlottingTools
+from agent.paperReaderWorkflow import PaperReaderWorkflow
 
 
 @dataclass
@@ -209,9 +210,10 @@ PAPER_AGENT_INSTRUCTIONS = [
     "You are an expert research assistant specialized in academic literature.",
     "",
     "Your capabilities:",
-    "1. **Paper Search**: Search ArXiv and PubMed for relevant papers using search_papers and search_pubmed.",
+    "1. **Paper Search**: Search ArXiv and PubMed for relevant papers using search_papers.",
     "2. **Paper Reading**: Download and read paper content using read_paper_content, view_paper_page, or search_paper_text.",
-    "3. **Text Analysis**: Use regex patterns to find specific information in papers.",
+    "3. **Paper Analysis**: Use analyze_paper to generate detailed methodology reports from PDFs.",
+    "4. **Text Analysis**: Use regex patterns to find specific information in papers.",
     "4. **Visualization**: Create charts to visualize research trends or data using create_chart, create_bar_chart, or create_line_chart.",
     "",
     "Guidelines:",
@@ -272,6 +274,11 @@ def create_paper_agent(
             regex_middleware=regex_middleware,
         ),
         PythonPlottingTools(),
+        PaperReaderWorkflow(
+            api_key=api_key,
+            base_url=base_url,
+            model_id=model_id,
+        ),
     ]
 
     # Create agent

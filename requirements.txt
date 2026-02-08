@@ -58,3 +58,8 @@ pytest # Added for unit testing
 claude-agent-sdk  # For codeAgent
 plotly  # For chart generation
 kaleido  # For plotly image export
+
+# Paper Reader Workflow Dependencies
+pymupdf  # For PDF image extraction (fitz)
+markdown  # For markdown to HTML conversion
+weasyprint  # For HTML to PDF export
