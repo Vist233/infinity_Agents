@@ -122,7 +122,7 @@ class PaperSearchTools(Toolkit):
 
         super().__init__(name="paper_search_tools", tools=tools, **kwargs)
 
-    def search_papers(self, query: str, num_results: int = 10) -> str:
+    def search_papers(self, query: str, num_results: int = 5) -> str:
         """Search for academic papers on both ArXiv and PubMed.
 
         Args:
