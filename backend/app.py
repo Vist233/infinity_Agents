@@ -3,13 +3,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
-from agent.paperAgent import get_paper_agent
+#from agent.paperAgent import get_paper_agent
+from agent.test_paperAgent import SimplePaperAgent as get_paper_agent
 from contextlib import asynccontextmanager
 import os
 import logging
 from agent.util import estimate_tokens, estimate_message_tokens
 import uuid
-from backend.db import insert_session, init_db, close_db, get_all_sessions, insert_message
+from backend.db import insert_session, init_db, close_db, get_session_messages, insert_message
 
 logging.basicConfig(level=logging.INFO)
 
@@ -21,6 +22,7 @@ async def lifespan(app):
 
 app = FastAPI(lifespan=lifespan)
 paper_agent = get_paper_agent()
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,8 +70,14 @@ async def chat_endpoint(request: ChatRequest):
             #流式读取回复
             response_text = ""
             for chunk in response_stream:
-                content = getattr(chunk, "content", None)
-                if content is None and isinstance(chunk, str):
+                content = None
+                if hasattr(chunk, "choices") and len(chunk.choices) > 0:
+                    delta = getattr(chunk.choices[0], "delta", None)
+                    if delta:
+                        content = getattr(delta, "content", None)
+                elif hasattr(chunk, "content"):
+                    content = chunk.content
+                elif isinstance(chunk, str):
                     content = chunk
                 if content:
                     response_text += content
@@ -97,7 +105,31 @@ async def chat_endpoint(request: ChatRequest):
 
     return StreamingResponse(event_generator(), media_type="text/plain")
 
+@app.get("/api/sessions/{session_id}/messages")
+async def get_session_history(session_id: str):
+    """
+    获取指定会话的历史消息记录
+    前端加载会话或切换会话时调用此接口
+    """
+    try:
+        uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session ID format")
 
+    pool = app.state.db_pool
+    if not pool:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+
+    try:
+        messages = await get_session_messages(pool, session_id)
+        if not messages:
+            return []
+            
+        return messages
+
+    except Exception as e:
+        logging.error(f"Error fetching history for {session_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve chat history")
 
 if __name__ == "__main__":
     import uvicorn

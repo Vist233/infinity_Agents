@@ -7,10 +7,9 @@ from backend.core.config import settings
 
 
 async def ensure_table(pool: asyncpg.Pool) -> None:
-    try:
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """
+    async with pool.acquire() as conn:
+         await conn.execute(
+            """
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id UUID PRIMARY KEY,
                     title VARCHAR(255) DEFAULT 'New chat',
@@ -32,10 +31,9 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages (session_id);
-                """
-            )
-    except Exception:
-        logging.exception("Failed to ensure sessions table exists")
+            """
+        )
+
 
 
 async def init_db(app) -> None:
@@ -61,10 +59,8 @@ async def insert_session(pool: asyncpg.Pool, session_id: str, title: str = "新�
         INSERT INTO sessions (session_id, title) 
         VALUES ($1, $2)
     """
-    try:
-        await pool.execute(query, session_id, title)
-    except Exception as e:
-        raise e
+    await pool.execute(query, session_id, title)
+
 
 
 async def insert_message(pool: asyncpg.Pool, session_id: str, role: str, content: str) -> None:
@@ -123,23 +119,24 @@ async def get_all_sessions(pool):
 
 async def get_session_messages(pool, session_id: str):
     """
-    根据 session_id 获取历史消息记录，按时间正序排列（先说的在前）
+    根据 session_id 获取历史消息记录，按时间正序排列
     """
     query = """
         SELECT role, content, created_at
         FROM messages
         WHERE session_id = $1
         ORDER BY created_at ASC;
-    """
+    """ 
+    u_id = uuid.UUID(session_id)
     try:
         async with pool.acquire() as conn:
-            rows = await conn.fetch(query, session_id)
+            rows = await conn.fetch(query, u_id)
             
             return [
                 {
                     "role": row["role"],
                     "content": row["content"],
-                    "created_at": row["created_at"].isoformat()
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None
                 }
                 for row in rows
             ]
