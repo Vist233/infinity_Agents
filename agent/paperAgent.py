@@ -128,7 +128,7 @@ def create_paper_agent(
         instructions=PAPER_AGENT_INSTRUCTIONS,
         markdown=True,
         description="PaperAgent: Research assistant for bioinformatics papers with search, analysis, and visualization.",
-        debug_mode=False,
+        debug_mode=True,
     )
 
     return agent
