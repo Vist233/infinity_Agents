@@ -11,6 +11,13 @@ interface Message {
   content: string;
 }
 
+interface SessionItem {
+  session_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -19,6 +26,9 @@ export default function ChatPage() {
   const [tokenInfo, setTokenInfo] = useState<{prompt:number,response:number,total:number}|null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
+
+  const API_BASE = "http://localhost:8000";
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -30,38 +40,109 @@ export default function ChatPage() {
   }, [messages]);
 
   useEffect(() => {
-    const initSession = async () => {
+    const init = async () => {
       try {
-        const res = await fetch("http://localhost:8000/api/sessions", { method: "POST" });
+        const res = await fetch(`${API_BASE}/api/sessions`);
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setSessions(data);
+          setSessionId(data[0].session_id);
+          return;
+        }
+      } catch (e) {
+        console.error("Failed to load sessions", e);
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/api/sessions`, { method: "POST" });
         const data = await res.json();
         setSessionId(data.session_id);
+        setSessions([
+          {
+            session_id: data.session_id,
+            title: "New chat",
+            created_at: "",
+            updated_at: "",
+          },
+        ]);
       } catch (e) {
         console.error("Failed to init session", e);
       }
     };
-    initSession();
+    init();
   }, []);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    setAssistantDone(false);
+    setTokenInfo(null);
+    setMessages([]);
+    const loadMessages = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/messages`);
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          const mapped: Message[] = data
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .map((m) => ({ role: m.role, content: m.content }));
+          setMessages(mapped);
+        }
+      } catch (e) {
+        console.error("Failed to load messages", e);
+      }
+    };
+    loadMessages();
+  }, [sessionId]);
+
+  const refreshSessions = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions`);
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setSessions(data);
+      }
+    } catch (e) {
+      console.error("Failed to refresh sessions", e);
+    }
+  };
+
+  const handleNewChat = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions`, { method: "POST" });
+      const data = await res.json();
+      setSessionId(data.session_id);
+      setMessages([]);
+      await refreshSessions();
+    } catch (e) {
+      console.error("Failed to create new session", e);
+    }
+  };
+
+  const handleSwitchSession = (id: string) => {
+    if (isLoading) return;
+    setSessionId(id);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading || !sessionId) return;
 
     const userMsg: Message = { role: "user", content: input };
-    setMessages((prev) => [...prev, userMsg]);
+    const messagesForRequest = [...messages, userMsg];
+    const messagesForUI = [...messages, userMsg, { role: "assistant", content: "" } as Message];
+    setMessages(messagesForUI);
     setInput("");
     setIsLoading(true);
     setAssistantDone(false);
     setTokenInfo(null);
 
-    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
-
     try {
-      const response = await fetch("http://localhost:8000/chat", {
+      const response = await fetch(`${API_BASE}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           session_id: sessionId, 
-          messages: [...messages, userMsg] 
+          messages: messagesForRequest 
         }),
       });
 
@@ -118,10 +199,35 @@ export default function ChatPage() {
     <div className="flex h-screen bg-white text-zinc-900 font-sans">
       {/* 侧边栏 - 极简点缀 */}
       <div className="w-[260px] bg-zinc-50 border-r border-zinc-200 hidden md:flex flex-col p-3">
-        <Button variant="outline" className="justify-start gap-2 bg-white border-zinc-200 shadow-sm hover:bg-zinc-100">
+        <Button
+          variant="outline"
+          className="justify-start gap-2 bg-white border-zinc-200 shadow-sm hover:bg-zinc-100"
+          onClick={handleNewChat}
+        >
           <Plus size={16} />
           New Chat
         </Button>
+        <div className="mt-3 text-xs uppercase tracking-widest text-zinc-400 px-2">Sessions</div>
+        <div className="mt-2 space-y-1 overflow-y-auto">
+          {sessions.length === 0 ? (
+            <div className="text-xs text-zinc-400 px-2 py-2">No sessions</div>
+          ) : (
+            sessions.map((s) => (
+              <button
+                key={s.session_id}
+                onClick={() => handleSwitchSession(s.session_id)}
+                className={`w-full text-left text-sm px-2 py-2 rounded-lg transition-colors ${
+                  s.session_id === sessionId
+                    ? "bg-zinc-200 text-zinc-900"
+                    : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
+                }`}
+                title={s.title}
+              >
+                <div className="truncate">{s.title || "Untitled"}</div>
+              </button>
+            ))
+          )}
+        </div>
         <div className="flex-1" />
         <div className="p-2 text-xs text-zinc-400 text-center tracking-tighter">
           v1.0.0 @ 2026

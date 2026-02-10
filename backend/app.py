@@ -10,19 +10,68 @@ import os
 import logging
 from agent.util import estimate_tokens, estimate_message_tokens
 import uuid
-from backend.db import insert_session, init_db, close_db, get_session_messages, insert_message
+from backend.db import (
+    insert_session,
+    init_db,
+    close_db,
+    get_session_messages,
+    insert_message,
+    get_all_sessions,
+)
 
 logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app):
     await init_db(app)
+    app.state.session_agents = {}
     yield
     await close_db(app)
 
 app = FastAPI(lifespan=lifespan)
-paper_agent = get_paper_agent()
 
+def _get_or_create_session_agent(session_id: str):
+    agents = app.state.session_agents
+    agent = agents.get(session_id)
+    if agent is None:
+        agent = get_paper_agent()
+        agents[session_id] = agent
+    return agent
+
+def _build_prompt_from_messages(
+    messages: List[Dict[str, Any]],
+    user_index: int,
+    user_query: str,
+    max_messages: int = 20,
+) -> str:
+    if not messages and user_query:
+        return user_query
+
+    context_messages = messages[:user_index] if user_index >= 0 else messages
+    if max_messages and len(context_messages) > max_messages:
+        context_messages = context_messages[-max_messages:]
+
+    lines: List[str] = []
+    for m in context_messages:
+        role = m.get("role")
+        content = m.get("content")
+        if not content:
+            continue
+        if role == "user":
+            prefix = "User"
+        elif role == "assistant":
+            prefix = "Assistant"
+        elif role:
+            prefix = role.capitalize()
+        else:
+            prefix = "Message"
+        lines.append(f"{prefix}: {content}")
+
+    if lines and user_query:
+        return "\n".join(lines) + f"\nUser: {user_query}"
+    if user_query:
+        return user_query
+    return "\n".join(lines)
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,11 +90,27 @@ async def create_session():
     try:
         pool = app.state.db_pool
         await insert_session(pool, session_id)
+        _get_or_create_session_agent(session_id)
     except Exception:
         logging.exception("Failed to create session")
         raise HTTPException(status_code=500, detail="Failed to create session")
 
     return {"session_id": session_id}
+
+@app.get("/api/sessions")
+async def list_sessions():
+    """
+    获取会话列表（按最近更新时间倒序）
+    """
+    pool = app.state.db_pool
+    if not pool:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+    try:
+        sessions = await get_all_sessions(pool)
+        return sessions
+    except Exception:
+        logging.exception("Failed to fetch sessions")
+        raise HTTPException(status_code=500, detail="Failed to fetch sessions")
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
@@ -54,9 +119,12 @@ async def chat_endpoint(request: ChatRequest):
     """
     session_id = request.session_id
     user_query = ""
-    for m in reversed(request.messages):
+    user_index = -1
+    for i in range(len(request.messages) - 1, -1, -1):
+        m = request.messages[i]
         if m.get("role") == "user":
             user_query = m.get("content", "")
+            user_index = i
             break
     
     async def event_generator():
@@ -66,7 +134,9 @@ async def chat_endpoint(request: ChatRequest):
             prompt_tokens = estimate_message_tokens(request.messages)
 
             await insert_message(pool, session_id, "user", user_query)
-            response_stream = paper_agent.run(user_query, stream=True)
+            session_agent = _get_or_create_session_agent(session_id)
+            prompt = _build_prompt_from_messages(request.messages, user_index, user_query)
+            response_stream = session_agent.run(prompt, stream=True)
             #流式读取回复
             response_text = ""
             for chunk in response_stream:
