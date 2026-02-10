@@ -17,6 +17,7 @@ from backend.db import (
     get_session_messages,
     insert_message,
     get_all_sessions,
+    update_session_title,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -84,6 +85,9 @@ class ChatRequest(BaseModel):
     session_id: str
     messages: List[Dict[str, Any]]
 
+class SessionTitleUpdate(BaseModel):
+    title: str
+
 @app.post("/api/sessions")
 async def create_session():
     session_id = str(uuid.uuid4())
@@ -111,6 +115,34 @@ async def list_sessions():
     except Exception:
         logging.exception("Failed to fetch sessions")
         raise HTTPException(status_code=500, detail="Failed to fetch sessions")
+
+@app.patch("/api/sessions/{session_id}/title")
+async def update_session_title_endpoint(session_id: str, payload: SessionTitleUpdate):
+    try:
+        uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session ID format")
+
+    title = (payload.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title cannot be empty")
+    if len(title) > 255:
+        raise HTTPException(status_code=400, detail="Title too long")
+
+    pool = app.state.db_pool
+    if not pool:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+
+    try:
+        updated = await update_session_title(pool, session_id, title)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"session_id": session_id, "title": title}
+    except HTTPException:
+        raise
+    except Exception:
+        logging.exception("Failed to update session title")
+        raise HTTPException(status_code=500, detail="Failed to update session title")
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):

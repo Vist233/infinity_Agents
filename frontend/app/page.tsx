@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { SendHorizontal, User, Bot, Plus } from "lucide-react";
+import { SendHorizontal, User, Bot, Plus, Pencil } from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
@@ -123,6 +123,29 @@ export default function ChatPage() {
     setSessionId(id);
   };
 
+  const handleEditSessionTitle = async (session: SessionItem) => {
+    const currentTitle = session.title || "Untitled";
+    const nextTitle = window.prompt("Edit session title", currentTitle);
+    if (nextTitle === null) return;
+    const trimmed = nextTitle.trim();
+    if (!trimmed || trimmed === session.title) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/sessions/${session.session_id}/title`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      });
+      if (!res.ok) {
+        console.error("Failed to update session title");
+        return;
+      }
+      await refreshSessions();
+    } catch (e) {
+      console.error("Failed to update session title", e);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading || !sessionId) return;
@@ -213,18 +236,33 @@ export default function ChatPage() {
             <div className="text-xs text-zinc-400 px-2 py-2">No sessions</div>
           ) : (
             sessions.map((s) => (
-              <button
+              <div
                 key={s.session_id}
-                onClick={() => handleSwitchSession(s.session_id)}
-                className={`w-full text-left text-sm px-2 py-2 rounded-lg transition-colors ${
+                className={`w-full flex items-center gap-2 px-2 py-2 rounded-lg transition-colors ${
                   s.session_id === sessionId
                     ? "bg-zinc-200 text-zinc-900"
                     : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
                 }`}
-                title={s.title}
               >
-                <div className="truncate">{s.title || "Untitled"}</div>
-              </button>
+                <button
+                  onClick={() => handleSwitchSession(s.session_id)}
+                  className="flex-1 text-left text-sm truncate"
+                  title={s.title}
+                >
+                  {s.title || "Untitled"}
+                </button>
+                <button
+                  onClick={() => handleEditSessionTitle(s)}
+                  className={`p-1 rounded-md transition-colors ${
+                    s.session_id === sessionId
+                      ? "text-zinc-700 hover:bg-zinc-300"
+                      : "text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700"
+                  }`}
+                  aria-label="Edit session title"
+                >
+                  <Pencil size={14} />
+                </button>
+              </div>
             ))
           )}
         </div>

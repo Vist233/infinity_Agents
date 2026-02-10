@@ -117,6 +117,27 @@ async def get_all_sessions(pool):
         return []
     
 
+async def update_session_title(pool: asyncpg.Pool, session_id: str, title: str) -> bool:
+    """
+    更新 sessions 标题，并刷新 updated_at。
+    """
+    query = """
+        UPDATE sessions
+        SET title = $2, updated_at = NOW()
+        WHERE session_id = $1
+    """
+    u_id = uuid.UUID(session_id)
+    try:
+        async with pool.acquire() as conn:
+            result = await conn.execute(query, u_id, title)
+        parts = result.split(" ")
+        if len(parts) == 2 and parts[0] == "UPDATE":
+            return int(parts[1]) > 0
+    except Exception as e:
+        logging.error(f"Error updating title for session {session_id}: {e}")
+    return False
+
+
 async def get_session_messages(pool, session_id: str):
     """
     根据 session_id 获取历史消息记录，按时间正序排列
