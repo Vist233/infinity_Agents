@@ -138,6 +138,26 @@ async def update_session_title(pool: asyncpg.Pool, session_id: str, title: str) 
     return False
 
 
+async def delete_session(pool: asyncpg.Pool, session_id: str) -> bool:
+    """
+    删除 sessions 记录（messages 会级联删除）。
+    """
+    query = """
+        DELETE FROM sessions
+        WHERE session_id = $1
+    """
+    u_id = uuid.UUID(session_id)
+    try:
+        async with pool.acquire() as conn:
+            result = await conn.execute(query, u_id)
+        parts = result.split(" ")
+        if len(parts) == 2 and parts[0] == "DELETE":
+            return int(parts[1]) > 0
+    except Exception as e:
+        logging.error(f"Error deleting session {session_id}: {e}")
+    return False
+
+
 async def get_session_messages(pool, session_id: str):
     """
     根据 session_id 获取历史消息记录，按时间正序排列

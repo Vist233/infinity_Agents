@@ -18,6 +18,7 @@ from backend.db import (
     insert_message,
     get_all_sessions,
     update_session_title,
+    delete_session,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -143,6 +144,28 @@ async def update_session_title_endpoint(session_id: str, payload: SessionTitleUp
     except Exception:
         logging.exception("Failed to update session title")
         raise HTTPException(status_code=500, detail="Failed to update session title")
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session_endpoint(session_id: str):
+    try:
+        uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session ID format")
+
+    pool = app.state.db_pool
+    if not pool:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+
+    try:
+        deleted = await delete_session(pool, session_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"session_id": session_id}
+    except HTTPException:
+        raise
+    except Exception:
+        logging.exception("Failed to delete session")
+        raise HTTPException(status_code=500, detail="Failed to delete session")
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
