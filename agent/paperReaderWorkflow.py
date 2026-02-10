@@ -266,7 +266,7 @@ class PaperReaderWorkflow(Toolkit):
         findings = analysis.get("key_findings", [])
         
         report_parts = [
-            f"# Bioinformatics Analysis Report: {paper_info.get('title', paper_id)}",
+            f"# {paper_info.get('title', paper_id)}",
             "",
             "## Paper Information",
             f"- **Paper ID**: {paper_id}",
