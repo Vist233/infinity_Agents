@@ -284,14 +284,29 @@ class PaperReaderWorkflow(Toolkit):
         for step in pipeline_steps:
             step_num = step.get("step_number", "?")
             step_name = step.get("step_name", "Unknown Step")
-            tools = step.get("tools", [])
+            tools_raw = step.get("tools", [])
+            tools: List[str] = []
+            for tool in tools_raw:
+                if isinstance(tool, str):
+                    tools.append(tool)
+                elif isinstance(tool, dict):
+                    name = tool.get("name") or tool.get("tool") or ""
+                    version = tool.get("version")
+                    parts = [p for p in [name, version] if p]
+                    if parts:
+                        tools.append(" ".join(parts))
+                    else:
+                        tools.append(json.dumps(tool, ensure_ascii=False))
+                else:
+                    tools.append(str(tool))
+            tools_text = ", ".join(tools) if tools else "Not specified"
             
             report_parts.extend([
                 f"### Step {step_num}: {step_name}",
                 "",
                 f"**Description**: {step.get('description', 'N/A')}",
                 "",
-                f"**Tools**: {', '.join(tools) if tools else 'Not specified'}",
+                f"**Tools**: {tools_text}",
                 "",
                 f"**Input**: {step.get('input_data', 'N/A')}",
                 "",

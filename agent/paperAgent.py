@@ -151,7 +151,7 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
 def create_paper_agent(
     api_key: Optional[str] = None,
     base_url: str = "https://api.moonshot.cn/v1",
-    model_id: str = "kimi-k2-thinking-turbo",
+    model_id: str = "kimi-k2-thinking",
     default_num_results: int = 5,
     papers_db: Optional[PapersDatabase] = None,
 ) -> Agent:
@@ -210,7 +210,7 @@ def create_paper_agent(
         markdown=True,
         description="PaperAgent: 生物信息学论文研究助手",
         stream=True,  # Enable streaming
-        debug_mode=False,
+        debug_mode=True,
     )
 
     return agent
