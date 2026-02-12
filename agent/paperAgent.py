@@ -26,6 +26,9 @@ from agno.utils.pprint import pprint_run_response
 from agent.tools.paper_search import PaperSearchTools, SizeMiddleware
 from agent.paperReaderWorkflow import PaperReaderWorkflow
 from agent.tools.plotly_charts import PlotlyVisualizationTools
+from agent.tools.paper_viewer import PaperViewerTools
+from agent.tools.python_plotter import PythonPlottingTools
+from agent.tools.file_tools import FileSystemTools
 from agent.session_db import SessionDatabase, SessionRecord
 from agent.papers_db import PapersDatabase
 
@@ -116,31 +119,47 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
 
 ### Paper Search
 - `search_papers(query, num_results=5)` - Search ArXiv and PubMed
-  - Input: search keywords
-  - Output: list of papers (title, authors, abstract, PDF link, etc.)
 
-### Paper Analysis  
+### Paper Analysis (Workflow)
 - `analyze_paper(pdf_url_or_path)` - Deep analysis of a single paper
-  - Input: PDF URL or local path
-  - Output: structured analysis report (methodology, tools, parameters, databases, key findings)
+  - Downloads PDF, extracts text/images, generates structured methodology report
+  - Saves extracted files and reports to the `papers/` directory
 
-### Visualization
-- `create_methodology_comparison(paper_reports_json)` - Generate methodology comparison sunburst chart
-- `create_tool_frequency(paper_reports_json, top_n=15)` - Generate tool usage frequency bar chart
-- `create_custom_sunburst/bar_chart` - Custom charts
+### Paper Viewing (Post-Analysis)
+- `view_paper_page(paper_id, page_number)` - View a specific page of a paper
+- `search_paper_text(paper_id, pattern)` - Regex search within paper text
+- `get_paper_outline(paper_id)` - Get paper structure (pages, sections)
 
-## Suggested Workflow
+### File System
+- `list_files(directory="")` - List files in workspace (papers, reports, charts)
+- `read_file(file_path)` - Read text files (reports, extracted text, etc.)
+- `read_image(file_path)` - Read image as base64 data URL for embedding in Markdown
 
-1. **Search papers**: Build appropriate search terms based on user questions, adjust `num_results` for more results
-2. **Analyze papers**: Use `analyze_paper` on papers of interest to extract detailed information
-3. **Compare & visualize**: After analyzing multiple papers, consider generating visualization charts for comparison
-4. **Summarize**: Integrate analysis results and clearly answer user questions
+### Plotting & Visualization
+- `create_chart(code, filename, chart_type)` - Execute Python code to create charts (matplotlib/plotly)
+- `create_bar_chart(data, title, ...)` - Quick bar chart from data dict
+- `create_line_chart(x_data, y_data, title, ...)` - Quick line chart
+- `create_methodology_comparison(paper_reports_json)` - Sunburst chart comparing methodologies
+- `create_tool_frequency(paper_reports_json)` - Tool usage frequency chart
+
+## Recommended Workflow
+
+1. **Search**: Use `search_papers` to find relevant papers
+2. **Analyze**: Use `analyze_paper` on papers of interest (generates reports in papers/ directory)
+3. **Deep dive**: Use `view_paper_page` / `search_paper_text` to examine specific sections
+4. **Browse files**: Use `list_files` / `read_file` to review generated reports and extracted content
+5. **Visualize**: Use `create_chart` or quick chart tools to generate analytical plots
+6. **Embed images**: All chart/image tools return a `markdown` field like `![chart](img://xxx.png)`.
+   Copy this exact Markdown into your response — the system will automatically render the image.
+   NEVER modify the `img://` reference or try to construct one yourself.
+7. **Summarize**: Integrate findings and answer the user's question
 
 ## Important Notes
 
 - **Always respond in Chinese (Simplified)**
-- Cite paper sources when referencing
-- Explain reasons when tool calls fail
+- Cite paper sources with titles and IDs when referencing
+- When embedding charts, use the `markdown` field from the tool response directly
+- For follow-up questions about a paper, prefer `view_paper_page` / `search_paper_text` over re-analyzing
 """
 
 
@@ -200,6 +219,9 @@ def create_paper_agent(
             db=papers_db,
         ),
         PlotlyVisualizationTools(),
+        PaperViewerTools(),
+        PythonPlottingTools(),
+        FileSystemTools(),
     ]
 
     # Create agent with streaming enabled

@@ -94,10 +94,11 @@ class PythonPlottingTools(Toolkit):
                 return json.dumps({"error": f"Unknown chart_type: {chart_type}"})
 
             log_debug(f"Chart saved to {output_path}")
+            img_ref = f"img://{filename}.png"
             return json.dumps({
                 "success": True,
-                "image_path": str(output_path),
-                "filename": filename,
+                "image_ref": img_ref,
+                "markdown": f"![{filename}]({img_ref})",
             })
 
         except Exception as e:
@@ -144,10 +145,11 @@ class PythonPlottingTools(Toolkit):
             plt.savefig(str(output_path), dpi=150)
             plt.close()
 
+            img_ref = f"img://{filename}.png"
             return json.dumps({
                 "success": True,
-                "image_path": str(output_path),
-                "filename": filename,
+                "image_ref": img_ref,
+                "markdown": f"![{filename}]({img_ref})",
             })
 
         except Exception as e:
@@ -195,10 +197,11 @@ class PythonPlottingTools(Toolkit):
             plt.savefig(str(output_path), dpi=150)
             plt.close()
 
+            img_ref = f"img://{filename}.png"
             return json.dumps({
                 "success": True,
-                "image_path": str(output_path),
-                "filename": filename,
+                "image_ref": img_ref,
+                "markdown": f"![{filename}]({img_ref})",
             })
 
         except Exception as e:

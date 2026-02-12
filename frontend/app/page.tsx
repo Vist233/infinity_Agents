@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SendHorizontal, User, Bot, Plus, Pencil, Terminal, FileText, Microscope, MessageCircle, Trash2 } from "lucide-react";
+import MarkdownRenderer from "@/components/markdown-renderer";
 
 interface Message {
   role: "user" | "assistant";
@@ -23,12 +24,12 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [assistantDone, setAssistantDone] = useState(false);
-  const [tokenInfo, setTokenInfo] = useState<{prompt:number,response:number,total:number}|null>(null);
+  const [tokenInfo, setTokenInfo] = useState<{ prompt: number, response: number, total: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
 
-  const API_BASE = "http://localhost:8000";
+  const API_BASE = "http://localhost:8008";
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -192,9 +193,9 @@ export default function ChatPage() {
       const response = await fetch(`${API_BASE}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          session_id: sessionId, 
-          messages: messagesForRequest 
+        body: JSON.stringify({
+          session_id: sessionId,
+          messages: messagesForRequest
         }),
       });
 
@@ -203,7 +204,7 @@ export default function ChatPage() {
       const decoder = new TextDecoder();
 
       let accumulatedResponse = ""; // 用于缓存当前回复的完整文本
-      
+
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -293,11 +294,10 @@ export default function ChatPage() {
             sessions.map((s) => (
               <div
                 key={s.session_id}
-                className={`w-full flex items-center gap-2 px-2 py-2 rounded-lg transition-colors ${
-                  s.session_id === sessionId
-                    ? "bg-zinc-200 text-zinc-900"
-                    : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
-                }`}
+                className={`w-full flex items-center gap-2 px-2 py-2 rounded-lg transition-colors ${s.session_id === sessionId
+                  ? "bg-zinc-200 text-zinc-900"
+                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
+                  }`}
               >
                 <MessageCircle size={14} className="shrink-0" />
                 <button
@@ -309,22 +309,20 @@ export default function ChatPage() {
                 </button>
                 <button
                   onClick={() => handleEditSessionTitle(s)}
-                  className={`p-1 rounded-md transition-colors ${
-                    s.session_id === sessionId
-                      ? "text-zinc-700 hover:bg-zinc-300"
-                      : "text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700"
-                  }`}
+                  className={`p-1 rounded-md transition-colors ${s.session_id === sessionId
+                    ? "text-zinc-700 hover:bg-zinc-300"
+                    : "text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700"
+                    }`}
                   aria-label="Edit session title"
                 >
                   <Pencil size={14} />
                 </button>
                 <button
                   onClick={() => handleDeleteSession(s)}
-                  className={`p-1 rounded-md transition-colors ${
-                    s.session_id === sessionId
-                      ? "text-zinc-700 hover:bg-zinc-300"
-                      : "text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700"
-                  }`}
+                  className={`p-1 rounded-md transition-colors ${s.session_id === sessionId
+                    ? "text-zinc-700 hover:bg-zinc-300"
+                    : "text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700"
+                    }`}
                   aria-label="Delete session"
                 >
                   <Trash2 size={14} />
@@ -372,8 +370,12 @@ export default function ChatPage() {
                         <span className="text-xs font-bold text-zinc-400 uppercase tracking-widest">
                           {m.role === "user" ? "You" : "Assistant"}
                         </span>
-                        <div className={`text-[15px] leading-7 whitespace-pre-wrap ${m.role === "user" ? "text-zinc-700" : "text-zinc-900"}`}>
-                          {m.content}
+                        <div className={`text-[15px] leading-7 ${m.role === "user" ? "text-zinc-700 whitespace-pre-wrap" : "text-zinc-900"}`}>
+                          {m.role === "assistant" ? (
+                            <MarkdownRenderer content={m.content} />
+                          ) : (
+                            m.content
+                          )}
                           {/* Typing cursor while streaming */}
                           {isLoading && i === messages.length - 1 && (
                             <span className="inline-block w-1.5 h-4 bg-zinc-900 animate-pulse ml-1 align-middle" />
@@ -411,10 +413,10 @@ export default function ChatPage() {
                   placeholder="Message Infinity..."
                   className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl py-4 pl-4 pr-12 text-sm focus:outline-none focus:ring-1 focus:ring-zinc-300 transition-all resize-none shadow-sm"
                 />
-                <Button 
-                  type="submit" 
-                  size="icon" 
-                  disabled={isLoading || !input.trim()} 
+                <Button
+                  type="submit"
+                  size="icon"
+                  disabled={isLoading || !input.trim()}
                   className="absolute right-2 top-1/2 -translate-y-1/2 h-8 w-8 rounded-xl !bg-zinc-700 hover:!bg-black disabled:!bg-zinc-200 transition-all duration-300 hover:scale-110 active:scale-95"
                 >
                   <SendHorizontal className="h-4 w-4 text-white" />
@@ -422,7 +424,7 @@ export default function ChatPage() {
               </div>
               <p className="text-[11px] text-center text-zinc-400 mt-3">
                 AI can make mistakes. Check important info.
-              </p>  
+              </p>
             </form>
           </div>
         </div>

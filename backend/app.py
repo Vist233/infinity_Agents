@@ -1,13 +1,16 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+from pathlib import Path as FilePath
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from fastapi.middleware.cors import CORSMiddleware
-#from agent.paperAgent import get_paper_agent
-from agent.test_paperAgent import SimplePaperAgent as get_paper_agent
+from agent.paperAgent import create_paper_agent
 from contextlib import asynccontextmanager
 import os
+import re
+import base64
 import logging
+import mimetypes
 from agent.util import estimate_tokens, estimate_message_tokens
 import uuid
 from backend.db import (
@@ -36,7 +39,7 @@ def _get_or_create_session_agent(session_id: str):
     agents = app.state.session_agents
     agent = agents.get(session_id)
     if agent is None:
-        agent = get_paper_agent()
+        agent = create_paper_agent()
         agents[session_id] = agent
     return agent
 
@@ -82,9 +85,83 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Allowed directories for file serving
+_PROJECT_ROOT = FilePath(__file__).parent.parent
+_ALLOWED_FILE_DIRS = [
+    _PROJECT_ROOT / "papers",
+    _PROJECT_ROOT / "agent" / "tools" / "plot_outputs",
+    _PROJECT_ROOT / "agent" / "tools" / "plotly_outputs",
+]
+
+@app.get("/api/files/{file_path:path}")
+async def serve_file(file_path: str):
+    """Serve images and files from allowed project directories."""
+    target = FilePath(file_path)
+    
+    # If relative path, try to find it in allowed dirs
+    if not target.is_absolute():
+        for allowed in _ALLOWED_FILE_DIRS:
+            candidate = allowed / file_path
+            if candidate.exists():
+                target = candidate
+                break
+    
+    # Security: ensure path is within allowed directories
+    resolved = target.resolve()
+    allowed = any(
+        str(resolved).startswith(str(d.resolve()))
+        for d in _ALLOWED_FILE_DIRS
+    )
+    if not allowed or not resolved.exists() or not resolved.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    return FileResponse(str(resolved))
+
+
+# ---------------------------------------------------------------------------
+# Image img:// → base64 conversion for streaming responses
+# ---------------------------------------------------------------------------
+_IMG_REF_PATTERN = re.compile(r'!\[([^\]]*)\]\(img://([^)]+)\)')
+_IMAGE_MIME = {
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+}
+
+def _resolve_image_ref(filename: str) -> Optional[FilePath]:
+    """Resolve an img://filename reference to an actual file path."""
+    for d in _ALLOWED_FILE_DIRS:
+        candidate = d / filename
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+def _replace_image_refs_with_base64(text: str) -> str:
+    """Scan Markdown for ![alt](img://filename) and convert to base64 data URLs."""
+    def _convert(match):
+        alt, filename = match.group(1), match.group(2)
+        resolved = _resolve_image_ref(filename)
+        if not resolved:
+            logging.warning(f"Image not found: img://{filename}")
+            return match.group(0)
+        ext = resolved.suffix.lower()
+        mime = _IMAGE_MIME.get(ext)
+        if not mime:
+            return match.group(0)
+        try:
+            b64 = base64.b64encode(resolved.read_bytes()).decode('ascii')
+            logging.info(f"Converted img://{filename} to base64 ({resolved.stat().st_size} bytes)")
+            return f'![{alt}](data:{mime};base64,{b64})'
+        except Exception as e:
+            logging.warning(f"Failed to encode image {resolved}: {e}")
+            return match.group(0)
+
+    return _IMG_REF_PATTERN.sub(_convert, text)
+
+
 class ChatRequest(BaseModel):
     session_id: str
     messages: List[Dict[str, Any]]
+
 
 class SessionTitleUpdate(BaseModel):
     title: str
@@ -201,7 +278,13 @@ async def chat_endpoint(request: ChatRequest):
                     if delta:
                         content = getattr(delta, "content", None)
                 elif hasattr(chunk, "content"):
-                    content = chunk.content
+                    raw = chunk.content
+                    if isinstance(raw, str):
+                        content = raw
+                    elif isinstance(raw, list):
+                        # Agno may return list of content items
+                        parts = [item if isinstance(item, str) else getattr(item, "text", str(item)) for item in raw]
+                        content = "".join(parts) if parts else None
                 elif isinstance(chunk, str):
                     content = chunk
                 if content:
@@ -260,4 +343,4 @@ if __name__ == "__main__":
     import uvicorn
     if not os.getenv("MOONSHOT_API_KEY"):
         print("Warning: MOONSHOT_API_KEY not found in environment variables.")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8008)
