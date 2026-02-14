@@ -48,6 +48,8 @@ arxiv
 pyinstaller # Added for EXE packaging
 requests
 asyncpg
+fastapi
+uvicorn
 
 pillow==12.1.1
 numpy~=2.2.2
