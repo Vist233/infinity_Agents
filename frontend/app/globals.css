@@ -48,6 +48,14 @@
 
 :root {
   --radius: 0.625rem;
+  --app-bg: linear-gradient(180deg, #f8fafc 0%, #f4f4f5 100%);
+  --surface-1: rgba(255, 255, 255, 0.82);
+  --surface-2: rgba(255, 255, 255, 0.7);
+  --hairline: rgba(24, 24, 27, 0.08);
+  --hairline-strong: rgba(24, 24, 27, 0.14);
+  --focus-ring: rgba(10, 132, 255, 0.45);
+  --easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --duration-fast: 160ms;
   --background: oklch(1 0 0);
   --foreground: oklch(0.141 0.005 285.823);
   --card: oklch(1 0 0);
@@ -82,6 +90,12 @@
 }
 
 .dark {
+  --app-bg: linear-gradient(180deg, #17171a 0%, #09090b 100%);
+  --surface-1: rgba(39, 39, 42, 0.72);
+  --surface-2: rgba(39, 39, 42, 0.58);
+  --hairline: rgba(255, 255, 255, 0.09);
+  --hairline-strong: rgba(255, 255, 255, 0.16);
+  --focus-ring: rgba(10, 132, 255, 0.55);
   --background: oklch(0.141 0.005 285.823);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.21 0.006 285.885);
@@ -122,6 +136,8 @@
 
   body {
     @apply bg-background text-foreground;
+    background-image: var(--app-bg);
+    font-feature-settings: "kern" 1, "liga" 1, "tnum" 0;
   }
 }
 

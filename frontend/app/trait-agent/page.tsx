@@ -9,28 +9,28 @@ const BILIBILI_EMBED_URL =
 
 export default function TraitAgentPage() {
   return (
-    <div className="flex h-screen bg-white text-zinc-900 font-sans">
-      <aside className="w-[260px] bg-zinc-50 border-r border-zinc-200 hidden md:flex flex-col p-3">
+    <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
+      <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl">
         <div className="space-y-1">
           <div className="text-[11px] uppercase tracking-widest text-zinc-400 px-2">Agents</div>
           <div className="space-y-1">
             <Link
               href="/code-agent"
-              className="w-full flex items-center gap-2 text-left text-sm px-2 py-2 rounded-lg text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-colors"
+              className="w-full flex items-center gap-2 text-left text-sm px-2 py-2 rounded-xl text-zinc-600 hover:bg-zinc-100/80 hover:text-zinc-900 transition-all duration-150"
             >
               <Terminal size={16} />
               <span className="truncate">CodeAgent</span>
             </Link>
             <Link
               href="/"
-              className="w-full flex items-center gap-2 text-left text-sm px-2 py-2 rounded-lg text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-colors"
+              className="w-full flex items-center gap-2 text-left text-sm px-2 py-2 rounded-xl text-zinc-600 hover:bg-zinc-100/80 hover:text-zinc-900 transition-all duration-150"
             >
               <FileText size={16} />
               <span className="truncate">PaperAgent</span>
             </Link>
             <Link
               href="/trait-agent"
-              className="w-full flex items-center gap-2 text-left text-sm px-2 py-2 rounded-lg bg-zinc-200 text-zinc-900"
+              className="w-full flex items-center gap-2 text-left text-sm px-2 py-2 rounded-xl bg-zinc-900 text-zinc-50 shadow-sm"
             >
               <Microscope size={16} />
               <span className="truncate">TraitRecognize</span>
@@ -40,9 +40,9 @@ export default function TraitAgentPage() {
       </aside>
 
       <main className="flex-1 flex flex-col">
-        <header className="h-14 border-b border-zinc-100 flex items-center px-4 justify-between bg-white/80 backdrop-blur-md">
-          <div className="text-sm font-semibold tracking-tight text-zinc-500">Trait Agent Demo</div>
-          <Button asChild variant="ghost" size="sm" className="text-zinc-500">
+        <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between bg-[var(--surface-1)] backdrop-blur-xl">
+          <div className="text-sm font-semibold tracking-tight text-zinc-700">Trait Agent Demo</div>
+          <Button asChild variant="ghost" size="sm" className="text-zinc-500 hover:text-zinc-900">
             <a href={BILIBILI_VIDEO_URL} target="_blank" rel="noreferrer">
               在 Bilibili 打开
             </a>
@@ -58,7 +58,7 @@ export default function TraitAgentPage() {
               </p>
             </div>
 
-            <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm p-3 md:p-4">
+            <section className="rounded-2xl border border-[var(--hairline)] bg-white/90 shadow-sm p-3 md:p-4 backdrop-blur">
               <div className="relative w-full overflow-hidden rounded-xl bg-black" style={{ paddingTop: "56.25%" }}>
                 <iframe
                   src={BILIBILI_EMBED_URL}

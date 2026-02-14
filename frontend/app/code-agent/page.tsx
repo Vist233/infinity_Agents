@@ -39,28 +39,28 @@ export default function CodeAgentPage() {
   };
 
   return (
-    <div className="flex h-screen bg-zinc-100 text-zinc-900 font-sans">
-      <aside className="w-[260px] bg-white/90 border-r border-zinc-200 hidden md:flex flex-col p-3 backdrop-blur-sm">
+    <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
+      <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl">
         <div className="space-y-1">
           <div className="text-[11px] uppercase tracking-[0.22em] text-zinc-400 px-2">Agents</div>
           <div className="space-y-1">
             <Link
               href="/code-agent"
-              className="w-full flex items-center gap-2 text-left text-sm px-2 py-2 rounded-lg bg-zinc-200 text-zinc-900"
+              className="w-full flex items-center gap-2 text-left text-sm px-2 py-2 rounded-xl bg-zinc-900 text-zinc-50 shadow-sm"
             >
               <Terminal size={16} />
               <span className="truncate">CodeAgent</span>
             </Link>
             <Link
               href="/"
-              className="w-full flex items-center gap-2 text-left text-sm px-2 py-2 rounded-lg text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-colors"
+              className="w-full flex items-center gap-2 text-left text-sm px-2 py-2 rounded-xl text-zinc-600 hover:bg-zinc-100/80 hover:text-zinc-900 transition-all duration-150"
             >
               <FileText size={16} />
               <span className="truncate">PaperAgent</span>
             </Link>
             <Link
               href="/trait-agent"
-              className="w-full flex items-center gap-2 text-left text-sm px-2 py-2 rounded-lg text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-colors"
+              className="w-full flex items-center gap-2 text-left text-sm px-2 py-2 rounded-xl text-zinc-600 hover:bg-zinc-100/80 hover:text-zinc-900 transition-all duration-150"
             >
               <Microscope size={16} />
               <span className="truncate">TraitRecognize</span>
@@ -70,12 +70,12 @@ export default function CodeAgentPage() {
       </aside>
 
       <main className="flex-1 flex flex-col">
-        <header className="h-14 border-b border-zinc-200/70 flex items-center px-4 justify-between bg-white/80 backdrop-blur-md">
-          <div className="text-sm font-semibold tracking-tight text-zinc-600">Code Agent</div>
+        <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between bg-[var(--surface-1)] backdrop-blur-xl">
+          <div className="text-sm font-semibold tracking-tight text-zinc-700">Code Agent</div>
         </header>
 
         <div className="flex-1 flex items-center justify-center px-6">
-          <div className="w-full max-w-4xl rounded-3xl border border-zinc-200 bg-white p-8 shadow-sm">
+          <div className="w-full max-w-4xl rounded-3xl border border-[var(--hairline)] bg-white/90 p-8 shadow-sm backdrop-blur">
             <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">CodeAgent 安装教程</h1>
             <p className="text-zinc-500 mt-3 leading-7">
               已检索并整理官方教程，按下面步骤可在本机完成 Codex 安装与登录。
