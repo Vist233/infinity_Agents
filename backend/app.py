@@ -375,6 +375,17 @@ def _start_stream_worker(sync_iter: Any) -> Tuple[asyncio.Queue, threading.Event
     return queue, stop_event
 
 
+def _stop_stream_worker(stop_event: Optional[threading.Event], response_stream: Any) -> None:
+    if stop_event is not None:
+        stop_event.set()
+    close_method = getattr(response_stream, "close", None) if response_stream is not None else None
+    if callable(close_method):
+        try:
+            close_method()
+        except Exception:
+            pass
+
+
 async def _send_status_event(
     websocket: WebSocket,
     phase: str,
@@ -512,6 +523,9 @@ async def chat_ws_endpoint(websocket: WebSocket):
             user_index = i
             break
 
+    active_stop_event: Optional[threading.Event] = None
+    active_response_stream: Any = None
+
     try:
         pool = app.state.db_pool
         prompt_tokens = estimate_message_tokens(request.messages)
@@ -529,6 +543,8 @@ async def chat_ws_endpoint(websocket: WebSocket):
         while attempt <= MAX_STREAM_ATTEMPTS:
             response_stream = session_agent.run(prompt, stream=True, stream_events=True)
             queue, stop_event = _start_stream_worker(response_stream)
+            active_response_stream = response_stream
+            active_stop_event = stop_event
             attempt_start = asyncio.get_running_loop().time()
             last_status_push = -1.0
             has_chunk = False
@@ -569,13 +585,9 @@ async def chat_ws_endpoint(websocket: WebSocket):
                         max_attempts=MAX_STREAM_ATTEMPTS,
                         reason="first_chunk_timeout",
                     )
-                    stop_event.set()
-                    close_method = getattr(response_stream, "close", None)
-                    if callable(close_method):
-                        try:
-                            close_method()
-                        except Exception:
-                            pass
+                    _stop_stream_worker(active_stop_event, active_response_stream)
+                    active_stop_event = None
+                    active_response_stream = None
                     break
 
                 try:
@@ -586,6 +598,8 @@ async def chat_ws_endpoint(websocket: WebSocket):
                 if kind == "error":
                     raise payload
                 if kind == "done":
+                    active_stop_event = None
+                    active_response_stream = None
                     break
                 if kind != "item":
                     continue
@@ -608,6 +622,8 @@ async def chat_ws_endpoint(websocket: WebSocket):
                 continue
 
             response_text = attempt_response
+            active_stop_event = None
+            active_response_stream = None
             break
 
         if not response_text:
@@ -633,7 +649,13 @@ async def chat_ws_endpoint(websocket: WebSocket):
 
     except WebSocketDisconnect:
         logging.info("WebSocket client disconnected: %s", session_id)
+        _stop_stream_worker(active_stop_event, active_response_stream)
+        active_stop_event = None
+        active_response_stream = None
     except Exception as e:
+        _stop_stream_worker(active_stop_event, active_response_stream)
+        active_stop_event = None
+        active_response_stream = None
         logging.exception("Error in websocket chat endpoint")
         try:
             await websocket.send_json({
@@ -643,6 +665,7 @@ async def chat_ws_endpoint(websocket: WebSocket):
         except Exception:
             pass
     finally:
+        _stop_stream_worker(active_stop_event, active_response_stream)
         try:
             await websocket.close()
         except Exception:

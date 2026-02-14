@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -65,6 +65,8 @@ export default function ChatPage() {
   const wsByRequestRef = useRef<Map<string, WebSocket>>(new Map());
   const runningRequestBySessionRef = useRef<Map<string, string>>(new Map());
   const loadedSessionIdsRef = useRef<Set<string>>(new Set());
+  const sessionMessagesMapRef = useRef<Record<string, Message[]>>({});
+  const sessionLoadPromiseRef = useRef<Map<string, Promise<Message[]>>>(new Map());
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [sessionMessagesMap, setSessionMessagesMap] = useState<Record<string, Message[]>>({});
@@ -74,7 +76,7 @@ export default function ChatPage() {
 
   const API_BASE = "http://localhost:8008";
   const WS_BASE = API_BASE.replace(/^http/, "ws");
-  const messages = sessionId ? (sessionMessagesMap[sessionId] || []) : [];
+  const messages = useMemo(() => (sessionId ? (sessionMessagesMap[sessionId] || []) : []), [sessionId, sessionMessagesMap]);
   const currentRunState = sessionId ? (sessionRunMap[sessionId] || DEFAULT_RUN_STATE) : DEFAULT_RUN_STATE;
   const isLoading = currentRunState.running;
 
@@ -88,14 +90,22 @@ export default function ChatPage() {
   }, [messages]);
 
   useEffect(() => {
+    sessionMessagesMapRef.current = sessionMessagesMap;
+  }, [sessionMessagesMap]);
+
+  useEffect(() => {
+    const wsByRequest = wsByRequestRef.current;
+    const runningRequestBySession = runningRequestBySessionRef.current;
+    const sessionLoadPromises = sessionLoadPromiseRef.current;
     return () => {
-      wsByRequestRef.current.forEach((ws) => {
+      wsByRequest.forEach((ws) => {
         if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
           ws.close(1000, "component_unmount");
         }
       });
-      wsByRequestRef.current.clear();
-      runningRequestBySessionRef.current.clear();
+      wsByRequest.clear();
+      runningRequestBySession.clear();
+      sessionLoadPromises.clear();
     };
   }, []);
 
@@ -118,6 +128,52 @@ export default function ChatPage() {
     init();
   }, []);
 
+  const ensureSessionMessagesLoaded = useCallback(async (targetSessionId: string): Promise<Message[]> => {
+    if (loadedSessionIdsRef.current.has(targetSessionId)) {
+      return sessionMessagesMapRef.current[targetSessionId] || [];
+    }
+
+    const inFlight = sessionLoadPromiseRef.current.get(targetSessionId);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const promise = (async () => {
+      const res = await fetch(`${API_BASE}/api/sessions/${targetSessionId}/messages`);
+      if (!res.ok) {
+        throw new Error(`Failed to load session messages: ${res.status}`);
+      }
+      const data = await res.json();
+      if (!Array.isArray(data)) {
+        throw new Error("Invalid messages payload");
+      }
+      const mapped: Message[] = data
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({ role: m.role, content: m.content }));
+
+      let merged = mapped;
+      setSessionMessagesMap((prev) => {
+        const existing = prev[targetSessionId] || [];
+        const shouldKeepExisting = runningRequestBySessionRef.current.has(targetSessionId) && existing.length > 0;
+        if (shouldKeepExisting) {
+          merged = existing;
+          return prev;
+        }
+        merged = mapped;
+        return { ...prev, [targetSessionId]: mapped };
+      });
+      loadedSessionIdsRef.current.add(targetSessionId);
+      return merged;
+    })();
+
+    sessionLoadPromiseRef.current.set(targetSessionId, promise);
+    try {
+      return await promise;
+    } finally {
+      sessionLoadPromiseRef.current.delete(targetSessionId);
+    }
+  }, [API_BASE]);
+
   useEffect(() => {
     if (!sessionId) return;
     setSessionRunMap((prev) => ({
@@ -127,26 +183,10 @@ export default function ChatPage() {
         unreadDone: false,
       },
     }));
-    if (loadedSessionIdsRef.current.has(sessionId)) {
-      return;
-    }
-    const loadMessages = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/messages`);
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          const mapped: Message[] = data
-            .filter((m) => m.role === "user" || m.role === "assistant")
-            .map((m) => ({ role: m.role, content: m.content }));
-          setSessionMessagesMap((prev) => ({ ...prev, [sessionId]: mapped }));
-          loadedSessionIdsRef.current.add(sessionId);
-        }
-      } catch (e) {
-        console.error("Failed to load messages", e);
-      }
-    };
-    loadMessages();
-  }, [sessionId]);
+    void ensureSessionMessagesLoaded(sessionId).catch((e) => {
+      console.error("Failed to load messages", e);
+    });
+  }, [sessionId, ensureSessionMessagesLoaded]);
 
   const refreshSessions = async () => {
     try {
@@ -333,6 +373,7 @@ export default function ChatPage() {
       }
       await refreshSessions();
       loadedSessionIdsRef.current.delete(session.session_id);
+      sessionLoadPromiseRef.current.delete(session.session_id);
       setSessionMessagesMap((prev) => {
         const next = { ...prev };
         delete next[session.session_id];
@@ -370,8 +411,18 @@ export default function ChatPage() {
       return;
     }
 
+    if (!loadedSessionIdsRef.current.has(targetSessionId)) {
+      try {
+        await ensureSessionMessagesLoaded(targetSessionId);
+      } catch (e) {
+        console.error("Failed to load conversation history before send", e);
+        window.alert("Failed to load conversation history. Please retry.");
+        return;
+      }
+    }
+
     const userMsg: Message = { role: "user", content: input };
-    const baseMessages = sessionMessagesMap[targetSessionId] || [];
+    const baseMessages = sessionMessagesMapRef.current[targetSessionId] || [];
     const messagesForRequest = [...baseMessages, userMsg];
     const messagesForUI = [...baseMessages, userMsg, { role: "assistant", content: "" } as Message];
     setSessionMessagesMap((prev) => ({ ...prev, [targetSessionId as string]: messagesForUI }));
