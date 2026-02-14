@@ -8,7 +8,7 @@ Features: paper search, paper analysis, methodology visualization.
 import os
 import sys
 import json
-from typing import Any, Dict, List, Optional, Iterator
+from typing import Any, Dict, List, Optional, Iterator, Literal
 from pathlib import Path
 
 # Fix imports when running as script
@@ -26,9 +26,7 @@ from agno.utils.pprint import pprint_run_response
 from agent.tools.paper_search import PaperSearchTools, SizeMiddleware
 from agent.paperReaderWorkflow import PaperReaderWorkflow
 from agent.tools.plotly_charts import PlotlyVisualizationTools
-from agent.tools.paper_viewer import PaperViewerTools
 from agent.tools.python_plotter import PythonPlottingTools
-from agent.tools.file_tools import FileSystemTools
 from agent.session_db import SessionDatabase, SessionRecord
 from agent.papers_db import PapersDatabase
 
@@ -118,22 +116,16 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
 ## Available Tools
 
 ### Paper Search
-- `search_papers(query, num_results=5)` - Search ArXiv and PubMed
+- `search_paper(query, num_results=5)` - Search ArXiv and PubMed
 
 ### Paper Analysis (Workflow)
 - `analyze_paper(pdf_url_or_path)` - Deep analysis of a single paper
-  - Downloads PDF, extracts text/images, generates structured methodology report
-  - Saves extracted files and reports to the `papers/` directory
+  - Fast whole-paper methodology analysis report
 
-### Paper Viewing (Post-Analysis)
-- `view_paper_page(paper_id, page_number)` - View a specific page of a paper
-- `search_paper_text(paper_id, pattern)` - Regex search within paper text
-- `get_paper_outline(paper_id)` - Get paper structure (pages, sections)
-
-### File System
-- `list_files(directory="")` - List files in workspace (papers, reports, charts)
-- `read_file(file_path)` - Read text files (reports, extracted text, etc.)
-- `read_image(file_path)` - Read image as base64 data URL for embedding in Markdown
+### Paper Reading
+- `read_paper(paper_ref, action="cat", pattern=None, start_line=1, max_lines=200, case_sensitive=False)`
+  - Fine-grained reading/searching on canonical paper Markdown
+  - If not cached, automatically downloads/extracts PDF and materializes Markdown cache
 
 ### Plotting & Visualization
 - `create_chart(code, filename, chart_type)` - Execute Python code to create charts (matplotlib/plotly)
@@ -144,10 +136,9 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
 
 ## Recommended Workflow
 
-1. **Search**: Use `search_papers` to find relevant papers
+1. **Search**: Use `search_paper` to find relevant papers
 2. **Analyze**: Use `analyze_paper` on papers of interest (generates reports in papers/ directory)
-3. **Deep dive**: Use `view_paper_page` / `search_paper_text` to examine specific sections
-4. **Browse files**: Use `list_files` / `read_file` to review generated reports and extracted content
+3. **Deep dive**: Use `read_paper` for detailed reading/grep/head/tail/outline
 5. **Visualize**: Use `create_chart` or quick chart tools to generate analytical plots
 6. **Embed images**: All chart/image tools return a `markdown` field like `![chart](img://xxx.png)`.
    Copy this exact Markdown into your response — the system will automatically render the image.
@@ -159,7 +150,8 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
 - **Always respond in Chinese (Simplified)**
 - Cite paper sources with titles and IDs when referencing
 - When embedding charts, use the `markdown` field from the tool response directly
-- For follow-up questions about a paper, prefer `view_paper_page` / `search_paper_text` over re-analyzing
+- For follow-up detailed reading, prefer `read_paper`; for whole-paper summary, use `analyze_paper`
+- Access control: only papers searched or generated in this session are readable
 """
 
 
@@ -170,9 +162,13 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
 def create_paper_agent(
     api_key: Optional[str] = None,
     base_url: str = "https://api.moonshot.cn/v1",
-    model_id: str = "kimi-k2-thinking",
+    chat_model_id: Optional[str] = None,
+    workflow_model_id: Optional[str] = None,
     default_num_results: int = 5,
     papers_db: Optional[PapersDatabase] = None,
+    session_id: Optional[str] = None,
+    session_root: Optional[Path] = None,
+    storage_mode: Literal["legacy", "sandboxed"] = "legacy",
 ) -> Agent:
     """
     Create a paperAgent instance.
@@ -180,7 +176,8 @@ def create_paper_agent(
     Args:
         api_key: Moonshot API key. Defaults to MOONSHOT_API_KEY env var.
         base_url: API base URL.
-        model_id: Model identifier.
+        chat_model_id: Chat orchestration model identifier.
+        workflow_model_id: Workflow/internal analysis model identifier.
         default_num_results: Default number of search results.
         papers_db: Optional PapersDatabase instance for caching.
 
@@ -192,36 +189,50 @@ def create_paper_agent(
         raise ValueError(
             "API key required. Set MOONSHOT_API_KEY environment variable."
         )
+    chat_model_id = chat_model_id or os.environ.get("PAPER_AGENT_CHAT_MODEL", "kimi-k2.5")
+    workflow_model_id = workflow_model_id or os.environ.get("PAPER_AGENT_WORKFLOW_MODEL", "kimi-k2.5")
+    disable_chat_thinking = os.environ.get("PAPER_AGENT_CHAT_DISABLE_THINKING", "1").strip().lower() not in {"0", "false", "no", "off"}
+    chat_extra_body = {"thinking": {"type": "disabled"}} if disable_chat_thinking else None
 
     # Configure model
     model = OpenAILike(
-        id=model_id,
+        id=chat_model_id,
         api_key=api_key,
         base_url=base_url,
+        extra_body=chat_extra_body,
     )
 
     # Configure tools with database cache
     if papers_db is None:
-        papers_db = PapersDatabase()
+        if session_root is not None:
+            papers_db = PapersDatabase(session_root / "papers.db")
+        else:
+            papers_db = PapersDatabase()
     
     cache_middleware = DatabaseCacheMiddleware(papers_db, ttl_seconds=3600)
     size_middleware = SizeMiddleware(max_chars=50000, max_articles=default_num_results)
+    plot_output_dir = session_root / "plot_outputs" if session_root is not None else None
+    plotly_output_dir = session_root / "plotly_outputs" if session_root is not None else None
 
     tools = [
         PaperSearchTools(
+            enable_read=False,
             cache_middleware=cache_middleware,
             size_middleware=size_middleware,
+            papers_db=papers_db,
+            download_dir=(session_root / "downloads") if session_root is not None else None,
         ),
         PaperReaderWorkflow(
+            papers_dir=session_root,
             api_key=api_key,
             base_url=base_url,
-            model_id=model_id,
+            model_id=workflow_model_id,
             db=papers_db,
+            session_id=session_id,
+            storage_mode=storage_mode,
         ),
-        PlotlyVisualizationTools(),
-        PaperViewerTools(),
-        PythonPlottingTools(),
-        FileSystemTools(),
+        PlotlyVisualizationTools(output_dir=plotly_output_dir),
+        PythonPlottingTools(output_dir=plot_output_dir),
     ]
 
     # Create agent with streaming enabled
@@ -252,7 +263,8 @@ class PaperAgentRunner:
         user_id: str = "default_user",
         api_key: Optional[str] = None,
         base_url: str = "https://api.moonshot.cn/v1",
-        model_id: str = "kimi-k2-thinking-turbo",
+        chat_model_id: str = "kimi-k2.5",
+        workflow_model_id: str = "kimi-k2.5",
         default_num_results: int = 5,
         max_context_messages: int = 20,
     ):
@@ -265,7 +277,8 @@ class PaperAgentRunner:
         self.agent = create_paper_agent(
             api_key=api_key,
             base_url=base_url,
-            model_id=model_id,
+            chat_model_id=chat_model_id,
+            workflow_model_id=workflow_model_id,
             default_num_results=default_num_results,
             papers_db=self.papers_db,
         )
