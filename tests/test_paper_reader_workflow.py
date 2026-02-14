@@ -220,11 +220,87 @@ class TestPaperReaderWorkflow:
         
         report = workflow._generate_report("test_id", analysis, extracted)
         
-        assert "# Bioinformatics Analysis Report" in report
+        assert "# Test Paper" in report
         assert "Test Paper" in report
         assert "Quality Control" in report
         assert "FastQC" in report
         assert "fastqc *.fastq.gz" in report
+
+    def test_read_paper_actions_from_cached_md(self):
+        """read_paper should support command-line style actions on cached canonical MD."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from agent.paperReaderWorkflow import PaperReaderWorkflow
+
+            workflow = PaperReaderWorkflow(
+                papers_dir=Path(tmpdir),
+                api_key="test_key",
+                session_id="s-test",
+                storage_mode="sandboxed",
+            )
+            paper_ref = "https://arxiv.org/pdf/2103.03404.pdf"
+            paper_id = "2103_03404"
+            md_path = workflow.md_dir / f"{paper_id}.md"
+            md_path.write_text(
+                "\n".join(
+                    [
+                        "# Title",
+                        "Intro line",
+                        "## Method",
+                        "Use FastQC pipeline",
+                        "## Results",
+                        "Accuracy improved",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            workflow.db.register_authorized_refs([paper_ref])
+            workflow.db.save_extracted_content(
+                paper_id,
+                "dummy text",
+                str(workflow.extracted_dir / paper_id / "images"),
+                canonical_md_path=str(md_path),
+            )
+            workflow.db.update_status(paper_id, "completed")
+
+            head = json.loads(workflow.read_paper(paper_ref, action="head", max_lines=2))
+            assert head["action"] == "head"
+            assert "Title" in head["content"]
+
+            tail = json.loads(workflow.read_paper(paper_ref, action="tail", max_lines=1))
+            assert tail["content"] == "Accuracy improved"
+
+            cat = json.loads(
+                workflow.read_paper(paper_ref, action="cat", start_line=2, max_lines=3)
+            )
+            assert cat["start_line"] == 2
+            assert cat["end_line"] == 4
+            assert "Intro line" in cat["content"]
+            assert "Use FastQC pipeline" in cat["content"]
+
+            grep = json.loads(workflow.read_paper(paper_ref, action="grep", pattern="fastqc"))
+            assert grep["match_count"] == 1
+            assert "Use FastQC pipeline" in grep["matches"][0]["match"]
+
+            outline = json.loads(workflow.read_paper(paper_ref, action="outline"))
+            assert len(outline["headings"]) == 3
+            assert outline["headings"][0]["heading"] == "# Title"
+
+    def test_read_paper_rejects_unauthorized_ref_in_sandbox(self):
+        """Sandbox mode should block reading papers not authorized by session registry."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from agent.paperReaderWorkflow import PaperReaderWorkflow
+
+            workflow = PaperReaderWorkflow(
+                papers_dir=Path(tmpdir),
+                api_key="test_key",
+                session_id="s-test",
+                storage_mode="sandboxed",
+            )
+            result = json.loads(
+                workflow.read_paper("https://arxiv.org/pdf/9999.99999.pdf", action="head")
+            )
+            assert result["success"] is False
+            assert result["error"] == "paper_not_authorized_for_session"
 
 
 if __name__ == "__main__":

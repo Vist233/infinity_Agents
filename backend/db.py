@@ -13,9 +13,11 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id UUID PRIMARY KEY,
                     title VARCHAR(255) DEFAULT 'New chat',
+                    storage_mode VARCHAR(20) DEFAULT 'legacy',
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
+                ALTER TABLE sessions ADD COLUMN IF NOT EXISTS storage_mode VARCHAR(20) DEFAULT 'legacy';
                 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions (updated_at DESC);
                 
                 CREATE TABLE IF NOT EXISTS messages (
@@ -51,15 +53,20 @@ async def close_db(app) -> None:
     if pool:
         await pool.close()
 
-async def insert_session(pool: asyncpg.Pool, session_id: str, title: str = "新对话") -> None:
+async def insert_session(
+    pool: asyncpg.Pool,
+    session_id: str,
+    title: str = "新对话",
+    storage_mode: str = "sandboxed",
+) -> None:
     """
     在 sessions 表中插入新记录
     """
     query = """
-        INSERT INTO sessions (session_id, title) 
-        VALUES ($1, $2)
+        INSERT INTO sessions (session_id, title, storage_mode) 
+        VALUES ($1, $2, $3)
     """
-    await pool.execute(query, session_id, title)
+    await pool.execute(query, session_id, title, storage_mode)
 
 
 
@@ -95,7 +102,7 @@ async def get_all_sessions(pool):
     从数据库获取所有会话列表，按最后更新时间倒序排列
     """
     query = """
-        SELECT session_id, title, created_at, updated_at 
+        SELECT session_id, title, created_at, updated_at, storage_mode
         FROM sessions 
         ORDER BY updated_at DESC;
     """
@@ -109,6 +116,7 @@ async def get_all_sessions(pool):
                     "title": row["title"],
                     "created_at": row["created_at"].isoformat(),
                     "updated_at": row["updated_at"].isoformat(),
+                    "storage_mode": row["storage_mode"] or "legacy",
                 }
                 for row in rows
             ]
@@ -184,3 +192,31 @@ async def get_session_messages(pool, session_id: str):
     except Exception as e:
         logging.error(f"Error fetching messages for session {session_id}: {e}")
         return []
+
+
+async def get_session(pool: asyncpg.Pool, session_id: str):
+    """
+    获取单个 session 元信息。
+    """
+    query = """
+        SELECT session_id, title, created_at, updated_at, storage_mode
+        FROM sessions
+        WHERE session_id = $1
+        LIMIT 1;
+    """
+    u_id = uuid.UUID(session_id)
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(query, u_id)
+            if not row:
+                return None
+            return {
+                "session_id": str(row["session_id"]),
+                "title": row["title"],
+                "created_at": row["created_at"].isoformat(),
+                "updated_at": row["updated_at"].isoformat(),
+                "storage_mode": row["storage_mode"] or "legacy",
+            }
+    except Exception as e:
+        logging.error(f"Error fetching session {session_id}: {e}")
+        return None

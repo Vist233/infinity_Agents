@@ -28,6 +28,7 @@ class PaperRecord:
     pdf_path: Optional[str] = None
     images_dir: Optional[str] = None
     extracted_text: Optional[str] = None
+    canonical_md_path: Optional[str] = None
     report_md: Optional[str] = None
     report_pdf_path: Optional[str] = None
     created_at: Optional[str] = None
@@ -62,11 +63,19 @@ class PapersDatabase:
                     pdf_path TEXT,
                     images_dir TEXT,
                     extracted_text TEXT,
+                    canonical_md_path TEXT,
                     report_md TEXT,
                     report_pdf_path TEXT,
                     created_at TEXT,
                     updated_at TEXT,
                     status TEXT DEFAULT 'pending'
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS authorized_papers (
+                    ref TEXT PRIMARY KEY,
+                    source TEXT,
+                    created_at TEXT
                 )
             """)
             conn.execute("""
@@ -151,15 +160,43 @@ class PapersDatabase:
         paper_id: str,
         text: str,
         images_dir: str,
+        canonical_md_path: Optional[str] = None,
     ) -> None:
         """Save extracted PDF content."""
         with self._get_connection() as conn:
             conn.execute("""
                 UPDATE papers 
-                SET extracted_text = ?, images_dir = ?, updated_at = ?
+                SET extracted_text = ?, images_dir = ?, canonical_md_path = ?, updated_at = ?
                 WHERE paper_id = ?
-            """, (text, images_dir, datetime.utcnow().isoformat(), paper_id))
+            """, (text, images_dir, canonical_md_path, datetime.utcnow().isoformat(), paper_id))
             conn.commit()
+
+    def register_authorized_refs(self, refs: List[str], source: str = "search_paper") -> None:
+        """Persist paper references that are authorized for this session."""
+        now = datetime.utcnow().isoformat()
+        normalized = [r.strip() for r in refs if isinstance(r, str) and r.strip()]
+        if not normalized:
+            return
+        with self._get_connection() as conn:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO authorized_papers (ref, source, created_at)
+                VALUES (?, ?, ?)
+                """,
+                [(r, source, now) for r in normalized],
+            )
+            conn.commit()
+
+    def is_authorized_ref(self, ref: str) -> bool:
+        """Check if a paper reference is authorized in this session."""
+        if not ref:
+            return False
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT ref FROM authorized_papers WHERE ref = ?",
+                (ref.strip(),),
+            ).fetchone()
+            return row is not None
     
     def save_report(
         self,

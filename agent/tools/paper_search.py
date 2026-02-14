@@ -13,6 +13,7 @@ from functools import wraps
 
 from agno.tools import Toolkit
 from agno.utils.log import log_debug, logger
+from agent.papers_db import PapersDatabase
 
 try:
     import arxiv
@@ -107,20 +108,38 @@ class PaperSearchTools(Toolkit):
         cache_middleware: Optional[CacheMiddleware] = None,
         size_middleware: Optional[SizeMiddleware] = None,
         download_dir: Optional[Path] = None,
+        papers_db: Optional[PapersDatabase] = None,
         **kwargs,
     ):
         self.arxiv_client = arxiv.Client()
         self.download_dir = download_dir or DOWNLOAD_DIR
         self.cache = cache_middleware or CacheMiddleware()
         self.size_limit = size_middleware or SizeMiddleware()
+        self.papers_db = papers_db
 
         tools: List[Any] = []
         if enable_search:
-            tools.append(self.search_papers)
+            tools.extend([self.search_paper, self.search_papers])
         if enable_read:
             tools.append(self.read_paper_content)
 
         super().__init__(name="paper_search_tools", tools=tools, **kwargs)
+
+    def _register_authorized_papers(self, papers: List[Dict]) -> None:
+        """Persist references returned by search so downstream tools can enforce authorization."""
+        if self.papers_db is None:
+            return
+        refs: List[str] = []
+        for p in papers:
+            for key in ("id", "entry_id", "pdf_url", "url"):
+                value = p.get(key)
+                if isinstance(value, str) and value.strip():
+                    refs.append(value.strip())
+        self.papers_db.register_authorized_refs(refs, source="search_paper")
+
+    def search_paper(self, query: str, num_results: int = 5) -> str:
+        """Primary paper search entry (alias of search_papers for compatibility)."""
+        return self.search_papers(query=query, num_results=num_results)
 
     def search_papers(self, query: str, num_results: int = 5) -> str:
         """Search for academic papers on both ArXiv and PubMed.
@@ -163,6 +182,7 @@ class PaperSearchTools(Toolkit):
         # Combine results
         all_articles = arxiv_articles + pubmed_articles
         all_articles = self.size_limit.limit_articles(all_articles[:num_results])
+        self._register_authorized_papers(all_articles)
         
         result = json.dumps(all_articles, indent=2)
         result = self.size_limit.limit_response(result)
@@ -334,4 +354,3 @@ class PaperSearchTools(Toolkit):
 
         self.cache.set("read_paper_content", result, *cache_key_args)
         return result
-

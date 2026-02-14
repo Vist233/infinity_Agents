@@ -8,10 +8,12 @@ import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 interface MarkdownRendererProps {
     content: string;
+    sessionId?: string | null;
 }
 
 const MarkdownRenderer = memo(function MarkdownRenderer({
     content,
+    sessionId,
 }: MarkdownRendererProps) {
     return (
         <ReactMarkdown
@@ -20,6 +22,9 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
                 // Convert img:// protocol to backend HTTP URL before react-markdown's sanitizer strips it
                 if (url.startsWith("img://")) {
                     const filename = url.slice(6);
+                    if (sessionId) {
+                        return `http://localhost:8008/api/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(filename)}`;
+                    }
                     return `http://localhost:8008/api/files/${encodeURIComponent(filename)}`;
                 }
                 return url;

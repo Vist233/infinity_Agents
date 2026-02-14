@@ -35,6 +35,23 @@ class PythonPlottingTools(Toolkit):
 
         super().__init__(name="python_plotting_tools", tools=tools, **kwargs)
 
+    def _is_nearly_blank_image(self, image_path: Path) -> bool:
+        """Detect obviously blank images (e.g., pure white canvases)."""
+        try:
+            from PIL import Image, ImageStat
+
+            img = Image.open(image_path).convert("RGB")
+            stat = ImageStat.Stat(img)
+            mean = stat.mean
+            std = stat.stddev
+            avg_mean = sum(mean) / len(mean)
+            avg_std = sum(std) / len(std)
+            # Very bright with almost no variance => visually blank.
+            return avg_mean >= 253 and avg_std < 1.0
+        except Exception:
+            # If detection fails, do not block chart output.
+            return False
+
     def create_chart(
         self,
         code: str,
@@ -74,6 +91,15 @@ class PythonPlottingTools(Toolkit):
                 # Save the figure
                 plt.savefig(str(output_path), dpi=150, bbox_inches="tight")
                 plt.close("all")
+
+                if self._is_nearly_blank_image(output_path):
+                    output_path.unlink(missing_ok=True)
+                    return json.dumps({
+                        "error": (
+                            "Generated image is blank. Please ensure the plotting code "
+                            "actually draws visible content before saving."
+                        )
+                    })
 
             elif chart_type == "plotly":
                 import plotly.express as px

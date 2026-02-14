@@ -18,7 +18,7 @@ import json
 import hashlib
 import requests
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Union, Literal
 from dataclasses import dataclass
 
 # Fix imports when running as script
@@ -113,26 +113,39 @@ class PaperReaderWorkflow(Toolkit):
         self,
         papers_dir: Optional[Path] = None,
         db: Optional[PapersDatabase] = None,
+        session_id: Optional[str] = None,
+        storage_mode: Literal["legacy", "sandboxed"] = "legacy",
         api_key: Optional[str] = None,
         base_url: str = "https://api.moonshot.cn/v1",
         model_id: str = "kimi-k2-thinking-turbo",
         **kwargs,
     ):
+        self.session_id = session_id
+        self.storage_mode = storage_mode
         self.papers_dir = papers_dir or PAPERS_DIR
         self.papers_dir.mkdir(parents=True, exist_ok=True)
-        
+
+        self.downloads_dir = self.papers_dir / "downloads"
+        self.downloads_dir.mkdir(parents=True, exist_ok=True)
+
+        self.extracted_dir = self.papers_dir / "extracted"
+        self.extracted_dir.mkdir(parents=True, exist_ok=True)
+
+        self.md_dir = self.papers_dir / "md"
+        self.md_dir.mkdir(parents=True, exist_ok=True)
+
         self.reports_dir = self.papers_dir / "reports"
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         
         self.db = db or PapersDatabase(self.papers_dir / "papers.db")
-        self.pdf_extractor = PDFExtractor(output_base_dir=self.papers_dir)
+        self.pdf_extractor = PDFExtractor(output_base_dir=self.extracted_dir)
         
         # AI Model setup
         self.api_key = api_key or os.getenv("MOONSHOT_API_KEY")
         self.base_url = base_url
         self.model_id = model_id
         
-        tools = [self.analyze_paper]
+        tools = [self.analyze_paper, self.read_paper]
         super().__init__(name="paper_reader_workflow", tools=tools, **kwargs)
     
     def _sanitize_filename(self, filename: str, max_length: int = 100) -> str:
@@ -179,12 +192,135 @@ class PaperReaderWorkflow(Toolkit):
             return arxiv_id.replace(".", "_")
         # Fallback to hash
         return hashlib.md5(url_or_path.encode()).hexdigest()[:16]
+
+    def _resolve_session_local_file(self, raw: str) -> Optional[Path]:
+        """Resolve local files inside the current session workspace."""
+        candidate = Path(raw)
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+        else:
+            resolved = (self.papers_dir / raw).resolve()
+        root = self.papers_dir.resolve()
+        if str(resolved).startswith(str(root)) and resolved.exists() and resolved.is_file():
+            return resolved
+        return None
+
+    def _is_authorized_ref(self, paper_ref: str) -> bool:
+        """Validate access to a paper reference in sandboxed mode."""
+        if self.storage_mode != "sandboxed":
+            return True
+
+        local_file = self._resolve_session_local_file(paper_ref)
+        if local_file is not None:
+            return True
+
+        arxiv_id = self._extract_arxiv_id(paper_ref)
+        if self.db.is_authorized_ref(paper_ref):
+            return True
+        if arxiv_id and self.db.is_authorized_ref(arxiv_id):
+            return True
+        if arxiv_id and self.db.is_authorized_ref(arxiv_id.replace(".", "_")):
+            return True
+        return False
+
+    def _canonical_md_path(self, paper_id: str) -> Path:
+        return self.md_dir / f"{paper_id}.md"
+
+    def _build_canonical_md(self, paper_id: str, extracted: ExtractedContent) -> str:
+        """Generate a canonical Markdown view for line-based reading."""
+        parts: List[str] = [
+            f"# Paper {paper_id}",
+            "",
+            "## Source Text (By Page)",
+            "",
+        ]
+        for page in extracted.pages:
+            page_num = page.get("page_num", "?")
+            text = page.get("text", "") or ""
+            parts.append(f"### Page {page_num}")
+            parts.append("")
+            parts.append(text if text.strip() else "[No text extracted on this page]")
+            parts.append("")
+        return "\n".join(parts)
+
+    def _ensure_materialized_for_read(self, paper_ref: str) -> Dict[str, Any]:
+        """Ensure PDF is downloaded/extracted and canonical MD is materialized for read_paper."""
+        if not self._is_authorized_ref(paper_ref):
+            return {
+                "success": False,
+                "error": "paper_not_authorized_for_session",
+                "message": "该论文不在当前会话可访问范围。请先使用 search_paper。",
+            }
+
+        paper_id = self._generate_paper_id(paper_ref)
+        existing = self.db.get_by_id(paper_id)
+        md_path = self._canonical_md_path(paper_id)
+
+        if existing and existing.canonical_md_path and Path(existing.canonical_md_path).exists():
+            return {
+                "success": True,
+                "paper_id": paper_id,
+                "md_path": Path(existing.canonical_md_path),
+                "source_status": "from_cache",
+                "cached": True,
+            }
+        if md_path.exists():
+            return {
+                "success": True,
+                "paper_id": paper_id,
+                "md_path": md_path,
+                "source_status": "from_cache",
+                "cached": True,
+            }
+
+        if self._is_url(paper_ref):
+            pdf_path = self._download_pdf(paper_ref, paper_id)
+            source_url = paper_ref
+            local_path = None
+        else:
+            local = self._resolve_session_local_file(paper_ref) if self.storage_mode == "sandboxed" else Path(paper_ref)
+            if local is None:
+                return {
+                    "success": False,
+                    "error": "paper_not_authorized_for_session",
+                    "message": "本地文件不在当前会话目录下。",
+                }
+            pdf_path = local
+            source_url = None
+            local_path = str(local)
+
+        record = PaperRecord(
+            paper_id=paper_id,
+            source_url=source_url,
+            local_path=local_path,
+            pdf_path=str(pdf_path),
+            status="processing",
+        )
+        self.db.upsert(record)
+
+        extracted = self.pdf_extractor.extract(str(pdf_path), paper_id)
+        canonical_md = self._build_canonical_md(paper_id, extracted)
+        md_path.write_text(canonical_md, encoding="utf-8")
+
+        self.db.save_extracted_content(
+            paper_id,
+            extracted.text,
+            str(extracted.images_dir),
+            canonical_md_path=str(md_path),
+        )
+        self.db.update_status(paper_id, "completed")
+
+        return {
+            "success": True,
+            "paper_id": paper_id,
+            "md_path": md_path,
+            "source_status": "downloaded_and_extracted",
+            "cached": False,
+        }
     
     def _download_pdf(self, url: str, paper_id: str) -> Path:
         """Download PDF from URL (supports arXiv URLs)."""
-        pdf_dir = self.papers_dir / paper_id
-        pdf_dir.mkdir(parents=True, exist_ok=True)
-        pdf_path = pdf_dir / f"{paper_id}.pdf"
+        pdf_path = self.downloads_dir / f"{paper_id}.pdf"
         
         if pdf_path.exists():
             log_debug(f"PDF already exists: {pdf_path}")
@@ -452,6 +588,14 @@ class PaperReaderWorkflow(Toolkit):
             str: JSON containing the workflow result with report paths.
         """
         try:
+            if not self._is_authorized_ref(pdf_url_or_path):
+                return json.dumps({
+                    "paper_id": None,
+                    "success": False,
+                    "error": "paper_not_authorized_for_session",
+                    "message": "该论文不在当前会话可访问范围。请先使用 search_paper。",
+                }, indent=2)
+
             paper_id = self._generate_paper_id(pdf_url_or_path)
             
             # Check cache first
@@ -490,10 +634,14 @@ class PaperReaderWorkflow(Toolkit):
             log_debug(f"Extracting content from {pdf_path}")
             extracted = self.pdf_extractor.extract(str(pdf_path), paper_id)
             
+            canonical_md = self._build_canonical_md(paper_id, extracted)
+            canonical_md_path = self._canonical_md_path(paper_id)
+            canonical_md_path.write_text(canonical_md, encoding="utf-8")
             self.db.save_extracted_content(
                 paper_id,
                 extracted.text,
                 str(extracted.images_dir),
+                canonical_md_path=str(canonical_md_path),
             )
             
             # Analyze with AI
@@ -549,6 +697,7 @@ class PaperReaderWorkflow(Toolkit):
                 "title": result.title,
                 "report_md_path": result.report_md_path,
                 "report_pdf_path": result.report_pdf_path,
+                "canonical_md_path": str(canonical_md_path),
                 "cached": result.cached,
             }, indent=2)
             
@@ -561,6 +710,90 @@ class PaperReaderWorkflow(Toolkit):
                 "success": False,
                 "error": str(e),
             }, indent=2)
+
+    def read_paper(
+        self,
+        paper_ref: str,
+        action: str = "cat",
+        pattern: Optional[str] = None,
+        start_line: int = 1,
+        max_lines: int = 200,
+        case_sensitive: bool = False,
+    ) -> str:
+        """Read paper content in command-line style from canonical Markdown."""
+        materialized = self._ensure_materialized_for_read(paper_ref)
+        if not materialized.get("success"):
+            return json.dumps(materialized, indent=2, ensure_ascii=False)
+
+        paper_id = materialized["paper_id"]
+        md_path: Path = materialized["md_path"]
+        source_status = materialized["source_status"]
+        cached = materialized["cached"]
+
+        lines = md_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        total_lines = len(lines)
+        action = (action or "cat").lower()
+
+        result: Dict[str, Any] = {
+            "paper_id": paper_id,
+            "md_path": str(md_path),
+            "action": action,
+            "cached": cached,
+            "source_status": source_status,
+            "total_lines": total_lines,
+        }
+
+        if action == "head":
+            n = max(1, min(max_lines, total_lines))
+            result["content"] = "\n".join(lines[:n])
+            return json.dumps(result, indent=2, ensure_ascii=False)
+
+        if action == "tail":
+            n = max(1, min(max_lines, total_lines))
+            result["content"] = "\n".join(lines[-n:])
+            return json.dumps(result, indent=2, ensure_ascii=False)
+
+        if action == "cat":
+            start = max(1, start_line)
+            end = min(total_lines, start + max_lines - 1)
+            result["start_line"] = start
+            result["end_line"] = end
+            result["content"] = "\n".join(lines[start - 1:end])
+            return json.dumps(result, indent=2, ensure_ascii=False)
+
+        if action == "grep":
+            if not pattern:
+                result["error"] = "pattern is required for grep action"
+                return json.dumps(result, indent=2, ensure_ascii=False)
+            flags = 0 if case_sensitive else re.IGNORECASE
+            matches: List[Dict[str, Any]] = []
+            regex = re.compile(pattern, flags=flags)
+            for idx, line in enumerate(lines, start=1):
+                if regex.search(line):
+                    ctx_start = max(1, idx - 2)
+                    ctx_end = min(total_lines, idx + 2)
+                    matches.append({
+                        "line": idx,
+                        "match": line,
+                        "context": "\n".join(lines[ctx_start - 1:ctx_end]),
+                    })
+                if len(matches) >= max_lines:
+                    break
+            result["pattern"] = pattern
+            result["matches"] = matches
+            result["match_count"] = len(matches)
+            return json.dumps(result, indent=2, ensure_ascii=False)
+
+        if action == "outline":
+            headings = []
+            for idx, line in enumerate(lines, start=1):
+                if line.startswith("#"):
+                    headings.append({"line": idx, "heading": line.strip()})
+            result["headings"] = headings
+            return json.dumps(result, indent=2, ensure_ascii=False)
+
+        result["error"] = f"unsupported action: {action}"
+        return json.dumps(result, indent=2, ensure_ascii=False)
 
 
 def create_paper_reader_workflow(
