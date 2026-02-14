@@ -7,6 +7,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SendHorizontal, Square, User, Bot, Plus, Pencil, Terminal, FileText, Microscope, MessageCircle, Trash2, Loader2 } from "lucide-react";
 import MarkdownRenderer from "@/components/markdown-renderer";
+import { getApiBase } from "@/lib/runtime-config";
 
 interface Message {
   role: "user" | "assistant";
@@ -74,10 +75,7 @@ export default function ChatPage() {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
 
-  const API_BASE =
-    typeof window !== "undefined"
-      ? `${window.location.protocol}//${window.location.hostname}:8008`
-      : "http://localhost:8008";
+  const API_BASE = getApiBase();
   const WS_BASE = API_BASE.replace(/^http/, "ws");
   const messages = useMemo(() => (sessionId ? (sessionMessagesMap[sessionId] || []) : []), [sessionId, sessionMessagesMap]);
   const currentRunState = sessionId ? (sessionRunMap[sessionId] || DEFAULT_RUN_STATE) : DEFAULT_RUN_STATE;

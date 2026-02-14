@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { getApiBase } from "@/lib/runtime-config";
 
 interface MarkdownRendererProps {
     content: string;
@@ -15,6 +16,8 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
     content,
     sessionId,
 }: MarkdownRendererProps) {
+    const apiOrigin = getApiBase();
+
     return (
         <ReactMarkdown
             remarkPlugins={[remarkGfm]}
@@ -23,9 +26,9 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
                 if (url.startsWith("img://")) {
                     const filename = url.slice(6);
                     if (sessionId) {
-                        return `http://localhost:8008/api/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(filename)}`;
+                        return `${apiOrigin}/api/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(filename)}`;
                     }
-                    return `http://localhost:8008/api/files/${encodeURIComponent(filename)}`;
+                    return `${apiOrigin}/api/files/${encodeURIComponent(filename)}`;
                 }
                 return url;
             }}
