@@ -1,7 +1,4 @@
 """
-DEPRECATED: This workflow is retained for compatibility only and is no longer
-wired into the default PaperAgent toolset.
-
 Paper Reader Workflow - Analyze bioinformatics papers and generate methodology reports.
 
 This workflow:
@@ -20,9 +17,11 @@ import re
 import json
 import hashlib
 import requests
+from html import unescape
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Union, Literal
+from typing import Optional, List, Dict, Any, Union
 from dataclasses import dataclass
+from urllib.parse import urljoin
 
 # Fix imports when running as script
 if __name__ == "__main__":
@@ -37,8 +36,8 @@ from agno.models.openai import OpenAILike
 from agno.utils.log import log_debug, logger
 
 # Local imports
-from agent.papers_repo_pg import PapersRepoPG, PaperRecord
-from agent.tools.pdf_extractor import PDFExtractor, ExtractedContent
+from standalone_paper_tools.papers_db import PapersDatabase, PaperRecord
+from standalone_paper_tools.pdf_extractor import PDFExtractor, ExtractedContent
 
 
 # Default directories
@@ -115,41 +114,27 @@ class PaperReaderWorkflow(Toolkit):
     def __init__(
         self,
         papers_dir: Optional[Path] = None,
-        db: Optional[PapersRepoPG] = None,
-        session_id: Optional[str] = None,
-        storage_mode: Literal["legacy", "sandboxed"] = "legacy",
+        db: Optional[PapersDatabase] = None,
         api_key: Optional[str] = None,
         base_url: str = "https://api.moonshot.cn/v1",
         model_id: str = "kimi-k2-thinking-turbo",
         **kwargs,
     ):
-        self.session_id = session_id
-        self.storage_mode = storage_mode
         self.papers_dir = papers_dir or PAPERS_DIR
         self.papers_dir.mkdir(parents=True, exist_ok=True)
-
-        self.downloads_dir = self.papers_dir / "downloads"
-        self.downloads_dir.mkdir(parents=True, exist_ok=True)
-
-        self.extracted_dir = self.papers_dir / "extracted"
-        self.extracted_dir.mkdir(parents=True, exist_ok=True)
-
-        self.md_dir = self.papers_dir / "md"
-        self.md_dir.mkdir(parents=True, exist_ok=True)
-
+        
         self.reports_dir = self.papers_dir / "reports"
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         
-        effective_session_id = session_id or "00000000-0000-0000-0000-000000000000"
-        self.db = db or PapersRepoPG(session_id=effective_session_id)
-        self.pdf_extractor = PDFExtractor(output_base_dir=self.extracted_dir)
+        self.db = db or PapersDatabase()
+        self.pdf_extractor = PDFExtractor(output_base_dir=self.papers_dir)
         
         # AI Model setup
         self.api_key = api_key or os.getenv("MOONSHOT_API_KEY")
         self.base_url = base_url
         self.model_id = model_id
         
-        tools = [self.analyze_paper, self.read_paper]
+        tools = [self.analyze_paper]
         super().__init__(name="paper_reader_workflow", tools=tools, **kwargs)
     
     def _sanitize_filename(self, filename: str, max_length: int = 100) -> str:
@@ -196,163 +181,95 @@ class PaperReaderWorkflow(Toolkit):
             return arxiv_id.replace(".", "_")
         # Fallback to hash
         return hashlib.md5(url_or_path.encode()).hexdigest()[:16]
-
-    def _resolve_session_local_file(self, raw: str) -> Optional[Path]:
-        """Resolve local files inside the current session workspace."""
-        candidate = Path(raw)
-        if candidate.is_absolute():
-            resolved = candidate.resolve()
-        else:
-            resolved = (self.papers_dir / raw).resolve()
-        root = self.papers_dir.resolve()
-        if str(resolved).startswith(str(root)) and resolved.exists() and resolved.is_file():
-            return resolved
-        return None
-
-    def _is_authorized_ref(self, paper_ref: str, paper_id: Optional[str] = None) -> bool:
-        """Validate access to a paper reference in sandboxed mode."""
-        if self.storage_mode != "sandboxed":
-            return True
-
-        local_file = self._resolve_session_local_file(paper_ref)
-        if local_file is not None:
-            return True
-
-        arxiv_id = self._extract_arxiv_id(paper_ref)
-        if self.db.is_authorized_ref(paper_ref, paper_id=paper_id):
-            return True
-        if arxiv_id and self.db.is_authorized_ref(arxiv_id, paper_id=paper_id):
-            return True
-        if arxiv_id and self.db.is_authorized_ref(arxiv_id.replace(".", "_"), paper_id=paper_id):
-            return True
-        if paper_id and self.db.is_paper_linked_to_session(self.session_id or "", paper_id):
-            return True
-        return False
-
-    def _canonical_md_path(self, paper_id: str) -> Path:
-        return self.md_dir / f"{paper_id}.md"
-
-    def _build_canonical_md(self, paper_id: str, extracted: ExtractedContent) -> str:
-        """Generate a canonical Markdown view for line-based reading."""
-        parts: List[str] = [
-            f"# Paper {paper_id}",
-            "",
-            "## Source Text (By Page)",
-            "",
-        ]
-        for page in extracted.pages:
-            page_num = page.get("page_num", "?")
-            text = page.get("text", "") or ""
-            parts.append(f"### Page {page_num}")
-            parts.append("")
-            parts.append(text if text.strip() else "[No text extracted on this page]")
-            parts.append("")
-        return "\n".join(parts)
-
-    def _ensure_materialized_for_read(self, paper_ref: str) -> Dict[str, Any]:
-        """Ensure PDF is downloaded/extracted and canonical MD is materialized for read_paper."""
-        paper_id = self._generate_paper_id(paper_ref)
-        if not self._is_authorized_ref(paper_ref, paper_id=paper_id):
-            return {
-                "success": False,
-                "error": "paper_not_authorized_for_session",
-                "message": "该论文不在当前会话可访问范围。请先使用 search_paper。",
-            }
-
-        if self.session_id:
-            self.db.link_paper_to_session(self.session_id, paper_id, source_ref=paper_ref)
-        existing = self.db.get_by_id(paper_id)
-        md_path = self._canonical_md_path(paper_id)
-
-        if existing and existing.canonical_md_path and Path(existing.canonical_md_path).exists():
-            return {
-                "success": True,
-                "paper_id": paper_id,
-                "md_path": Path(existing.canonical_md_path),
-                "source_status": "from_cache",
-                "cached": True,
-            }
-        if md_path.exists():
-            return {
-                "success": True,
-                "paper_id": paper_id,
-                "md_path": md_path,
-                "source_status": "from_cache",
-                "cached": True,
-            }
-
-        if self._is_url(paper_ref):
-            pdf_path = self._download_pdf(paper_ref, paper_id)
-            source_url = paper_ref
-            local_path = None
-        else:
-            local = self._resolve_session_local_file(paper_ref) if self.storage_mode == "sandboxed" else Path(paper_ref)
-            if local is None:
-                return {
-                    "success": False,
-                    "error": "paper_not_authorized_for_session",
-                    "message": "本地文件不在当前会话目录下。",
-                }
-            pdf_path = local
-            source_url = None
-            local_path = str(local)
-
-        record = PaperRecord(
-            paper_id=paper_id,
-            source_url=source_url,
-            local_path=local_path,
-            pdf_path=str(pdf_path),
-            status="processing",
-        )
-        self.db.upsert(record)
-
-        extracted = self.pdf_extractor.extract(str(pdf_path), paper_id)
-        canonical_md = self._build_canonical_md(paper_id, extracted)
-        md_path.write_text(canonical_md, encoding="utf-8")
-
-        self.db.save_extracted_content(
-            paper_id,
-            extracted.text,
-            str(extracted.images_dir),
-            canonical_md_path=str(md_path),
-        )
-        self.db.update_status(paper_id, "completed")
-
-        return {
-            "success": True,
-            "paper_id": paper_id,
-            "md_path": md_path,
-            "source_status": "downloaded_and_extracted",
-            "cached": False,
-        }
     
     def _download_pdf(self, url: str, paper_id: str) -> Path:
-        """Download PDF from URL (supports arXiv URLs)."""
-        pdf_path = self.downloads_dir / f"{paper_id}.pdf"
+        """Download PDF from URL (supports arXiv and full_text_url pages like PMC)."""
+        pdf_dir = self.papers_dir / paper_id
+        pdf_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = pdf_dir / f"{paper_id}.pdf"
         
         if pdf_path.exists():
             log_debug(f"PDF already exists: {pdf_path}")
             return pdf_path
         
-        # Handle arXiv URLs
+        # Handle arXiv URLs directly
         download_url = url
         if "arxiv.org" in url:
             arxiv_id = self._extract_arxiv_id(url)
             if arxiv_id:
                 download_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-        
+
+        headers = {"User-Agent": "Infinity-Agent/1.0"}
         log_debug(f"Downloading PDF from: {download_url}")
-        response = requests.get(download_url, timeout=60)
+        response = requests.get(download_url, timeout=60, headers=headers)
         response.raise_for_status()
+
+        if not self._is_pdf_response(response):
+            resolved_pdf_url = self._extract_pdf_url_from_html(response.text, download_url)
+            if not resolved_pdf_url:
+                raise ValueError(f"URL does not provide PDF content: {download_url}")
+
+            log_debug(f"Resolved PDF URL from full text page: {resolved_pdf_url}")
+            response = requests.get(resolved_pdf_url, timeout=60, headers=headers)
+            response.raise_for_status()
+            if not self._is_pdf_response(response):
+                raise ValueError(f"Resolved URL is not a PDF: {resolved_pdf_url}")
         
         with open(pdf_path, "wb") as f:
             f.write(response.content)
         
         return pdf_path
+
+    def _is_pdf_response(self, response: requests.Response) -> bool:
+        """Check whether an HTTP response looks like PDF content."""
+        content_type = str(response.headers.get("Content-Type", "")).lower()
+        if "pdf" in content_type:
+            return True
+        return bool(response.content and response.content.startswith(b"%PDF"))
+
+    def _extract_pdf_url_from_html(self, html: str, base_url: str) -> Optional[str]:
+        """Extract a PDF URL from full-text HTML pages (e.g., PMC)."""
+        if not html:
+            return None
+
+        meta_match = re.search(
+            r'<meta[^>]+name=["\']citation_pdf_url["\'][^>]+content=["\']([^"\']+)["\']',
+            html,
+            flags=re.IGNORECASE,
+        )
+        if meta_match:
+            return urljoin(base_url, meta_match.group(1))
+
+        href_match = re.search(
+            r'href=["\']([^"\']+\.pdf(?:\?[^"\']*)?)["\']',
+            html,
+            flags=re.IGNORECASE,
+        )
+        if href_match:
+            return urljoin(base_url, href_match.group(1))
+
+        return None
     
     def _is_url(self, input_str: str) -> bool:
         """Check if input is a URL."""
         return input_str.startswith(("http://", "https://"))
+
+    def _extract_text_from_full_text_url(self, url: str) -> str:
+        """Extract readable text from a full-text HTML page."""
+        headers = {"User-Agent": "Infinity-Agent/1.0"}
+        response = requests.get(url, timeout=60, headers=headers)
+        response.raise_for_status()
+        html = response.text
+        if not html:
+            return ""
+
+        # Strip script/style and tags, keep plain text for fallback analysis.
+        html = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.IGNORECASE)
+        html = re.sub(r"<style[\s\S]*?</style>", " ", html, flags=re.IGNORECASE)
+        text = re.sub(r"<[^>]+>", " ", html)
+        text = unescape(text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
     
     def _analyze_with_ai(self, text: str, image_paths: List[Path]) -> Dict[str, Any]:
         """Analyze paper content with AI."""
@@ -587,9 +504,10 @@ class PaperReaderWorkflow(Toolkit):
         the bioinformatics analysis pipeline, tools, and parameters used.
         
         Args:
-            pdf_url_or_path (str): Either an arXiv PDF URL or a local file path.
+            pdf_url_or_path (str): Either a PDF URL, a full_text_url page (e.g. PMC article page), or a local file path.
                 Examples:
                 - "https://arxiv.org/pdf/2103.03404.pdf"
+                - "https://pmc.ncbi.nlm.nih.gov/articles/PMC12892343/"
                 - "/path/to/paper.pdf"
         
         Returns:
@@ -597,17 +515,6 @@ class PaperReaderWorkflow(Toolkit):
         """
         try:
             paper_id = self._generate_paper_id(pdf_url_or_path)
-            is_url = self._is_url(pdf_url_or_path)
-            if not self._is_authorized_ref(pdf_url_or_path, paper_id=paper_id):
-                return json.dumps({
-                    "paper_id": None,
-                    "success": False,
-                    "error": "paper_not_authorized_for_session",
-                    "message": "该论文不在当前会话可访问范围。请先使用 search_paper。",
-                }, indent=2)
-
-            if self.session_id:
-                self.db.link_paper_to_session(self.session_id, paper_id, source_ref=pdf_url_or_path)
             
             # Check cache first
             cached_record = self.db.get_completed(paper_id)
@@ -620,36 +527,38 @@ class PaperReaderWorkflow(Toolkit):
                     "report_md_path": str(self.reports_dir / f"{paper_id}.md"),
                     "report_pdf_path": cached_record.report_pdf_path,
                 }, indent=2)
-
-            local_path_value: Optional[str] = None
-            if not is_url:
-                if self.storage_mode == "sandboxed":
-                    local = self._resolve_session_local_file(pdf_url_or_path)
-                    if local is None:
-                        return json.dumps({
-                            "paper_id": paper_id,
-                            "success": False,
-                            "error": "paper_not_authorized_for_session",
-                            "message": "本地文件不在当前会话目录下。",
-                        }, indent=2, ensure_ascii=False)
-                    local_path_value = str(local)
-                else:
-                    local_path_value = str(Path(pdf_url_or_path))
             
             # Create or update record
             record = PaperRecord(
                 paper_id=paper_id,
-                source_url=pdf_url_or_path if is_url else None,
-                local_path=local_path_value,
+                source_url=pdf_url_or_path if self._is_url(pdf_url_or_path) else None,
+                local_path=None if self._is_url(pdf_url_or_path) else pdf_url_or_path,
                 status="processing",
             )
             self.db.upsert(record)
             
-            # Get PDF file
-            if is_url:
-                pdf_path = self._download_pdf(pdf_url_or_path, paper_id)
+            # Get PDF file or full-text fallback
+            extracted: Optional[ExtractedContent] = None
+            if self._is_url(pdf_url_or_path):
+                try:
+                    pdf_path = self._download_pdf(pdf_url_or_path, paper_id)
+                except Exception as download_err:
+                    log_debug(f"PDF download failed, trying full-text fallback: {download_err}")
+                    full_text = self._extract_text_from_full_text_url(pdf_url_or_path)
+                    if not full_text:
+                        raise
+                    images_dir = self.papers_dir / paper_id / "images"
+                    images_dir.mkdir(parents=True, exist_ok=True)
+                    extracted = ExtractedContent(
+                        text=full_text,
+                        pages=[{"page_num": 1, "text": full_text, "image_paths": []}],
+                        images_dir=images_dir,
+                        image_count=0,
+                        page_count=1,
+                    )
+                    pdf_path = self.papers_dir / paper_id / f"{paper_id}.pdf"
             else:
-                pdf_path = Path(local_path_value or pdf_url_or_path)
+                pdf_path = Path(pdf_url_or_path)
                 if not pdf_path.exists():
                     raise FileNotFoundError(f"PDF not found: {pdf_path}")
             
@@ -657,17 +566,14 @@ class PaperReaderWorkflow(Toolkit):
             self.db.upsert(record)
             
             # Extract content
-            log_debug(f"Extracting content from {pdf_path}")
-            extracted = self.pdf_extractor.extract(str(pdf_path), paper_id)
+            if extracted is None:
+                log_debug(f"Extracting content from {pdf_path}")
+                extracted = self.pdf_extractor.extract(str(pdf_path), paper_id)
             
-            canonical_md = self._build_canonical_md(paper_id, extracted)
-            canonical_md_path = self._canonical_md_path(paper_id)
-            canonical_md_path.write_text(canonical_md, encoding="utf-8")
             self.db.save_extracted_content(
                 paper_id,
                 extracted.text,
                 str(extracted.images_dir),
-                canonical_md_path=str(canonical_md_path),
             )
             
             # Analyze with AI
@@ -723,7 +629,6 @@ class PaperReaderWorkflow(Toolkit):
                 "title": result.title,
                 "report_md_path": result.report_md_path,
                 "report_pdf_path": result.report_pdf_path,
-                "canonical_md_path": str(canonical_md_path),
                 "cached": result.cached,
             }, indent=2)
             
@@ -736,90 +641,6 @@ class PaperReaderWorkflow(Toolkit):
                 "success": False,
                 "error": str(e),
             }, indent=2)
-
-    def read_paper(
-        self,
-        paper_ref: str,
-        action: str = "cat",
-        pattern: Optional[str] = None,
-        start_line: int = 1,
-        max_lines: int = 200,
-        case_sensitive: bool = False,
-    ) -> str:
-        """Read paper content in command-line style from canonical Markdown."""
-        materialized = self._ensure_materialized_for_read(paper_ref)
-        if not materialized.get("success"):
-            return json.dumps(materialized, indent=2, ensure_ascii=False)
-
-        paper_id = materialized["paper_id"]
-        md_path: Path = materialized["md_path"]
-        source_status = materialized["source_status"]
-        cached = materialized["cached"]
-
-        lines = md_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        total_lines = len(lines)
-        action = (action or "cat").lower()
-
-        result: Dict[str, Any] = {
-            "paper_id": paper_id,
-            "md_path": str(md_path),
-            "action": action,
-            "cached": cached,
-            "source_status": source_status,
-            "total_lines": total_lines,
-        }
-
-        if action == "head":
-            n = max(1, min(max_lines, total_lines))
-            result["content"] = "\n".join(lines[:n])
-            return json.dumps(result, indent=2, ensure_ascii=False)
-
-        if action == "tail":
-            n = max(1, min(max_lines, total_lines))
-            result["content"] = "\n".join(lines[-n:])
-            return json.dumps(result, indent=2, ensure_ascii=False)
-
-        if action == "cat":
-            start = max(1, start_line)
-            end = min(total_lines, start + max_lines - 1)
-            result["start_line"] = start
-            result["end_line"] = end
-            result["content"] = "\n".join(lines[start - 1:end])
-            return json.dumps(result, indent=2, ensure_ascii=False)
-
-        if action == "grep":
-            if not pattern:
-                result["error"] = "pattern is required for grep action"
-                return json.dumps(result, indent=2, ensure_ascii=False)
-            flags = 0 if case_sensitive else re.IGNORECASE
-            matches: List[Dict[str, Any]] = []
-            regex = re.compile(pattern, flags=flags)
-            for idx, line in enumerate(lines, start=1):
-                if regex.search(line):
-                    ctx_start = max(1, idx - 2)
-                    ctx_end = min(total_lines, idx + 2)
-                    matches.append({
-                        "line": idx,
-                        "match": line,
-                        "context": "\n".join(lines[ctx_start - 1:ctx_end]),
-                    })
-                if len(matches) >= max_lines:
-                    break
-            result["pattern"] = pattern
-            result["matches"] = matches
-            result["match_count"] = len(matches)
-            return json.dumps(result, indent=2, ensure_ascii=False)
-
-        if action == "outline":
-            headings = []
-            for idx, line in enumerate(lines, start=1):
-                if line.startswith("#"):
-                    headings.append({"line": idx, "heading": line.strip()})
-            result["headings"] = headings
-            return json.dumps(result, indent=2, ensure_ascii=False)
-
-        result["error"] = f"unsupported action: {action}"
-        return json.dumps(result, indent=2, ensure_ascii=False)
 
 
 def create_paper_reader_workflow(

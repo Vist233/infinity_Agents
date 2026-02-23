@@ -1,6 +1,6 @@
 # Infinity Agents
 
-An AI agent platform featuring paper searching/summarization with real-time streaming responses via WebSockets. Built using `agno` and Flask.
+An AI agent platform featuring paper searching/summarization with real-time streaming responses via WebSockets. Built using `agno` and FastAPI.
 
 ## Table of Contents
 
@@ -21,6 +21,8 @@ Infinity Agents is an AI-based tool designed to assist with research tasks. It c
 
 - **Paper AI**: Give it a topic, it will search articles using ArXiv, PubMed, and DuckDuckGo, then summarize the most relevant ones for you. (Access via main chat interface)
 - **Chater**: A general conversational AI, optionally enhanced with Retrieval-Augmented Generation (RAG) using uploaded documents. (Access via main chat interface)
+- **Paper cache model**: Single global paper cache under `papers/cache` + per-session pointers in PostgreSQL (`authorized_paper_refs`, `session_paper_links`).
+- **Paper reading model**: `read_paper` supports arXiv ID/URL only and reuses cached PDFs under `papers/cache/downloads` before downloading.
 
 ## Quick Start
 
@@ -31,24 +33,22 @@ Infinity Agents is an AI-based tool designed to assist with research tasks. It c
     pip install -r requirements.txt
     ```
 
-2.  **Set API Key:**
+2.  **Set env vars:**
     ```bash
-    # Set environment variable
-    export DEEPSEEK_API_KEY="your_api_key_here"
-    
-    # Or modify app/agents.py line 8
+    export DATABASE_URL="postgresql://app_user:your_password@localhost:5432/app_db"
+    export MOONSHOT_API_KEY="your_api_key_here"
     ```
 
 3.  **Run:**
     ```bash
-    python app/app.py
+    python -m uvicorn backend.app:app --host 127.0.0.1 --port 8008 --reload
     ```
 
 ## Usage
 
 After starting the server, access:
 
-- **Chat Interface**: `http://127.0.0.1:8080/chat`
+- **Chat Interface**: `http://127.0.0.1:3000`
 
 ### Features
 
@@ -61,11 +61,27 @@ After starting the server, access:
 # Build image
 docker build -t infinite-agents .
 
-# Run container
-docker run -p 8080:8080 -e DEEPSEEK_API_KEY="your_key" infinite-agents
+# Run backend container (connects external PostgreSQL via DATABASE_URL)
+docker run --rm \
+  -p 8008:8008 \
+  -e DATABASE_URL="postgresql://app_user:your_password@host:5432/app_db" \
+  -e MOONSHOT_API_KEY="your_key" \
+  infinite-agents
 ```
 
-Access at: `http://localhost:8080/chat`
+Backend API at: `http://localhost:8008`
+
+## Legacy SQLite Migration
+
+Run one-off migration from `papers/sessions.db` and `papers/sessions/*/papers.db` to PostgreSQL:
+
+```bash
+python scripts/migrate_sqlite_to_pg.py --database-url "$DATABASE_URL"
+```
+
+Notes:
+- Migration is environment-local. Run it independently on local and cloud databases.
+- The script merges legacy `papers/sessions/*` paper artifacts into a single global cache root (`papers/cache`) without duplicating files.
 
 ## Testing
 

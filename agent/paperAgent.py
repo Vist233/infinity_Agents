@@ -2,7 +2,7 @@
 paperAgent - Research assistant for academic papers.
 
 Uses Agno framework with Moonshot kimi-k2.5 model.
-Features: paper search, paper analysis, methodology visualization.
+Features: paper search, paper reading, methodology visualization.
 """
 
 import os
@@ -10,6 +10,8 @@ import sys
 import json
 from typing import Any, Dict, List, Optional, Iterator, Literal
 from pathlib import Path
+import shutil
+from datetime import datetime, timezone
 
 # Fix imports when running as script
 if __name__ == "__main__":
@@ -24,44 +26,25 @@ from agno.utils.pprint import pprint_run_response
 
 # Import tools
 from agent.tools.paper_search import PaperSearchTools, SizeMiddleware
-from agent.paperReaderWorkflow import PaperReaderWorkflow
 from agent.tools.plotly_charts import PlotlyVisualizationTools
 from agent.tools.python_plotter import PythonPlottingTools
-from agent.session_db import SessionDatabase, SessionRecord
-from agent.papers_db import PapersDatabase
+from agent.session_repo_pg import SessionRepoPG, SessionRecord
+from agent.papers_repo_pg import PapersRepoPG
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+GLOBAL_PAPERS_CACHE_ROOT = PROJECT_ROOT / "papers" / "cache"
+GLOBAL_PAPERS_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
 # Database-based Cache (replaces JSON file cache)
 # ============================================================================
 
 class DatabaseCacheMiddleware:
-    """Middleware for caching API responses in SQLite database."""
+    """Middleware for caching API responses in PostgreSQL table."""
 
-    def __init__(self, db: PapersDatabase, ttl_seconds: int = 3600):
+    def __init__(self, db: PapersRepoPG, ttl_seconds: int = 3600):
         self.db = db
         self.ttl_seconds = ttl_seconds
-        self._init_cache_table()
-
-    def _init_cache_table(self) -> None:
-        """Initialize cache table in the papers database."""
-        import sqlite3
-        from datetime import datetime
-        
-        with self.db._get_connection() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS cache (
-                    cache_key TEXT PRIMARY KEY,
-                    func_name TEXT,
-                    data TEXT,
-                    created_at TEXT,
-                    expires_at TEXT
-                )
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache(expires_at)
-            """)
-            conn.commit()
     
     def _get_cache_key(self, func_name: str, *args, **kwargs) -> str:
         """Generate a cache key from function name and arguments."""
@@ -71,40 +54,23 @@ class DatabaseCacheMiddleware:
 
     def get(self, func_name: str, *args, **kwargs) -> Optional[str]:
         """Get cached result if available and not expired."""
-        from datetime import datetime
-        
         cache_key = self._get_cache_key(func_name, *args, **kwargs)
-        
-        with self.db._get_connection() as conn:
-            row = conn.execute(
-                "SELECT data, expires_at FROM cache WHERE cache_key = ?",
-                (cache_key,)
-            ).fetchone()
-            
-            if row:
-                expires_at = datetime.fromisoformat(row["expires_at"])
-                if datetime.utcnow() < expires_at:
-                    return row["data"]
-                else:
-                    # Expired, delete it
-                    conn.execute("DELETE FROM cache WHERE cache_key = ?", (cache_key,))
-                    conn.commit()
+        row = self.db.get_cache(cache_key)
+        if row:
+            expires_at = row["expires_at"]
+            if isinstance(expires_at, str):
+                expires_at = datetime.fromisoformat(expires_at)
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if datetime.now(tz=timezone.utc) < expires_at:
+                return row["data"]
+            self.db.delete_cache(cache_key)
         return None
 
     def set(self, func_name: str, result: str, *args, **kwargs) -> None:
         """Cache the result."""
-        from datetime import datetime, timedelta
-        
         cache_key = self._get_cache_key(func_name, *args, **kwargs)
-        now = datetime.utcnow()
-        expires_at = now + timedelta(seconds=self.ttl_seconds)
-        
-        with self.db._get_connection() as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO cache (cache_key, func_name, data, created_at, expires_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (cache_key, func_name, result, now.isoformat(), expires_at.isoformat()))
-            conn.commit()
+        self.db.set_cache(cache_key, func_name, result, self.ttl_seconds)
 
 
 # ============================================================================
@@ -118,13 +84,9 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
 ### Paper Search
 - `search_paper(query, num_results=5)` - Search ArXiv and PubMed
 
-### Paper Analysis (Workflow)
-- `analyze_paper(pdf_url_or_path)` - Deep analysis of a single paper
-  - Fast whole-paper methodology analysis report
-
 ### Paper Reading
 - `read_paper(paper_ref, action="cat", pattern=None, start_line=1, max_lines=200, case_sensitive=False)`
-  - Fine-grained reading/searching on canonical paper Markdown
+  - Fine-grained reading/searching on canonical paper Markdown for arXiv papers
   - If not cached, automatically downloads/extracts PDF and materializes Markdown cache
 
 ### Plotting & Visualization
@@ -137,21 +99,21 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
 ## Recommended Workflow
 
 1. **Search**: Use `search_paper` to find relevant papers
-2. **Analyze**: Use `analyze_paper` on papers of interest (generates reports in papers/ directory)
-3. **Deep dive**: Use `read_paper` for detailed reading/grep/head/tail/outline
-5. **Visualize**: Use `create_chart` or quick chart tools to generate analytical plots
-6. **Embed images**: All chart/image tools return a `markdown` field like `![chart](img://xxx.png)`.
+2. **Deep dive**: Use `read_paper` for detailed reading/grep/head/tail/outline
+3. **Visualize**: Use `create_chart` or quick chart tools to generate analytical plots
+4. **Embed images**: All chart/image tools return a `markdown` field like `![chart](img://xxx.png)`.
    Copy this exact Markdown into your response — the system will automatically render the image.
    NEVER modify the `img://` reference or try to construct one yourself.
-7. **Summarize**: Integrate findings and answer the user's question
+   在 Ubuntu 22 环境下，绘图时优先使用系统 CJK 字体（如 Noto Sans CJK），避免中文标题/坐标轴出现方块字；优先沿用工具默认字体配置，不要覆盖为不支持中文的字体。
+5. **Summarize**: Integrate findings and answer the user's question
 
 ## Important Notes
 
 - **Always respond in Chinese (Simplified)**
 - Cite paper sources with titles and IDs when referencing
 - When embedding charts, use the `markdown` field from the tool response directly
-- For follow-up detailed reading, prefer `read_paper`; for whole-paper summary, use `analyze_paper`
-- Access control: only papers searched or generated in this session are readable
+- For follow-up detailed reading, prefer `read_paper`
+- Access control: only papers searched/authorized in this session are readable
 """
 
 
@@ -165,7 +127,7 @@ def create_paper_agent(
     chat_model_id: Optional[str] = None,
     workflow_model_id: Optional[str] = None,
     default_num_results: int = 5,
-    papers_db: Optional[PapersDatabase] = None,
+    papers_db: Optional[PapersRepoPG] = None,
     session_id: Optional[str] = None,
     session_root: Optional[Path] = None,
     storage_mode: Literal["legacy", "sandboxed"] = "legacy",
@@ -177,9 +139,9 @@ def create_paper_agent(
         api_key: Moonshot API key. Defaults to MOONSHOT_API_KEY env var.
         base_url: API base URL.
         chat_model_id: Chat orchestration model identifier.
-        workflow_model_id: Workflow/internal analysis model identifier.
+        workflow_model_id: Deprecated, kept for API compatibility.
         default_num_results: Default number of search results.
-        papers_db: Optional PapersDatabase instance for caching.
+        papers_db: Optional PapersRepoPG instance for caching.
 
     Returns:
         Configured Agent instance.
@@ -190,7 +152,7 @@ def create_paper_agent(
             "API key required. Set MOONSHOT_API_KEY environment variable."
         )
     chat_model_id = chat_model_id or os.environ.get("PAPER_AGENT_CHAT_MODEL", "kimi-k2.5")
-    workflow_model_id = workflow_model_id or os.environ.get("PAPER_AGENT_WORKFLOW_MODEL", "kimi-k2.5")
+    _ = workflow_model_id
     disable_chat_thinking = os.environ.get("PAPER_AGENT_CHAT_DISABLE_THINKING", "1").strip().lower() not in {"0", "false", "no", "off"}
     chat_extra_body = {"thinking": {"type": "disabled"}} if disable_chat_thinking else None
 
@@ -204,32 +166,23 @@ def create_paper_agent(
 
     # Configure tools with database cache
     if papers_db is None:
-        if session_root is not None:
-            papers_db = PapersDatabase(session_root / "papers.db")
-        else:
-            papers_db = PapersDatabase()
+        effective_session_id = session_id or "00000000-0000-0000-0000-000000000000"
+        papers_db = PapersRepoPG(session_id=effective_session_id)
     
     cache_middleware = DatabaseCacheMiddleware(papers_db, ttl_seconds=3600)
     size_middleware = SizeMiddleware(max_chars=50000, max_articles=default_num_results)
     plot_output_dir = session_root / "plot_outputs" if session_root is not None else None
     plotly_output_dir = session_root / "plotly_outputs" if session_root is not None else None
+    shared_papers_dir = GLOBAL_PAPERS_CACHE_ROOT
 
     tools = [
         PaperSearchTools(
-            enable_read=False,
+            enable_read=True,
             cache_middleware=cache_middleware,
             size_middleware=size_middleware,
             papers_db=papers_db,
-            download_dir=(session_root / "downloads") if session_root is not None else None,
-        ),
-        PaperReaderWorkflow(
-            papers_dir=session_root,
-            api_key=api_key,
-            base_url=base_url,
-            model_id=workflow_model_id,
-            db=papers_db,
-            session_id=session_id,
-            storage_mode=storage_mode,
+            download_dir=shared_papers_dir / "downloads",
+            shared_cache_root=shared_papers_dir,
         ),
         PlotlyVisualizationTools(output_dir=plotly_output_dir),
         PythonPlottingTools(output_dir=plot_output_dir),
@@ -270,21 +223,44 @@ class PaperAgentRunner:
     ):
         self.user_id = user_id
         self.max_context_messages = max_context_messages
+        self.api_key = api_key
+        self.base_url = base_url
+        self.chat_model_id = chat_model_id
+        self.workflow_model_id = workflow_model_id
+        self.default_num_results = default_num_results
+        self.sessions_root = Path(__file__).resolve().parent.parent / "papers" / "sessions"
+        self.sessions_root.mkdir(parents=True, exist_ok=True)
         
-        self.session_db = SessionDatabase()
-        self.papers_db = PapersDatabase()
-        
-        self.agent = create_paper_agent(
-            api_key=api_key,
-            base_url=base_url,
-            chat_model_id=chat_model_id,
-            workflow_model_id=workflow_model_id,
-            default_num_results=default_num_results,
-            papers_db=self.papers_db,
-        )
+        self.session_db = SessionRepoPG()
+        self.papers_db: Optional[PapersRepoPG] = None
+        self.agent: Optional[Agent] = None
         
         self.session_id: Optional[str] = None
         self.messages: List[Dict] = []
+
+    def _session_root(self, session_id: str) -> Path:
+        """Resolve workspace root for a given session."""
+        return self.sessions_root / session_id
+
+    def _bind_session_workspace(self, session_id: str) -> None:
+        """
+        Bind runner agent/tools to a session-local workspace.
+        Keeps per-session files isolated under papers/sessions/{session_id}.
+        """
+        session_root = self._session_root(session_id)
+        session_root.mkdir(parents=True, exist_ok=True)
+        self.papers_db = PapersRepoPG(session_id=session_id)
+        self.agent = create_paper_agent(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            chat_model_id=self.chat_model_id,
+            workflow_model_id=self.workflow_model_id,
+            default_num_results=self.default_num_results,
+            papers_db=self.papers_db,
+            session_id=session_id,
+            session_root=session_root,
+            storage_mode="sandboxed",
+        )
     
     def start_session(self, session_id: Optional[str] = None) -> str:
         """Start or resume a session."""
@@ -293,6 +269,7 @@ class PaperAgentRunner:
             if record:
                 self.session_id = session_id
                 self.messages = record.messages
+                self._bind_session_workspace(self.session_id)
                 print(f"📂 恢复会话: {session_id}")
                 if record.title:
                     print(f"   主题: {record.title}")
@@ -301,8 +278,9 @@ class PaperAgentRunner:
                 print(f"⚠️  会话 {session_id} 不存在，创建新会话")
         
         # Create new session
-        self.session_id = self.session_db.create_session(self.user_id)
+        self.session_id = self.session_db.create_session(self.user_id, storage_mode="sandboxed")
         self.messages = []
+        self._bind_session_workspace(self.session_id)
         print(f"✨ 新会话: {self.session_id}")
         return self.session_id
     
@@ -339,6 +317,8 @@ class PaperAgentRunner:
     
     def _run_with_streaming(self, prompt: str) -> str:
         """Run agent and stream output to terminal."""
+        if self.agent is None:
+            raise RuntimeError("Agent not initialized. Please start a session first.")
         response = self.agent.run(prompt, stream=True)
         
         full_content = []
@@ -418,7 +398,12 @@ class PaperAgentRunner:
     
     def delete_session(self, session_id: str) -> bool:
         """Delete a session."""
-        return self.session_db.delete_session(self.user_id, session_id)
+        deleted = self.session_db.delete_session(self.user_id, session_id)
+        if deleted:
+            session_root = self._session_root(session_id)
+            if session_root.exists():
+                shutil.rmtree(session_root, ignore_errors=True)
+        return deleted
 
 
 # ============================================================================

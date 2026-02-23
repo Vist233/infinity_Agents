@@ -25,6 +25,8 @@ from backend.db import (
     get_all_sessions,
     update_session_title,
     delete_session,
+    resolve_global_paper_id_by_path,
+    session_can_access_paper,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -64,7 +66,9 @@ app = FastAPI(lifespan=lifespan)
 
 _PROJECT_ROOT = FilePath(__file__).parent.parent
 _SESSIONS_ROOT = _PROJECT_ROOT / "papers" / "sessions"
+_SHARED_PAPERS_CACHE_ROOT = _PROJECT_ROOT / "papers" / "cache"
 _SESSIONS_ROOT.mkdir(parents=True, exist_ok=True)
+_SHARED_PAPERS_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
 _LEGACY_ALLOWED_FILE_DIRS = [
     _PROJECT_ROOT / "papers",
     _PROJECT_ROOT / "agent" / "tools" / "plot_outputs",
@@ -167,6 +171,24 @@ def _resolve_relative_in_dirs(file_path: str, allowed_dirs: List[FilePath]) -> O
                     return candidate
     return None
 
+
+def _infer_paper_id_from_shared_path(resolved: FilePath, shared_root: FilePath) -> Optional[str]:
+    """Infer paper_id from canonical shared-cache layouts when possible."""
+    try:
+        rel = resolved.resolve().relative_to(shared_root.resolve())
+    except ValueError:
+        return None
+    parts = rel.parts
+    if not parts:
+        return None
+    # papers/cache/downloads/{paper_id}.pdf
+    if parts[0] in {"downloads", "md"} and len(parts) >= 2:
+        return FilePath(parts[1]).stem
+    # papers/cache/extracted/{paper_id}/...
+    if parts[0] == "extracted" and len(parts) >= 2:
+        return parts[1]
+    return None
+
 @app.get("/api/files/{file_path:path}")
 async def serve_file(file_path: str):
     """Serve legacy files only (backward compatibility)."""
@@ -214,14 +236,32 @@ async def serve_session_file(session_id: str, file_path: str):
         session_root / "reports",
         session_root / "md",
         session_root / "extracted",
+        _SHARED_PAPERS_CACHE_ROOT,
+        _SHARED_PAPERS_CACHE_ROOT / "reports",
+        _SHARED_PAPERS_CACHE_ROOT / "md",
+        _SHARED_PAPERS_CACHE_ROOT / "extracted",
+        _SHARED_PAPERS_CACHE_ROOT / "downloads",
     ]
     target = _resolve_relative_in_dirs(file_path, allowed_dirs)
     if target is None:
         raise HTTPException(status_code=404, detail="File not found")
 
     resolved = target.resolve()
-    if not str(resolved).startswith(str(session_root)) or not resolved.is_file():
+    in_session = str(resolved).startswith(str(session_root))
+    in_shared = str(resolved).startswith(str(_SHARED_PAPERS_CACHE_ROOT.resolve()))
+    if not (in_session or in_shared) or not resolved.is_file():
         raise HTTPException(status_code=404, detail="File not found")
+
+    if in_shared:
+        inferred_paper_id = _infer_paper_id_from_shared_path(resolved, _SHARED_PAPERS_CACHE_ROOT)
+        paper_id = inferred_paper_id
+        if not paper_id:
+            paper_id = await resolve_global_paper_id_by_path(pool, str(resolved))
+        if not paper_id:
+            raise HTTPException(status_code=403, detail="File access not authorized for this session")
+        allowed = await session_can_access_paper(pool, session_id, paper_id)
+        if not allowed:
+            raise HTTPException(status_code=403, detail="File access not authorized for this session")
     return FileResponse(str(resolved))
 
 

@@ -1,9 +1,9 @@
 import json
-import pytest
 from pathlib import Path
-import shutil
-import time
+from types import SimpleNamespace
+import pytest
 from agent.tools.paper_search import PaperSearchTools, CacheMiddleware, SizeMiddleware
+from agent.tools.pdf_extractor import ExtractedContent
 
 @pytest.fixture
 def temp_cache_dir(tmp_path):
@@ -68,9 +68,42 @@ def test_search_papers_combined(paper_search_tools):
     # Ideally should contain both if available
     assert "arxiv" in sources or "pubmed" in sources
 
-def test_read_paper_content_basic(paper_search_tools):
+def test_read_paper_content_basic(monkeypatch, paper_search_tools, temp_download_dir):
     """Test reading paper content."""
-    paper_id = "1706.03762v7" # Attention Is All You Need
+    paper_id = "1706.03762v7"  # Attention Is All You Need
+
+    class _FakePage:
+        def extract_text(self):
+            return "Transformer content"
+
+    class _FakeReader:
+        def __init__(self, _pdf_path):
+            self.pages = [_FakePage()]
+
+    class _FakeResult:
+        title = "Attention Is All You Need"
+        summary = "summary"
+
+        def get_short_id(self):
+            return paper_id
+
+        @property
+        def pdf_url(self):
+            return "https://arxiv.org/pdf/1706.03762v7.pdf"
+
+        def download_pdf(self, dirpath):
+            path = Path(dirpath) / f"{paper_id}.pdf"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"%PDF-1.4\n%fake\n")
+            return str(path)
+
+    monkeypatch.setattr(
+        paper_search_tools.arxiv_client,
+        "results",
+        lambda search: [_FakeResult()],
+    )
+    monkeypatch.setattr("agent.tools.paper_search.PdfReader", _FakeReader)
+
     result_json = paper_search_tools.read_paper_content(paper_id, pages=[1])
     
     if "... [Response truncated]" in result_json:
@@ -81,10 +114,43 @@ def test_read_paper_content_basic(paper_search_tools):
         assert len(result["content"]) == 1
         assert result["content"][0]["page"] == 1
 
-def test_read_paper_content_regex(paper_search_tools):
+def test_read_paper_content_regex(monkeypatch, paper_search_tools):
     """Test reading paper content with regex."""
     paper_id = "1706.03762v7"
     regex = "Transformer"
+
+    class _FakePage:
+        def extract_text(self):
+            return "This paper introduces the Transformer architecture."
+
+    class _FakeReader:
+        def __init__(self, _pdf_path):
+            self.pages = [_FakePage()]
+
+    class _FakeResult:
+        title = "Attention Is All You Need"
+        summary = "summary"
+
+        def get_short_id(self):
+            return paper_id
+
+        @property
+        def pdf_url(self):
+            return "https://arxiv.org/pdf/1706.03762v7.pdf"
+
+        def download_pdf(self, dirpath):
+            path = Path(dirpath) / f"{paper_id}.pdf"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"%PDF-1.4\n%fake\n")
+            return str(path)
+
+    monkeypatch.setattr(
+        paper_search_tools.arxiv_client,
+        "results",
+        lambda search: [_FakeResult()],
+    )
+    monkeypatch.setattr("agent.tools.paper_search.PdfReader", _FakeReader)
+
     result_json = paper_search_tools.read_paper_content(paper_id, pages=[1], regex_pattern=regex)
     
     if "... [Response truncated]" in result_json:
@@ -96,3 +162,512 @@ def test_read_paper_content_regex(paper_search_tools):
             assert "matches" in page
             for match in page["matches"]:
                 assert "Transformer" in match or "transformer" in match.lower()
+
+
+def test_search_papers_interleaved_and_deduped(monkeypatch, paper_search_tools):
+    """Standalone merge strategy: interleaved merge + source-aware dedupe."""
+    arxiv_articles = [
+        {"source": "arxiv", "id": "a1", "title": "A1", "summary": "sa1", "authors": ["x"]},
+        {"source": "arxiv", "id": "a1", "title": "A1 duplicate", "summary": "dup", "authors": ["x"]},
+        {"source": "arxiv", "id": "a2", "title": "A2", "summary": "sa2", "authors": ["y"]},
+    ]
+    pubmed_articles = [
+        {"source": "pubmed", "id": "p1", "title": "P1", "summary": "sp1", "authors": []},
+        {"source": "pubmed", "id": "p2", "title": "P2", "summary": "sp2", "authors": []},
+    ]
+
+    monkeypatch.setattr(paper_search_tools, "_get_arxiv_papers", lambda _q, _n: arxiv_articles)
+    monkeypatch.setattr(paper_search_tools, "_get_pubmed_papers", lambda _q, _n: pubmed_articles)
+
+    called = {}
+
+    def _capture_register(items):
+        called["items"] = items
+
+    monkeypatch.setattr(paper_search_tools, "_register_authorized_papers", _capture_register)
+
+    result_json = paper_search_tools.search_papers("merge-test", num_results=4)
+    result = json.loads(result_json)
+
+    assert isinstance(result, list)
+    assert len(result) == 4
+    # Interleave happens before dedupe. The second "a1" is dropped, keeping first-seen order.
+    assert [item["id"] for item in result] == ["a1", "p1", "p2", "a2"]
+    assert called["items"] == result
+
+
+def test_normalize_pubmed_article_compat_fields(paper_search_tools):
+    """Normalized PubMed article keeps existing compatibility fields."""
+    normalized = paper_search_tools._normalize_pubmed_article(
+        {
+            "source": "pubmed",
+            "title": "PubMed title",
+            "id": "12345",
+            "pmid": "12345",
+            "summary": "summary",
+            "pdf_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC1/pdf/",
+        }
+    )
+    assert normalized["source"] == "pubmed"
+    assert normalized["id"] == "12345"
+    assert normalized["title"] == "PubMed title"
+    assert "authors" in normalized
+    assert isinstance(normalized["authors"], list)
+    assert normalized["summary"] == "summary"
+
+
+def test_search_papers_pubmed_error_tolerant(monkeypatch, temp_cache_dir, temp_download_dir):
+    """PubMed structured error should not break array output."""
+    class FakePubMedClient:
+        def search(self, query, num_results):
+            return {
+                "articles": [],
+                "error": {"source": "pubmed", "code": "request_failed", "message": "boom"},
+            }
+
+    cache = CacheMiddleware(cache_dir=temp_cache_dir, ttl_seconds=60)
+    size = SizeMiddleware(max_chars=5000, max_articles=10)
+    tool = PaperSearchTools(
+        cache_middleware=cache,
+        size_middleware=size,
+        download_dir=temp_download_dir,
+        pubmed_client=FakePubMedClient(),
+    )
+
+    monkeypatch.setattr(
+        tool,
+        "_get_arxiv_papers",
+        lambda _q, _n: [
+            {
+                "source": "arxiv",
+                "id": "a1",
+                "title": "A1",
+                "summary": "s",
+                "authors": ["x"],
+                "entry_id": "http://arxiv.org/abs/a1",
+                "url": "http://arxiv.org/abs/a1",
+                "pdf_url": "http://arxiv.org/pdf/a1",
+            }
+        ],
+    )
+
+    result_json = tool.search_papers("error-tolerant", num_results=3)
+    result = json.loads(result_json)
+    assert isinstance(result, list)
+    assert len(result) >= 1
+    assert all("error" not in item for item in result if isinstance(item, dict))
+
+
+def test_register_authorized_papers_called_with_final_list(monkeypatch, temp_cache_dir, temp_download_dir):
+    """Ensure authorization registration uses final merged result list."""
+    class FakePapersDB:
+        def __init__(self):
+            self.session_id = "test-session"
+            self.linked = []
+            self.refs = []
+
+        def link_paper_to_session(self, session_id, paper_id, source_ref=None):
+            self.linked.append((session_id, paper_id, source_ref))
+
+        def register_authorized_refs(self, refs, source=""):
+            self.refs.append((refs, source))
+
+    cache = CacheMiddleware(cache_dir=temp_cache_dir, ttl_seconds=60)
+    size = SizeMiddleware(max_chars=5000, max_articles=10)
+    fake_db = FakePapersDB()
+    tool = PaperSearchTools(
+        cache_middleware=cache,
+        size_middleware=size,
+        download_dir=temp_download_dir,
+        papers_db=fake_db,
+    )
+
+    monkeypatch.setattr(
+        tool,
+        "_get_arxiv_papers",
+        lambda _q, _n: [{"source": "arxiv", "id": "2401.00001", "title": "A", "summary": "sa", "entry_id": "https://arxiv.org/abs/2401.00001", "url": "https://arxiv.org/abs/2401.00001", "pdf_url": "https://arxiv.org/pdf/2401.00001"}],
+    )
+    monkeypatch.setattr(
+        tool,
+        "_get_pubmed_papers",
+        lambda _q, _n: [{"source": "pubmed", "id": "123456", "pmid": "123456", "title": "P", "summary": "sp", "url": "https://pubmed.ncbi.nlm.nih.gov/123456/", "authors": []}],
+    )
+
+    result = json.loads(tool.search_papers("auth-test", num_results=2))
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert fake_db.linked
+    assert fake_db.refs
+
+
+def test_search_paper_alias_matches_search_papers(monkeypatch, paper_search_tools):
+    """search_paper should remain a compatibility alias of search_papers."""
+    payload = [{"source": "arxiv", "id": "a1", "title": "T", "summary": "S", "authors": []}]
+    monkeypatch.setattr(paper_search_tools, "search_papers", lambda query, num_results=5: json.dumps(payload))
+
+    via_alias = paper_search_tools.search_paper("q", num_results=3)
+    via_direct = paper_search_tools.search_papers("q", num_results=3)
+    assert via_alias == via_direct
+    assert json.loads(via_alias) == payload
+
+
+def test_search_papers_uses_fetch_size_multiplier(monkeypatch, paper_search_tools):
+    """Standalone strategy fetches each source with num_results * 4."""
+    captured = {"arxiv": None, "pubmed": None}
+
+    def _fake_arxiv(_q, n):
+        captured["arxiv"] = n
+        return []
+
+    def _fake_pubmed(_q, n):
+        captured["pubmed"] = n
+        return []
+
+    monkeypatch.setattr(paper_search_tools, "_get_arxiv_papers", _fake_arxiv)
+    monkeypatch.setattr(paper_search_tools, "_get_pubmed_papers", _fake_pubmed)
+    monkeypatch.setattr(paper_search_tools, "_register_authorized_papers", lambda _items: None)
+
+    paper_search_tools.search_papers("fetch-size", num_results=7)
+    assert captured["arxiv"] == 28
+    assert captured["pubmed"] == 28
+
+
+def test_search_papers_cache_key_uses_schema_and_pdf_flag(monkeypatch, paper_search_tools):
+    """Cache arguments should include schema version and require_pdf flag to avoid stale collisions."""
+    calls = {"get": None, "set": None}
+
+    def _fake_get(func_name, *args, **kwargs):
+        calls["get"] = (func_name, args, kwargs)
+        return None
+
+    def _fake_set(func_name, result, *args, **kwargs):
+        calls["set"] = (func_name, result, args, kwargs)
+
+    monkeypatch.setattr(paper_search_tools.cache, "get", _fake_get)
+    monkeypatch.setattr(paper_search_tools.cache, "set", _fake_set)
+    monkeypatch.setattr(paper_search_tools, "_get_arxiv_papers", lambda _q, _n: [])
+    monkeypatch.setattr(paper_search_tools, "_get_pubmed_papers", lambda _q, _n: [])
+    monkeypatch.setattr(paper_search_tools, "_register_authorized_papers", lambda _items: None)
+
+    paper_search_tools.search_papers("cache-key", num_results=2)
+
+    assert calls["get"] is not None
+    get_func, get_args, _ = calls["get"]
+    assert get_func == "combined_search"
+    assert get_args[0] == paper_search_tools.SEARCH_OUTPUT_SCHEMA_VERSION
+    assert get_args[1] == "cache-key"
+    assert get_args[2] == 2
+    assert get_args[3] is False
+
+    assert calls["set"] is not None
+    set_func, _set_result, set_args, _ = calls["set"]
+    assert set_func == "combined_search"
+    assert set_args[0] == paper_search_tools.SEARCH_OUTPUT_SCHEMA_VERSION
+    assert set_args[1] == "cache-key"
+    assert set_args[2] == 2
+    assert set_args[3] is False
+
+
+def test_normalize_pubmed_article_fallbacks(paper_search_tools):
+    """Normalizer should backfill url and authors when standalone payload is sparse."""
+    normalized = paper_search_tools._normalize_pubmed_article(
+        {
+            "id": "67890",
+            "title": "Sparse",
+            "abstract": "Abstract only",
+            "authors": "not-a-list",
+        }
+    )
+    assert normalized["id"] == "67890"
+    assert normalized["pmid"] == "67890"
+    assert normalized["url"] == "https://pubmed.ncbi.nlm.nih.gov/67890/"
+    assert normalized["authors"] == []
+    assert normalized["summary"] == "Abstract only"
+
+
+def test_search_papers_pdf_filter_toggle(monkeypatch, paper_search_tools):
+    """When require_pdf_url_default=True, non-PDF records should be dropped before merge."""
+    arxiv_articles = [
+        {"source": "arxiv", "id": "a1", "title": "A1", "summary": "s", "authors": [], "pdf_url": ""},
+        {"source": "arxiv", "id": "a2", "title": "A2", "summary": "s", "authors": [], "pdf_url": "http://x/a2.pdf"},
+    ]
+    pubmed_articles = [
+        {"source": "pubmed", "id": "p1", "title": "P1", "summary": "s", "authors": [], "pdf_url": None},
+        {"source": "pubmed", "id": "p2", "title": "P2", "summary": "s", "authors": [], "pdf_url": "http://x/p2.pdf"},
+    ]
+
+    paper_search_tools.require_pdf_url_default = True
+    monkeypatch.setattr(paper_search_tools, "_get_arxiv_papers", lambda _q, _n: arxiv_articles)
+    monkeypatch.setattr(paper_search_tools, "_get_pubmed_papers", lambda _q, _n: pubmed_articles)
+    monkeypatch.setattr(paper_search_tools, "_register_authorized_papers", lambda _items: None)
+
+    result = json.loads(paper_search_tools.search_papers("pdf-filter", num_results=4))
+    assert [item["id"] for item in result] == ["a2", "p2"]
+
+
+class _FakePapersDB:
+    def __init__(self):
+        self.session_id = "00000000-0000-0000-0000-000000000001"
+        self.authorized = True
+        self.linked = []
+        self.upserts = []
+        self.saved_extracted = []
+        self.status_updates = []
+        self.record = None
+
+    def is_authorized_ref(self, ref, paper_id=None):
+        return self.authorized
+
+    def link_paper_to_session(self, session_id, paper_id, source_ref=None):
+        self.linked.append((session_id, paper_id, source_ref))
+
+    def get_by_id(self, paper_id):
+        return self.record
+
+    def upsert(self, record):
+        self.upserts.append(record)
+        self.record = SimpleNamespace(
+            paper_id=record.paper_id,
+            pdf_path=record.pdf_path,
+            canonical_md_path=record.canonical_md_path,
+        )
+
+    def save_extracted_content(self, paper_id, text, images_dir, canonical_md_path=None):
+        self.saved_extracted.append((paper_id, canonical_md_path, images_dir))
+        self.record = SimpleNamespace(
+            paper_id=paper_id,
+            pdf_path=self.record.pdf_path if self.record else None,
+            canonical_md_path=canonical_md_path,
+        )
+
+    def update_status(self, paper_id, status):
+        self.status_updates.append((paper_id, status))
+
+
+class _SharedSessionStore:
+    def __init__(self):
+        self.authorized_refs_by_session = {}
+        self.linked = set()
+        self.record = None
+
+
+class _SessionScopedFakePapersDB:
+    def __init__(self, shared: _SharedSessionStore, session_id: str):
+        self.shared = shared
+        self.session_id = session_id
+
+    def is_authorized_ref(self, ref, paper_id=None):
+        refs = self.shared.authorized_refs_by_session.get(self.session_id, set())
+        if isinstance(ref, str) and ref in refs:
+            return True
+        if paper_id and (self.session_id, paper_id) in self.shared.linked:
+            return True
+        return False
+
+    def link_paper_to_session(self, session_id, paper_id, source_ref=None):
+        self.shared.linked.add((session_id, paper_id))
+
+    def get_by_id(self, paper_id):
+        return self.shared.record
+
+    def upsert(self, record):
+        self.shared.record = SimpleNamespace(
+            paper_id=record.paper_id,
+            pdf_path=record.pdf_path,
+            canonical_md_path=record.canonical_md_path,
+        )
+
+    def save_extracted_content(self, paper_id, text, images_dir, canonical_md_path=None):
+        self.shared.record = SimpleNamespace(
+            paper_id=paper_id,
+            pdf_path=self.shared.record.pdf_path if self.shared.record else None,
+            canonical_md_path=canonical_md_path,
+        )
+
+    def update_status(self, paper_id, status):
+        return None
+
+
+def test_read_paper_rejects_unauthorized_ref(tmp_path):
+    fake_db = _FakePapersDB()
+    fake_db.authorized = False
+    tool = PaperSearchTools(
+        enable_search=False,
+        enable_read=True,
+        download_dir=tmp_path / "cache" / "downloads",
+        shared_cache_root=tmp_path / "cache",
+        papers_db=fake_db,
+    )
+    result = json.loads(tool.read_paper("2103.03404", action="head"))
+    assert result["error"] == "paper_not_authorized_for_session"
+
+
+def test_read_paper_cache_hit_skips_download(monkeypatch, tmp_path):
+    fake_db = _FakePapersDB()
+    shared_root = tmp_path / "cache"
+    md_path = shared_root / "md" / "2103_03404.md"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text("# Title\nLine2\n", encoding="utf-8")
+    fake_db.record = SimpleNamespace(
+        paper_id="2103_03404",
+        pdf_path=str(shared_root / "downloads" / "2103_03404.pdf"),
+        canonical_md_path=str(md_path),
+    )
+    tool = PaperSearchTools(
+        enable_search=False,
+        enable_read=True,
+        download_dir=shared_root / "downloads",
+        shared_cache_root=shared_root,
+        papers_db=fake_db,
+    )
+
+    def _should_not_download(*_args, **_kwargs):
+        raise AssertionError("download should not be called on cache hit")
+
+    monkeypatch.setattr(tool, "_download_arxiv_pdf", _should_not_download)
+    result = json.loads(tool.read_paper("2103.03404", action="head", max_lines=1))
+    assert result["paper_id"] == "2103_03404"
+    assert result["source_status"] == "from_cache"
+    assert "Title" in result["content"]
+
+
+def test_read_paper_download_and_materialize(monkeypatch, tmp_path):
+    fake_db = _FakePapersDB()
+    shared_root = tmp_path / "cache"
+    downloads = shared_root / "downloads"
+    tool = PaperSearchTools(
+        enable_search=False,
+        enable_read=True,
+        download_dir=downloads,
+        shared_cache_root=shared_root,
+        papers_db=fake_db,
+    )
+
+    def _fake_download(_arxiv_id, paper_id):
+        pdf_path = downloads / f"{paper_id}.pdf"
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(b"%PDF-1.4\n%fake\n")
+        return pdf_path
+
+    def _fake_extract(_pdf_path, paper_id):
+        images_dir = shared_root / "extracted" / paper_id / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        return ExtractedContent(
+            text="Method section",
+            pages=[{"page_num": 1, "text": "Method section", "image_paths": []}],
+            images_dir=images_dir,
+            image_count=0,
+            page_count=1,
+        )
+
+    monkeypatch.setattr(tool, "_download_arxiv_pdf", _fake_download)
+    monkeypatch.setattr(tool.pdf_extractor, "extract", _fake_extract)
+
+    result = json.loads(tool.read_paper("https://arxiv.org/abs/2103.03404", action="grep", pattern="Method"))
+    assert result["paper_id"] == "2103_03404"
+    assert result["source_status"] == "downloaded_and_extracted"
+    assert result["match_count"] >= 1
+    assert (shared_root / "downloads" / "2103_03404.pdf").exists()
+    assert (shared_root / "md" / "2103_03404.md").exists()
+    assert fake_db.upserts
+    assert fake_db.saved_extracted
+
+
+def test_read_paper_accepts_underscore_arxiv_id(monkeypatch, tmp_path):
+    fake_db = _FakePapersDB()
+    shared_root = tmp_path / "cache"
+    downloads = shared_root / "downloads"
+    tool = PaperSearchTools(
+        enable_search=False,
+        enable_read=True,
+        download_dir=downloads,
+        shared_cache_root=shared_root,
+        papers_db=fake_db,
+    )
+
+    def _fake_download(arxiv_id, paper_id):
+        assert arxiv_id == "2103.03404"
+        assert paper_id == "2103_03404"
+        pdf_path = downloads / f"{paper_id}.pdf"
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(b"%PDF-1.4\n%fake\n")
+        return pdf_path
+
+    def _fake_extract(_pdf_path, paper_id):
+        images_dir = shared_root / "extracted" / paper_id / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        return ExtractedContent(
+            text="content",
+            pages=[{"page_num": 1, "text": "content", "image_paths": []}],
+            images_dir=images_dir,
+            image_count=0,
+            page_count=1,
+        )
+
+    monkeypatch.setattr(tool, "_download_arxiv_pdf", _fake_download)
+    monkeypatch.setattr(tool.pdf_extractor, "extract", _fake_extract)
+
+    result = json.loads(tool.read_paper("2103_03404", action="head", max_lines=1))
+    assert result["paper_id"] == "2103_03404"
+    assert result["source_status"] == "downloaded_and_extracted"
+
+
+def test_read_paper_rejects_non_arxiv_url(tmp_path):
+    fake_db = _FakePapersDB()
+    tool = PaperSearchTools(
+        enable_search=False,
+        enable_read=True,
+        download_dir=tmp_path / "cache" / "downloads",
+        shared_cache_root=tmp_path / "cache",
+        papers_db=fake_db,
+    )
+    result = json.loads(tool.read_paper("https://example.com/paper.pdf", action="head"))
+    assert result["error"] == "unsupported_paper_ref"
+
+
+def test_read_paper_session_isolation_on_shared_cache(monkeypatch, tmp_path):
+    shared_root = tmp_path / "cache"
+    md_path = shared_root / "md" / "2103_03404.md"
+    pdf_path = shared_root / "downloads" / "2103_03404.pdf"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text("# Title\nSession scoped\n", encoding="utf-8")
+    pdf_path.write_bytes(b"%PDF-1.4\n%fake\n")
+
+    shared = _SharedSessionStore()
+    shared.record = SimpleNamespace(
+        paper_id="2103_03404",
+        pdf_path=str(pdf_path),
+        canonical_md_path=str(md_path),
+    )
+    shared.authorized_refs_by_session["00000000-0000-0000-0000-0000000000aa"] = {"2103.03404"}
+    shared.authorized_refs_by_session["00000000-0000-0000-0000-0000000000bb"] = set()
+
+    tool_a = PaperSearchTools(
+        enable_search=False,
+        enable_read=True,
+        download_dir=shared_root / "downloads",
+        shared_cache_root=shared_root,
+        papers_db=_SessionScopedFakePapersDB(shared, "00000000-0000-0000-0000-0000000000aa"),
+    )
+    tool_b = PaperSearchTools(
+        enable_search=False,
+        enable_read=True,
+        download_dir=shared_root / "downloads",
+        shared_cache_root=shared_root,
+        papers_db=_SessionScopedFakePapersDB(shared, "00000000-0000-0000-0000-0000000000bb"),
+    )
+
+    def _should_not_download(*_args, **_kwargs):
+        raise AssertionError("download should not happen for shared cache hit")
+
+    monkeypatch.setattr(tool_a, "_download_arxiv_pdf", _should_not_download)
+    monkeypatch.setattr(tool_b, "_download_arxiv_pdf", _should_not_download)
+
+    allowed = json.loads(tool_a.read_paper("2103.03404", action="head", max_lines=1))
+    denied = json.loads(tool_b.read_paper("2103.03404", action="head", max_lines=1))
+
+    assert allowed["paper_id"] == "2103_03404"
+    assert allowed["source_status"] == "from_cache"
+    assert "Title" in allowed["content"]
+    assert denied["error"] == "paper_not_authorized_for_session"

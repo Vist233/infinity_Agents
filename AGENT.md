@@ -4,6 +4,7 @@
 - Always use `pyenv shell Agent`.
 - Backend default: `http://127.0.0.1:8008`
 - Frontend default: `http://127.0.0.1:3000`
+- Database: PostgreSQL only (`DATABASE_URL` required). SQLite is deprecated for runtime paths.
 
 ### Quick start
 ```bash
@@ -14,7 +15,6 @@ cd frontend && npm run dev -- --hostname 127.0.0.1 --port 3000
 
 ## PaperAgent model policy
 - Chat model env: `PAPER_AGENT_CHAT_MODEL` (default: `kimi-k2.5`)
-- Workflow model env: `PAPER_AGENT_WORKFLOW_MODEL` (default: `kimi-k2.5`)
 - Disable chat thinking by default (required for stable tool-calls on `kimi-k2.5`):
   - `PAPER_AGENT_CHAT_DISABLE_THINKING=1`
 
@@ -51,10 +51,22 @@ Rules:
 
 ## Session isolation (PaperAgent)
 - New sessions are sandboxed.
-- Files are scoped to session path under `papers/sessions/{session_id}`.
+- Session-private files are scoped under `papers/sessions/{session_id}`.
+- Paper artifacts use global single-copy cache under `papers/cache`.
+- `read_paper` supports arXiv ID/URL only; it first reuses cached `papers/cache/downloads/{paper_id}.pdf`, and only downloads when missing.
+- Metadata/cache model in PostgreSQL:
+  - Global cache: `paper_records_global`, `paper_cache_global`
+  - Session pointers: `authorized_paper_refs`, `session_paper_links`
 - Session-scoped file API:
   - `/api/sessions/{session_id}/files/{file_path}`
 - Legacy API `/api/files/{file_path}` remains for legacy sessions only.
+
+## Legacy SQLite backfill
+```bash
+pyenv shell Agent
+python scripts/migrate_sqlite_to_pg.py --database-url "$DATABASE_URL"
+```
+- Run separately in each environment (local/cloud). No cross-environment sync is assumed.
 
 ## Frontend UX requirements
 - Show tool banners when `tool_call` arrives.

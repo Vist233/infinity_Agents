@@ -18,6 +18,20 @@ PLOT_OUTPUT_DIR = Path(__file__).parent / "plot_outputs"
 
 class PythonPlottingTools(Toolkit):
     """Tools for generating charts and visualizations."""
+    _FONT_PRIORITY = [
+        "Noto Sans CJK SC",
+        "Noto Sans CJK",
+        "WenQuanYi Micro Hei",
+        "Microsoft YaHei",
+        "SimHei",
+        "DejaVu Sans",
+    ]
+    _CJK_FONT_MARKERS = [
+        "noto sans cjk",
+        "wenquanyi micro hei",
+        "microsoft yahei",
+        "simhei",
+    ]
 
     def __init__(
         self,
@@ -52,6 +66,47 @@ class PythonPlottingTools(Toolkit):
             # If detection fails, do not block chart output.
             return False
 
+    def _configure_matplotlib_cjk_font(self, plt) -> Dict[str, Any]:
+        """Configure matplotlib with best-effort CJK-capable font fallback."""
+        selected_font = "DejaVu Sans"
+        cjk_ready = False
+
+        try:
+            import matplotlib.font_manager as font_manager
+
+            available_fonts = {
+                font.name
+                for font in font_manager.fontManager.ttflist
+                if getattr(font, "name", None)
+            }
+
+            for font_name in self._FONT_PRIORITY:
+                if font_name in available_fonts:
+                    selected_font = font_name
+                    break
+            else:
+                lower_map = {name.lower(): name for name in available_fonts}
+                for marker in self._CJK_FONT_MARKERS:
+                    matched = next((name for key, name in lower_map.items() if marker in key), None)
+                    if matched:
+                        selected_font = matched
+                        break
+
+            selected_lower = selected_font.lower()
+            cjk_ready = any(marker in selected_lower for marker in self._CJK_FONT_MARKERS)
+        except Exception as e:
+            logger.warning(f"Failed to inspect system fonts, fallback to defaults: {e}")
+
+        font_fallback = [selected_font] + [f for f in self._FONT_PRIORITY if f != selected_font]
+        plt.rcParams["font.family"] = "sans-serif"
+        plt.rcParams["font.sans-serif"] = font_fallback
+        plt.rcParams["axes.unicode_minus"] = False
+
+        return {
+            "selected_font": selected_font,
+            "cjk_ready": cjk_ready,
+        }
+
     def create_chart(
         self,
         code: str,
@@ -75,10 +130,16 @@ class PythonPlottingTools(Toolkit):
         output_path = self.output_dir / f"{filename}.png"
 
         try:
+            font_info: Optional[Dict[str, Any]] = None
+            warning: Optional[str] = None
+
             if chart_type == "matplotlib":
                 import matplotlib
                 matplotlib.use("Agg")  # Non-interactive backend
                 import matplotlib.pyplot as plt
+                font_info = self._configure_matplotlib_cjk_font(plt)
+                if not font_info.get("cjk_ready", False):
+                    warning = "No CJK font detected. Install fonts-noto-cjk for proper Chinese rendering."
 
                 # Clear any existing figures
                 plt.clf()
@@ -121,11 +182,16 @@ class PythonPlottingTools(Toolkit):
 
             log_debug(f"Chart saved to {output_path}")
             img_ref = f"img://{filename}.png"
-            return json.dumps({
+            response: Dict[str, Any] = {
                 "success": True,
                 "image_ref": img_ref,
                 "markdown": f"![{filename}]({img_ref})",
-            })
+            }
+            if font_info is not None:
+                response["font_info"] = font_info
+            if warning:
+                response["warning"] = warning
+            return json.dumps(response)
 
         except Exception as e:
             logger.error(f"Chart creation error: {e}")
@@ -160,6 +226,10 @@ class PythonPlottingTools(Toolkit):
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
+            font_info = self._configure_matplotlib_cjk_font(plt)
+            warning = None
+            if not font_info.get("cjk_ready", False):
+                warning = "No CJK font detected. Install fonts-noto-cjk for proper Chinese rendering."
 
             plt.figure(figsize=(10, 6))
             plt.bar(list(data.keys()), list(data.values()), color="steelblue")
@@ -172,11 +242,15 @@ class PythonPlottingTools(Toolkit):
             plt.close()
 
             img_ref = f"img://{filename}.png"
-            return json.dumps({
+            response: Dict[str, Any] = {
                 "success": True,
                 "image_ref": img_ref,
                 "markdown": f"![{filename}]({img_ref})",
-            })
+                "font_info": font_info,
+            }
+            if warning:
+                response["warning"] = warning
+            return json.dumps(response)
 
         except Exception as e:
             return json.dumps({"error": str(e)})
@@ -212,6 +286,10 @@ class PythonPlottingTools(Toolkit):
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
+            font_info = self._configure_matplotlib_cjk_font(plt)
+            warning = None
+            if not font_info.get("cjk_ready", False):
+                warning = "No CJK font detected. Install fonts-noto-cjk for proper Chinese rendering."
 
             plt.figure(figsize=(10, 6))
             plt.plot(x_data, y_data, marker="o", linewidth=2, markersize=6)
@@ -224,11 +302,15 @@ class PythonPlottingTools(Toolkit):
             plt.close()
 
             img_ref = f"img://{filename}.png"
-            return json.dumps({
+            response: Dict[str, Any] = {
                 "success": True,
                 "image_ref": img_ref,
                 "markdown": f"![{filename}]({img_ref})",
-            })
+                "font_info": font_info,
+            }
+            if warning:
+                response["warning"] = warning
+            return json.dumps(response)
 
         except Exception as e:
             return json.dumps({"error": str(e)})

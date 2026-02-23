@@ -33,6 +33,116 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages (session_id);
+
+                CREATE TABLE IF NOT EXISTS paper_records (
+                    session_id UUID NOT NULL,
+                    paper_id TEXT NOT NULL,
+                    source_url TEXT,
+                    local_path TEXT,
+                    title TEXT,
+                    authors JSONB,
+                    pdf_path TEXT,
+                    images_dir TEXT,
+                    extracted_text TEXT,
+                    canonical_md_path TEXT,
+                    report_md TEXT,
+                    report_pdf_path TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    PRIMARY KEY (session_id, paper_id),
+                    CONSTRAINT fk_paper_session
+                    FOREIGN KEY(session_id)
+                    REFERENCES sessions(session_id)
+                    ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_paper_records_session_updated
+                    ON paper_records (session_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_paper_records_session_source_url
+                    ON paper_records (session_id, source_url);
+                CREATE INDEX IF NOT EXISTS idx_paper_records_session_local_path
+                    ON paper_records (session_id, local_path);
+
+                CREATE TABLE IF NOT EXISTS authorized_paper_refs (
+                    session_id UUID NOT NULL,
+                    ref TEXT NOT NULL,
+                    source TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (session_id, ref),
+                    CONSTRAINT fk_auth_paper_session
+                    FOREIGN KEY(session_id)
+                    REFERENCES sessions(session_id)
+                    ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_authorized_paper_refs_session_ref
+                    ON authorized_paper_refs (session_id, ref);
+
+                CREATE TABLE IF NOT EXISTS session_paper_links (
+                    session_id UUID NOT NULL,
+                    paper_id TEXT NOT NULL,
+                    source_ref TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_access_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (session_id, paper_id),
+                    CONSTRAINT fk_session_paper_links_session
+                    FOREIGN KEY(session_id)
+                    REFERENCES sessions(session_id)
+                    ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_session_paper_links_session_last_access
+                    ON session_paper_links (session_id, last_access_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_session_paper_links_paper
+                    ON session_paper_links (paper_id);
+
+                -- Deprecated session-scoped cache tables; kept for backward compatibility.
+                CREATE TABLE IF NOT EXISTS paper_cache (
+                    session_id UUID NOT NULL,
+                    cache_key TEXT NOT NULL,
+                    func_name TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    PRIMARY KEY (session_id, cache_key),
+                    CONSTRAINT fk_paper_cache_session
+                    FOREIGN KEY(session_id)
+                    REFERENCES sessions(session_id)
+                    ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_paper_cache_session_expires
+                    ON paper_cache (session_id, expires_at);
+
+                CREATE TABLE IF NOT EXISTS paper_records_global (
+                    paper_id TEXT PRIMARY KEY,
+                    source_url TEXT,
+                    local_path TEXT,
+                    title TEXT,
+                    authors JSONB,
+                    pdf_path TEXT,
+                    images_dir TEXT,
+                    extracted_text TEXT,
+                    canonical_md_path TEXT,
+                    report_md TEXT,
+                    report_pdf_path TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    status TEXT NOT NULL DEFAULT 'pending'
+                );
+                CREATE INDEX IF NOT EXISTS idx_paper_records_global_updated
+                    ON paper_records_global (updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_paper_records_global_source_url
+                    ON paper_records_global (source_url);
+                CREATE INDEX IF NOT EXISTS idx_paper_records_global_local_path
+                    ON paper_records_global (local_path);
+
+                CREATE TABLE IF NOT EXISTS paper_cache_global (
+                    cache_key TEXT PRIMARY KEY,
+                    func_name TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    expires_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_paper_cache_global_expires
+                    ON paper_cache_global (expires_at);
             """
         )
 
@@ -220,3 +330,64 @@ async def get_session(pool: asyncpg.Pool, session_id: str):
     except Exception as e:
         logging.error(f"Error fetching session {session_id}: {e}")
         return None
+
+
+async def resolve_global_paper_id_by_path(pool: asyncpg.Pool, file_path: str) -> str | None:
+    """
+    Resolve paper_id from global cache file path.
+    Supports exact path matches and images_dir prefix matches.
+    """
+    query = """
+        SELECT paper_id
+        FROM paper_records_global
+        WHERE pdf_path = $1
+           OR canonical_md_path = $1
+           OR report_pdf_path = $1
+           OR local_path = $1
+           OR ($1 LIKE images_dir || '/%')
+        ORDER BY updated_at DESC
+        LIMIT 1
+    """
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(query, file_path)
+            return row["paper_id"] if row else None
+    except Exception as e:
+        logging.error(f"Error resolving paper_id by path: {e}")
+        return None
+
+
+async def session_can_access_paper(pool: asyncpg.Pool, session_id: str, paper_id: str) -> bool:
+    """
+    Check whether a session is authorized/linked to access a paper.
+    Authorization sources:
+    - session_paper_links(session_id, paper_id)
+    - authorized_paper_refs(session_id, ref) matching paper identifiers
+    """
+    if not paper_id:
+        return False
+
+    refs = {
+        paper_id,
+        paper_id.replace("_", ".", 1),
+        paper_id.replace("_", "."),
+    }
+    refs_list = list(refs)
+    query = """
+        SELECT EXISTS (
+            SELECT 1
+            FROM session_paper_links
+            WHERE session_id = $1::uuid AND paper_id = $2
+            UNION
+            SELECT 1
+            FROM authorized_paper_refs
+            WHERE session_id = $1::uuid AND ref = ANY($3::text[])
+        ) AS allowed
+    """
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(query, session_id, paper_id, refs_list)
+            return bool(row["allowed"]) if row else False
+    except Exception as e:
+        logging.error(f"Error checking paper access for session {session_id}: {e}")
+        return False
