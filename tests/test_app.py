@@ -103,3 +103,38 @@ def test_shared_cache_file_requires_session_access(client: TestClient, monkeypat
     response = client.get(f"/api/sessions/{session_id}/files/downloads/2103_03404.pdf")
     assert response.status_code == 403
 
+
+def test_resolve_image_ref_supports_nested_img_path(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    root = tmp_path / "papers"
+    nested = root / "extracted" / "2103_03404" / "images" / "page1_img1.png"
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_bytes(b"fake-image")
+
+    monkeypatch.setattr(backend_app_module, "_LEGACY_ALLOWED_FILE_DIRS", [root])
+    resolved = backend_app_module._resolve_image_ref("extracted/2103_03404/images/page1_img1.png")
+    assert resolved == nested
+
+
+def test_resolve_image_ref_basename_fallback_searches_recursively(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    root = tmp_path / "papers"
+    nested = root / "cache" / "imgs" / "same_name.png"
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_bytes(b"fake-image")
+
+    monkeypatch.setattr(backend_app_module, "_LEGACY_ALLOWED_FILE_DIRS", [root])
+    resolved = backend_app_module._resolve_image_ref("same_name.png")
+    assert resolved == nested
+
+
+def test_replace_image_refs_with_base64_supports_nested_img_path(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    root = tmp_path / "papers"
+    nested = root / "extracted" / "paper_x" / "images" / "fig.png"
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_bytes(b"fake-image-content")
+
+    monkeypatch.setattr(backend_app_module, "_LEGACY_ALLOWED_FILE_DIRS", [root])
+    converted = backend_app_module._replace_image_refs_with_base64(
+        "图如下：![fig](img://extracted/paper_x/images/fig.png)"
+    )
+    assert "data:image/png;base64," in converted
+

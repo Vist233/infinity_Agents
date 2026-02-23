@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { getApiBase } from "@/lib/runtime-config";
 
 interface MarkdownRendererProps {
     content: string;
@@ -15,17 +16,24 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
     content,
     sessionId,
 }: MarkdownRendererProps) {
+    const apiBase = getApiBase();
     return (
         <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             urlTransform={(url) => {
                 // Convert img:// protocol to backend HTTP URL before react-markdown's sanitizer strips it
                 if (url.startsWith("img://")) {
-                    const filename = url.slice(6);
+                    const rawPath = url.slice(6).replace(/\\/g, "/").replace(/^\/+/, "");
+                    if (!rawPath) return url;
+                    const encodedPath = rawPath
+                        .split("/")
+                        .filter(Boolean)
+                        .map((segment) => encodeURIComponent(segment))
+                        .join("/");
                     if (sessionId) {
-                        return `http://localhost:8008/api/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(filename)}`;
+                        return `${apiBase}/api/sessions/${encodeURIComponent(sessionId)}/files/${encodedPath}`;
                     }
-                    return `http://localhost:8008/api/files/${encodeURIComponent(filename)}`;
+                    return `${apiBase}/api/files/${encodedPath}`;
                 }
                 return url;
             }}
@@ -129,6 +137,7 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
 
                     return (
                         <span className="md-image-wrapper">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
                                 src={src}
                                 alt={alt || ""}

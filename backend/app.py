@@ -274,21 +274,28 @@ _IMAGE_MIME = {
     '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
 }
 
-def _resolve_image_ref(filename: str) -> Optional[FilePath]:
-    """Resolve an img://filename reference to an actual file path."""
+def _resolve_image_ref(ref_path: str) -> Optional[FilePath]:
+    """Resolve an img:// path reference to an actual file path."""
+    normalized = ref_path.replace("\\", "/").lstrip("/")
     for d in _LEGACY_ALLOWED_FILE_DIRS:
-        candidate = d / filename
+        candidate = d / normalized
         if candidate.exists() and candidate.is_file():
             return candidate
+    # Backward compatibility for basename refs.
+    if "/" not in normalized:
+        for d in _LEGACY_ALLOWED_FILE_DIRS:
+            for candidate in d.rglob(normalized):
+                if candidate.is_file():
+                    return candidate
     return None
 
 def _replace_image_refs_with_base64(text: str) -> str:
     """Scan Markdown for ![alt](img://filename) and convert to base64 data URLs."""
     def _convert(match):
-        alt, filename = match.group(1), match.group(2)
-        resolved = _resolve_image_ref(filename)
+        alt, ref_path = match.group(1), match.group(2)
+        resolved = _resolve_image_ref(ref_path)
         if not resolved:
-            logging.warning(f"Image not found: img://{filename}")
+            logging.warning(f"Image not found: img://{ref_path}")
             return match.group(0)
         ext = resolved.suffix.lower()
         mime = _IMAGE_MIME.get(ext)
@@ -296,7 +303,7 @@ def _replace_image_refs_with_base64(text: str) -> str:
             return match.group(0)
         try:
             b64 = base64.b64encode(resolved.read_bytes()).decode('ascii')
-            logging.info(f"Converted img://{filename} to base64 ({resolved.stat().st_size} bytes)")
+            logging.info(f"Converted img://{ref_path} to base64 ({resolved.stat().st_size} bytes)")
             return f'![{alt}](data:{mime};base64,{b64})'
         except Exception as e:
             logging.warning(f"Failed to encode image {resolved}: {e}")

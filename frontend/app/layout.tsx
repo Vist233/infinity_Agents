@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { ToasterProvider } from "@/components/providers/toaster-provider";
 
 export const metadata: Metadata = {
   title: "Infinity Agents",
@@ -15,6 +16,7 @@ export default function RootLayout({
     <html lang="en">
       <body className="antialiased bg-[var(--app-bg)] text-foreground">
         {children}
+        <ToasterProvider />
       </body>
     </html>
   );

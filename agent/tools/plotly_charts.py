@@ -392,6 +392,23 @@ class PlotlyVisualizationTools(Toolkit):
         ]
         
         super().__init__(name="plotly_visualization_tools", tools=tools, **kwargs)
+
+    def _build_image_response(self, saved_path: Optional[str], filename: str, chart_type: str) -> str:
+        if not saved_path:
+            return json.dumps({"error": "chart_not_saved"}, ensure_ascii=False)
+        file_path = Path(saved_path)
+        image_ref = f"img://{file_path.name}"
+        return json.dumps(
+            {
+                "success": True,
+                "chart_type": chart_type,
+                "filename": filename,
+                "image_path": str(file_path),
+                "image_ref": image_ref,
+                "markdown": f"![{filename}]({image_ref})",
+            },
+            ensure_ascii=False,
+        )
     
     def create_methodology_comparison(
         self,
@@ -416,6 +433,10 @@ class PlotlyVisualizationTools(Toolkit):
             paper_reports = json.loads(paper_reports_json)
         except json.JSONDecodeError as e:
             return json.dumps({"error": f"Invalid JSON: {e}"})
+        if not isinstance(paper_reports, list):
+            return json.dumps({"error": "paper_reports_json must be a JSON array"})
+        if len(paper_reports) > 200:
+            return json.dumps({"error": "too_many_reports: max 200"})
         
         if not filename:
             filename = f"methodology_comparison_{uuid.uuid4().hex[:8]}"
@@ -424,13 +445,7 @@ class PlotlyVisualizationTools(Toolkit):
         
         try:
             _, saved_path = create_methodology_sunburst(paper_reports, output_path)
-            
-            return json.dumps({
-                "success": True,
-                "image_path": saved_path,
-                "filename": filename,
-                "chart_type": "sunburst",
-            })
+            return self._build_image_response(saved_path, filename, "sunburst")
         except Exception as e:
             logger.error(f"Methodology comparison error: {e}")
             return json.dumps({"error": str(e)})
@@ -456,6 +471,13 @@ class PlotlyVisualizationTools(Toolkit):
             paper_reports = json.loads(paper_reports_json)
         except json.JSONDecodeError as e:
             return json.dumps({"error": f"Invalid JSON: {e}"})
+        if not isinstance(paper_reports, list):
+            return json.dumps({"error": "paper_reports_json must be a JSON array"})
+        try:
+            top_n = int(top_n)
+        except (TypeError, ValueError):
+            top_n = 15
+        top_n = max(1, min(top_n, 50))
         
         if not filename:
             filename = f"tool_frequency_{uuid.uuid4().hex[:8]}"
@@ -464,13 +486,7 @@ class PlotlyVisualizationTools(Toolkit):
         
         try:
             _, saved_path = create_tool_frequency_chart(paper_reports, output_path, top_n)
-            
-            return json.dumps({
-                "success": True,
-                "image_path": saved_path,
-                "filename": filename,
-                "chart_type": "bar_horizontal",
-            })
+            return self._build_image_response(saved_path, filename, "bar_horizontal")
         except Exception as e:
             logger.error(f"Tool frequency chart error: {e}")
             return json.dumps({"error": str(e)})
@@ -507,6 +523,14 @@ class PlotlyVisualizationTools(Toolkit):
             values_list = json.loads(values) if values else [1] * len(labels_list)
         except json.JSONDecodeError as e:
             return json.dumps({"error": f"Invalid JSON: {e}"})
+        if not isinstance(labels_list, list) or not isinstance(parents_list, list) or not isinstance(values_list, list):
+            return json.dumps({"error": "labels/parents/values must be JSON arrays"})
+        if not labels_list:
+            return json.dumps({"error": "labels cannot be empty"})
+        if len(labels_list) != len(parents_list) or len(labels_list) != len(values_list):
+            return json.dumps({"error": "labels/parents/values length mismatch"})
+        if len(labels_list) > 500:
+            return json.dumps({"error": "too_many_nodes: max 500"})
         
         if not filename:
             filename = f"sunburst_{uuid.uuid4().hex[:8]}"
@@ -520,13 +544,7 @@ class PlotlyVisualizationTools(Toolkit):
                 "values": values_list,
             }
             _, saved_path = create_sunburst(data, title, output_path)
-            
-            return json.dumps({
-                "success": True,
-                "image_path": saved_path,
-                "filename": filename,
-                "chart_type": "sunburst",
-            })
+            return self._build_image_response(saved_path, filename, "sunburst")
         except Exception as e:
             logger.error(f"Custom sunburst error: {e}")
             return json.dumps({"error": str(e)})
@@ -559,6 +577,17 @@ class PlotlyVisualizationTools(Toolkit):
             data = json.loads(data_json)
         except json.JSONDecodeError as e:
             return json.dumps({"error": f"Invalid JSON: {e}"})
+        if not isinstance(data, dict):
+            return json.dumps({"error": "data_json must be a JSON object"})
+        if not data:
+            return json.dumps({"error": "data_json cannot be empty"})
+        if len(data) > 100:
+            return json.dumps({"error": "too_many_categories: max 100"})
+        for k, v in data.items():
+            if not isinstance(k, str):
+                return json.dumps({"error": "all category names must be strings"})
+            if not isinstance(v, (int, float)):
+                return json.dumps({"error": f"category '{k}' has non-numeric value"})
         
         if not filename:
             filename = f"bar_chart_{uuid.uuid4().hex[:8]}"
@@ -570,13 +599,8 @@ class PlotlyVisualizationTools(Toolkit):
                 data, title, xlabel, ylabel,
                 output_path, horizontal, color_by_value=True
             )
-            
-            return json.dumps({
-                "success": True,
-                "image_path": saved_path,
-                "filename": filename,
-                "chart_type": "bar_horizontal" if horizontal else "bar_vertical",
-            })
+            chart_type = "bar_horizontal" if horizontal else "bar_vertical"
+            return self._build_image_response(saved_path, filename, chart_type)
         except Exception as e:
             logger.error(f"Custom bar chart error: {e}")
             return json.dumps({"error": str(e)})

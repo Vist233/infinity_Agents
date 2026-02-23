@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
 import { Terminal, FileText, Microscope, ExternalLink, Copy } from "lucide-react";
 
 const OFFICIAL_TUTORIALS = [

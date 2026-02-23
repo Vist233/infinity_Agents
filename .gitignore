@@ -43,3 +43,27 @@ agent/__pycache__/
 agent/tools/__pycache__/
 agent/tools/cache/
 agent/tools/arxiv_pdfs/
+*.log
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments
+.venv/
+env/
+
+# Frontend dependencies
+frontend/node_modules/
+
+# Runtime paper artifacts (generated locally)
+papers/cache/
+papers/sessions/
+
+# Local generated figures
+normal_distribution.png
+cute_turtle.png

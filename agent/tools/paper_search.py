@@ -11,12 +11,27 @@ import re
 import requests
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from agno.tools import Toolkit
 from agno.utils.log import log_debug, logger
 from agent.papers_repo_pg import PapersRepoPG, PaperRecord
 from agent.tools.pdf_extractor import PDFExtractor, ExtractedContent
-from standalone_paper_tools.pubmed_search import PubMedSearchClient
+try:
+    from standalone_paper_tools.pubmed_search import PubMedSearchClient
+except ModuleNotFoundError:
+    class PubMedSearchClient:  # type: ignore[override]
+        """Fallback PubMed client when standalone_paper_tools package is unavailable."""
+
+        def search(self, query: str, num_results: int) -> Dict[str, Any]:
+            return {
+                "articles": [],
+                "error": {
+                    "source": "pubmed",
+                    "code": "module_not_found",
+                    "message": "standalone_paper_tools.pubmed_search is unavailable",
+                },
+            }
 
 try:
     import arxiv
@@ -168,8 +183,105 @@ class PaperSearchTools(Toolkit):
     def _paper_id_from_arxiv_id(self, arxiv_id: str) -> str:
         return arxiv_id.replace(".", "_")
 
+    def _paper_id_from_pdf_url(self, pdf_url: str) -> str:
+        return hashlib.md5(pdf_url.encode("utf-8")).hexdigest()[:16]
+
+    def _is_http_url(self, value: str) -> bool:
+        parsed = urlparse(value)
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+    def _looks_like_pdf_url(self, value: str) -> bool:
+        parsed = urlparse(value)
+        return parsed.path.lower().endswith(".pdf")
+
+    def _is_pdf_response(self, response: requests.Response) -> bool:
+        content_type = str(response.headers.get("Content-Type", "")).lower()
+        disposition = str(response.headers.get("Content-Disposition", "")).lower()
+        if "application/pdf" in content_type or ".pdf" in disposition:
+            return True
+        content = response.content or b""
+        return content.startswith(b"%PDF")
+
+    def _is_valid_pdf_url(self, value: str) -> bool:
+        if not self._is_http_url(value):
+            return False
+        if self._looks_like_pdf_url(value):
+            return True
+        try:
+            resp = requests.head(value, allow_redirects=True, timeout=15)
+            content_type = str(resp.headers.get("Content-Type", "")).lower()
+            disposition = str(resp.headers.get("Content-Disposition", "")).lower()
+            return ("application/pdf" in content_type) or (".pdf" in disposition)
+        except Exception:
+            return False
+
     def _canonical_md_path(self, paper_id: str) -> Path:
         return self.md_dir / f"{paper_id}.md"
+
+    def _normalize_image_path(self, image_path: Any) -> str:
+        """Normalize image paths to stable refs relative to shared cache root."""
+        raw = str(image_path or "").strip()
+        if not raw:
+            return ""
+        p = Path(raw)
+        if p.is_absolute():
+            try:
+                return p.resolve().relative_to(self.shared_cache_root.resolve()).as_posix()
+            except ValueError:
+                return str(p.resolve())
+        return Path(raw).as_posix()
+
+    def _extract_page_num_from_image_name(self, image_name: str) -> int:
+        match = re.search(r"page(\d+)_img\d+", image_name)
+        if match:
+            return int(match.group(1))
+        return 0
+
+    def _build_images_by_page(
+        self,
+        paper_id: str,
+        pages: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        page_to_paths: Dict[int, List[str]] = {}
+
+        if pages:
+            for page in pages:
+                raw_page_num = page.get("page_num", 0)
+                try:
+                    page_num = int(raw_page_num)
+                except (TypeError, ValueError):
+                    page_num = 0
+                image_paths = page.get("image_paths") or []
+                normalized = [self._normalize_image_path(p) for p in image_paths if str(p).strip()]
+                normalized = [p for p in normalized if p]
+                if normalized:
+                    page_to_paths.setdefault(page_num, [])
+                    page_to_paths[page_num].extend(normalized)
+
+        # Fallback for cache hits: rebuild index from extracted directory if needed.
+        images_dir = self.extracted_dir / paper_id / "images"
+        if images_dir.exists():
+            for image_file in sorted(images_dir.glob("*.*")):
+                rel_path = self._normalize_image_path(image_file)
+                page_num = self._extract_page_num_from_image_name(image_file.name)
+                page_to_paths.setdefault(page_num, [])
+                if rel_path not in page_to_paths[page_num]:
+                    page_to_paths[page_num].append(rel_path)
+
+        images_by_page: List[Dict[str, Any]] = []
+        for page_num in sorted(page_to_paths.keys()):
+            paths = page_to_paths[page_num]
+            images_by_page.append(
+                {
+                    "page_num": page_num,
+                    "image_paths": paths,
+                    "image_markdown": [
+                        f"![{Path(path).stem}](img://{path})"
+                        for path in paths
+                    ],
+                }
+            )
+        return images_by_page
 
     def _build_canonical_md(self, paper_id: str, extracted: ExtractedContent) -> str:
         parts: List[str] = [
@@ -181,20 +293,35 @@ class PaperSearchTools(Toolkit):
         for page in extracted.pages:
             page_num = page.get("page_num", "?")
             text = page.get("text", "") or ""
+            image_paths = [
+                self._normalize_image_path(p)
+                for p in (page.get("image_paths") or [])
+                if str(p).strip()
+            ]
+            image_paths = [p for p in image_paths if p]
             parts.append(f"### Page {page_num}")
             parts.append("")
             parts.append(text if text.strip() else "[No text extracted on this page]")
             parts.append("")
+            if image_paths:
+                parts.append("#### Extracted Images")
+                parts.append("")
+                for image_path in image_paths:
+                    parts.append(f"- `{image_path}`")
+                    parts.append(f"- ![{Path(image_path).stem}](img://{image_path})")
+                parts.append("")
         return "\n".join(parts)
 
-    def _download_arxiv_pdf(self, arxiv_id: str, paper_id: str) -> Path:
+    def _download_pdf(self, pdf_url: str, paper_id: str) -> Path:
         pdf_path = self.download_dir / f"{paper_id}.pdf"
         if pdf_path.exists():
             return pdf_path
-        download_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-        log_debug(f"Downloading PDF from: {download_url}")
-        response = requests.get(download_url, timeout=60)
+
+        log_debug(f"Downloading PDF from: {pdf_url}")
+        response = requests.get(pdf_url, timeout=60)
         response.raise_for_status()
+        if not self._is_pdf_response(response):
+            raise ValueError("invalid_pdf_content")
         with open(pdf_path, "wb") as f:
             f.write(response.content)
         return pdf_path
@@ -207,23 +334,34 @@ class PaperSearchTools(Toolkit):
                 "message": "当前运行未配置论文仓库，无法执行会话授权读取。",
             }
 
-        arxiv_id = self._extract_arxiv_id(paper_ref)
-        if not arxiv_id:
+        ref = str(paper_ref).strip()
+        arxiv_id = self._extract_arxiv_id(ref)
+        is_pdf_url = False
+        if self._is_http_url(ref):
+            if self._looks_like_pdf_url(ref):
+                is_pdf_url = True
+            elif not arxiv_id:
+                is_pdf_url = self._is_valid_pdf_url(ref)
+
+        if not arxiv_id and not is_pdf_url:
             return {
                 "success": False,
                 "error": "unsupported_paper_ref",
-                "message": "仅支持 arXiv ID 或 arXiv URL。",
+                "message": "仅支持 arXiv ID/arXiv URL，或可访问的 PDF URL。",
             }
-        paper_id = self._paper_id_from_arxiv_id(arxiv_id)
+        if arxiv_id:
+            paper_id = self._paper_id_from_arxiv_id(arxiv_id)
+        else:
+            paper_id = self._paper_id_from_pdf_url(ref)
 
-        if not self.papers_db.is_authorized_ref(paper_ref, paper_id=paper_id):
+        if (not is_pdf_url) and (not self.papers_db.is_authorized_ref(ref, paper_id=paper_id)):
             return {
                 "success": False,
                 "error": "paper_not_authorized_for_session",
                 "message": "该论文不在当前会话可访问范围。请先使用 search_paper。",
             }
 
-        self.papers_db.link_paper_to_session(self.papers_db.session_id, paper_id, source_ref=paper_ref)
+        self.papers_db.link_paper_to_session(self.papers_db.session_id, paper_id, source_ref=ref)
         existing = self.papers_db.get_by_id(paper_id)
         md_path = self._canonical_md_path(paper_id)
 
@@ -245,21 +383,55 @@ class PaperSearchTools(Toolkit):
             }
 
         pdf_path: Optional[Path] = None
+        source_url: Optional[str] = None
         if existing and existing.pdf_path and Path(existing.pdf_path).exists():
             pdf_path = Path(existing.pdf_path)
         if pdf_path is None:
-            pdf_path = self._download_arxiv_pdf(arxiv_id, paper_id)
+            try:
+                if is_pdf_url:
+                    source_url = ref
+                    pdf_path = self._download_pdf(ref, paper_id)
+                else:
+                    source_url = f"https://arxiv.org/abs/{arxiv_id}"
+                    pdf_path = self._download_pdf(f"https://arxiv.org/pdf/{arxiv_id}.pdf", paper_id)
+            except ValueError as e:
+                if str(e) == "invalid_pdf_content":
+                    return {
+                        "success": False,
+                        "error": "invalid_pdf_content",
+                        "message": "URL 响应不是有效 PDF 内容。",
+                    }
+                return {
+                    "success": False,
+                    "error": "download_failed",
+                    "message": str(e),
+                }
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": "download_failed",
+                    "message": str(e),
+                }
+        elif existing and existing.source_url:
+            source_url = existing.source_url
 
         self.papers_db.upsert(
             PaperRecord(
                 paper_id=paper_id,
-                source_url=f"https://arxiv.org/abs/{arxiv_id}",
+                source_url=source_url,
                 pdf_path=str(pdf_path),
                 status="processing",
             )
         )
-
-        extracted = self.pdf_extractor.extract(str(pdf_path), paper_id)
+        try:
+            extracted = self.pdf_extractor.extract(str(pdf_path), paper_id)
+        except Exception as e:
+            self.papers_db.update_status(paper_id, "failed")
+            return {
+                "success": False,
+                "error": "extraction_failed",
+                "message": str(e),
+            }
         canonical_md = self._build_canonical_md(paper_id, extracted)
         md_path.write_text(canonical_md, encoding="utf-8")
 
@@ -270,6 +442,9 @@ class PaperSearchTools(Toolkit):
             canonical_md_path=str(md_path),
         )
         self.papers_db.update_status(paper_id, "completed")
+        if is_pdf_url:
+            self.papers_db.register_authorized_refs([ref], source="read_paper")
+            self.papers_db.link_paper_to_session(self.papers_db.session_id, paper_id, source_ref=ref)
         return {
             "success": True,
             "paper_id": paper_id,
@@ -288,6 +463,16 @@ class PaperSearchTools(Toolkit):
         case_sensitive: bool = False,
     ) -> str:
         """Read paper content in command-line style from canonical Markdown."""
+        try:
+            max_lines = int(max_lines)
+        except (TypeError, ValueError):
+            max_lines = 200
+        max_lines = max(1, min(max_lines, 500))
+        try:
+            start_line = int(start_line)
+        except (TypeError, ValueError):
+            start_line = 1
+        start_line = max(1, start_line)
         materialized = self._ensure_materialized_for_read(paper_ref)
         if not materialized.get("success"):
             return json.dumps(materialized, indent=2, ensure_ascii=False)
@@ -308,6 +493,7 @@ class PaperSearchTools(Toolkit):
             "cached": cached,
             "source_status": source_status,
             "total_lines": total_lines,
+            "images_by_page": self._build_images_by_page(paper_id=paper_id),
         }
 
         if action == "head":
@@ -321,7 +507,7 @@ class PaperSearchTools(Toolkit):
             return json.dumps(result, indent=2, ensure_ascii=False)
 
         if action == "cat":
-            start = max(1, start_line)
+            start = start_line
             end = min(total_lines, start + max_lines - 1)
             result["start_line"] = start
             result["end_line"] = end
@@ -334,7 +520,11 @@ class PaperSearchTools(Toolkit):
                 return json.dumps(result, indent=2, ensure_ascii=False)
             flags = 0 if case_sensitive else re.IGNORECASE
             matches: List[Dict[str, Any]] = []
-            regex = re.compile(pattern, flags=flags)
+            try:
+                regex = re.compile(pattern, flags=flags)
+            except re.error as e:
+                result["error"] = f"invalid_regex: {e}"
+                return json.dumps(result, indent=2, ensure_ascii=False)
             for idx, line in enumerate(lines, start=1):
                 if regex.search(line):
                     ctx_start = max(1, idx - 2)
@@ -425,6 +615,15 @@ class PaperSearchTools(Toolkit):
         Returns:
             str: JSON array of papers from both sources.
         """
+        query = str(query or "").strip()
+        if not query:
+            return json.dumps({"error": "query cannot be empty"})
+        try:
+            num_results = int(num_results)
+        except (TypeError, ValueError):
+            num_results = 5
+        num_results = max(1, min(num_results, 25))
+
         # Check cache first
         cached = self.cache.get(
             "combined_search",

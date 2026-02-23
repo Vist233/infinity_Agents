@@ -6,7 +6,7 @@ class SimplePaperAgent:
     """
     极简版 Agent，直接透传 OpenAI/Moonshot 的标准流。
     """
-    def __init__(self, base_url: str = "https://api.moonshot.cn/v1", model: str = "kimi-k2-thinking-turbo"):
+    def __init__(self, base_url: str = "https://api.moonshot.cn/v1", model: str = "kimi-k2.5"):
         self.client = OpenAI(
             api_key=os.environ.get("MOONSHOT_API_KEY"), 
             base_url=base_url,

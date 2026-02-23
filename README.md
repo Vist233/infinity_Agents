@@ -22,7 +22,7 @@ Infinity Agents is an AI-based tool designed to assist with research tasks. It c
 - **Paper AI**: Give it a topic, it will search articles using ArXiv, PubMed, and DuckDuckGo, then summarize the most relevant ones for you. (Access via main chat interface)
 - **Chater**: A general conversational AI, optionally enhanced with Retrieval-Augmented Generation (RAG) using uploaded documents. (Access via main chat interface)
 - **Paper cache model**: Single global paper cache under `papers/cache` + per-session pointers in PostgreSQL (`authorized_paper_refs`, `session_paper_links`).
-- **Paper reading model**: `read_paper` supports arXiv ID/URL only and reuses cached PDFs under `papers/cache/downloads` before downloading.
+- **Paper reading model**: `read_paper` supports arXiv ID/URL and direct `pdf_url`, reusing cached PDFs under `papers/cache/downloads` before downloading.
 
 ## Quick Start
 

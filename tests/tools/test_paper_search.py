@@ -54,19 +54,46 @@ def test_size_middleware_limits():
     limited_articles = size.limit_articles(articles)
     assert len(limited_articles) == 1
 
-def test_search_papers_combined(paper_search_tools):
-    """Test combined ArXiv and PubMed search."""
-    query = "transformer models"
-    result_json = paper_search_tools.search_papers(query, num_results=4)
-    
+def test_search_papers_combined(monkeypatch, paper_search_tools):
+    """Test combined search behavior with deterministic offline fixtures."""
+    monkeypatch.setattr(
+        paper_search_tools,
+        "_get_arxiv_papers",
+        lambda _q, _n: [
+            {
+                "source": "arxiv",
+                "id": "a1",
+                "title": "Attention Paper",
+                "summary": "summary-a1",
+                "authors": ["author-a"],
+                "entry_id": "https://arxiv.org/abs/1706.03762",
+                "url": "https://arxiv.org/abs/1706.03762",
+                "pdf_url": "https://arxiv.org/pdf/1706.03762",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        paper_search_tools,
+        "_get_pubmed_papers",
+        lambda _q, _n: [
+            {
+                "source": "pubmed",
+                "id": "123456",
+                "pmid": "123456",
+                "title": "PubMed Paper",
+                "summary": "summary-p1",
+                "authors": [],
+                "url": "https://pubmed.ncbi.nlm.nih.gov/123456/",
+            }
+        ],
+    )
+    monkeypatch.setattr(paper_search_tools, "_register_authorized_papers", lambda _items: None)
+
+    result_json = paper_search_tools.search_papers("transformer models", num_results=4)
     results = json.loads(result_json)
     assert isinstance(results, list)
-    assert len(results) <= 4
-    
-    sources = set(article.get("source") for article in results)
-    print(f"Sources found: {sources}")
-    # Ideally should contain both if available
-    assert "arxiv" in sources or "pubmed" in sources
+    assert len(results) == 2
+    assert {article.get("source") for article in results} == {"arxiv", "pubmed"}
 
 def test_read_paper_content_basic(monkeypatch, paper_search_tools, temp_download_dir):
     """Test reading paper content."""
@@ -410,6 +437,7 @@ class _FakePapersDB:
         self.session_id = "00000000-0000-0000-0000-000000000001"
         self.authorized = True
         self.linked = []
+        self.refs = []
         self.upserts = []
         self.saved_extracted = []
         self.status_updates = []
@@ -420,6 +448,9 @@ class _FakePapersDB:
 
     def link_paper_to_session(self, session_id, paper_id, source_ref=None):
         self.linked.append((session_id, paper_id, source_ref))
+
+    def register_authorized_refs(self, refs, source="search_paper"):
+        self.refs.append((list(refs), source))
 
     def get_by_id(self, paper_id):
         return self.record
@@ -466,6 +497,9 @@ class _SessionScopedFakePapersDB:
 
     def link_paper_to_session(self, session_id, paper_id, source_ref=None):
         self.shared.linked.add((session_id, paper_id))
+
+    def register_authorized_refs(self, refs, source="search_paper"):
+        self.shared.authorized_refs_by_session.setdefault(self.session_id, set()).update(refs)
 
     def get_by_id(self, paper_id):
         return self.shared.record
@@ -524,7 +558,7 @@ def test_read_paper_cache_hit_skips_download(monkeypatch, tmp_path):
     def _should_not_download(*_args, **_kwargs):
         raise AssertionError("download should not be called on cache hit")
 
-    monkeypatch.setattr(tool, "_download_arxiv_pdf", _should_not_download)
+    monkeypatch.setattr(tool, "_download_pdf", _should_not_download)
     result = json.loads(tool.read_paper("2103.03404", action="head", max_lines=1))
     assert result["paper_id"] == "2103_03404"
     assert result["source_status"] == "from_cache"
@@ -543,7 +577,7 @@ def test_read_paper_download_and_materialize(monkeypatch, tmp_path):
         papers_db=fake_db,
     )
 
-    def _fake_download(_arxiv_id, paper_id):
+    def _fake_download(_pdf_url, paper_id):
         pdf_path = downloads / f"{paper_id}.pdf"
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
         pdf_path.write_bytes(b"%PDF-1.4\n%fake\n")
@@ -552,23 +586,33 @@ def test_read_paper_download_and_materialize(monkeypatch, tmp_path):
     def _fake_extract(_pdf_path, paper_id):
         images_dir = shared_root / "extracted" / paper_id / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
+        image_path = images_dir / "page1_img1.png"
+        image_path.write_bytes(b"fake-image")
         return ExtractedContent(
             text="Method section",
-            pages=[{"page_num": 1, "text": "Method section", "image_paths": []}],
+            pages=[{"page_num": 1, "text": "Method section", "image_paths": [str(image_path)]}],
             images_dir=images_dir,
-            image_count=0,
+            image_count=1,
             page_count=1,
         )
 
-    monkeypatch.setattr(tool, "_download_arxiv_pdf", _fake_download)
+    monkeypatch.setattr(tool, "_download_pdf", _fake_download)
     monkeypatch.setattr(tool.pdf_extractor, "extract", _fake_extract)
 
     result = json.loads(tool.read_paper("https://arxiv.org/abs/2103.03404", action="grep", pattern="Method"))
     assert result["paper_id"] == "2103_03404"
     assert result["source_status"] == "downloaded_and_extracted"
     assert result["match_count"] >= 1
+    assert result["images_by_page"] == [
+        {
+            "page_num": 1,
+            "image_paths": ["extracted/2103_03404/images/page1_img1.png"],
+            "image_markdown": ["![page1_img1](img://extracted/2103_03404/images/page1_img1.png)"],
+        }
+    ]
     assert (shared_root / "downloads" / "2103_03404.pdf").exists()
     assert (shared_root / "md" / "2103_03404.md").exists()
+    assert "extracted/2103_03404/images/page1_img1.png" in (shared_root / "md" / "2103_03404.md").read_text(encoding="utf-8")
     assert fake_db.upserts
     assert fake_db.saved_extracted
 
@@ -585,8 +629,8 @@ def test_read_paper_accepts_underscore_arxiv_id(monkeypatch, tmp_path):
         papers_db=fake_db,
     )
 
-    def _fake_download(arxiv_id, paper_id):
-        assert arxiv_id == "2103.03404"
+    def _fake_download(pdf_url, paper_id):
+        assert pdf_url.endswith("/2103.03404.pdf")
         assert paper_id == "2103_03404"
         pdf_path = downloads / f"{paper_id}.pdf"
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
@@ -604,7 +648,7 @@ def test_read_paper_accepts_underscore_arxiv_id(monkeypatch, tmp_path):
             page_count=1,
         )
 
-    monkeypatch.setattr(tool, "_download_arxiv_pdf", _fake_download)
+    monkeypatch.setattr(tool, "_download_pdf", _fake_download)
     monkeypatch.setattr(tool.pdf_extractor, "extract", _fake_extract)
 
     result = json.loads(tool.read_paper("2103_03404", action="head", max_lines=1))
@@ -612,7 +656,7 @@ def test_read_paper_accepts_underscore_arxiv_id(monkeypatch, tmp_path):
     assert result["source_status"] == "downloaded_and_extracted"
 
 
-def test_read_paper_rejects_non_arxiv_url(tmp_path):
+def test_read_paper_rejects_non_pdf_url(monkeypatch, tmp_path):
     fake_db = _FakePapersDB()
     tool = PaperSearchTools(
         enable_search=False,
@@ -621,8 +665,68 @@ def test_read_paper_rejects_non_arxiv_url(tmp_path):
         shared_cache_root=tmp_path / "cache",
         papers_db=fake_db,
     )
-    result = json.loads(tool.read_paper("https://example.com/paper.pdf", action="head"))
+    monkeypatch.setattr(tool, "_is_valid_pdf_url", lambda _url: False)
+    result = json.loads(tool.read_paper("https://example.com/paper.html", action="head"))
     assert result["error"] == "unsupported_paper_ref"
+
+
+def test_read_paper_direct_pdf_url_without_search(monkeypatch, tmp_path):
+    fake_db = _FakePapersDB()
+    fake_db.authorized = False
+    shared_root = tmp_path / "cache"
+    downloads = shared_root / "downloads"
+    tool = PaperSearchTools(
+        enable_search=False,
+        enable_read=True,
+        download_dir=downloads,
+        shared_cache_root=shared_root,
+        papers_db=fake_db,
+    )
+    pdf_url = "https://example.com/whitepaper.pdf"
+
+    def _fake_download(_pdf_url, paper_id):
+        pdf_path = downloads / f"{paper_id}.pdf"
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(b"%PDF-1.4\n%fake\n")
+        return pdf_path
+
+    def _fake_extract(_pdf_path, paper_id):
+        images_dir = shared_root / "extracted" / paper_id / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        return ExtractedContent(
+            text="Direct PDF content",
+            pages=[{"page_num": 1, "text": "Direct PDF content", "image_paths": []}],
+            images_dir=images_dir,
+            image_count=0,
+            page_count=1,
+        )
+
+    monkeypatch.setattr(tool, "_download_pdf", _fake_download)
+    monkeypatch.setattr(tool.pdf_extractor, "extract", _fake_extract)
+    first = json.loads(tool.read_paper(pdf_url, action="head", max_lines=1))
+    assert first["source_status"] == "downloaded_and_extracted"
+    assert fake_db.refs and fake_db.refs[-1][1] == "read_paper"
+    assert pdf_url in fake_db.refs[-1][0]
+
+    monkeypatch.setattr(tool, "_download_pdf", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should not redownload")))
+    second = json.loads(tool.read_paper(pdf_url, action="head", max_lines=1))
+    assert second["source_status"] == "from_cache"
+
+
+def test_read_paper_invalid_pdf_content_returns_structured_error(monkeypatch, tmp_path):
+    fake_db = _FakePapersDB()
+    fake_db.authorized = False
+    tool = PaperSearchTools(
+        enable_search=False,
+        enable_read=True,
+        download_dir=tmp_path / "cache" / "downloads",
+        shared_cache_root=tmp_path / "cache",
+        papers_db=fake_db,
+    )
+    monkeypatch.setattr(tool, "_download_pdf", lambda *_a, **_k: (_ for _ in ()).throw(ValueError("invalid_pdf_content")))
+
+    result = json.loads(tool.read_paper("https://example.com/notpdf.pdf", action="head"))
+    assert result["error"] == "invalid_pdf_content"
 
 
 def test_read_paper_session_isolation_on_shared_cache(monkeypatch, tmp_path):
@@ -661,8 +765,8 @@ def test_read_paper_session_isolation_on_shared_cache(monkeypatch, tmp_path):
     def _should_not_download(*_args, **_kwargs):
         raise AssertionError("download should not happen for shared cache hit")
 
-    monkeypatch.setattr(tool_a, "_download_arxiv_pdf", _should_not_download)
-    monkeypatch.setattr(tool_b, "_download_arxiv_pdf", _should_not_download)
+    monkeypatch.setattr(tool_a, "_download_pdf", _should_not_download)
+    monkeypatch.setattr(tool_b, "_download_pdf", _should_not_download)
 
     allowed = json.loads(tool_a.read_paper("2103.03404", action="head", max_lines=1))
     denied = json.loads(tool_b.read_paper("2103.03404", action="head", max_lines=1))
@@ -671,3 +775,81 @@ def test_read_paper_session_isolation_on_shared_cache(monkeypatch, tmp_path):
     assert allowed["source_status"] == "from_cache"
     assert "Title" in allowed["content"]
     assert denied["error"] == "paper_not_authorized_for_session"
+
+
+def test_read_paper_cache_hit_rebuilds_images_index_from_extracted_dir(monkeypatch, tmp_path):
+    fake_db = _FakePapersDB()
+    shared_root = tmp_path / "cache"
+    md_path = shared_root / "md" / "2103_03404.md"
+    images_dir = shared_root / "extracted" / "2103_03404" / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    (images_dir / "page1_img1.png").write_bytes(b"fake")
+    (images_dir / "page2_img1.png").write_bytes(b"fake")
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text("# Title\n", encoding="utf-8")
+
+    fake_db.record = SimpleNamespace(
+        paper_id="2103_03404",
+        pdf_path=str(shared_root / "downloads" / "2103_03404.pdf"),
+        canonical_md_path=str(md_path),
+    )
+    tool = PaperSearchTools(
+        enable_search=False,
+        enable_read=True,
+        download_dir=shared_root / "downloads",
+        shared_cache_root=shared_root,
+        papers_db=fake_db,
+    )
+    monkeypatch.setattr(tool, "_download_pdf", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should not download")))
+
+    result = json.loads(tool.read_paper("2103.03404", action="head", max_lines=1))
+    assert result["source_status"] == "from_cache"
+    assert result["images_by_page"] == [
+        {
+            "page_num": 1,
+            "image_paths": ["extracted/2103_03404/images/page1_img1.png"],
+            "image_markdown": ["![page1_img1](img://extracted/2103_03404/images/page1_img1.png)"],
+        },
+        {
+            "page_num": 2,
+            "image_paths": ["extracted/2103_03404/images/page2_img1.png"],
+            "image_markdown": ["![page2_img1](img://extracted/2103_03404/images/page2_img1.png)"],
+        },
+    ]
+
+
+def test_read_paper_includes_empty_images_by_page_for_text_only_pdf(monkeypatch, tmp_path):
+    fake_db = _FakePapersDB()
+    shared_root = tmp_path / "cache"
+    downloads = shared_root / "downloads"
+    tool = PaperSearchTools(
+        enable_search=False,
+        enable_read=True,
+        download_dir=downloads,
+        shared_cache_root=shared_root,
+        papers_db=fake_db,
+    )
+
+    def _fake_download(_pdf_url, paper_id):
+        pdf_path = downloads / f"{paper_id}.pdf"
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(b"%PDF-1.4\n%fake\n")
+        return pdf_path
+
+    def _fake_extract(_pdf_path, paper_id):
+        images_dir = shared_root / "extracted" / paper_id / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        return ExtractedContent(
+            text="Only text",
+            pages=[{"page_num": 1, "text": "Only text", "image_paths": []}],
+            images_dir=images_dir,
+            image_count=0,
+            page_count=1,
+        )
+
+    monkeypatch.setattr(tool, "_download_pdf", _fake_download)
+    monkeypatch.setattr(tool.pdf_extractor, "extract", _fake_extract)
+
+    result = json.loads(tool.read_paper("https://arxiv.org/abs/2103.03404", action="cat"))
+    assert result["paper_id"] == "2103_03404"
+    assert result["images_by_page"] == []

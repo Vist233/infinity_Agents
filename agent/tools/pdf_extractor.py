@@ -55,6 +55,22 @@ class PDFExtractor:
         images_dir = self._get_paper_dir(paper_id) / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
         return images_dir
+
+    def _to_reference_path(self, image_path: Path) -> str:
+        """Build a stable relative path for downstream tools/UI references."""
+        resolved = image_path.resolve()
+        # Preferred anchor: parent of output_base_dir (e.g. papers/cache or session root)
+        try:
+            anchored = resolved.relative_to(self.output_base_dir.resolve().parent)
+            return anchored.as_posix()
+        except ValueError:
+            pass
+        # Fallback: relative to output_base_dir (e.g. paper_id/images/...)
+        try:
+            anchored = resolved.relative_to(self.output_base_dir.resolve())
+            return anchored.as_posix()
+        except ValueError:
+            return str(resolved)
     
     def generate_paper_id(self, pdf_path: str) -> str:
         """Generate a unique paper ID from file path or content hash."""
@@ -141,7 +157,7 @@ class PDFExtractor:
                     
                     # Update pages list
                     if page_num < len(pages):
-                        pages[page_num]["image_paths"].append(str(image_path))
+                        pages[page_num]["image_paths"].append(self._to_reference_path(image_path))
                     
                     image_count += 1
                     

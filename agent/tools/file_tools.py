@@ -1,5 +1,5 @@
 """
-File System Tools - Atomic tools for browsing files, reading text, and reading images as base64.
+File System Tools - Atomic tools for browsing files, reading text, and resolving image refs.
 
 Designed for PaperAgent to browse extracted papers, reports, and chart outputs.
 Scoped to allowed directories only for safety.
@@ -21,7 +21,7 @@ PLOTLY_OUTPUTS_DIR = Path(__file__).parent / "plotly_outputs"
 
 
 class FileSystemTools(Toolkit):
-    """Tools for listing files, reading text, and reading images (as base64).
+    """Tools for listing files, reading text, and reading images as img:// refs.
 
     Access is restricted to a set of allowed directories for safety.
     """
@@ -59,7 +59,8 @@ class FileSystemTools(Toolkit):
 
     def _resolve_path(self, path_str: str) -> Optional[Path]:
         """Resolve a path string. Try absolute first, then relative to each allowed dir."""
-        p = Path(path_str)
+        normalized = str(path_str or "").replace("\\", "/")
+        p = Path(normalized)
 
         # If absolute and allowed, use directly
         if p.is_absolute():
@@ -69,11 +70,28 @@ class FileSystemTools(Toolkit):
 
         # Try relative to each allowed dir
         for allowed in self.allowed_dirs:
-            candidate = allowed / path_str
+            candidate = allowed / normalized
             if candidate.exists() and self._is_path_allowed(candidate):
                 return candidate
 
+        # Backward compatibility for basename-only references.
+        if "/" not in normalized:
+            for allowed in self.allowed_dirs:
+                for candidate in allowed.rglob(normalized):
+                    if candidate.exists() and candidate.is_file() and self._is_path_allowed(candidate):
+                        return candidate
+
         return None
+
+    def _to_relative_ref_path(self, target: Path) -> str:
+        """Compute a stable relative path following allowed_dirs priority."""
+        resolved = target.resolve()
+        for allowed in self.allowed_dirs:
+            try:
+                return resolved.relative_to(allowed.resolve()).as_posix()
+            except ValueError:
+                continue
+        return target.name
 
     def list_files(self, directory: str = "") -> str:
         """List files and subdirectories in the workspace.
@@ -229,10 +247,19 @@ class FileSystemTools(Toolkit):
         try:
             size_bytes = target.stat().st_size
             logger.info(f"Image {target.name} ({size_bytes} bytes)")
-            img_ref = f"img://{target.name}"
+            raw_input = str(file_path or "")
+            input_path = Path(raw_input)
+            if input_path.is_absolute():
+                ref_path = self._to_relative_ref_path(target)
+            elif "/" in raw_input or "\\" in raw_input:
+                ref_path = Path(raw_input.replace("\\", "/")).as_posix().lstrip("/")
+            else:
+                ref_path = target.name
+            img_ref = f"img://{ref_path}"
 
             return json.dumps({
                 "file_name": target.name,
+                "resolved_path": str(target.resolve()),
                 "size_bytes": size_bytes,
                 "mime_type": mime,
                 "image_ref": img_ref,

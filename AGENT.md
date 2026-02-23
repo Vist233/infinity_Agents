@@ -15,8 +15,12 @@ cd frontend && npm run dev -- --hostname 127.0.0.1 --port 3000
 
 ## PaperAgent model policy
 - Chat model env: `PAPER_AGENT_CHAT_MODEL` (default: `kimi-k2.5`)
+- Vision model env: `PAPER_AGENT_VISION_MODEL` (default: fallback to chat model)
 - Disable chat thinking by default (required for stable tool-calls on `kimi-k2.5`):
   - `PAPER_AGENT_CHAT_DISABLE_THINKING=1`
+
+### Tool spec
+- Detailed PaperAgent tool I/O spec: `docs/paperAgent_tools_spec.md`
 
 ## Streaming protocol (WebSocket `/ws/chat`)
 Client payload supports:
@@ -53,7 +57,7 @@ Rules:
 - New sessions are sandboxed.
 - Session-private files are scoped under `papers/sessions/{session_id}`.
 - Paper artifacts use global single-copy cache under `papers/cache`.
-- `read_paper` supports arXiv ID/URL only; it first reuses cached `papers/cache/downloads/{paper_id}.pdf`, and only downloads when missing.
+- `read_paper` supports arXiv ID/URL and direct `pdf_url`; it first reuses cached `papers/cache/downloads/{paper_id}.pdf`, and only downloads when missing.
 - Metadata/cache model in PostgreSQL:
   - Global cache: `paper_records_global`, `paper_cache_global`
   - Session pointers: `authorized_paper_refs`, `session_paper_links`
