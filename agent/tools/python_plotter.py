@@ -4,13 +4,16 @@ Python Plotting Tools - Generate charts using Matplotlib and Plotly.
 Saves generated charts to a designated output directory.
 """
 
+import os
 import json
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agno.tools import Toolkit
 from agno.utils.log import log_debug, logger
+from agent.tools.image_path_utils import to_img_ref
 
 
 PLOT_OUTPUT_DIR = Path(__file__).parent / "plot_outputs"
@@ -107,6 +110,16 @@ class PythonPlottingTools(Toolkit):
             "cjk_ready": cjk_ready,
         }
 
+    @contextmanager
+    def _temporary_working_dir(self, target_dir: Path):
+        """Temporarily run code within a target working directory."""
+        previous_dir = Path.cwd()
+        os.chdir(target_dir)
+        try:
+            yield
+        finally:
+            os.chdir(previous_dir)
+
     def create_chart(
         self,
         code: str,
@@ -116,7 +129,8 @@ class PythonPlottingTools(Toolkit):
         """Execute Python code to create a chart and save it as an image.
 
         Args:
-            code (str): Python code that creates a figure. For matplotlib, use plt.savefig().
+            code (str): Python code that creates a figure.
+                       Do not manually save files inside code; the tool saves automatically.
                        For plotly, assign to 'fig' variable.
             filename (str, optional): Output filename without extension. Auto-generated if not provided.
             chart_type (str, optional): 'matplotlib' or 'plotly'. Defaults to 'matplotlib'.
@@ -145,13 +159,48 @@ class PythonPlottingTools(Toolkit):
                 plt.clf()
                 plt.close("all")
 
-                # Execute the code
-                local_vars = {"plt": plt}
-                exec(code, {"__builtins__": __builtins__}, local_vars)
+                did_save = False
+                original_plt_savefig = plt.savefig
+                from matplotlib.figure import Figure
+                original_figure_savefig = Figure.savefig
 
-                # Save the figure
-                plt.savefig(str(output_path), dpi=150, bbox_inches="tight")
-                plt.close("all")
+                def _forced_plt_savefig(*args, **kwargs):
+                    nonlocal did_save
+                    did_save = True
+                    sanitized_kwargs = dict(kwargs)
+                    sanitized_kwargs.pop("fname", None)
+                    passthrough_args = args[1:] if args else ()
+                    return original_plt_savefig(
+                        str(output_path),
+                        *passthrough_args,
+                        **sanitized_kwargs,
+                    )
+
+                def _forced_figure_savefig(self_figure, *args, **kwargs):
+                    nonlocal did_save
+                    did_save = True
+                    sanitized_kwargs = dict(kwargs)
+                    sanitized_kwargs.pop("fname", None)
+                    passthrough_args = args[1:] if args else ()
+                    return original_figure_savefig(
+                        self_figure,
+                        str(output_path),
+                        *passthrough_args,
+                        **sanitized_kwargs,
+                    )
+
+                local_vars = {"plt": plt}
+                plt.savefig = _forced_plt_savefig
+                Figure.savefig = _forced_figure_savefig
+                try:
+                    with self._temporary_working_dir(self.output_dir):
+                        exec(code, {"__builtins__": __builtins__}, local_vars)
+                    if not did_save:
+                        original_plt_savefig(str(output_path), dpi=150, bbox_inches="tight")
+                finally:
+                    plt.savefig = original_plt_savefig
+                    Figure.savefig = original_figure_savefig
+                    plt.close("all")
 
                 if self._is_nearly_blank_image(output_path):
                     output_path.unlink(missing_ok=True)
@@ -166,22 +215,44 @@ class PythonPlottingTools(Toolkit):
                 import plotly.express as px
                 import plotly.graph_objects as go
 
+                did_save = False
+                original_write_image = go.Figure.write_image
+
+                def _forced_write_image(self_figure, *args, **kwargs):
+                    nonlocal did_save
+                    did_save = True
+                    sanitized_kwargs = dict(kwargs)
+                    sanitized_kwargs.pop("file", None)
+                    passthrough_args = args[1:] if args else ()
+                    return original_write_image(
+                        self_figure,
+                        str(output_path),
+                        *passthrough_args,
+                        **sanitized_kwargs,
+                    )
+
                 local_vars = {"px": px, "go": go}
-                exec(code, {"__builtins__": __builtins__}, local_vars)
+                go.Figure.write_image = _forced_write_image
+                try:
+                    with self._temporary_working_dir(self.output_dir):
+                        exec(code, {"__builtins__": __builtins__}, local_vars)
 
-                fig = local_vars.get("fig")
-                if fig is None:
-                    return json.dumps({
-                        "error": "Plotly code must create a 'fig' variable."
-                    })
+                    fig = local_vars.get("fig")
+                    if fig is None:
+                        return json.dumps({
+                            "error": "Plotly code must create a 'fig' variable."
+                        })
 
-                fig.write_image(str(output_path), width=1000, height=600, scale=2)
+                    if not did_save:
+                        fig.write_image(str(output_path), width=1000, height=600, scale=2)
+                finally:
+                    go.Figure.write_image = original_write_image
 
             else:
                 return json.dumps({"error": f"Unknown chart_type: {chart_type}"})
 
             log_debug(f"Chart saved to {output_path}")
-            img_ref = f"img://{filename}.png"
+            img_ref = to_img_ref(f"{filename}.png")
             response: Dict[str, Any] = {
                 "success": True,
                 "image_ref": img_ref,
@@ -241,7 +312,7 @@ class PythonPlottingTools(Toolkit):
             plt.savefig(str(output_path), dpi=150)
             plt.close()
 
-            img_ref = f"img://{filename}.png"
+            img_ref = to_img_ref(f"{filename}.png")
             response: Dict[str, Any] = {
                 "success": True,
                 "image_ref": img_ref,
@@ -301,7 +372,7 @@ class PythonPlottingTools(Toolkit):
             plt.savefig(str(output_path), dpi=150)
             plt.close()
 
-            img_ref = f"img://{filename}.png"
+            img_ref = to_img_ref(f"{filename}.png")
             response: Dict[str, Any] = {
                 "success": True,
                 "image_ref": img_ref,

@@ -92,7 +92,7 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
   - If not cached, automatically downloads/extracts PDF and materializes Markdown cache
 
 ### Plotting & Visualization
-- `create_chart(code, filename, chart_type)` - Execute Python code to create charts (matplotlib/plotly)
+- `create_chart(code, filename, chart_type)` - Execute Python code to create charts (matplotlib/plotly); do not call `plt.savefig()` or `fig.write_image()` manually
 - `create_bar_chart(data, title, ...)` - Quick bar chart from data dict
 - `create_line_chart(x_data, y_data, title, ...)` - Quick line chart
 - `create_methodology_comparison(paper_reports_json)` - Sunburst chart comparing methodologies
@@ -101,8 +101,9 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
 ### File & Image Understanding
 - `list_files(directory="")` - List files/folders in session sandbox and shared cache
 - `read_file(file_path, max_chars=50000)` - Read text files (JSON/MD/TXT)
-- `read_image(file_path)` - Resolve image and return `img://` reference + markdown
+- `read_image(file_path)` - Resolve image and return canonical image reference + markdown
 - `analyze_image(image_path, prompt=...)` - Analyze chart/figure/image content with vision model
+  - `file_path/image_path` 支持多种输入：相对路径、绝对路径、`img://./...`、`![...](img://./...)`、`/api/sessions/{id}/files/...`
 
 ## Recommended Workflow
 
@@ -111,10 +112,12 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
    - Search 与 Read 需要分步执行，不要在同一轮对搜索结果批量一次性全部阅读
    - 例外：当用户明确提供单篇 `pdf_url` 时，可以直接调用 `read_paper` 读取该单篇论文
 3. **Visualize**: Use `create_chart` or quick chart tools to generate analytical plots
+   - 绘图代码只负责绘制，不要在代码中手动保存图片（不要调用 `plt.savefig` 或 `fig.write_image`）；工具会自动保存到当前 session 的目录
 4. **Inspect images**: Use `read_image`/`analyze_image` for chart outputs, extracted figures, and local screenshots
-5. **Embed images**: All chart/image tools return a `markdown` field like `![chart](img://xxx.png)`.
+5. **Embed images**: All chart/image tools return a `markdown` field like `![chart](img://./xxx.png)`.
    Copy this exact Markdown into your response — the system will automatically render the image.
    NEVER modify the `img://` reference or try to construct one yourself.
+   新标准统一使用 `img://./...`，由后端将 `./` 映射到会话可访问的真实文件路径。
    在 Ubuntu 22 环境下，绘图时优先使用系统 CJK 字体（如 Noto Sans CJK），避免中文标题/坐标轴出现方块字；优先沿用工具默认字体配置，不要覆盖为不支持中文的字体。
 6. **Summarize**: Integrate findings and answer the user's question
 

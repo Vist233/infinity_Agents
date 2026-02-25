@@ -26,8 +26,8 @@ def test_plotly_custom_bar_chart_returns_markdown(monkeypatch, tmp_path):
     result = json.loads(raw)
 
     assert result["success"] is True
-    assert result["image_ref"] == "img://demo_chart.png"
-    assert result["markdown"] == "![demo_chart](img://demo_chart.png)"
+    assert result["image_ref"] == "img://./demo_chart.png"
+    assert result["markdown"] == "![demo_chart](img://./demo_chart.png)"
 
 
 def test_plotly_custom_sunburst_validation(tmp_path):
@@ -85,7 +85,7 @@ def test_image_analyzer_success_with_mocked_openai(monkeypatch, tmp_path):
 
     assert result["success"] is True
     assert result["model"] == "kimi-k2.5"
-    assert result["image_ref"] == "img://chart.png"
+    assert result["image_ref"] == "img://./chart.png"
     assert "白底" in result["analysis"]
 
 
@@ -122,7 +122,7 @@ def test_image_analyzer_preserves_relative_path_ref(monkeypatch, tmp_path):
     result = json.loads(raw)
 
     assert result["success"] is True
-    assert result["image_ref"] == "img://extracted/paper_x/images/fig.png"
+    assert result["image_ref"] == "img://./extracted/paper_x/images/fig.png"
 
 
 def test_image_analyzer_absolute_path_uses_relative_ref(monkeypatch, tmp_path):
@@ -158,4 +158,64 @@ def test_image_analyzer_absolute_path_uses_relative_ref(monkeypatch, tmp_path):
     result = json.loads(raw)
 
     assert result["success"] is True
-    assert result["image_ref"] == "img://extracted/paper_y/images/fig_abs.png"
+    assert result["image_ref"] == "img://./extracted/paper_y/images/fig_abs.png"
+
+
+def test_image_analyzer_accepts_img_scheme_locator(monkeypatch, tmp_path):
+    image_path = tmp_path / "extracted" / "paper_z" / "images" / "fig_scheme.png"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (50, 50), color=(180, 180, 180)).save(image_path)
+
+    class _FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            del kwargs
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="scheme ok"))]
+            )
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs):
+            del kwargs
+            self.chat = _FakeChat()
+
+    monkeypatch.setattr("agent.tools.image_analyzer.OpenAI", _FakeOpenAI)
+    tool = ImageAnalysisTools(api_key="test", model_id="kimi-k2.5", allowed_dirs=[tmp_path])
+    raw = tool.analyze_image("img://./extracted/paper_z/images/fig_scheme.png")
+    result = json.loads(raw)
+
+    assert result["success"] is True
+    assert result["image_ref"] == "img://./extracted/paper_z/images/fig_scheme.png"
+
+
+def test_image_analyzer_accepts_markdown_locator(monkeypatch, tmp_path):
+    image_path = tmp_path / "extracted" / "paper_z" / "images" / "fig_md.png"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (50, 50), color=(180, 180, 180)).save(image_path)
+
+    class _FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            del kwargs
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="markdown ok"))]
+            )
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs):
+            del kwargs
+            self.chat = _FakeChat()
+
+    monkeypatch.setattr("agent.tools.image_analyzer.OpenAI", _FakeOpenAI)
+    tool = ImageAnalysisTools(api_key="test", model_id="kimi-k2.5", allowed_dirs=[tmp_path])
+    raw = tool.analyze_image("![fig](img://./extracted/paper_z/images/fig_md.png)")
+    result = json.loads(raw)
+
+    assert result["success"] is True
+    assert result["image_ref"] == "img://./extracted/paper_z/images/fig_md.png"

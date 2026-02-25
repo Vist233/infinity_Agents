@@ -24,8 +24,9 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
                 // Convert img:// protocol to backend HTTP URL before react-markdown's sanitizer strips it
                 if (url.startsWith("img://")) {
                     const rawPath = url.slice(6).replace(/\\/g, "/").replace(/^\/+/, "");
-                    if (!rawPath) return url;
-                    const encodedPath = rawPath
+                    const normalizedPath = rawPath.replace(/^(\.\/)+/, "");
+                    if (!normalizedPath) return url;
+                    const encodedPath = normalizedPath
                         .split("/")
                         .filter(Boolean)
                         .map((segment) => encodeURIComponent(segment))

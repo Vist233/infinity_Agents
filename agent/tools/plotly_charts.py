@@ -13,6 +13,7 @@ from collections import Counter
 
 from agno.tools import Toolkit
 from agno.utils.log import log_debug, logger
+from agent.tools.image_path_utils import to_img_ref
 
 try:
     import plotly.express as px
@@ -397,7 +398,7 @@ class PlotlyVisualizationTools(Toolkit):
         if not saved_path:
             return json.dumps({"error": "chart_not_saved"}, ensure_ascii=False)
         file_path = Path(saved_path)
-        image_ref = f"img://{file_path.name}"
+        image_ref = to_img_ref(file_path.name)
         return json.dumps(
             {
                 "success": True,

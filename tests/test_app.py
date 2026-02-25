@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 
 import pytest
@@ -115,6 +116,27 @@ def test_resolve_image_ref_supports_nested_img_path(monkeypatch: pytest.MonkeyPa
     assert resolved == nested
 
 
+def test_resolve_relative_in_dirs_supports_dot_slash_path(tmp_path):
+    root = tmp_path / "root"
+    nested = root / "extracted" / "paper_x" / "images" / "fig.png"
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_bytes(b"fake-image")
+
+    resolved = backend_app_module._resolve_relative_in_dirs("./extracted/paper_x/images/fig.png", [root])
+    assert resolved == nested
+
+
+def test_resolve_image_ref_supports_dot_slash_path(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    root = tmp_path / "papers"
+    nested = root / "extracted" / "2103_03404" / "images" / "page1_img1.png"
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_bytes(b"fake-image")
+
+    monkeypatch.setattr(backend_app_module, "_LEGACY_ALLOWED_FILE_DIRS", [root])
+    resolved = backend_app_module._resolve_image_ref("./extracted/2103_03404/images/page1_img1.png")
+    assert resolved == nested
+
+
 def test_resolve_image_ref_basename_fallback_searches_recursively(monkeypatch: pytest.MonkeyPatch, tmp_path):
     root = tmp_path / "papers"
     nested = root / "cache" / "imgs" / "same_name.png"
@@ -137,4 +159,191 @@ def test_replace_image_refs_with_base64_supports_nested_img_path(monkeypatch: py
         "图如下：![fig](img://extracted/paper_x/images/fig.png)"
     )
     assert "data:image/png;base64," in converted
+
+
+def test_replace_image_refs_with_base64_supports_dot_slash_img_path(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    root = tmp_path / "papers"
+    nested = root / "extracted" / "paper_x" / "images" / "fig.png"
+    nested.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_bytes(b"fake-image-content")
+
+    monkeypatch.setattr(backend_app_module, "_LEGACY_ALLOWED_FILE_DIRS", [root])
+    converted = backend_app_module._replace_image_refs_with_base64(
+        "图如下：![fig](img://./extracted/paper_x/images/fig.png)"
+    )
+    assert "data:image/png;base64," in converted
+
+
+def test_should_trigger_context_compression_threshold():
+    assert backend_app_module._should_trigger_context_compression(0.929, 0.93) is False
+    assert backend_app_module._should_trigger_context_compression(0.93, 0.93) is True
+
+
+def test_extract_retrieval_records_from_tool_result_json():
+    payload = [
+        {
+            "source": "arxiv",
+            "id": "2401.00001",
+            "url": "https://arxiv.org/abs/2401.00001",
+            "title": "Paper A",
+            "summary": "Abstract A",
+        },
+        {
+            "source": "pubmed",
+            "pmid": "123456",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/123456/",
+            "title": "Paper B",
+            "abstract": "Abstract B",
+        },
+    ]
+    records = backend_app_module._extract_retrieval_records_from_tool_result(
+        tool_name="search_paper",
+        tool_result=payload,
+    )
+    assert len(records) == 2
+    assert records[0]["url"] == "https://arxiv.org/abs/2401.00001"
+    assert records[0]["title"] == "Paper A"
+    assert records[0]["abstract"] == "Abstract A"
+    assert records[0]["paper_id"] == "2401.00001"
+
+
+def test_merge_retrieval_records_dedupe_by_paper_id_and_url():
+    merged = backend_app_module._merge_retrieval_records(
+        existing=[
+            {
+                "url": "https://arxiv.org/abs/2401.00001",
+                "title": "A",
+                "abstract": "old",
+                "paper_id": "2401.00001",
+                "source_tool": "search_paper",
+            }
+        ],
+        new_items=[
+            {
+                "url": "https://arxiv.org/abs/2401.00001",
+                "title": "A newer",
+                "abstract": "new",
+                "paper_id": "2401.00001",
+                "source_tool": "search_paper",
+            },
+            {
+                "url": "https://pubmed.ncbi.nlm.nih.gov/123456/",
+                "title": "P",
+                "abstract": "x",
+                "source_tool": "search_paper",
+            },
+            {
+                "url": "https://pubmed.ncbi.nlm.nih.gov/123456/",
+                "title": "P duplicate",
+                "abstract": "y",
+                "source_tool": "search_paper",
+            },
+        ],
+    )
+    assert len(merged) == 2
+    assert merged[0]["paper_id"] == "2401.00001"
+    assert merged[1]["url"] == "https://pubmed.ncbi.nlm.nih.gov/123456/"
+
+
+def test_build_effective_prompt_includes_compressed_block_and_recent_tools():
+    prompt = backend_app_module._build_effective_prompt(
+        messages=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}],
+        user_index=2,
+        user_query="next",
+        compressed_block={
+            "retrieval_records": [
+                {
+                    "url": "https://arxiv.org/abs/2401.00001",
+                    "title": "Paper A",
+                    "abstract": "Abstract A",
+                    "source_tool": "search_paper",
+                }
+            ]
+        },
+        recent_tool_calls=[
+            {
+                "tool_name": "read_paper",
+                "tool_args": {"paper_ref": "2401.00001"},
+                "tool_result_summary": "read done",
+            }
+        ],
+    )
+    assert "[Compressed Retrieval Memory]" in prompt
+    assert "[Recent Tool Calls]" in prompt
+    assert "User: next" in prompt
+
+
+def test_compress_context_memory_merges_incremental_retrieval_records(monkeypatch: pytest.MonkeyPatch):
+    async def fake_keep_from_id(_pool, _session_id, keep_recent):
+        assert keep_recent == 3
+        return 8
+
+    async def fake_candidates(_pool, _session_id, after_id, before_id):
+        assert after_id == 5
+        assert before_id == 8
+        return [
+            {
+                "id": 6,
+                "retrieval_records": [
+                    {
+                        "url": "https://arxiv.org/abs/2401.00002",
+                        "title": "Paper B",
+                        "abstract": "Abstract B",
+                        "paper_id": "2401.00002",
+                        "source_tool": "search_paper",
+                    }
+                ],
+            },
+            {
+                "id": 7,
+                "retrieval_records": [
+                    {
+                        "url": "https://pubmed.ncbi.nlm.nih.gov/123456/",
+                        "title": "Paper P",
+                        "abstract": "Abstract P",
+                        "source_tool": "search_paper",
+                    }
+                ],
+            },
+        ]
+
+    captured = {}
+
+    async def fake_update(_pool, **kwargs):
+        captured["compressed_block"] = kwargs["compressed_block"]
+        captured["last_id"] = kwargs["last_compressed_tool_call_id"]
+        captured["window"] = kwargs["context_window_tokens"]
+        captured["ratio"] = kwargs["threshold_ratio"]
+        return True
+
+    monkeypatch.setattr(backend_app_module, "get_recent_tool_calls_keep_from_id", fake_keep_from_id)
+    monkeypatch.setattr(backend_app_module, "get_tool_calls_for_compression", fake_candidates)
+    monkeypatch.setattr(backend_app_module, "update_session_context_compression_state", fake_update)
+
+    block, changed = asyncio.run(
+        backend_app_module._compress_context_memory(
+            pool=object(),
+            session_id="00000000-0000-0000-0000-000000000000",
+            compression_state={
+                "compressed_block": {
+                    "retrieval_records": [
+                        {
+                            "url": "https://arxiv.org/abs/2401.00001",
+                            "title": "Paper A",
+                            "abstract": "Abstract A",
+                            "paper_id": "2401.00001",
+                            "source_tool": "search_paper",
+                        }
+                    ]
+                },
+                "last_compressed_tool_call_id": 5,
+            },
+            keep_recent=3,
+            context_window_tokens=128000,
+            threshold_ratio=0.93,
+        )
+    )
+    assert changed is True
+    assert len(block["retrieval_records"]) == 3
+    assert captured["last_id"] == 7
 

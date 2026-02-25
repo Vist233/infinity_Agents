@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from agno.tools import Toolkit
 from agno.utils.log import log_debug, logger
 from agent.papers_repo_pg import PapersRepoPG, PaperRecord
+from agent.tools.image_path_utils import to_img_ref
 from agent.tools.pdf_extractor import PDFExtractor, ExtractedContent
 try:
     from standalone_paper_tools.pubmed_search import PubMedSearchClient
@@ -276,7 +277,7 @@ class PaperSearchTools(Toolkit):
                     "page_num": page_num,
                     "image_paths": paths,
                     "image_markdown": [
-                        f"![{Path(path).stem}](img://{path})"
+                        f"![{Path(path).stem}]({to_img_ref(path)})"
                         for path in paths
                     ],
                 }
@@ -308,7 +309,7 @@ class PaperSearchTools(Toolkit):
                 parts.append("")
                 for image_path in image_paths:
                     parts.append(f"- `{image_path}`")
-                    parts.append(f"- ![{Path(image_path).stem}](img://{image_path})")
+                    parts.append(f"- ![{Path(image_path).stem}]({to_img_ref(image_path)})")
                 parts.append("")
         return "\n".join(parts)
 

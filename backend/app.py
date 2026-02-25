@@ -13,7 +13,9 @@ import re
 import base64
 import logging
 import mimetypes
-from agent.util import estimate_tokens, estimate_message_tokens
+import json
+import hashlib
+from agent.util import estimate_tokens
 import uuid
 from backend.db import (
     insert_session,
@@ -27,6 +29,12 @@ from backend.db import (
     delete_session,
     resolve_global_paper_id_by_path,
     session_can_access_paper,
+    insert_session_tool_call,
+    get_recent_session_tool_calls,
+    get_recent_tool_calls_keep_from_id,
+    get_tool_calls_for_compression,
+    upsert_session_context_compression_state,
+    update_session_context_compression_state,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -49,10 +57,23 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 ENABLE_WS_STATUS_EVENTS = _env_flag("ENABLE_WS_STATUS_EVENTS", True)
 ENABLE_FIRST_CHUNK_RETRY = _env_flag("ENABLE_FIRST_CHUNK_RETRY", True)
 FIRST_CHUNK_TIMEOUT_SECONDS = max(1, _env_int("FIRST_CHUNK_TIMEOUT_SECONDS", 8))
 MAX_STREAM_ATTEMPTS = 2 if ENABLE_FIRST_CHUNK_RETRY else 1
+CONTEXT_WINDOW_TOKENS = max(1, _env_int("PAPER_AGENT_CONTEXT_WINDOW_TOKENS", 128000))
+CONTEXT_COMPRESSION_RATIO = min(max(_env_float("PAPER_AGENT_CONTEXT_COMPRESSION_RATIO", 0.93), 0.01), 1.0)
+TOOL_KEEP_RECENT = max(1, _env_int("PAPER_AGENT_TOOL_KEEP_RECENT", 3))
 
 @asynccontextmanager
 async def lifespan(app):
@@ -111,15 +132,22 @@ async def _get_or_create_session_agent(session_id: str):
         agents[session_id] = agent
     return agent
 
-def _build_prompt_from_messages(
-    messages: List[Dict[str, Any]],
-    user_index: int,
-    user_query: str,
-    max_messages: int = 20,
-) -> str:
-    if not messages and user_query:
-        return user_query
+def _truncate_text(value: Any, max_chars: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3] + "..."
 
+
+def _safe_compact_json(value: Any, max_chars: int = 300) -> str:
+    try:
+        text = json.dumps(value if value is not None else {}, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        text = str(value)
+    return _truncate_text(text, max_chars=max_chars)
+
+
+def _build_history_context(messages: List[Dict[str, Any]], user_index: int, max_messages: int = 20) -> str:
     context_messages = messages[:user_index] if user_index >= 0 else messages
     if max_messages and len(context_messages) > max_messages:
         context_messages = context_messages[-max_messages:]
@@ -127,7 +155,7 @@ def _build_prompt_from_messages(
     lines: List[str] = []
     for m in context_messages:
         role = m.get("role")
-        content = m.get("content")
+        content = str(m.get("content") or "").strip()
         if not content:
             continue
         if role == "user":
@@ -135,16 +163,282 @@ def _build_prompt_from_messages(
         elif role == "assistant":
             prefix = "Assistant"
         elif role:
-            prefix = role.capitalize()
+            prefix = str(role).capitalize()
         else:
             prefix = "Message"
         lines.append(f"{prefix}: {content}")
+    return "\n".join(lines)
 
-    if lines and user_query:
-        return "\n".join(lines) + f"\nUser: {user_query}"
+
+def _normalize_retrieval_record(raw: Dict[str, Any], source_tool: str) -> Optional[Dict[str, Any]]:
+    url = str(raw.get("url") or raw.get("pdf_url") or raw.get("entry_id") or raw.get("source_url") or "").strip()
+    title = str(raw.get("title") or "").strip()
+    abstract = str(raw.get("abstract") or raw.get("summary") or "").strip()
+    if not (url and title and abstract):
+        return None
+
+    record: Dict[str, Any] = {
+        "url": _truncate_text(url, 1000),
+        "title": _truncate_text(title, 500),
+        "abstract": _truncate_text(abstract, 1800),
+        "source_tool": source_tool,
+    }
+    paper_id = raw.get("paper_id") or raw.get("id") or raw.get("pmid")
+    if paper_id is not None and str(paper_id).strip():
+        record["paper_id"] = _truncate_text(str(paper_id), 128)
+    return record
+
+
+def _collect_retrieval_records(node: Any, source_tool: str, output: List[Dict[str, Any]]) -> None:
+    if isinstance(node, dict):
+        normalized = _normalize_retrieval_record(node, source_tool=source_tool)
+        if normalized is not None:
+            output.append(normalized)
+        for value in node.values():
+            _collect_retrieval_records(value, source_tool=source_tool, output=output)
+        return
+    if isinstance(node, list):
+        for item in node:
+            _collect_retrieval_records(item, source_tool=source_tool, output=output)
+
+
+def _extract_retrieval_records_from_tool_result(tool_name: str, tool_result: Any) -> List[Dict[str, Any]]:
+    if tool_result is None:
+        return []
+
+    parsed: Any = None
+    if isinstance(tool_result, (dict, list)):
+        parsed = tool_result
+    elif isinstance(tool_result, str):
+        text = tool_result.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return []
+    else:
+        return []
+
+    records: List[Dict[str, Any]] = []
+    _collect_retrieval_records(parsed, source_tool=tool_name, output=records)
+    return _merge_retrieval_records([], records)
+
+
+def _merge_retrieval_records(existing: List[Dict[str, Any]], new_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    index_by_key: Dict[str, int] = {}
+
+    def _key(record: Dict[str, Any]) -> str:
+        paper_id = str(record.get("paper_id") or "").strip()
+        if paper_id:
+            return f"paper:{paper_id}"
+        return f"url:{str(record.get('url') or '').strip()}"
+
+    for record in existing + new_items:
+        if not isinstance(record, dict):
+            continue
+        normalized = _normalize_retrieval_record(record, source_tool=str(record.get("source_tool") or "unknown"))
+        if normalized is None:
+            continue
+        key = _key(normalized)
+        if key in index_by_key:
+            idx = index_by_key[key]
+            if not merged[idx].get("paper_id") and normalized.get("paper_id"):
+                merged[idx]["paper_id"] = normalized["paper_id"]
+            continue
+        index_by_key[key] = len(merged)
+        merged.append(normalized)
+    return merged
+
+
+def _render_compressed_retrieval_block(compressed_block: Dict[str, Any]) -> str:
+    records = compressed_block.get("retrieval_records")
+    if not isinstance(records, list) or not records:
+        return ""
+
+    lines = ["[Compressed Retrieval Memory]"]
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        url = _truncate_text(record.get("url"), 1000)
+        title = _truncate_text(record.get("title"), 500)
+        abstract = _truncate_text(record.get("abstract"), 280)
+        if not (url and title and abstract):
+            continue
+        lines.append(f"- {url} | {title} | {abstract}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _render_recent_tool_calls_block(tool_calls: List[Dict[str, Any]]) -> str:
+    if not tool_calls:
+        return ""
+
+    lines = ["[Recent Tool Calls]"]
+    for call in tool_calls:
+        tool_name = _truncate_text(call.get("tool_name"), 120) or "unknown_tool"
+        tool_args = _safe_compact_json(call.get("tool_args") or {}, max_chars=240)
+        summary = _truncate_text(call.get("tool_result_summary"), 280)
+        lines.append(f"- {tool_name}(args={tool_args}) => {summary}")
+    return "\n".join(lines)
+
+
+def _build_effective_prompt(
+    messages: List[Dict[str, Any]],
+    user_index: int,
+    user_query: str,
+    compressed_block: Dict[str, Any],
+    recent_tool_calls: List[Dict[str, Any]],
+    max_messages: int = 20,
+) -> str:
+    sections: List[str] = []
+    history_block = _build_history_context(messages, user_index=user_index, max_messages=max_messages)
+    if history_block:
+        sections.append(history_block)
+
+    compressed_text = str(compressed_block.get("rendered_text") or "").strip()
+    if not compressed_text:
+        compressed_text = _render_compressed_retrieval_block(compressed_block)
+    if compressed_text:
+        sections.append(compressed_text)
+
+    recent_tools_text = _render_recent_tool_calls_block(recent_tool_calls)
+    if recent_tools_text:
+        sections.append(recent_tools_text)
+
+    if sections and user_query:
+        return "\n\n".join(sections) + f"\n\nUser: {user_query}"
     if user_query:
         return user_query
-    return "\n".join(lines)
+    return "\n\n".join(sections)
+
+
+def _compute_context_ratio(prompt_tokens: int, window_tokens: int) -> float:
+    if window_tokens <= 0:
+        return 0.0
+    return float(prompt_tokens) / float(window_tokens)
+
+
+def _should_trigger_context_compression(ratio: float, threshold_ratio: float) -> bool:
+    return ratio >= threshold_ratio
+
+
+async def _compress_context_memory(
+    pool: Any,
+    session_id: str,
+    compression_state: Dict[str, Any],
+    keep_recent: int,
+    context_window_tokens: int,
+    threshold_ratio: float,
+) -> Tuple[Dict[str, Any], bool]:
+    keep_from_id = await get_recent_tool_calls_keep_from_id(pool, session_id, keep_recent=keep_recent)
+    if keep_from_id is None:
+        return compression_state.get("compressed_block") or {}, False
+
+    last_compressed_id = int(compression_state.get("last_compressed_tool_call_id") or 0)
+    candidates = await get_tool_calls_for_compression(
+        pool,
+        session_id,
+        after_id=last_compressed_id,
+        before_id=keep_from_id,
+    )
+    if not candidates:
+        return compression_state.get("compressed_block") or {}, False
+
+    existing_block = compression_state.get("compressed_block")
+    if not isinstance(existing_block, dict):
+        existing_block = {}
+    existing_records = existing_block.get("retrieval_records")
+    if not isinstance(existing_records, list):
+        existing_records = []
+
+    new_records: List[Dict[str, Any]] = []
+    for item in candidates:
+        retrieval_records = item.get("retrieval_records")
+        if isinstance(retrieval_records, list):
+            for record in retrieval_records:
+                if isinstance(record, dict):
+                    new_records.append(record)
+
+    merged_records = _merge_retrieval_records(existing_records, new_records)
+    new_block = {
+        "retrieval_records": merged_records,
+    }
+    new_block["rendered_text"] = _render_compressed_retrieval_block(new_block)
+    last_new_id = max(int(item["id"]) for item in candidates)
+    saved = await update_session_context_compression_state(
+        pool,
+        session_id=session_id,
+        compressed_block=new_block,
+        last_compressed_tool_call_id=last_new_id,
+        context_window_tokens=context_window_tokens,
+        threshold_ratio=threshold_ratio,
+    )
+    if not saved:
+        return existing_block, False
+    return new_block, True
+
+
+async def _prepare_prompt_with_context_management(
+    pool: Any,
+    session_id: str,
+    messages: List[Dict[str, Any]],
+    user_index: int,
+    user_query: str,
+) -> Tuple[str, Dict[str, Any]]:
+    compression_state = await upsert_session_context_compression_state(
+        pool,
+        session_id=session_id,
+        context_window_tokens=CONTEXT_WINDOW_TOKENS,
+        threshold_ratio=CONTEXT_COMPRESSION_RATIO,
+    )
+    compressed_block = compression_state.get("compressed_block")
+    if not isinstance(compressed_block, dict):
+        compressed_block = {}
+
+    recent_tool_calls = await get_recent_session_tool_calls(pool, session_id, limit=TOOL_KEEP_RECENT)
+    recent_tool_calls = list(reversed(recent_tool_calls))
+    prompt = _build_effective_prompt(
+        messages=messages,
+        user_index=user_index,
+        user_query=user_query,
+        compressed_block=compressed_block,
+        recent_tool_calls=recent_tool_calls,
+    )
+    prompt_tokens = estimate_tokens(prompt)
+    ratio = _compute_context_ratio(prompt_tokens, CONTEXT_WINDOW_TOKENS)
+    compressed_this_turn = False
+
+    if _should_trigger_context_compression(ratio, CONTEXT_COMPRESSION_RATIO):
+        compressed_block, compressed_this_turn = await _compress_context_memory(
+            pool=pool,
+            session_id=session_id,
+            compression_state=compression_state,
+            keep_recent=TOOL_KEEP_RECENT,
+            context_window_tokens=CONTEXT_WINDOW_TOKENS,
+            threshold_ratio=CONTEXT_COMPRESSION_RATIO,
+        )
+        if compressed_this_turn:
+            recent_tool_calls = await get_recent_session_tool_calls(pool, session_id, limit=TOOL_KEEP_RECENT)
+            recent_tool_calls = list(reversed(recent_tool_calls))
+            prompt = _build_effective_prompt(
+                messages=messages,
+                user_index=user_index,
+                user_query=user_query,
+                compressed_block=compressed_block,
+                recent_tool_calls=recent_tool_calls,
+            )
+            prompt_tokens = estimate_tokens(prompt)
+            ratio = _compute_context_ratio(prompt_tokens, CONTEXT_WINDOW_TOKENS)
+
+    context_info = {
+        "estimated_prompt_tokens": prompt_tokens,
+        "window_tokens": CONTEXT_WINDOW_TOKENS,
+        "ratio": round(ratio, 6),
+        "compressed_this_turn": compressed_this_turn,
+        "recent_tool_calls_kept": len(recent_tool_calls),
+    }
+    return prompt, context_info
 
 app.add_middleware(
     CORSMiddleware,
@@ -154,19 +448,27 @@ app.add_middleware(
 )
 
 def _resolve_relative_in_dirs(file_path: str, allowed_dirs: List[FilePath]) -> Optional[FilePath]:
-    target = FilePath(file_path)
+    raw_path = str(file_path or "")
+    target = FilePath(raw_path)
     if target.is_absolute() and target.exists():
         return target
 
+    normalized = raw_path.replace("\\", "/").lstrip("/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.lstrip("/")
+    if not normalized:
+        return None
+
     for allowed in allowed_dirs:
-        candidate = allowed / file_path
+        candidate = allowed / normalized
         if candidate.exists() and candidate.is_file():
             return candidate
 
     # For plain filenames in img:// refs, search recursively.
-    if "/" not in file_path and "\\" not in file_path:
+    if "/" not in normalized and "\\" not in normalized:
         for allowed in allowed_dirs:
-            for candidate in allowed.rglob(file_path):
+            for candidate in allowed.rglob(normalized):
                 if candidate.is_file():
                     return candidate
     return None
@@ -277,6 +579,11 @@ _IMAGE_MIME = {
 def _resolve_image_ref(ref_path: str) -> Optional[FilePath]:
     """Resolve an img:// path reference to an actual file path."""
     normalized = ref_path.replace("\\", "/").lstrip("/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.lstrip("/")
+    if not normalized:
+        return None
     for d in _LEGACY_ALLOWED_FILE_DIRS:
         candidate = d / normalized
         if candidate.exists() and candidate.is_file():
@@ -399,6 +706,82 @@ def _extract_tool_names(chunk: Any) -> List[str]:
                 if name:
                     names.append(str(name))
     return names
+
+
+def _coerce_tool_execution(tool: Any) -> Optional[Dict[str, Any]]:
+    if tool is None:
+        return None
+
+    if isinstance(tool, dict):
+        tool_name = tool.get("tool_name") or tool.get("name")
+        tool_call_id = tool.get("tool_call_id") or tool.get("id")
+        tool_args = tool.get("tool_args") or tool.get("arguments") or {}
+        result = tool.get("result")
+    else:
+        tool_name = getattr(tool, "tool_name", None) or getattr(tool, "name", None)
+        tool_call_id = getattr(tool, "tool_call_id", None) or getattr(tool, "id", None)
+        tool_args = getattr(tool, "tool_args", None) or getattr(tool, "arguments", None) or {}
+        result = getattr(tool, "result", None)
+
+    if not tool_name:
+        return None
+    if isinstance(tool_args, str):
+        try:
+            tool_args = json.loads(tool_args)
+        except json.JSONDecodeError:
+            tool_args = {"raw": tool_args}
+    if not isinstance(tool_args, dict):
+        tool_args = {"raw": str(tool_args)}
+    return {
+        "tool_call_id": str(tool_call_id) if tool_call_id is not None else None,
+        "tool_name": str(tool_name),
+        "tool_args": tool_args,
+        "result": "" if result is None else str(result),
+    }
+
+
+def _extract_completed_tool_executions(chunk: Any) -> List[Dict[str, Any]]:
+    executions: List[Dict[str, Any]] = []
+    event_name = getattr(chunk, "event", None)
+
+    if event_name == "ToolCallCompleted":
+        item = _coerce_tool_execution(getattr(chunk, "tool", None))
+        if item is not None:
+            executions.append(item)
+
+    tools = getattr(chunk, "tools", None)
+    if tools:
+        for tool in tools:
+            item = _coerce_tool_execution(tool)
+            if item is not None and item.get("result"):
+                executions.append(item)
+    return executions
+
+
+def _tool_execution_identity_key(tool_execution: Dict[str, Any]) -> str:
+    call_id = str(tool_execution.get("tool_call_id") or "").strip()
+    if call_id:
+        return f"id:{call_id}"
+    digest_source = json.dumps(
+        {
+            "tool_name": tool_execution.get("tool_name"),
+            "tool_args": tool_execution.get("tool_args"),
+            "result": _truncate_text(tool_execution.get("result"), 1200),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    return "hash:" + hashlib.sha1(digest_source.encode("utf-8")).hexdigest()
+
+
+def _summarize_tool_result(result: Any, max_chars: int = 400) -> str:
+    if result is None:
+        return ""
+    text = str(result).strip()
+    if not text:
+        return ""
+    return _truncate_text(text, max_chars=max_chars)
 
 
 def _start_stream_worker(sync_iter: Any) -> Tuple[asyncio.Queue, threading.Event]:
@@ -575,13 +958,20 @@ async def chat_ws_endpoint(websocket: WebSocket):
 
     try:
         pool = app.state.db_pool
-        prompt_tokens = estimate_message_tokens(request.messages)
         should_insert_user_message = request.retry_attempt <= 0
         if should_insert_user_message:
             await insert_message(pool, session_id, "user", user_query)
         session_agent = await _get_or_create_session_agent(session_id)
-        prompt = _build_prompt_from_messages(request.messages, user_index, user_query)
+        prompt, context_info = await _prepare_prompt_with_context_management(
+            pool=pool,
+            session_id=session_id,
+            messages=request.messages,
+            user_index=user_index,
+            user_query=user_query,
+        )
+        prompt_tokens = int(context_info.get("estimated_prompt_tokens") or 0)
         emitted_tools: set[str] = set()
+        persisted_tool_exec_keys: set[str] = set()
 
         response_text = ""
         did_auto_retry = False
@@ -658,6 +1048,26 @@ async def chat_ws_endpoint(websocket: WebSocket):
                     if tool_name not in emitted_tools:
                         emitted_tools.add(tool_name)
                         await websocket.send_json({"type": "tool_call", "tool_name": tool_name})
+                for tool_exec in _extract_completed_tool_executions(chunk):
+                    exec_key = _tool_execution_identity_key(tool_exec)
+                    if exec_key in persisted_tool_exec_keys:
+                        continue
+                    persisted_tool_exec_keys.add(exec_key)
+                    result_text = str(tool_exec.get("result") or "")
+                    retrieval_records = _extract_retrieval_records_from_tool_result(
+                        tool_name=str(tool_exec.get("tool_name") or "unknown_tool"),
+                        tool_result=result_text,
+                    )
+                    await insert_session_tool_call(
+                        pool=pool,
+                        session_id=session_id,
+                        tool_call_id=tool_exec.get("tool_call_id"),
+                        tool_name=str(tool_exec.get("tool_name") or "unknown_tool"),
+                        tool_args=tool_exec.get("tool_args") if isinstance(tool_exec.get("tool_args"), dict) else {},
+                        tool_result=_truncate_text(result_text, 50000),
+                        tool_result_summary=_summarize_tool_result(result_text, max_chars=500),
+                        retrieval_records=retrieval_records,
+                    )
                 content = _extract_chunk_content(chunk)
                 if content:
                     has_chunk = True
@@ -692,6 +1102,7 @@ async def chat_ws_endpoint(websocket: WebSocket):
                 "response": response_tokens,
                 "total": total_tokens,
             },
+            "context_info": context_info,
         })
 
     except WebSocketDisconnect:

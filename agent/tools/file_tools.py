@@ -13,6 +13,7 @@ from typing import Any, List, Optional
 from agno.tools import Toolkit
 from agno.utils.log import logger
 
+from agent.tools.image_path_utils import normalize_image_locator, normalize_ref_path, to_img_ref
 
 # Default allowed roots
 PAPERS_DIR = Path(__file__).parent.parent.parent / "papers"
@@ -59,7 +60,9 @@ class FileSystemTools(Toolkit):
 
     def _resolve_path(self, path_str: str) -> Optional[Path]:
         """Resolve a path string. Try absolute first, then relative to each allowed dir."""
-        normalized = str(path_str or "").replace("\\", "/")
+        normalized = normalize_image_locator(path_str)
+        if not normalized:
+            return None
         p = Path(normalized)
 
         # If absolute and allowed, use directly
@@ -216,7 +219,15 @@ class FileSystemTools(Toolkit):
         target = self._resolve_path(file_path)
         if target is None:
             return json.dumps({
-                "error": f"Image '{file_path}' not found or not in allowed directories."
+                "error": f"Image '{file_path}' not found or not in allowed directories.",
+                "accepted_formats": [
+                    "extracted/paper_x/images/fig.png",
+                    "/absolute/path/to/fig.png",
+                    "img://extracted/paper_x/images/fig.png",
+                    "img://./extracted/paper_x/images/fig.png",
+                    "![fig](img://extracted/paper_x/images/fig.png)",
+                    "/api/sessions/{session_id}/files/extracted/paper_x/images/fig.png",
+                ],
             })
 
         if not target.exists():
@@ -247,15 +258,15 @@ class FileSystemTools(Toolkit):
         try:
             size_bytes = target.stat().st_size
             logger.info(f"Image {target.name} ({size_bytes} bytes)")
-            raw_input = str(file_path or "")
-            input_path = Path(raw_input)
+            normalized_input = normalize_image_locator(file_path)
+            input_path = Path(normalized_input)
             if input_path.is_absolute():
                 ref_path = self._to_relative_ref_path(target)
-            elif "/" in raw_input or "\\" in raw_input:
-                ref_path = Path(raw_input.replace("\\", "/")).as_posix().lstrip("/")
+            elif "/" in normalized_input or "\\" in normalized_input:
+                ref_path = normalize_ref_path(normalized_input)
             else:
                 ref_path = target.name
-            img_ref = f"img://{ref_path}"
+            img_ref = to_img_ref(ref_path)
 
             return json.dumps({
                 "file_name": target.name,

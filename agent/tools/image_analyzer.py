@@ -15,6 +15,7 @@ from openai import OpenAI
 from PIL import Image
 
 from agent.tools.file_tools import PAPERS_DIR, PLOT_OUTPUTS_DIR, PLOTLY_OUTPUTS_DIR
+from agent.tools.image_path_utils import normalize_image_locator, normalize_ref_path, to_img_ref
 
 
 class ImageAnalysisTools(Toolkit):
@@ -61,7 +62,9 @@ class ImageAnalysisTools(Toolkit):
         )
 
     def _resolve_path(self, path_str: str) -> Optional[Path]:
-        normalized = str(path_str or "").replace("\\", "/")
+        normalized = normalize_image_locator(path_str)
+        if not normalized:
+            return None
         candidate = Path(normalized)
         if candidate.is_absolute():
             if candidate.exists() and self._is_path_allowed(candidate):
@@ -124,7 +127,7 @@ class ImageAnalysisTools(Toolkit):
     def analyze_image(
         self,
         image_path: str,
-        prompt: str = "请分析这张图像的主要内容、关键趋势、异常点，并给出简洁结论。",
+        prompt: str = "请用中文结构化分析这张图：图像类型、关键信息与证据、异常/风险、结论与建议。",
         detail: str = "high",
     ) -> str:
         """Analyze a local image with a vision model.
@@ -142,6 +145,13 @@ class ImageAnalysisTools(Toolkit):
             return json.dumps(
                 {
                     "error": f"Image '{image_path}' not found or outside allowed directories.",
+                    "accepted_formats": [
+                        "extracted/paper_x/images/fig.png",
+                        "/absolute/path/to/fig.png",
+                        "img://./extracted/paper_x/images/fig.png",
+                        "![fig](img://./extracted/paper_x/images/fig.png)",
+                        "/api/sessions/{session_id}/files/extracted/paper_x/images/fig.png",
+                    ],
                     "allowed_directories": [str(d) for d in self.allowed_dirs],
                 },
                 ensure_ascii=False,
@@ -169,8 +179,9 @@ class ImageAnalysisTools(Toolkit):
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
         system_prompt = (
-            "你是论文图表分析助手。请输出结构化中文结论："
-            "图像类型、核心信息、可能风险、简短建议。"
+            "你是论文图像分析助手。只基于可见内容作答，不要臆测不可见信息。"
+            "请用中文输出四段：1) 图像类型与场景 2) 关键信息与证据 3) 异常或风险 4) 结论与建议。"
+            "信息不足时明确写“信息不足”。"
         )
         try:
             completion = client.chat.completions.create(
@@ -194,15 +205,15 @@ class ImageAnalysisTools(Toolkit):
             if len(analysis_text) > self.max_output_chars:
                 analysis_text = analysis_text[: self.max_output_chars] + "\n... [analysis truncated]"
 
-            raw_input = str(image_path or "")
-            input_path = Path(raw_input)
+            normalized_input = normalize_image_locator(image_path)
+            input_path = Path(normalized_input)
             if input_path.is_absolute():
                 ref_path = self._to_relative_ref_path(resolved)
-            elif "/" in raw_input or "\\" in raw_input:
-                ref_path = Path(raw_input.replace("\\", "/")).as_posix().lstrip("/")
+            elif "/" in normalized_input or "\\" in normalized_input:
+                ref_path = normalize_ref_path(normalized_input)
             else:
                 ref_path = resolved.name
-            img_ref = f"img://{ref_path}"
+            img_ref = to_img_ref(ref_path)
             return json.dumps(
                 {
                     "success": True,
@@ -210,6 +221,7 @@ class ImageAnalysisTools(Toolkit):
                     "prompt": prompt,
                     "detail": detail,
                     "image": image_meta,
+                    "resolved_path": str(resolved.resolve()),
                     "image_ref": img_ref,
                     "markdown": f"![{resolved.stem}]({img_ref})",
                     "analysis": analysis_text,

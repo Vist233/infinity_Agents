@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional
 
 from agent.pg_sync import exec_sync, fetch_sync, fetchrow_sync, get_database_url
@@ -161,6 +163,67 @@ class PapersRepoPG:
         except json.JSONDecodeError:
             return [authors]
 
+    def _coerce_timestamptz(self, value: Any, fallback: datetime) -> datetime:
+        """Convert flexible timestamp inputs to timezone-aware datetime for asyncpg."""
+        if value is None:
+            return fallback
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        if isinstance(value, date):
+            return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+        if isinstance(value, (int, float)):
+            try:
+                return datetime.fromtimestamp(float(value), tz=timezone.utc)
+            except (OverflowError, OSError, ValueError):
+                return fallback
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return fallback
+            # Numeric timestamp string.
+            try:
+                if raw.isdigit() or re.match(r"^-?\d+(\.\d+)?$", raw):
+                    return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+            except Exception:
+                pass
+            # fromisoformat does not accept trailing 'Z' directly.
+            if raw.endswith("Z"):
+                raw = raw[:-1] + "+00:00"
+            # Normalize timezone offset like +0800 -> +08:00 for broader ISO compatibility.
+            if re.match(r".*[+-]\d{4}$", raw):
+                raw = raw[:-5] + raw[-5:-2] + ":" + raw[-2:]
+            try:
+                dt = datetime.fromisoformat(raw)
+                return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+            try:
+                dt = parsedate_to_datetime(raw)
+                if dt is not None:
+                    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                pass
+            for fmt in (
+                "%Y-%m-%d %H:%M:%S.%f",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y/%m/%d %H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S.%f",
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y%m%dT%H%M%SZ",
+                "%Y-%m-%d",
+                "%Y/%m/%d",
+                "%Y%m%d",
+                "%Y-%b",
+                "%Y-%B",
+            ):
+                try:
+                    dt = datetime.strptime(raw, fmt)
+                    return dt.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+            return fallback
+        return fallback
+
     def get_by_id(self, paper_id: str) -> Optional[PaperRecord]:
         row = fetchrow_sync(
             self.database_url,
@@ -193,8 +256,8 @@ class PapersRepoPG:
 
     def upsert(self, record: PaperRecord) -> None:
         now = datetime.now(tz=timezone.utc)
-        created_at = record.created_at or now.isoformat()
-        updated_at = now.isoformat()
+        created_at = self._coerce_timestamptz(record.created_at, fallback=now)
+        updated_at = self._coerce_timestamptz(record.updated_at, fallback=now)
         exec_sync(
             self.database_url,
             """

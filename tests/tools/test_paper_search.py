@@ -607,7 +607,7 @@ def test_read_paper_download_and_materialize(monkeypatch, tmp_path):
         {
             "page_num": 1,
             "image_paths": ["extracted/2103_03404/images/page1_img1.png"],
-            "image_markdown": ["![page1_img1](img://extracted/2103_03404/images/page1_img1.png)"],
+            "image_markdown": ["![page1_img1](img://./extracted/2103_03404/images/page1_img1.png)"],
         }
     ]
     assert (shared_root / "downloads" / "2103_03404.pdf").exists()
@@ -808,12 +808,12 @@ def test_read_paper_cache_hit_rebuilds_images_index_from_extracted_dir(monkeypat
         {
             "page_num": 1,
             "image_paths": ["extracted/2103_03404/images/page1_img1.png"],
-            "image_markdown": ["![page1_img1](img://extracted/2103_03404/images/page1_img1.png)"],
+            "image_markdown": ["![page1_img1](img://./extracted/2103_03404/images/page1_img1.png)"],
         },
         {
             "page_num": 2,
             "image_paths": ["extracted/2103_03404/images/page2_img1.png"],
-            "image_markdown": ["![page2_img1](img://extracted/2103_03404/images/page2_img1.png)"],
+            "image_markdown": ["![page2_img1](img://./extracted/2103_03404/images/page2_img1.png)"],
         },
     ]
 

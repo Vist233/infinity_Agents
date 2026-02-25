@@ -1,6 +1,8 @@
 import logging
 from contextlib import asynccontextmanager
 import uuid
+import json
+from typing import Any, Dict, List, Optional
 import asyncpg
 
 from backend.core.config import settings
@@ -143,6 +145,37 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_paper_cache_global_expires
                     ON paper_cache_global (expires_at);
+
+                CREATE TABLE IF NOT EXISTS session_tool_calls (
+                    id BIGSERIAL PRIMARY KEY,
+                    session_id UUID NOT NULL,
+                    tool_call_id TEXT,
+                    tool_name TEXT NOT NULL,
+                    tool_args JSONB,
+                    tool_result TEXT,
+                    tool_result_summary TEXT,
+                    retrieval_records JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    CONSTRAINT fk_session_tool_calls_session
+                    FOREIGN KEY(session_id)
+                    REFERENCES sessions(session_id)
+                    ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_session_tool_calls_session_id
+                    ON session_tool_calls (session_id, id DESC);
+
+                CREATE TABLE IF NOT EXISTS session_context_compression (
+                    session_id UUID PRIMARY KEY,
+                    compressed_block JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    last_compressed_tool_call_id BIGINT,
+                    context_window_tokens INT NOT NULL DEFAULT 128000,
+                    threshold_ratio DOUBLE PRECISION NOT NULL DEFAULT 0.93,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    CONSTRAINT fk_session_context_compression_session
+                    FOREIGN KEY(session_id)
+                    REFERENCES sessions(session_id)
+                    ON DELETE CASCADE
+                );
             """
         )
 
@@ -390,4 +423,272 @@ async def session_can_access_paper(pool: asyncpg.Pool, session_id: str, paper_id
             return bool(row["allowed"]) if row else False
     except Exception as e:
         logging.error(f"Error checking paper access for session {session_id}: {e}")
+        return False
+
+
+async def insert_session_tool_call(
+    pool: asyncpg.Pool,
+    session_id: str,
+    tool_name: str,
+    tool_call_id: Optional[str] = None,
+    tool_args: Optional[Dict[str, Any]] = None,
+    tool_result: Optional[str] = None,
+    tool_result_summary: Optional[str] = None,
+    retrieval_records: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[int]:
+    """Persist a completed tool execution for context management."""
+    query = """
+        INSERT INTO session_tool_calls (
+            session_id, tool_call_id, tool_name, tool_args,
+            tool_result, tool_result_summary, retrieval_records
+        )
+        VALUES (
+            $1::uuid, $2, $3, $4::jsonb,
+            $5, $6, $7::jsonb
+        )
+        RETURNING id
+    """
+    try:
+        tool_args_json = json.dumps(tool_args or {}, ensure_ascii=False)
+        retrieval_json = json.dumps(retrieval_records or [], ensure_ascii=False)
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                query,
+                session_id,
+                tool_call_id,
+                tool_name,
+                tool_args_json,
+                tool_result,
+                tool_result_summary,
+                retrieval_json,
+            )
+            return int(row["id"]) if row else None
+    except Exception as e:
+        logging.error(f"Error inserting session tool call for session {session_id}: {e}")
+        return None
+
+
+async def get_recent_session_tool_calls(
+    pool: asyncpg.Pool,
+    session_id: str,
+    limit: int = 3,
+) -> List[Dict[str, Any]]:
+    """Return most recent tool calls for prompt injection."""
+    query = """
+        SELECT id, tool_call_id, tool_name, tool_args, tool_result_summary, created_at
+        FROM session_tool_calls
+        WHERE session_id = $1::uuid
+        ORDER BY id DESC
+        LIMIT $2
+    """
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(query, session_id, max(1, limit))
+        records = []
+        for row in rows:
+            tool_args = row["tool_args"]
+            if isinstance(tool_args, str):
+                try:
+                    tool_args = json.loads(tool_args)
+                except json.JSONDecodeError:
+                    tool_args = {}
+            records.append(
+                {
+                    "id": int(row["id"]),
+                    "tool_call_id": row["tool_call_id"],
+                    "tool_name": row["tool_name"],
+                    "tool_args": tool_args or {},
+                    "tool_result_summary": row["tool_result_summary"] or "",
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                }
+            )
+        return records
+    except Exception as e:
+        logging.error(f"Error fetching recent tool calls for session {session_id}: {e}")
+        return []
+
+
+async def get_recent_tool_calls_keep_from_id(
+    pool: asyncpg.Pool,
+    session_id: str,
+    keep_recent: int,
+) -> Optional[int]:
+    """
+    Return the minimum ID among the most recent N tool calls.
+    Tool calls with ID >= keep_from_id should be kept as raw recent calls.
+    """
+    query = """
+        SELECT MIN(id) AS keep_from_id
+        FROM (
+            SELECT id
+            FROM session_tool_calls
+            WHERE session_id = $1::uuid
+            ORDER BY id DESC
+            LIMIT $2
+        ) recent
+    """
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(query, session_id, max(1, keep_recent))
+            if not row or row["keep_from_id"] is None:
+                return None
+            return int(row["keep_from_id"])
+    except Exception as e:
+        logging.error(f"Error fetching keep_from_id for session {session_id}: {e}")
+        return None
+
+
+async def get_tool_calls_for_compression(
+    pool: asyncpg.Pool,
+    session_id: str,
+    after_id: int,
+    before_id: int,
+) -> List[Dict[str, Any]]:
+    """Return tool calls in (after_id, before_id) for incremental compression."""
+    query = """
+        SELECT id, tool_call_id, tool_name, tool_args, tool_result, tool_result_summary, retrieval_records, created_at
+        FROM session_tool_calls
+        WHERE session_id = $1::uuid
+          AND id > $2
+          AND id < $3
+        ORDER BY id ASC
+    """
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(query, session_id, max(0, after_id), before_id)
+        records = []
+        for row in rows:
+            tool_args = row["tool_args"]
+            if isinstance(tool_args, str):
+                try:
+                    tool_args = json.loads(tool_args)
+                except json.JSONDecodeError:
+                    tool_args = {}
+            retrieval_records = row["retrieval_records"]
+            if isinstance(retrieval_records, str):
+                try:
+                    retrieval_records = json.loads(retrieval_records)
+                except json.JSONDecodeError:
+                    retrieval_records = []
+            records.append(
+                {
+                    "id": int(row["id"]),
+                    "tool_call_id": row["tool_call_id"],
+                    "tool_name": row["tool_name"],
+                    "tool_args": tool_args or {},
+                    "tool_result": row["tool_result"] or "",
+                    "tool_result_summary": row["tool_result_summary"] or "",
+                    "retrieval_records": retrieval_records or [],
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                }
+            )
+        return records
+    except Exception as e:
+        logging.error(f"Error fetching compression candidates for session {session_id}: {e}")
+        return []
+
+
+async def upsert_session_context_compression_state(
+    pool: asyncpg.Pool,
+    session_id: str,
+    context_window_tokens: int,
+    threshold_ratio: float,
+) -> Dict[str, Any]:
+    """Ensure and return context compression state for a session."""
+    query = """
+        INSERT INTO session_context_compression (
+            session_id, compressed_block, last_compressed_tool_call_id,
+            context_window_tokens, threshold_ratio, updated_at
+        )
+        VALUES (
+            $1::uuid, '{}'::jsonb, NULL,
+            $2, $3, NOW()
+        )
+        ON CONFLICT (session_id)
+        DO UPDATE SET
+            context_window_tokens = EXCLUDED.context_window_tokens,
+            threshold_ratio = EXCLUDED.threshold_ratio
+        RETURNING session_id, compressed_block, last_compressed_tool_call_id,
+                  context_window_tokens, threshold_ratio, updated_at
+    """
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                query,
+                session_id,
+                max(1, int(context_window_tokens)),
+                float(threshold_ratio),
+            )
+        compressed_block = row["compressed_block"] if row and row["compressed_block"] is not None else {}
+        if isinstance(compressed_block, str):
+            try:
+                compressed_block = json.loads(compressed_block)
+            except json.JSONDecodeError:
+                compressed_block = {}
+        return {
+            "session_id": str(row["session_id"]),
+            "compressed_block": compressed_block if isinstance(compressed_block, dict) else {},
+            "last_compressed_tool_call_id": row["last_compressed_tool_call_id"],
+            "context_window_tokens": int(row["context_window_tokens"]),
+            "threshold_ratio": float(row["threshold_ratio"]),
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        } if row else {
+            "session_id": session_id,
+            "compressed_block": {},
+            "last_compressed_tool_call_id": None,
+            "context_window_tokens": max(1, int(context_window_tokens)),
+            "threshold_ratio": float(threshold_ratio),
+            "updated_at": None,
+        }
+    except Exception as e:
+        logging.error(f"Error upserting compression state for session {session_id}: {e}")
+        return {
+            "session_id": session_id,
+            "compressed_block": {},
+            "last_compressed_tool_call_id": None,
+            "context_window_tokens": max(1, int(context_window_tokens)),
+            "threshold_ratio": float(threshold_ratio),
+            "updated_at": None,
+        }
+
+
+async def update_session_context_compression_state(
+    pool: asyncpg.Pool,
+    session_id: str,
+    compressed_block: Dict[str, Any],
+    last_compressed_tool_call_id: Optional[int],
+    context_window_tokens: int,
+    threshold_ratio: float,
+) -> bool:
+    """Persist compressed context block and pointer to the last compressed tool call."""
+    query = """
+        INSERT INTO session_context_compression (
+            session_id, compressed_block, last_compressed_tool_call_id,
+            context_window_tokens, threshold_ratio, updated_at
+        )
+        VALUES (
+            $1::uuid, $2::jsonb, $3,
+            $4, $5, NOW()
+        )
+        ON CONFLICT (session_id)
+        DO UPDATE SET
+            compressed_block = EXCLUDED.compressed_block,
+            last_compressed_tool_call_id = EXCLUDED.last_compressed_tool_call_id,
+            context_window_tokens = EXCLUDED.context_window_tokens,
+            threshold_ratio = EXCLUDED.threshold_ratio,
+            updated_at = NOW()
+    """
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                query,
+                session_id,
+                json.dumps(compressed_block or {}, ensure_ascii=False),
+                last_compressed_tool_call_id,
+                max(1, int(context_window_tokens)),
+                float(threshold_ratio),
+            )
+        return True
+    except Exception as e:
+        logging.error(f"Error updating compression state for session {session_id}: {e}")
         return False
