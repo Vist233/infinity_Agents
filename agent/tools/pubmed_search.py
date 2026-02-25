@@ -33,9 +33,12 @@ Usage:
 import json
 import hashlib
 import time
+import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
+from urllib.parse import urljoin
+from urllib.request import Request, urlopen
 
 # Configure logging
 import logging
@@ -74,6 +77,7 @@ class PubMedPaper:
             "pdf_url": self.pdf_url,
             "pmc_id": self.pmc_id,
             "url": f"https://pubmed.ncbi.nlm.nih.gov/{self.pmid}/",
+            "full_text_url": f"https://pmc.ncbi.nlm.nih.gov/articles/{self.pmc_id}/" if self.pmc_id else (f"https://doi.org/{self.doi}" if self.doi else None),
         }
 
 
@@ -165,27 +169,7 @@ class PubMedSearchTools:
         num_results: int = 10,
         use_cache: bool = True,
     ) -> List[Dict]:
-        """Search PubMed for papers matching the query.
-        
-        Args:
-            query: Search query (e.g., "COVID-19 vaccine")
-            num_results: Maximum number of results to return
-            use_cache: Whether to use cached results
-            
-        Returns:
-            List of paper dictionaries with keys:
-            - pmid: PubMed ID
-            - title: Paper title
-            - authors: List of author names
-            - summary: Abstract (truncated)
-            - abstract: Full abstract
-            - pdf_url: PMC PDF URL if available
-            - pmc_id: PubMed Central ID
-            - url: PubMed page URL
-            - publication_date: Publication date
-            - journal: Journal name
-            - doi: DOI
-        """
+        """Search PubMed for papers matching the query."""
         if not self._entrez_available:
             logger.error("Biopython not available. Cannot search PubMed.")
             return []
@@ -197,7 +181,6 @@ class PubMedSearchTools:
                 logger.info(f"Returning cached results for '{query}'")
                 return json.loads(cached)
         
-        # Perform search
         from Bio import Entrez
         Entrez.email = self.email
         
@@ -205,11 +188,7 @@ class PubMedSearchTools:
             logger.info(f"Searching PubMed for: {query}")
             
             # Step 1: Search for PMIDs
-            handle = Entrez.esearch(db="pubmed", term=query, retmax=num_results)
-            record = Entrez.read(handle)
-            handle.close()
-            
-            id_list = record.get("IdList", [])
+            id_list = self._retry("esearch", lambda: self._run_esearch(Entrez, query, num_results))
             if not id_list:
                 logger.info(f"No results found for '{query}'")
                 return []
@@ -217,14 +196,7 @@ class PubMedSearchTools:
             logger.info(f"Found {len(id_list)} papers, fetching details...")
             
             # Step 2: Fetch paper details
-            handle = Entrez.efetch(
-                db="pubmed",
-                id=",".join(id_list),
-                rettype="xml",
-                retmode="xml"
-            )
-            records = Entrez.read(handle)
-            handle.close()
+            records = self._retry("efetch", lambda: self._run_efetch(Entrez, id_list))
             
             # Step 3: Parse papers
             papers = []
@@ -248,6 +220,43 @@ class PubMedSearchTools:
         except Exception as e:
             logger.error(f"PubMed search error: {e}")
             return []
+
+    def _retry(self, op_name: str, op, max_retries: int = 3, retry_delay_seconds: float = 1.0):
+        """Run an operation with exponential backoff."""
+        last_exc: Optional[Exception] = None
+        for attempt in range(max_retries):
+            try:
+                return op()
+            except Exception as exc:
+                last_exc = exc
+                if attempt == max_retries - 1:
+                    break
+                sleep_seconds = retry_delay_seconds * (2**attempt)
+                logger.warning(
+                    "PubMed %s failed on attempt %s/%s: %s. Retrying in %.1fs",
+                    op_name,
+                    attempt + 1,
+                    max_retries,
+                    exc,
+                    sleep_seconds,
+                )
+                time.sleep(sleep_seconds)
+        raise RuntimeError(f"PubMed {op_name} failed after {max_retries} attempts: {last_exc}")
+
+    def _run_esearch(self, entrez, query: str, num_results: int) -> List[str]:
+        handle = entrez.esearch(db="pubmed", term=query, retmax=num_results)
+        try:
+            record = entrez.read(handle)
+            return record.get("IdList", [])
+        finally:
+            handle.close()
+
+    def _run_efetch(self, entrez, id_list: List[str]) -> Dict[str, Any]:
+        handle = entrez.efetch(db="pubmed", id=",".join(id_list), rettype="xml", retmode="xml")
+        try:
+            return entrez.read(handle)
+        finally:
+            handle.close()
     
     def _parse_pubmed_article(self, article: Dict) -> Optional[PubMedPaper]:
         """Parse a PubMed article XML into a PubMedPaper object."""
@@ -386,6 +395,113 @@ class PubMedSearchTools:
             
         except Exception as e:
             logger.error(f"Error getting PMC PDF for PMID {pmid}: {e}")
+            return None
+            
+    def download_pdf_by_pmid(self, pmid: str, output_dir: str = "papers/pubmed") -> Dict[str, Any]:
+        """Try downloading a PubMed paper PDF if an open PDF URL is available."""
+        articles = self.search_papers(query=f"{pmid}[PMID]", num_results=1)
+        if not articles:
+            return {
+                "ok": False,
+                "error": {
+                    "source": "pubmed",
+                    "code": "not_found",
+                    "message": f"No article found for PMID {pmid}",
+                },
+            }
+
+        article = articles[0]
+        pdf_url = article.get("pdf_url")
+        if not pdf_url:
+            return {
+                "ok": False,
+                "error": {
+                    "source": "pubmed",
+                    "code": "pdf_unavailable",
+                    "message": f"No open PDF URL available for PMID {pmid}",
+                },
+                "article": article,
+            }
+
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        file_path = out_dir / f"{pmid}.pdf"
+
+        try:
+            data, content_type = self._fetch_url_bytes(pdf_url)
+            if "pdf" not in content_type and not data.startswith(b"%PDF"):
+                resolved_pdf_url = self._resolve_pdf_url_from_full_text(article)
+                if not resolved_pdf_url:
+                    return {
+                        "ok": False,
+                        "error": {
+                            "source": "pubmed",
+                            "code": "pdf_download_failed",
+                            "message": f"URL did not return PDF content: {pdf_url}",
+                        },
+                        "article": article,
+                    }
+                data, content_type = self._fetch_url_bytes(resolved_pdf_url)
+                if "pdf" not in content_type and not data.startswith(b"%PDF"):
+                    return {
+                        "ok": False,
+                        "error": {
+                            "source": "pubmed",
+                            "code": "pdf_download_failed",
+                            "message": f"Resolved URL did not return PDF content: {resolved_pdf_url}",
+                        },
+                        "article": article,
+                    }
+                article["pdf_url"] = resolved_pdf_url
+            file_path.write_bytes(data)
+            return {"ok": True, "path": str(file_path), "article": article}
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": {
+                    "source": "pubmed",
+                    "code": "pdf_download_failed",
+                    "message": str(exc),
+                },
+                "article": article,
+            }
+
+    def _fetch_url_bytes(self, url: str) -> tuple[bytes, str]:
+        req = Request(url, headers={"User-Agent": "Infinity-Agent/1.0"})
+        with urlopen(req, timeout=30) as resp:
+            content_type = str(resp.headers.get("Content-Type", "")).lower()
+            data = resp.read()
+        return data, content_type
+
+    def _resolve_pdf_url_from_full_text(self, article: Dict[str, Any]) -> Optional[str]:
+        full_text_url = article.get("full_text_url")
+        if not full_text_url:
+            return None
+        try:
+            html_bytes, content_type = self._fetch_url_bytes(full_text_url)
+            if "html" not in content_type and "text" not in content_type:
+                return None
+            html = html_bytes.decode("utf-8", errors="ignore")
+
+            # Preferred: citation_pdf_url meta tag
+            match = re.search(
+                r'<meta[^>]+name=["\\\']citation_pdf_url["\\\'][^>]+content=["\\\']([^"\\\']+)["\\\']',
+                html,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                return urljoin(full_text_url, match.group(1))
+
+            # Fallback: direct .pdf href in page
+            href_match = re.search(
+                r'href=["\\\']([^"\\\']+\\.pdf(?:\\?[^"\\\']*)?)["\\\']',
+                html,
+                flags=re.IGNORECASE,
+            )
+            if href_match:
+                return urljoin(full_text_url, href_match.group(1))
+            return None
+        except Exception:
             return None
 
 

@@ -1,1 +1,0 @@
- claude --file "standard.jpg" --file "case2.jpg" --json-schema '{"type":"object","properties":{"reason":{"type":"string"},"class":{"type":"string"}},"required":["reason","class"]}' --print "根据第一张图片中的分类标准，判断第二张图片的内容属于什么类型？请返回一个包含 'reason' 和 'class' 字段的 JSON 格式输出。使用工具检查standard.jpg以及case2.jpg文件之后输出结果，不要调用任何其他的工具或者对文件夹中的文件做任何改动。" --max-turns 2 --output-format stream-json --verbose

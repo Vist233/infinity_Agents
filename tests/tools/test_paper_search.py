@@ -630,7 +630,7 @@ def test_read_paper_accepts_underscore_arxiv_id(monkeypatch, tmp_path):
     )
 
     def _fake_download(pdf_url, paper_id):
-        assert pdf_url.endswith("/2103.03404.pdf")
+        assert pdf_url == "2103_03404"
         assert paper_id == "2103_03404"
         pdf_path = downloads / f"{paper_id}.pdf"
         pdf_path.parent.mkdir(parents=True, exist_ok=True)

@@ -11,7 +11,8 @@ import re
 import requests
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+from urllib.request import Request, urlopen
 
 from agno.tools import Toolkit
 from agno.utils.log import log_debug, logger
@@ -19,10 +20,28 @@ from agent.papers_repo_pg import PapersRepoPG, PaperRecord
 from agent.tools.image_path_utils import to_img_ref
 from agent.tools.pdf_extractor import PDFExtractor, ExtractedContent
 try:
-    from standalone_paper_tools.pubmed_search import PubMedSearchClient
+    from agent.tools.pubmed_search import PubMedSearchTools
+    class PubMedSearchClient:
+        """Adapter for agent.tools.pubmed_search to match the expected interface."""
+        def __init__(self):
+            self.tool = PubMedSearchTools()
+
+        def search(self, query: str, num_results: int) -> Dict[str, Any]:
+            try:
+                articles = self.tool.search_papers(query, num_results)
+                return {"articles": articles, "error": None}
+            except Exception as e:
+                return {
+                    "articles": [],
+                    "error": {
+                        "source": "pubmed",
+                        "code": "search_error",
+                        "message": str(e),
+                    }
+                }
 except ModuleNotFoundError:
-    class PubMedSearchClient:  # type: ignore[override]
-        """Fallback PubMed client when standalone_paper_tools package is unavailable."""
+    class PubMedSearchClient:  # type: ignore[override, no-redef]
+        """Fallback PubMed client when agent.tools.pubmed_search is unavailable."""
 
         def search(self, query: str, num_results: int) -> Dict[str, Any]:
             return {
@@ -30,7 +49,7 @@ except ModuleNotFoundError:
                 "error": {
                     "source": "pubmed",
                     "code": "module_not_found",
-                    "message": "standalone_paper_tools.pubmed_search is unavailable",
+                    "message": "agent.tools.pubmed_search is unavailable",
                 },
             }
 
@@ -313,19 +332,105 @@ class PaperSearchTools(Toolkit):
                 parts.append("")
         return "\n".join(parts)
 
-    def _download_pdf(self, pdf_url: str, paper_id: str) -> Path:
+    def _fetch_url_bytes(self, url: str) -> tuple[bytes, str]:
+        req = Request(url, headers={"User-Agent": "Infinity-Agent/1.0"})
+        with urlopen(req, timeout=30) as resp:
+            content_type = str(resp.headers.get("Content-Type", "")).lower()
+            data = resp.read()
+        return data, content_type
+
+    def _resolve_pdf_url_from_full_text(self, url: str) -> Optional[str]:
+        try:
+            html_bytes, content_type = self._fetch_url_bytes(url)
+            if "html" not in content_type and "text" not in content_type:
+                return None
+            html = html_bytes.decode("utf-8", errors="ignore")
+
+            # Preferred: citation_pdf_url meta tag
+            match = re.search(
+                r'<meta[^>]+name=["\\\']citation_pdf_url["\\\'][^>]+content=["\\\']([^"\\\']+)["\\\']',
+                html,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                return urljoin(url, match.group(1))
+
+            # Fallback: direct .pdf href in page
+            href_match = re.search(
+                r'href=["\\\']([^"\\\']+\\.pdf(?:\\?[^"\\\']*)?)["\\\']',
+                html,
+                flags=re.IGNORECASE,
+            )
+            if href_match:
+                return urljoin(url, href_match.group(1))
+            return None
+        except Exception:
+            return None
+
+    def _download_pdf(self, paper_ref: str, paper_id: str) -> Path:
+        """Smart PDF downloader: auto-detects arxiv ID, PMID, PMC URL, or direct PDF URL."""
         pdf_path = self.download_dir / f"{paper_id}.pdf"
         if pdf_path.exists():
             return pdf_path
 
-        log_debug(f"Downloading PDF from: {pdf_url}")
-        response = requests.get(pdf_url, timeout=60)
-        response.raise_for_status()
-        if not self._is_pdf_response(response):
-            raise ValueError("invalid_pdf_content")
-        with open(pdf_path, "wb") as f:
-            f.write(response.content)
-        return pdf_path
+        # 1. Dispatch based on paper_ref format to get the initial URL
+        pdf_url = ""
+        arxiv_id = self._extract_arxiv_id(paper_ref)
+        is_pmid = bool(re.match(r"^\d+$", paper_ref.strip()))
+
+        if arxiv_id:
+            pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+            log_debug(f"Resolved ArXiv PDF: {pdf_url}")
+        elif is_pmid:
+            log_debug(f"Treating {paper_ref} as PMID, looking up PDF...")
+            articles = self.pubmed_client.search(f"{paper_ref}[PMID]", num_results=1).get("articles", [])
+            if not articles:
+                raise ValueError(f"not_found: No article found for PMID {paper_ref}")
+            pdf_url = articles[0].get("pdf_url")
+            if not pdf_url:
+                raise ValueError(f"pdf_unavailable: No open PDF URL available for PMID {paper_ref}")
+            log_debug(f"Resolved PubMed PMC PDF: {pdf_url}")
+        else:
+            pdf_url = paper_ref
+            log_debug(f"Using direct URL for download: {pdf_url}")
+
+        # 2. Download with retry and fallback resolution for HTML pages
+        max_retries = 3
+        last_exc: Optional[Exception] = None
+
+        for attempt in range(max_retries):
+            try:
+                data, content_type = self._fetch_url_bytes(pdf_url)
+                
+                # If we hit an HTML page instead of a PDF (common with PMC links), try to extract true PDF link
+                if "pdf" not in content_type and not data.startswith(b"%PDF"):
+                    log_debug(f"URL returned HTML/non-PDF, attempting to resolve true PDF URL from {pdf_url}")
+                    resolved_url = self._resolve_pdf_url_from_full_text(pdf_url)
+                    if not resolved_url:
+                        raise ValueError(f"invalid_pdf_content: URL did not return PDF content and could not be resolved: {pdf_url}")
+                    
+                    log_debug(f"Successfully resolved true PDF URL: {resolved_url}")
+                    data, content_type = self._fetch_url_bytes(resolved_url)
+                    
+                    if "pdf" not in content_type and not data.startswith(b"%PDF"):
+                        raise ValueError(f"invalid_pdf_content: Resolved URL {resolved_url} still did not return PDF content")
+
+                # Write standard PDF bytes
+                with open(pdf_path, "wb") as f:
+                    f.write(data)
+                return pdf_path
+
+            except Exception as e:
+                last_exc = e
+                if attempt == max_retries - 1:
+                    break
+                sleep_time = 1.0 * (2**attempt)
+                logger.warning(f"PDF download failed (attempt {attempt+1}/{max_retries}): {e}. Retrying in {sleep_time}s")
+                time.sleep(sleep_time)
+
+        if isinstance(last_exc, ValueError):
+            raise last_exc
+        raise ValueError(f"download_failed: {str(last_exc)}")
 
     def _ensure_materialized_for_read(self, paper_ref: str) -> Dict[str, Any]:
         if self.papers_db is None:
@@ -337,21 +442,27 @@ class PaperSearchTools(Toolkit):
 
         ref = str(paper_ref).strip()
         arxiv_id = self._extract_arxiv_id(ref)
+        is_pmid = bool(re.match(r"^\d+$", ref))
         is_pdf_url = False
+
         if self._is_http_url(ref):
             if self._looks_like_pdf_url(ref):
                 is_pdf_url = True
             elif not arxiv_id:
                 is_pdf_url = self._is_valid_pdf_url(ref)
 
-        if not arxiv_id and not is_pdf_url:
+        if not arxiv_id and not is_pdf_url and not is_pmid:
             return {
                 "success": False,
                 "error": "unsupported_paper_ref",
-                "message": "仅支持 arXiv ID/arXiv URL，或可访问的 PDF URL。",
+                "message": "仅支持 arXiv ID/arXiv URL、PubMed ID (纯数字)，或可访问的 PDF URL。",
             }
+
+        # Determine authoritative internal paper_id
         if arxiv_id:
             paper_id = self._paper_id_from_arxiv_id(arxiv_id)
+        elif is_pmid:
+            paper_id = ref
         else:
             paper_id = self._paper_id_from_pdf_url(ref)
 
@@ -387,32 +498,31 @@ class PaperSearchTools(Toolkit):
         source_url: Optional[str] = None
         if existing and existing.pdf_path and Path(existing.pdf_path).exists():
             pdf_path = Path(existing.pdf_path)
+            
         if pdf_path is None:
             try:
+                # The _download_pdf acts as our smart dispatcher now
+                pdf_path = self._download_pdf(ref, paper_id)
+                
+                # Determine display source_url for DB
                 if is_pdf_url:
                     source_url = ref
-                    pdf_path = self._download_pdf(ref, paper_id)
-                else:
+                elif arxiv_id:
                     source_url = f"https://arxiv.org/abs/{arxiv_id}"
-                    pdf_path = self._download_pdf(f"https://arxiv.org/pdf/{arxiv_id}.pdf", paper_id)
+                elif is_pmid:
+                    source_url = f"https://pubmed.ncbi.nlm.nih.gov/{ref}/"
+                    
             except ValueError as e:
-                if str(e) == "invalid_pdf_content":
-                    return {
-                        "success": False,
-                        "error": "invalid_pdf_content",
-                        "message": "URL 响应不是有效 PDF 内容。",
-                    }
-                return {
-                    "success": False,
-                    "error": "download_failed",
-                    "message": str(e),
-                }
+                err_str = str(e)
+                if err_str.startswith("invalid_pdf_content"):
+                    return {"success": False, "error": "invalid_pdf_content", "message": "URL 响应不是有效 PDF 内容。"}
+                elif err_str.startswith("not_found"):
+                    return {"success": False, "error": "not_found", "message": "无法找到该文献。"}
+                elif err_str.startswith("pdf_unavailable"):
+                    return {"success": False, "error": "pdf_unavailable", "message": "该文献没有可公开下载的 PDF。"}
+                return {"success": False, "error": "download_failed", "message": err_str}
             except Exception as e:
-                return {
-                    "success": False,
-                    "error": "download_failed",
-                    "message": str(e),
-                }
+                return {"success": False, "error": "download_failed", "message": str(e)}
         elif existing and existing.source_url:
             source_url = existing.source_url
 
@@ -446,6 +556,7 @@ class PaperSearchTools(Toolkit):
         if is_pdf_url:
             self.papers_db.register_authorized_refs([ref], source="read_paper")
             self.papers_db.link_paper_to_session(self.papers_db.session_id, paper_id, source_ref=ref)
+            
         return {
             "success": True,
             "paper_id": paper_id,
@@ -602,11 +713,11 @@ class PaperSearchTools(Toolkit):
                 return pm_match.group(1)
         return None
 
-    def search_paper(self, query: str, num_results: int = 5) -> str:
+    def search_paper(self, query: str, num_results: int = 10) -> str:
         """Primary paper search entry (alias of search_papers for compatibility)."""
         return self.search_papers(query=query, num_results=num_results)
 
-    def search_papers(self, query: str, num_results: int = 5) -> str:
+    def search_papers(self, query: str, num_results: int = 10) -> str:
         """Search for academic papers on both ArXiv and PubMed.
 
         Args:
@@ -622,7 +733,7 @@ class PaperSearchTools(Toolkit):
         try:
             num_results = int(num_results)
         except (TypeError, ValueError):
-            num_results = 5
+            num_results = 10
         num_results = max(1, min(num_results, 25))
 
         # Check cache first
