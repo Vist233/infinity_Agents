@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import {
   chatReducer,
@@ -15,7 +15,16 @@ import {
   type SessionRunState,
   type TerminalState,
 } from "@/lib/chat-state";
-import { createSession, deleteSession, listSessionMessages, listSessions, updateSessionTitle } from "@/lib/api/sessions";
+import {
+  createSession,
+  deleteSession,
+  listSessionMessages,
+  listSessionUploadedPapers,
+  listSessions,
+  updateSessionTitle,
+  uploadSessionPaper,
+  type UploadedPaperItem,
+} from "@/lib/api/sessions";
 import { getApiBase, getWsBase } from "@/lib/runtime-config";
 import { startChatStream, toFriendlyChatError, type ChatDoneEvent, type ChatEvent, type ChatStreamHandle } from "@/lib/ws/chat-stream";
 
@@ -43,6 +52,8 @@ export function useChatController() {
   const sessionMessagesMapRef = useRef<Record<string, Message[]>>({});
   const sessionLoadPromiseRef = useRef<Map<string, Promise<Message[]>>>(new Map());
   const sessionsRef = useRef<SessionItem[]>([]);
+  const [uploadedPapersMap, setUploadedPapersMap] = useState<Record<string, UploadedPaperItem[]>>({});
+  const [uploadingPdf, setUploadingPdf] = useState(false);
 
   const sessionId = state.sessionId;
   const messages = useMemo(() => getMessagesForSession(state, sessionId), [state, sessionId]);
@@ -56,6 +67,18 @@ export function useChatController() {
   useEffect(() => {
     sessionsRef.current = state.sessions;
   }, [state.sessions]);
+
+  const loadUploadedPapers = useCallback(async (targetSessionId: string): Promise<UploadedPaperItem[]> => {
+    try {
+      const papers = await listSessionUploadedPapers(apiBase, targetSessionId);
+      setUploadedPapersMap((prev) => ({ ...prev, [targetSessionId]: papers }));
+      return papers;
+    } catch (error) {
+      console.error("Failed to load uploaded papers", error);
+      setUploadedPapersMap((prev) => ({ ...prev, [targetSessionId]: prev[targetSessionId] || [] }));
+      return [];
+    }
+  }, [apiBase]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -156,7 +179,8 @@ export function useChatController() {
       setError(`消息加载失败：${message}`);
       toast.error("消息加载失败，请重试。");
     });
-  }, [sessionId, ensureSessionMessagesLoaded, setError]);
+    void loadUploadedPapers(sessionId);
+  }, [sessionId, ensureSessionMessagesLoaded, loadUploadedPapers, setError]);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -233,6 +257,7 @@ export function useChatController() {
       });
       dispatch({ type: "set_session_messages", sessionId: createdSessionId, messages: [] });
       dispatch({ type: "set_session_run_state", sessionId: createdSessionId, runState: DEFAULT_RUN_STATE });
+      setUploadedPapersMap((prev) => ({ ...prev, [createdSessionId]: [] }));
       loadedSessionIdsRef.current.add(createdSessionId);
       return createdSessionId;
     } catch (error) {
@@ -282,8 +307,9 @@ export function useChatController() {
       setSessionRunState(id, { unreadDone: false });
       dispatch({ type: "set_session_id", sessionId: id });
       dispatch({ type: "set_deleting_session", sessionId: null });
+      void loadUploadedPapers(id);
     },
-    [setSessionRunState, state.editingSessionId],
+    [loadUploadedPapers, setSessionRunState, state.editingSessionId],
   );
 
   const handleEditSessionTitle = useCallback((session: SessionItem) => {
@@ -585,6 +611,60 @@ export function useChatController() {
     });
   }, [setSessionRunState, state.sessionId]);
 
+  const handleUploadPdf = useCallback(async (file: File) => {
+    if (!file) return;
+    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    if (!isPdf) {
+      toast.error("仅支持上传 PDF 文件。");
+      return;
+    }
+
+    let targetSessionId = state.sessionId;
+    if (!targetSessionId) {
+      targetSessionId = await createSessionIfNeeded();
+      if (!targetSessionId) {
+        toast.error("创建会话失败，无法上传论文。");
+        return;
+      }
+    }
+
+    setUploadingPdf(true);
+    try {
+      const uploaded = await uploadSessionPaper(apiBase, targetSessionId, file);
+      setUploadedPapersMap((prev) => {
+        const current = prev[targetSessionId!] || [];
+        const deduped = [uploaded, ...current.filter((item) => item.paper_id !== uploaded.paper_id)];
+        return { ...prev, [targetSessionId!]: deduped };
+      });
+      dispatch({
+        type: "update_session_messages",
+        sessionId: targetSessionId,
+        updater: (current) => [
+          ...current,
+          {
+            role: "assistant",
+            content:
+              `已上传论文 **${uploaded.original_filename}**。\n` +
+              `引用: \`uploaded://${uploaded.paper_id}\`，可直接让我基于该论文生成操作手册。`,
+          },
+        ],
+      });
+      loadedSessionIdsRef.current.add(targetSessionId);
+      toast.success(`上传完成：${uploaded.original_filename}`);
+    } catch (error) {
+      console.error("Failed to upload pdf", error);
+      const message = error instanceof Error ? error.message : "未知错误";
+      toast.error(`上传失败：${message}`);
+    } finally {
+      setUploadingPdf(false);
+    }
+  }, [apiBase, createSessionIfNeeded, state.sessionId]);
+
+  const handleExportPdf = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.print();
+  }, []);
+
   const statusText = useMemo(() => {
     const seconds = Math.max(0, Math.floor(currentRunState.elapsedMs / 1000));
     const attemptText = currentRunState.maxAttempts > 1 ? ` · ${currentRunState.attempt}/${currentRunState.maxAttempts}` : "";
@@ -602,6 +682,11 @@ export function useChatController() {
     const suffix = currentRunState.hasReceivedToolCall && !currentRunState.hasReceivedChunk ? " · tool triggered" : "";
     return `Thinking (${seconds}s)${attemptText}${suffix}`;
   }, [currentRunState]);
+
+  const uploadedPapers = useMemo(() => {
+    if (!state.sessionId) return [];
+    return uploadedPapersMap[state.sessionId] || [];
+  }, [state.sessionId, uploadedPapersMap]);
 
   return {
     apiBase,
@@ -626,5 +711,9 @@ export function useChatController() {
     confirmDeleteSession,
     handleSubmit,
     handleStopGeneration,
+    handleUploadPdf,
+    handleExportPdf,
+    uploadedPapers,
+    uploadingPdf,
   };
 }

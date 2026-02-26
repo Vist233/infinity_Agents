@@ -2,8 +2,10 @@ import {
   createSession,
   deleteSession,
   listSessionMessages,
+  listSessionUploadedPapers,
   listSessions,
   updateSessionTitle,
+  uploadSessionPaper,
 } from "@/lib/api/sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -74,6 +76,37 @@ describe("sessions api", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "http://localhost:8008/api/sessions/s3",
       expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("lists uploaded papers", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [{ paper_id: "upload_x", original_filename: "x.pdf" }],
+    } as Response);
+
+    const papers = await listSessionUploadedPapers("http://localhost:8008", "s1");
+    expect(papers).toHaveLength(1);
+    expect(papers[0].paper_id).toBe("upload_x");
+  });
+
+  it("uploads session paper with multipart form", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ paper_id: "upload_y", original_filename: "y.pdf" }),
+    } as Response);
+    global.fetch = fetchMock;
+
+    const file = new File(["%PDF-1.4"], "paper.pdf", { type: "application/pdf" });
+    const uploaded = await uploadSessionPaper("http://localhost:8008", "s1", file);
+
+    expect(uploaded.paper_id).toBe("upload_y");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8008/api/sessions/s1/uploads/papers",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.any(FormData),
+      }),
     );
   });
 });

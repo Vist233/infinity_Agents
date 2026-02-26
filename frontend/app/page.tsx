@@ -15,7 +15,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
-      <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl">
+      <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
         <AgentNav onNavigate={(path) => router.push(path)} />
         <Button
           variant="outline"
@@ -51,10 +51,10 @@ export default function ChatPage() {
       </aside>
 
       <main className="flex-1 flex flex-col relative">
-        <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between sticky top-0 bg-[var(--surface-1)] backdrop-blur-xl z-10">
+        <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between sticky top-0 bg-[var(--surface-1)] backdrop-blur-xl z-10 print:hidden">
           <div className="text-sm font-semibold tracking-tight text-zinc-700">Paper Agent</div>
-          <Button variant="ghost" size="sm" className="text-zinc-500 hover:text-zinc-900">
-            Share
+          <Button variant="outline" size="sm" className="text-zinc-600 hover:text-zinc-900" onClick={controller.handleExportPdf}>
+            导出 PDF
           </Button>
         </header>
 
@@ -70,11 +70,16 @@ export default function ChatPage() {
         <Composer
           input={controller.state.input}
           isLoading={controller.isLoading}
+          uploadingPdf={controller.uploadingPdf}
+          uploadedPapers={controller.uploadedPapers}
           inlineError={controller.state.uiError}
           inputRef={controller.inputRef}
           onInputChange={controller.setInput}
           onSubmit={(event) => {
             void controller.handleSubmit(event);
+          }}
+          onUploadPdf={(file) => {
+            void controller.handleUploadPdf(file);
           }}
           onStop={controller.handleStopGeneration}
           onRetry={() => {

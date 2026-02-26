@@ -25,7 +25,7 @@ export function MessagePane({
 }: MessagePaneProps) {
   return (
     <ScrollArea className="flex-1 overflow-y-auto" ref={scrollRef}>
-      <div className="max-w-3xl mx-auto w-full px-4 pt-10 pb-32">
+      <div id="chat-export-content" className="max-w-3xl mx-auto w-full px-4 pt-10 pb-32">
         {messages.length === 0 ? (
           <div className="h-[60vh] flex flex-col items-center justify-center space-y-4">
             <div className="w-12 h-12 rounded-full border border-zinc-200 flex items-center justify-center shadow-sm">
