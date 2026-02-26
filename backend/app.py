@@ -1,10 +1,12 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import FileResponse
 from pathlib import Path as FilePath
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Tuple
 from fastapi.middleware.cors import CORSMiddleware
 from agent.paperAgent import create_paper_agent
+from agent.tools.pdf_extractor import PDFExtractor, ExtractedContent
+from agent.tools.image_path_utils import to_img_ref
 from contextlib import asynccontextmanager
 import asyncio
 import threading
@@ -29,6 +31,9 @@ from backend.db import (
     delete_session,
     resolve_global_paper_id_by_path,
     session_can_access_paper,
+    upsert_session_paper_link,
+    insert_session_uploaded_paper,
+    list_session_uploaded_papers,
     insert_session_tool_call,
     get_recent_session_tool_calls,
     get_recent_tool_calls_keep_from_id,
@@ -95,10 +100,75 @@ _LEGACY_ALLOWED_FILE_DIRS = [
     _PROJECT_ROOT / "agent" / "tools" / "plot_outputs",
     _PROJECT_ROOT / "agent" / "tools" / "plotly_outputs",
 ]
+_MAX_UPLOAD_PDF_BYTES = 50 * 1024 * 1024
+_MAX_SESSION_UPLOAD_PAPERS = 20
+_PDF_MIME_TYPES = {"application/pdf", "application/x-pdf"}
 
 
 def _get_session_root(session_id: str) -> FilePath:
     return _SESSIONS_ROOT / session_id
+
+
+def _normalize_uploaded_image_path(image_path: Any) -> str:
+    raw = str(image_path or "").strip()
+    if not raw:
+        return ""
+    p = FilePath(raw)
+    if p.is_absolute():
+        resolved = p.resolve()
+        match = re.search(r"/papers/sessions/[^/]+/(.+)$", resolved.as_posix())
+        if match:
+            return match.group(1)
+        try:
+            return resolved.relative_to(_SHARED_PAPERS_CACHE_ROOT.resolve()).as_posix()
+        except ValueError:
+            return resolved.as_posix()
+    normalized = raw.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.lstrip("/")
+
+
+def _build_uploaded_canonical_md(paper_id: str, extracted: ExtractedContent) -> str:
+    parts: List[str] = [
+        f"# Paper {paper_id}",
+        "",
+        "## Source Text (By Page)",
+        "",
+    ]
+    for page in extracted.pages:
+        page_num = page.get("page_num", "?")
+        text = str(page.get("text", "") or "")
+        image_paths = [
+            _normalize_uploaded_image_path(p)
+            for p in (page.get("image_paths") or [])
+            if str(p).strip()
+        ]
+        image_paths = [p for p in image_paths if p]
+
+        parts.append(f"### Page {page_num}")
+        parts.append("")
+        parts.append(text if text.strip() else "[No text extracted on this page]")
+        parts.append("")
+        if image_paths:
+            parts.append("#### Extracted Images")
+            parts.append("")
+            for image_path in image_paths:
+                parts.append(f"- `{image_path}`")
+                parts.append(f"- ![{FilePath(image_path).stem}]({to_img_ref(image_path)})")
+            parts.append("")
+    return "\n".join(parts)
+
+
+def _to_project_relative(path: FilePath) -> str:
+    try:
+        return path.resolve().relative_to(_PROJECT_ROOT.resolve()).as_posix()
+    except ValueError:
+        return path.resolve().as_posix()
+
+
+def _generate_uploaded_paper_id() -> str:
+    return "upload_" + uuid.uuid4().hex[:12]
 
 
 async def _get_or_create_session_agent(session_id: str):
@@ -283,12 +353,31 @@ def _render_recent_tool_calls_block(tool_calls: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _render_uploaded_papers_block(uploaded_papers: List[Dict[str, Any]]) -> str:
+    if not uploaded_papers:
+        return ""
+    lines = [
+        "[Uploaded Papers]",
+        "用户上传了 PDF 论文，可用 read_paper('uploaded://{paper_id}') 阅读。",
+    ]
+    for paper in uploaded_papers:
+        paper_id = _truncate_text(paper.get("paper_id"), 128)
+        if not paper_id:
+            continue
+        filename = _truncate_text(paper.get("original_filename"), 220) or "unknown.pdf"
+        pages = int(paper.get("page_count") or 0)
+        md_path = _truncate_text(paper.get("canonical_md_path"), 500)
+        lines.append(f"- uploaded://{paper_id} | {filename} | pages={pages} | md={md_path}")
+    return "\n".join(lines) if len(lines) > 2 else ""
+
+
 def _build_effective_prompt(
     messages: List[Dict[str, Any]],
     user_index: int,
     user_query: str,
     compressed_block: Dict[str, Any],
     recent_tool_calls: List[Dict[str, Any]],
+    uploaded_papers: Optional[List[Dict[str, Any]]] = None,
     max_messages: int = 20,
 ) -> str:
     sections: List[str] = []
@@ -305,6 +394,10 @@ def _build_effective_prompt(
     recent_tools_text = _render_recent_tool_calls_block(recent_tool_calls)
     if recent_tools_text:
         sections.append(recent_tools_text)
+
+    uploaded_text = _render_uploaded_papers_block(uploaded_papers or [])
+    if uploaded_text:
+        sections.append(uploaded_text)
 
     if sections and user_query:
         return "\n\n".join(sections) + f"\n\nUser: {user_query}"
@@ -396,6 +489,7 @@ async def _prepare_prompt_with_context_management(
     if not isinstance(compressed_block, dict):
         compressed_block = {}
 
+    uploaded_papers = await list_session_uploaded_papers(pool, session_id)
     recent_tool_calls = await get_recent_session_tool_calls(pool, session_id, limit=TOOL_KEEP_RECENT)
     recent_tool_calls = list(reversed(recent_tool_calls))
     prompt = _build_effective_prompt(
@@ -404,6 +498,7 @@ async def _prepare_prompt_with_context_management(
         user_query=user_query,
         compressed_block=compressed_block,
         recent_tool_calls=recent_tool_calls,
+        uploaded_papers=uploaded_papers,
     )
     prompt_tokens = estimate_tokens(prompt)
     ratio = _compute_context_ratio(prompt_tokens, CONTEXT_WINDOW_TOKENS)
@@ -427,6 +522,7 @@ async def _prepare_prompt_with_context_management(
                 user_query=user_query,
                 compressed_block=compressed_block,
                 recent_tool_calls=recent_tool_calls,
+                uploaded_papers=uploaded_papers,
             )
             prompt_tokens = estimate_tokens(prompt)
             ratio = _compute_context_ratio(prompt_tokens, CONTEXT_WINDOW_TOKENS)
@@ -437,6 +533,7 @@ async def _prepare_prompt_with_context_management(
         "ratio": round(ratio, 6),
         "compressed_this_turn": compressed_this_turn,
         "recent_tool_calls_kept": len(recent_tool_calls),
+        "uploaded_papers": len(uploaded_papers),
     }
     return prompt, context_info
 
@@ -584,14 +681,25 @@ def _resolve_image_ref(ref_path: str) -> Optional[FilePath]:
     normalized = normalized.lstrip("/")
     if not normalized:
         return None
-    for d in _LEGACY_ALLOWED_FILE_DIRS:
+    for d in [*_LEGACY_ALLOWED_FILE_DIRS, _SHARED_PAPERS_CACHE_ROOT]:
         candidate = d / normalized
         if candidate.exists() and candidate.is_file():
             return candidate
+    if _SESSIONS_ROOT.exists():
+        for session_dir in _SESSIONS_ROOT.iterdir():
+            if not session_dir.is_dir():
+                continue
+            candidate = session_dir / normalized
+            if candidate.exists() and candidate.is_file():
+                return candidate
     # Backward compatibility for basename refs.
     if "/" not in normalized:
-        for d in _LEGACY_ALLOWED_FILE_DIRS:
+        for d in [*_LEGACY_ALLOWED_FILE_DIRS, _SHARED_PAPERS_CACHE_ROOT]:
             for candidate in d.rglob(normalized):
+                if candidate.is_file():
+                    return candidate
+        if _SESSIONS_ROOT.exists():
+            for candidate in _SESSIONS_ROOT.rglob(normalized):
                 if candidate.is_file():
                     return candidate
     return None
@@ -918,6 +1026,139 @@ async def delete_session_endpoint(session_id: str):
     except Exception:
         logging.exception("Failed to delete session")
         raise HTTPException(status_code=500, detail="Failed to delete session")
+
+
+@app.post("/api/sessions/{session_id}/uploads/papers")
+async def upload_session_paper(session_id: str, file: UploadFile = File(...)):
+    try:
+        uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session ID format")
+
+    pool = app.state.db_pool
+    if not pool:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+
+    meta = await get_session(pool, session_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if (meta.get("storage_mode") or "legacy") == "legacy":
+        raise HTTPException(status_code=400, detail="PDF upload is only supported for sandboxed sessions")
+
+    original_filename = str(file.filename or "").strip() or "uploaded.pdf"
+    lower_name = original_filename.lower()
+    content_type = str(file.content_type or "").lower()
+    if not lower_name.endswith(".pdf") and content_type not in _PDF_MIME_TYPES:
+        raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
+
+    existing = await list_session_uploaded_papers(pool, session_id)
+    if len(existing) >= _MAX_SESSION_UPLOAD_PAPERS:
+        raise HTTPException(status_code=400, detail=f"Upload limit exceeded: max {_MAX_SESSION_UPLOAD_PAPERS} papers per session")
+
+    session_root = _get_session_root(session_id)
+    uploads_dir = session_root / "uploads"
+    md_dir = session_root / "md"
+    extracted_root = session_root / "extracted"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    extracted_root.mkdir(parents=True, exist_ok=True)
+
+    paper_id = _generate_uploaded_paper_id()
+    stored_pdf_abs = uploads_dir / f"{paper_id}.pdf"
+
+    total_bytes = 0
+    try:
+        with stored_pdf_abs.open("wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > _MAX_UPLOAD_PDF_BYTES:
+                    raise HTTPException(status_code=413, detail="File too large (max 50MB)")
+                out.write(chunk)
+    finally:
+        await file.close()
+
+    if total_bytes <= 0:
+        if stored_pdf_abs.exists():
+            stored_pdf_abs.unlink()
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    try:
+        with stored_pdf_abs.open("rb") as f:
+            signature = f.read(5)
+        if signature != b"%PDF-":
+            raise HTTPException(status_code=400, detail="Uploaded file is not a valid PDF")
+    except HTTPException:
+        if stored_pdf_abs.exists():
+            stored_pdf_abs.unlink()
+        raise
+    except Exception:
+        if stored_pdf_abs.exists():
+            stored_pdf_abs.unlink()
+        raise HTTPException(status_code=400, detail="Failed to validate uploaded PDF")
+
+    extractor = PDFExtractor(output_base_dir=extracted_root)
+    try:
+        extracted = extractor.extract(str(stored_pdf_abs), paper_id=paper_id)
+    except Exception as e:
+        logging.exception("Failed to extract uploaded PDF")
+        raise HTTPException(status_code=500, detail=f"PDF extraction failed: {e}")
+
+    canonical_md_abs = md_dir / f"{paper_id}.md"
+    canonical_md_abs.write_text(_build_uploaded_canonical_md(paper_id, extracted), encoding="utf-8")
+
+    stored_pdf_path = _to_project_relative(stored_pdf_abs)
+    canonical_md_path = _to_project_relative(canonical_md_abs)
+    images_dir = _to_project_relative(extracted.images_dir)
+    metadata = await insert_session_uploaded_paper(
+        pool=pool,
+        session_id=session_id,
+        paper_id=paper_id,
+        original_filename=original_filename,
+        stored_pdf_path=stored_pdf_path,
+        canonical_md_path=canonical_md_path,
+        images_dir=images_dir,
+        page_count=extracted.page_count,
+        image_count=extracted.image_count,
+        status="completed",
+    )
+    if metadata is None:
+        raise HTTPException(status_code=500, detail="Failed to persist uploaded paper metadata")
+
+    await upsert_session_paper_link(pool, session_id, paper_id, source_ref=f"uploaded://{paper_id}")
+
+    return {
+        "paper_id": paper_id,
+        "original_filename": original_filename,
+        "stored_pdf_path": stored_pdf_path,
+        "canonical_md_path": canonical_md_path,
+        "images_dir": images_dir,
+        "page_count": int(extracted.page_count),
+        "image_count": int(extracted.image_count),
+        "status": "completed",
+    }
+
+
+@app.get("/api/sessions/{session_id}/uploads/papers")
+async def list_uploaded_papers(session_id: str):
+    try:
+        uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session ID format")
+
+    pool = app.state.db_pool
+    if not pool:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+
+    meta = await get_session(pool, session_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    papers = await list_session_uploaded_papers(pool, session_id)
+    return papers
+
 
 @app.websocket("/ws/chat")
 async def chat_ws_endpoint(websocket: WebSocket):

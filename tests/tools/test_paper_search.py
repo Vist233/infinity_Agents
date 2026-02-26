@@ -335,6 +335,7 @@ class _FakePapersDB:
         self.saved_extracted = []
         self.status_updates = []
         self.record = None
+        self.uploaded_papers = {}
 
     def is_authorized_ref(self, ref, paper_id=None):
         return self.authorized
@@ -366,6 +367,11 @@ class _FakePapersDB:
 
     def update_status(self, paper_id, status):
         self.status_updates.append((paper_id, status))
+
+    def get_session_uploaded_paper(self, session_id, paper_id):
+        if session_id != self.session_id:
+            return None
+        return self.uploaded_papers.get(paper_id)
 
 
 class _SharedSessionStore:
@@ -426,6 +432,59 @@ def test_read_paper_rejects_unauthorized_ref(tmp_path):
         papers_db=fake_db,
     )
     result = json.loads(tool.read_paper("2103.03404", action="head"))
+    assert result["error"] == "paper_not_authorized_for_session"
+
+
+def test_read_paper_uploaded_ref_success(monkeypatch, tmp_path):
+    fake_db = _FakePapersDB()
+    from agent.tools import paper_search as paper_search_module
+
+    monkeypatch.setattr(paper_search_module, "PROJECT_ROOT", tmp_path)
+    session_root = tmp_path / "papers" / "sessions" / fake_db.session_id
+    md_path = session_root / "md" / "upload_test.md"
+    images_dir = session_root / "extracted" / "upload_test" / "images"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    images_dir.mkdir(parents=True, exist_ok=True)
+    (images_dir / "page1_img1.png").write_bytes(b"fake-image")
+    md_path.write_text(
+        "# Paper upload_test\n\n## Source Text (By Page)\n\n### Page 1\n\ncontent\n\n",
+        encoding="utf-8",
+    )
+    fake_db.uploaded_papers["upload_test"] = {
+        "paper_id": "upload_test",
+        "canonical_md_path": str(md_path),
+        "images_dir": f"papers/sessions/{fake_db.session_id}/extracted/upload_test/images",
+    }
+    tool = PaperSearchTools(
+        enable_search=False,
+        enable_read=True,
+        download_dir=tmp_path / "cache" / "downloads",
+        shared_cache_root=tmp_path / "cache",
+        papers_db=fake_db,
+    )
+
+    result = json.loads(tool.read_paper("uploaded://upload_test", action="head", max_lines=20))
+    assert result["paper_id"] == "upload_test"
+    assert result["source_status"] == "uploaded_session_pdf"
+    assert result["images_by_page"] == [
+        {
+            "page_num": 1,
+            "image_paths": ["extracted/upload_test/images/page1_img1.png"],
+            "image_markdown": ["![page1_img1](img://./extracted/upload_test/images/page1_img1.png)"],
+        }
+    ]
+
+
+def test_read_paper_uploaded_ref_denied_when_not_in_session(tmp_path):
+    fake_db = _FakePapersDB()
+    tool = PaperSearchTools(
+        enable_search=False,
+        enable_read=True,
+        download_dir=tmp_path / "cache" / "downloads",
+        shared_cache_root=tmp_path / "cache",
+        papers_db=fake_db,
+    )
+    result = json.loads(tool.read_paper("uploaded://not_exists", action="head"))
     assert result["error"] == "paper_not_authorized_for_session"
 
 

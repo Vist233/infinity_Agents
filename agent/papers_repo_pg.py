@@ -102,6 +102,22 @@ class PapersRepoPG:
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 expires_at TIMESTAMPTZ NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS session_uploaded_papers (
+                session_id UUID NOT NULL,
+                paper_id TEXT NOT NULL,
+                original_filename TEXT NOT NULL,
+                stored_pdf_path TEXT NOT NULL,
+                canonical_md_path TEXT NOT NULL,
+                images_dir TEXT,
+                page_count INT NOT NULL DEFAULT 0,
+                image_count INT NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'completed',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (session_id, paper_id),
+                CONSTRAINT fk_session_uploaded_papers_session FOREIGN KEY(session_id)
+                    REFERENCES sessions(session_id)
+                    ON DELETE CASCADE
+            );
             CREATE INDEX IF NOT EXISTS idx_paper_records_global_updated
                 ON paper_records_global (updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_paper_records_global_source_url
@@ -114,6 +130,10 @@ class PapersRepoPG:
                 ON session_paper_links (session_id, last_access_at DESC);
             CREATE INDEX IF NOT EXISTS idx_session_paper_links_paper
                 ON session_paper_links (paper_id);
+            CREATE INDEX IF NOT EXISTS idx_session_uploaded_papers_session_created
+                ON session_uploaded_papers (session_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_session_uploaded_papers_paper
+                ON session_uploaded_papers (paper_id);
             CREATE INDEX IF NOT EXISTS idx_paper_cache_global_expires
                 ON paper_cache_global (expires_at);
             """,
@@ -412,6 +432,132 @@ class PapersRepoPG:
             session_id,
         )
         return [str(r["paper_id"]) for r in rows]
+
+    def insert_session_uploaded_paper(
+        self,
+        session_id: str,
+        paper_id: str,
+        original_filename: str,
+        stored_pdf_path: str,
+        canonical_md_path: str,
+        images_dir: Optional[str] = None,
+        page_count: int = 0,
+        image_count: int = 0,
+        status: str = "completed",
+        created_at: Optional[Any] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not session_id or not paper_id:
+            return None
+        now = datetime.now(tz=timezone.utc)
+        created = self._coerce_timestamptz(created_at, fallback=now)
+        row = fetchrow_sync(
+            self.database_url,
+            """
+            INSERT INTO session_uploaded_papers (
+                session_id, paper_id, original_filename, stored_pdf_path,
+                canonical_md_path, images_dir, page_count, image_count, status, created_at
+            )
+            VALUES (
+                $1::uuid, $2, $3, $4,
+                $5, $6, $7, $8, $9, $10::timestamptz
+            )
+            ON CONFLICT (session_id, paper_id)
+            DO UPDATE SET
+                original_filename = EXCLUDED.original_filename,
+                stored_pdf_path = EXCLUDED.stored_pdf_path,
+                canonical_md_path = EXCLUDED.canonical_md_path,
+                images_dir = EXCLUDED.images_dir,
+                page_count = EXCLUDED.page_count,
+                image_count = EXCLUDED.image_count,
+                status = EXCLUDED.status
+            RETURNING session_id, paper_id, original_filename, stored_pdf_path,
+                      canonical_md_path, images_dir, page_count, image_count, status, created_at
+            """,
+            session_id,
+            paper_id,
+            original_filename,
+            stored_pdf_path,
+            canonical_md_path,
+            images_dir,
+            max(0, int(page_count)),
+            max(0, int(image_count)),
+            status or "completed",
+            created,
+        )
+        if row is None:
+            return None
+        return {
+            "session_id": str(row["session_id"]),
+            "paper_id": row["paper_id"],
+            "original_filename": row["original_filename"],
+            "stored_pdf_path": row["stored_pdf_path"],
+            "canonical_md_path": row["canonical_md_path"],
+            "images_dir": row["images_dir"],
+            "page_count": int(row["page_count"] or 0),
+            "image_count": int(row["image_count"] or 0),
+            "status": row["status"] or "completed",
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        }
+
+    def list_session_uploaded_papers(self, session_id: str) -> List[Dict[str, Any]]:
+        if not session_id:
+            return []
+        rows = fetch_sync(
+            self.database_url,
+            """
+            SELECT paper_id, original_filename, stored_pdf_path, canonical_md_path,
+                   images_dir, page_count, image_count, status, created_at
+            FROM session_uploaded_papers
+            WHERE session_id = $1::uuid
+            ORDER BY created_at DESC
+            """,
+            session_id,
+        )
+        records: List[Dict[str, Any]] = []
+        for row in rows:
+            records.append(
+                {
+                    "paper_id": row["paper_id"],
+                    "original_filename": row["original_filename"],
+                    "stored_pdf_path": row["stored_pdf_path"],
+                    "canonical_md_path": row["canonical_md_path"],
+                    "images_dir": row["images_dir"],
+                    "page_count": int(row["page_count"] or 0),
+                    "image_count": int(row["image_count"] or 0),
+                    "status": row["status"] or "completed",
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                }
+            )
+        return records
+
+    def get_session_uploaded_paper(self, session_id: str, paper_id: str) -> Optional[Dict[str, Any]]:
+        if not session_id or not paper_id:
+            return None
+        row = fetchrow_sync(
+            self.database_url,
+            """
+            SELECT paper_id, original_filename, stored_pdf_path, canonical_md_path,
+                   images_dir, page_count, image_count, status, created_at
+            FROM session_uploaded_papers
+            WHERE session_id = $1::uuid AND paper_id = $2
+            LIMIT 1
+            """,
+            session_id,
+            paper_id,
+        )
+        if row is None:
+            return None
+        return {
+            "paper_id": row["paper_id"],
+            "original_filename": row["original_filename"],
+            "stored_pdf_path": row["stored_pdf_path"],
+            "canonical_md_path": row["canonical_md_path"],
+            "images_dir": row["images_dir"],
+            "page_count": int(row["page_count"] or 0),
+            "image_count": int(row["image_count"] or 0),
+            "status": row["status"] or "completed",
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        }
 
     def _paper_id_ref_candidates(self, paper_id: str) -> List[str]:
         return list({

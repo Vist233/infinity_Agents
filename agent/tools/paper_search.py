@@ -34,6 +34,7 @@ except ImportError:
 # Cache directory
 CACHE_DIR = Path(__file__).parent / "cache"
 DOWNLOAD_DIR = Path(__file__).parent / "arxiv_pdfs"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 class CacheMiddleware:
@@ -207,10 +208,14 @@ class PaperSearchTools(Toolkit):
             return ""
         p = Path(raw)
         if p.is_absolute():
+            resolved = p.resolve()
             try:
-                return p.resolve().relative_to(self.shared_cache_root.resolve()).as_posix()
+                return resolved.relative_to(self.shared_cache_root.resolve()).as_posix()
             except ValueError:
-                return str(p.resolve())
+                match = re.search(r"/papers/sessions/[^/]+/(.+)$", resolved.as_posix())
+                if match:
+                    return match.group(1)
+                return str(resolved)
         return Path(raw).as_posix()
 
     def _extract_page_num_from_image_name(self, image_name: str) -> int:
@@ -223,6 +228,7 @@ class PaperSearchTools(Toolkit):
         self,
         paper_id: str,
         pages: Optional[List[Dict[str, Any]]] = None,
+        images_dir: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         page_to_paths: Dict[int, List[str]] = {}
 
@@ -241,9 +247,18 @@ class PaperSearchTools(Toolkit):
                     page_to_paths[page_num].extend(normalized)
 
         # Fallback for cache hits: rebuild index from extracted directory if needed.
-        images_dir = self.extracted_dir / paper_id / "images"
-        if images_dir.exists():
-            for image_file in sorted(images_dir.glob("*.*")):
+        scan_dirs: List[Path] = []
+        if images_dir:
+            candidate = Path(str(images_dir))
+            if not candidate.is_absolute():
+                candidate = PROJECT_ROOT / candidate
+            scan_dirs.append(candidate)
+        scan_dirs.append(self.extracted_dir / paper_id / "images")
+
+        for scan_dir in scan_dirs:
+            if not scan_dir.exists() or not scan_dir.is_dir():
+                continue
+            for image_file in sorted(scan_dir.glob("*.*")):
                 rel_path = self._normalize_image_path(image_file)
                 page_num = self._extract_page_num_from_image_name(image_file.name)
                 page_to_paths.setdefault(page_num, [])
@@ -394,6 +409,61 @@ class PaperSearchTools(Toolkit):
             }
 
         ref = str(paper_ref).strip()
+        uploaded_prefix = "uploaded://"
+        if ref.lower().startswith(uploaded_prefix):
+            uploaded_paper_id = ref[len(uploaded_prefix):].strip()
+            if not uploaded_paper_id:
+                return {
+                    "success": False,
+                    "error": "invalid_uploaded_paper_ref",
+                    "message": "uploaded:// 引用缺少 paper_id。",
+                }
+            uploaded = self.papers_db.get_session_uploaded_paper(self.papers_db.session_id, uploaded_paper_id)
+            if not uploaded:
+                return {
+                    "success": False,
+                    "error": "paper_not_authorized_for_session",
+                    "message": "该上传论文不在当前会话可访问范围。",
+                }
+            md_raw = str(uploaded.get("canonical_md_path") or "").strip()
+            if not md_raw:
+                return {
+                    "success": False,
+                    "error": "uploaded_paper_missing_md",
+                    "message": "上传论文缺少 canonical markdown。",
+                }
+            md_path = Path(md_raw)
+            if not md_path.is_absolute():
+                md_path = PROJECT_ROOT / md_path
+            if not md_path.exists():
+                return {
+                    "success": False,
+                    "error": "uploaded_paper_missing_md",
+                    "message": "上传论文 markdown 文件不存在。",
+                }
+            raw_images_dir = str(uploaded.get("images_dir") or "").strip()
+            resolved_images_dir: Optional[str] = None
+            if raw_images_dir:
+                images_dir_path = Path(raw_images_dir)
+                if images_dir_path.is_absolute():
+                    resolved_images_dir = str(images_dir_path)
+                else:
+                    project_candidate = (PROJECT_ROOT / images_dir_path).resolve()
+                    if project_candidate.exists():
+                        resolved_images_dir = str(project_candidate)
+                    else:
+                        session_root = md_path.parent.parent
+                        resolved_images_dir = str((session_root / images_dir_path).resolve())
+            self.papers_db.link_paper_to_session(self.papers_db.session_id, uploaded_paper_id, source_ref=ref)
+            return {
+                "success": True,
+                "paper_id": uploaded_paper_id,
+                "md_path": md_path,
+                "source_status": "uploaded_session_pdf",
+                "cached": True,
+                "images_dir": resolved_images_dir,
+            }
+
         arxiv_id = self._extract_arxiv_id(ref)
         is_pdf_url = False
 
@@ -434,6 +504,7 @@ class PaperSearchTools(Toolkit):
                 "md_path": Path(existing.canonical_md_path),
                 "source_status": "from_cache",
                 "cached": True,
+                "images_dir": getattr(existing, "images_dir", None),
             }
         if md_path.exists():
             return {
@@ -442,6 +513,7 @@ class PaperSearchTools(Toolkit):
                 "md_path": md_path,
                 "source_status": "from_cache",
                 "cached": True,
+                "images_dir": getattr(existing, "images_dir", None) if existing else None,
             }
 
         pdf_path: Optional[Path] = None
@@ -511,6 +583,7 @@ class PaperSearchTools(Toolkit):
             "md_path": md_path,
             "source_status": "downloaded_and_extracted",
             "cached": False,
+            "images_dir": str(extracted.images_dir),
         }
 
     def read_paper(
@@ -553,7 +626,10 @@ class PaperSearchTools(Toolkit):
             "cached": cached,
             "source_status": source_status,
             "total_lines": total_lines,
-            "images_by_page": self._build_images_by_page(paper_id=paper_id),
+            "images_by_page": self._build_images_by_page(
+                paper_id=paper_id,
+                images_dir=materialized.get("images_dir"),
+            ),
         }
 
         if action == "head":

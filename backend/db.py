@@ -96,6 +96,28 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 CREATE INDEX IF NOT EXISTS idx_session_paper_links_paper
                     ON session_paper_links (paper_id);
 
+                CREATE TABLE IF NOT EXISTS session_uploaded_papers (
+                    session_id UUID NOT NULL,
+                    paper_id TEXT NOT NULL,
+                    original_filename TEXT NOT NULL,
+                    stored_pdf_path TEXT NOT NULL,
+                    canonical_md_path TEXT NOT NULL,
+                    images_dir TEXT,
+                    page_count INT NOT NULL DEFAULT 0,
+                    image_count INT NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'completed',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (session_id, paper_id),
+                    CONSTRAINT fk_session_uploaded_papers_session
+                    FOREIGN KEY(session_id)
+                    REFERENCES sessions(session_id)
+                    ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_session_uploaded_papers_session_created
+                    ON session_uploaded_papers (session_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_session_uploaded_papers_paper
+                    ON session_uploaded_papers (paper_id);
+
                 -- Deprecated session-scoped cache tables; kept for backward compatibility.
                 CREATE TABLE IF NOT EXISTS paper_cache (
                     session_id UUID NOT NULL,
@@ -362,6 +384,156 @@ async def get_session(pool: asyncpg.Pool, session_id: str):
             }
     except Exception as e:
         logging.error(f"Error fetching session {session_id}: {e}")
+        return None
+
+
+async def upsert_session_paper_link(
+    pool: asyncpg.Pool,
+    session_id: str,
+    paper_id: str,
+    source_ref: Optional[str] = None,
+) -> bool:
+    if not session_id or not paper_id:
+        return False
+    query = """
+        INSERT INTO session_paper_links (session_id, paper_id, source_ref, created_at, last_access_at)
+        VALUES ($1::uuid, $2, $3, NOW(), NOW())
+        ON CONFLICT (session_id, paper_id)
+        DO UPDATE SET
+            source_ref = COALESCE(EXCLUDED.source_ref, session_paper_links.source_ref),
+            last_access_at = NOW()
+    """
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(query, session_id, paper_id, source_ref)
+        return True
+    except Exception as e:
+        logging.error(f"Error linking paper {paper_id} to session {session_id}: {e}")
+        return False
+
+
+async def insert_session_uploaded_paper(
+    pool: asyncpg.Pool,
+    session_id: str,
+    paper_id: str,
+    original_filename: str,
+    stored_pdf_path: str,
+    canonical_md_path: str,
+    images_dir: Optional[str] = None,
+    page_count: int = 0,
+    image_count: int = 0,
+    status: str = "completed",
+) -> Optional[Dict[str, Any]]:
+    query = """
+        INSERT INTO session_uploaded_papers (
+            session_id, paper_id, original_filename, stored_pdf_path,
+            canonical_md_path, images_dir, page_count, image_count, status, created_at
+        )
+        VALUES (
+            $1::uuid, $2, $3, $4,
+            $5, $6, $7, $8, $9, NOW()
+        )
+        ON CONFLICT (session_id, paper_id)
+        DO UPDATE SET
+            original_filename = EXCLUDED.original_filename,
+            stored_pdf_path = EXCLUDED.stored_pdf_path,
+            canonical_md_path = EXCLUDED.canonical_md_path,
+            images_dir = EXCLUDED.images_dir,
+            page_count = EXCLUDED.page_count,
+            image_count = EXCLUDED.image_count,
+            status = EXCLUDED.status
+        RETURNING session_id, paper_id, original_filename, stored_pdf_path,
+                  canonical_md_path, images_dir, page_count, image_count, status, created_at
+    """
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                query,
+                session_id,
+                paper_id,
+                original_filename,
+                stored_pdf_path,
+                canonical_md_path,
+                images_dir,
+                max(0, int(page_count)),
+                max(0, int(image_count)),
+                status or "completed",
+            )
+        if not row:
+            return None
+        return {
+            "session_id": str(row["session_id"]),
+            "paper_id": row["paper_id"],
+            "original_filename": row["original_filename"],
+            "stored_pdf_path": row["stored_pdf_path"],
+            "canonical_md_path": row["canonical_md_path"],
+            "images_dir": row["images_dir"],
+            "page_count": int(row["page_count"] or 0),
+            "image_count": int(row["image_count"] or 0),
+            "status": row["status"] or "completed",
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        }
+    except Exception as e:
+        logging.error(f"Error inserting uploaded paper {paper_id} for session {session_id}: {e}")
+        return None
+
+
+async def list_session_uploaded_papers(pool: asyncpg.Pool, session_id: str) -> List[Dict[str, Any]]:
+    query = """
+        SELECT paper_id, original_filename, stored_pdf_path, canonical_md_path,
+               images_dir, page_count, image_count, status, created_at
+        FROM session_uploaded_papers
+        WHERE session_id = $1::uuid
+        ORDER BY created_at DESC
+    """
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(query, session_id)
+        return [
+            {
+                "paper_id": row["paper_id"],
+                "original_filename": row["original_filename"],
+                "stored_pdf_path": row["stored_pdf_path"],
+                "canonical_md_path": row["canonical_md_path"],
+                "images_dir": row["images_dir"],
+                "page_count": int(row["page_count"] or 0),
+                "image_count": int(row["image_count"] or 0),
+                "status": row["status"] or "completed",
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logging.error(f"Error listing uploaded papers for session {session_id}: {e}")
+        return []
+
+
+async def get_session_uploaded_paper(pool: asyncpg.Pool, session_id: str, paper_id: str) -> Optional[Dict[str, Any]]:
+    query = """
+        SELECT paper_id, original_filename, stored_pdf_path, canonical_md_path,
+               images_dir, page_count, image_count, status, created_at
+        FROM session_uploaded_papers
+        WHERE session_id = $1::uuid AND paper_id = $2
+        LIMIT 1
+    """
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(query, session_id, paper_id)
+        if not row:
+            return None
+        return {
+            "paper_id": row["paper_id"],
+            "original_filename": row["original_filename"],
+            "stored_pdf_path": row["stored_pdf_path"],
+            "canonical_md_path": row["canonical_md_path"],
+            "images_dir": row["images_dir"],
+            "page_count": int(row["page_count"] or 0),
+            "image_count": int(row["image_count"] or 0),
+            "status": row["status"] or "completed",
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        }
+    except Exception as e:
+        logging.error(f"Error fetching uploaded paper {paper_id} for session {session_id}: {e}")
         return None
 
 

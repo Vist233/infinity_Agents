@@ -5,10 +5,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 import backend.app as backend_app_module
+from agent.tools.pdf_extractor import ExtractedContent
 
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch):
+    uploaded_store = {}
+
     async def fake_init_db(app):
         app.state.db_pool = object()
         app.state.session_agents = {}
@@ -41,6 +44,40 @@ def client(monkeypatch: pytest.MonkeyPatch):
     async def fake_session_can_access_paper(_pool, _session_id, _paper_id):
         return True
 
+    async def fake_upsert_session_paper_link(_pool, _session_id, _paper_id, source_ref=None):
+        return bool(_session_id and _paper_id)
+
+    async def fake_insert_session_uploaded_paper(
+        _pool=None,
+        session_id=None,
+        paper_id=None,
+        original_filename="",
+        stored_pdf_path="",
+        canonical_md_path="",
+        images_dir=None,
+        page_count=0,
+        image_count=0,
+        status="completed",
+        **_kwargs,
+    ):
+        item = {
+            "paper_id": paper_id,
+            "original_filename": original_filename,
+            "stored_pdf_path": stored_pdf_path,
+            "canonical_md_path": canonical_md_path,
+            "images_dir": images_dir,
+            "page_count": page_count,
+            "image_count": image_count,
+            "status": status,
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        uploaded_store.setdefault(session_id, [])
+        uploaded_store[session_id] = [item] + [x for x in uploaded_store[session_id] if x["paper_id"] != paper_id]
+        return item
+
+    async def fake_list_session_uploaded_papers(_pool, session_id):
+        return uploaded_store.get(session_id, [])
+
     monkeypatch.setattr(backend_app_module, "init_db", fake_init_db)
     monkeypatch.setattr(backend_app_module, "close_db", fake_close_db)
     monkeypatch.setattr(backend_app_module, "get_all_sessions", fake_get_all_sessions)
@@ -49,6 +86,9 @@ def client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(backend_app_module, "get_session", fake_get_session)
     monkeypatch.setattr(backend_app_module, "resolve_global_paper_id_by_path", fake_resolve_global_paper_id_by_path)
     monkeypatch.setattr(backend_app_module, "session_can_access_paper", fake_session_can_access_paper)
+    monkeypatch.setattr(backend_app_module, "upsert_session_paper_link", fake_upsert_session_paper_link)
+    monkeypatch.setattr(backend_app_module, "insert_session_uploaded_paper", fake_insert_session_uploaded_paper)
+    monkeypatch.setattr(backend_app_module, "list_session_uploaded_papers", fake_list_session_uploaded_papers)
 
     with TestClient(backend_app_module.app) as test_client:
         yield test_client
@@ -73,6 +113,84 @@ def test_get_session_messages_invalid_uuid_returns_400(client: TestClient):
     response = client.get("/api/sessions/not-a-uuid/messages")
     assert response.status_code == 400
     assert response.json().get("detail") == "Invalid session ID format"
+
+
+def test_upload_session_pdf_success(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path):
+    monkeypatch.setattr(backend_app_module, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(backend_app_module, "_SESSIONS_ROOT", tmp_path / "papers" / "sessions")
+    monkeypatch.setattr(backend_app_module, "_SHARED_PAPERS_CACHE_ROOT", tmp_path / "papers" / "cache")
+
+    class FakeExtractor:
+        def __init__(self, output_base_dir):
+            self.output_base_dir = output_base_dir
+
+        def extract(self, _pdf_path, paper_id=None):
+            images_dir = self.output_base_dir / paper_id / "images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+            (images_dir / "page1_img1.png").write_bytes(b"fake-image")
+            return ExtractedContent(
+                text="Uploaded paper text",
+                pages=[{"page_num": 1, "text": "Uploaded paper text", "image_paths": [f"extracted/{paper_id}/images/page1_img1.png"]}],
+                images_dir=images_dir,
+                image_count=1,
+                page_count=1,
+            )
+
+    monkeypatch.setattr(backend_app_module, "PDFExtractor", FakeExtractor)
+    session_id = str(uuid.uuid4())
+    response = client.post(
+        f"/api/sessions/{session_id}/uploads/papers",
+        files={"file": ("paper.pdf", b"%PDF-1.4\nfake\n", "application/pdf")},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["paper_id"].startswith("upload_")
+    assert payload["stored_pdf_path"].startswith("papers/sessions/")
+    assert payload["canonical_md_path"].startswith("papers/sessions/")
+    assert payload["images_dir"].startswith("papers/sessions/")
+    assert payload["page_count"] == 1
+    assert payload["image_count"] == 1
+    assert payload["status"] == "completed"
+
+    listed = client.get(f"/api/sessions/{session_id}/uploads/papers")
+    assert listed.status_code == 200
+    items = listed.json()
+    assert len(items) == 1
+    assert items[0]["paper_id"] == payload["paper_id"]
+
+
+def test_upload_session_pdf_rejects_non_pdf(client: TestClient):
+    session_id = str(uuid.uuid4())
+    response = client.post(
+        f"/api/sessions/{session_id}/uploads/papers",
+        files={"file": ("notes.txt", b"hello", "text/plain")},
+    )
+    assert response.status_code == 400
+    assert response.json().get("detail") == "Only PDF uploads are supported"
+
+
+def test_upload_session_pdf_rejects_large_file(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    session_id = str(uuid.uuid4())
+    monkeypatch.setattr(backend_app_module, "_MAX_UPLOAD_PDF_BYTES", 8)
+    response = client.post(
+        f"/api/sessions/{session_id}/uploads/papers",
+        files={"file": ("paper.pdf", b"%PDF-123456789", "application/pdf")},
+    )
+    assert response.status_code == 413
+
+
+def test_upload_session_pdf_rejects_when_session_limit_reached(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    async def fake_list_session_uploaded_papers(_pool, _session_id):
+        return [{"paper_id": f"upload_{i}"} for i in range(20)]
+
+    monkeypatch.setattr(backend_app_module, "list_session_uploaded_papers", fake_list_session_uploaded_papers)
+    session_id = str(uuid.uuid4())
+    response = client.post(
+        f"/api/sessions/{session_id}/uploads/papers",
+        files={"file": ("paper.pdf", b"%PDF-1.4\nfake\n", "application/pdf")},
+    )
+    assert response.status_code == 400
+    assert "Upload limit exceeded" in response.json().get("detail", "")
 
 
 def test_update_title_empty_returns_400(client: TestClient):
@@ -271,6 +389,26 @@ def test_build_effective_prompt_includes_compressed_block_and_recent_tools():
     assert "[Compressed Retrieval Memory]" in prompt
     assert "[Recent Tool Calls]" in prompt
     assert "User: next" in prompt
+
+
+def test_build_effective_prompt_includes_uploaded_papers_block():
+    prompt = backend_app_module._build_effective_prompt(
+        messages=[{"role": "user", "content": "请总结"}],
+        user_index=1,
+        user_query="开始",
+        compressed_block={},
+        recent_tool_calls=[],
+        uploaded_papers=[
+            {
+                "paper_id": "upload_abc123",
+                "original_filename": "paper.pdf",
+                "page_count": 12,
+                "canonical_md_path": "papers/sessions/s1/md/upload_abc123.md",
+            }
+        ],
+    )
+    assert "[Uploaded Papers]" in prompt
+    assert "uploaded://upload_abc123" in prompt
 
 
 def test_compress_context_memory_merges_incremental_retrieval_records(monkeypatch: pytest.MonkeyPatch):

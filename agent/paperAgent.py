@@ -90,6 +90,7 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
 - `read_paper(paper_ref, action="cat", pattern=None, start_line=1, max_lines=200, case_sensitive=False)`
   - Fine-grained reading/searching on canonical paper Markdown
   - If not cached, automatically downloads/extracts PDF and materializes Markdown cache
+  - Supports uploaded session paper refs: `uploaded://{paper_id}`
 
 # ### Plotting & Visualization (DISABLED)
 # - `create_chart(code, filename, chart_type)` - Execute Python code to create charts (matplotlib/plotly)
@@ -128,6 +129,13 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
 - When embedding charts, use the `markdown` field from the tool response directly
 - For follow-up detailed reading, prefer `read_paper`
 - Access control: only papers searched/read in this session are readable
+- Uploaded PDFs in the current session are readable via `read_paper("uploaded://{paper_id}")`
+- When the user asks to output an operation manual, use this template:
+  1. Per-paper card: data type, software/version, commands or pseudo-commands, input->process->output, downstream usage, observed phenotype/conclusion.
+  2. Cross-paper unified pipeline.
+  3. Risks and missing parameters.
+  4. Executable checklist.
+  5. If a flow is needed, output a `mermaid` code block.
 """
 
 
