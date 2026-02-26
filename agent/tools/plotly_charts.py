@@ -383,7 +383,6 @@ class PlotlyVisualizationTools(Toolkit):
         **kwargs,
     ):
         self.output_dir = output_dir or CHART_OUTPUT_DIR
-        self.output_dir.mkdir(parents=True, exist_ok=True)
         
         tools = [
             self.create_methodology_comparison,

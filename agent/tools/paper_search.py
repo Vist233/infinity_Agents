@@ -1,7 +1,7 @@
 """
-Paper Search Tools - Combined ArXiv and PubMed search with caching and middleware.
+Paper Search Tools - ArXiv search with caching and middleware.
 
-Based on arxiv_agno.py pattern, extended with PubMed integration and middleware support.
+Based on arxiv_agno.py pattern, with middleware support.
 """
 
 import json
@@ -19,39 +19,6 @@ from agno.utils.log import log_debug, logger
 from agent.papers_repo_pg import PapersRepoPG, PaperRecord
 from agent.tools.image_path_utils import to_img_ref
 from agent.tools.pdf_extractor import PDFExtractor, ExtractedContent
-try:
-    from agent.tools.pubmed_search import PubMedSearchTools
-    class PubMedSearchClient:
-        """Adapter for agent.tools.pubmed_search to match the expected interface."""
-        def __init__(self):
-            self.tool = PubMedSearchTools()
-
-        def search(self, query: str, num_results: int) -> Dict[str, Any]:
-            try:
-                articles = self.tool.search_papers(query, num_results)
-                return {"articles": articles, "error": None}
-            except Exception as e:
-                return {
-                    "articles": [],
-                    "error": {
-                        "source": "pubmed",
-                        "code": "search_error",
-                        "message": str(e),
-                    }
-                }
-except ModuleNotFoundError:
-    class PubMedSearchClient:  # type: ignore[override, no-redef]
-        """Fallback PubMed client when agent.tools.pubmed_search is unavailable."""
-
-        def search(self, query: str, num_results: int) -> Dict[str, Any]:
-            return {
-                "articles": [],
-                "error": {
-                    "source": "pubmed",
-                    "code": "module_not_found",
-                    "message": "agent.tools.pubmed_search is unavailable",
-                },
-            }
 
 try:
     import arxiv
@@ -137,8 +104,8 @@ class SizeMiddleware:
 
 
 class PaperSearchTools(Toolkit):
-    """Combined ArXiv and PubMed search tools with caching and size limiting."""
-    SEARCH_OUTPUT_SCHEMA_VERSION = "v4_standalone_pubmed_interleaved"
+    """ArXiv search tools with caching and size limiting."""
+    SEARCH_OUTPUT_SCHEMA_VERSION = "v5_arxiv_only"
 
     def __init__(
         self,
@@ -149,23 +116,17 @@ class PaperSearchTools(Toolkit):
         download_dir: Optional[Path] = None,
         shared_cache_root: Optional[Path] = None,
         papers_db: Optional[PapersRepoPG] = None,
-        pubmed_client: Optional[PubMedSearchClient] = None,
         **kwargs,
     ):
         self.arxiv_client = arxiv.Client()
         self.download_dir = download_dir or DOWNLOAD_DIR
-        self.download_dir.mkdir(parents=True, exist_ok=True)
         self.shared_cache_root = shared_cache_root or self.download_dir.parent
-        self.shared_cache_root.mkdir(parents=True, exist_ok=True)
         self.md_dir = self.shared_cache_root / "md"
-        self.md_dir.mkdir(parents=True, exist_ok=True)
         self.extracted_dir = self.shared_cache_root / "extracted"
-        self.extracted_dir.mkdir(parents=True, exist_ok=True)
         self.pdf_extractor = PDFExtractor(output_base_dir=self.extracted_dir)
         self.cache = cache_middleware or CacheMiddleware()
         self.size_limit = size_middleware or SizeMiddleware()
         self.papers_db = papers_db
-        self.pubmed_client = pubmed_client or PubMedSearchClient()
         # Keep historical response behavior: do not enforce PDF-only results by default.
         self.require_pdf_url_default = False
 
@@ -236,6 +197,7 @@ class PaperSearchTools(Toolkit):
             return False
 
     def _canonical_md_path(self, paper_id: str) -> Path:
+        self.md_dir.mkdir(parents=True, exist_ok=True)
         return self.md_dir / f"{paper_id}.md"
 
     def _normalize_image_path(self, image_path: Any) -> str:
@@ -369,6 +331,7 @@ class PaperSearchTools(Toolkit):
 
     def _download_pdf(self, paper_ref: str, paper_id: str) -> Path:
         """Smart PDF downloader: auto-detects arxiv ID, PMID, PMC URL, or direct PDF URL."""
+        self.download_dir.mkdir(parents=True, exist_ok=True)
         pdf_path = self.download_dir / f"{paper_id}.pdf"
         if pdf_path.exists():
             return pdf_path
@@ -376,20 +339,10 @@ class PaperSearchTools(Toolkit):
         # 1. Dispatch based on paper_ref format to get the initial URL
         pdf_url = ""
         arxiv_id = self._extract_arxiv_id(paper_ref)
-        is_pmid = bool(re.match(r"^\d+$", paper_ref.strip()))
 
         if arxiv_id:
             pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
             log_debug(f"Resolved ArXiv PDF: {pdf_url}")
-        elif is_pmid:
-            log_debug(f"Treating {paper_ref} as PMID, looking up PDF...")
-            articles = self.pubmed_client.search(f"{paper_ref}[PMID]", num_results=1).get("articles", [])
-            if not articles:
-                raise ValueError(f"not_found: No article found for PMID {paper_ref}")
-            pdf_url = articles[0].get("pdf_url")
-            if not pdf_url:
-                raise ValueError(f"pdf_unavailable: No open PDF URL available for PMID {paper_ref}")
-            log_debug(f"Resolved PubMed PMC PDF: {pdf_url}")
         else:
             pdf_url = paper_ref
             log_debug(f"Using direct URL for download: {pdf_url}")
@@ -442,7 +395,6 @@ class PaperSearchTools(Toolkit):
 
         ref = str(paper_ref).strip()
         arxiv_id = self._extract_arxiv_id(ref)
-        is_pmid = bool(re.match(r"^\d+$", ref))
         is_pdf_url = False
 
         if self._is_http_url(ref):
@@ -451,18 +403,16 @@ class PaperSearchTools(Toolkit):
             elif not arxiv_id:
                 is_pdf_url = self._is_valid_pdf_url(ref)
 
-        if not arxiv_id and not is_pdf_url and not is_pmid:
+        if not arxiv_id and not is_pdf_url:
             return {
                 "success": False,
                 "error": "unsupported_paper_ref",
-                "message": "仅支持 arXiv ID/arXiv URL、PubMed ID (纯数字)，或可访问的 PDF URL。",
+                "message": "仅支持 arXiv ID/arXiv URL 或可访问的 PDF URL。",
             }
 
         # Determine authoritative internal paper_id
         if arxiv_id:
             paper_id = self._paper_id_from_arxiv_id(arxiv_id)
-        elif is_pmid:
-            paper_id = ref
         else:
             paper_id = self._paper_id_from_pdf_url(ref)
 
@@ -509,8 +459,6 @@ class PaperSearchTools(Toolkit):
                     source_url = ref
                 elif arxiv_id:
                     source_url = f"https://arxiv.org/abs/{arxiv_id}"
-                elif is_pmid:
-                    source_url = f"https://pubmed.ncbi.nlm.nih.gov/{ref}/"
                     
             except ValueError as e:
                 err_str = str(e)
@@ -718,14 +666,14 @@ class PaperSearchTools(Toolkit):
         return self.search_papers(query=query, num_results=num_results)
 
     def search_papers(self, query: str, num_results: int = 10) -> str:
-        """Search for academic papers on both ArXiv and PubMed.
+        """Search for academic papers on ArXiv.
 
         Args:
             query (str): The search query for finding papers.
             num_results (int, optional): Maximum number of results to return. Defaults to 10.
 
         Returns:
-            str: JSON array of papers from both sources.
+            str: JSON array of papers.
         """
         query = str(query or "").strip()
         if not query:
@@ -752,15 +700,10 @@ class PaperSearchTools(Toolkit):
         # Fetch ArXiv papers
         arxiv_articles = self._get_arxiv_papers(query, fetch_size)
 
-        # Fetch PubMed papers
-        pubmed_articles = self._get_pubmed_papers(query, fetch_size)
-
         if self.require_pdf_url_default:
             arxiv_articles = self._filter_with_pdf(arxiv_articles)
-            pubmed_articles = self._filter_with_pdf(pubmed_articles)
 
-        merged_articles = self._merge_interleaved(arxiv_articles, pubmed_articles)
-        all_articles = self._dedupe_articles(merged_articles)
+        all_articles = self._dedupe_articles(arxiv_articles)
         all_articles = self.size_limit.limit_articles(all_articles[:num_results])
         self._register_authorized_papers(all_articles)
 
@@ -802,21 +745,6 @@ class PaperSearchTools(Toolkit):
                 filtered.append(article)
         return filtered
 
-    def _merge_interleaved(
-        self,
-        arxiv_articles: List[Dict[str, Any]],
-        pubmed_articles: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        """Interleave source results to produce a single seamless ranked list."""
-        merged: List[Dict[str, Any]] = []
-        max_len = max(len(arxiv_articles), len(pubmed_articles))
-        for i in range(max_len):
-            if i < len(arxiv_articles):
-                merged.append(arxiv_articles[i])
-            if i < len(pubmed_articles):
-                merged.append(pubmed_articles[i])
-        return merged
-
     def _get_arxiv_papers(self, query: str, num_results: int) -> List[Dict]:
         """Internal helper to get ArXiv results."""
         if num_results <= 0:
@@ -836,9 +764,6 @@ class PaperSearchTools(Toolkit):
                     "source": "arxiv",
                     "title": result.title,
                     "id": result.get_short_id(),
-                    "pmid": None,
-                    "pmcid": None,
-                    "doi": None,
                     "entry_id": result.entry_id,
                     "url": result.entry_id,
                     "full_text_url": result.entry_id,
@@ -853,52 +778,6 @@ class PaperSearchTools(Toolkit):
         except Exception as e:
             logger.error(f"ArXiv search error: {e}")
         return articles
-
-    def _get_pubmed_papers(self, query: str, num_results: int) -> List[Dict]:
-        """Internal helper to get PubMed results."""
-        result = self.pubmed_client.search(query, num_results)
-        error = result.get("error")
-        if error:
-            logger.warning("PubMed search returned error: %s", error)
-
-        raw_articles = result.get("articles") or []
-        normalized: List[Dict[str, Any]] = []
-        for article in raw_articles:
-            normalized.append(self._normalize_pubmed_article(article))
-        return normalized
-
-    def _normalize_pubmed_article(self, article: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize standalone PubMed payload to preserve current output compatibility."""
-        pmid = str(article.get("pmid") or article.get("id") or "").strip()
-        title = str(article.get("title") or "").strip()
-        summary = str(article.get("summary") or article.get("abstract") or "").strip()
-        url = article.get("url")
-        if not isinstance(url, str) or not url.strip():
-            if pmid:
-                url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
-            else:
-                url = None
-        authors = article.get("authors")
-        if not isinstance(authors, list):
-            authors = []
-
-        return {
-            "source": "pubmed",
-            "title": title,
-            "id": pmid,
-            "pmid": pmid,
-            "pmcid": article.get("pmcid"),
-            "doi": article.get("doi"),
-            "entry_id": article.get("entry_id"),
-            "url": url,
-            "full_text_url": article.get("full_text_url"),
-            "primary_category": article.get("primary_category"),
-            "categories": article.get("categories") if isinstance(article.get("categories"), list) else [],
-            "published": article.get("published"),
-            "pdf_url": article.get("pdf_url"),
-            "authors": authors,
-            "summary": summary[:500] + "..." if len(summary) > 500 else summary,
-        }
 
     def read_paper_content(
         self,

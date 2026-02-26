@@ -70,8 +70,8 @@ def test_pubmed_search_tools_returns_structured_results(monkeypatch, tmp_path: P
     tool = PubMedSearchTools(cache_dir=tmp_path / "cache", cache_ttl=60)
     monkeypatch.setattr(
         tool,
-        "_get_pubmed_pmc_pdf_url",
-        lambda pmid: f"https://www.ncbi.nlm.nih.gov/pmc/articles/PMC{pmid}/pdf",
+        "_batch_get_pubmed_pmc_pdf_urls",
+        lambda entrez, pmids: {pmid: f"https://www.ncbi.nlm.nih.gov/pmc/articles/PMC{pmid}/pdf" for pmid in pmids},
     )
 
     results = tool.search_papers("covid vaccine", num_results=2, use_cache=False)
@@ -101,8 +101,11 @@ def test_pubmed_pmc_pdf_url_resolution(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(Bio, "Entrez", fake_entrez, raising=False)
 
     tool = PubMedSearchTools(cache_dir=tmp_path / "cache", cache_ttl=60)
-    url = tool._get_pubmed_pmc_pdf_url("12345678")
-    assert url == "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9999999/pdf"
+    # The true test of _batch_get_pubmed_pmc_pdf_urls since it runs elink
+    import Bio.Entrez as Entrez
+    urls = tool._batch_get_pubmed_pmc_pdf_urls(Entrez, ["12345678"])
+    assert "12345678" in urls
+    assert urls["12345678"] == "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9999999/pdf"
 
 
 def test_search_pubmed_convenience_function(monkeypatch):

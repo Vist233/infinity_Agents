@@ -42,7 +42,6 @@ class PythonPlottingTools(Toolkit):
         **kwargs,
     ):
         self.output_dir = output_dir or PLOT_OUTPUT_DIR
-        self.output_dir.mkdir(parents=True, exist_ok=True)
 
         tools: List[Any] = [
             self.create_chart,
@@ -141,6 +140,7 @@ class PythonPlottingTools(Toolkit):
         if not filename:
             filename = f"chart_{uuid.uuid4().hex[:8]}"
 
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         output_path = self.output_dir / f"{filename}.png"
 
         try:
@@ -291,6 +291,7 @@ class PythonPlottingTools(Toolkit):
         if not filename:
             filename = f"bar_chart_{uuid.uuid4().hex[:8]}"
 
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         output_path = self.output_dir / f"{filename}.png"
 
         try:
@@ -351,6 +352,7 @@ class PythonPlottingTools(Toolkit):
         if not filename:
             filename = f"line_chart_{uuid.uuid4().hex[:8]}"
 
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         output_path = self.output_dir / f"{filename}.png"
 
         try:

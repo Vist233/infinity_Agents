@@ -69,22 +69,17 @@ def test_search_papers_combined(monkeypatch, paper_search_tools):
                 "entry_id": "https://arxiv.org/abs/1706.03762",
                 "url": "https://arxiv.org/abs/1706.03762",
                 "pdf_url": "https://arxiv.org/pdf/1706.03762",
-            }
-        ],
-    )
-    monkeypatch.setattr(
-        paper_search_tools,
-        "_get_pubmed_papers",
-        lambda _q, _n: [
+            },
             {
-                "source": "pubmed",
-                "id": "123456",
-                "pmid": "123456",
-                "title": "PubMed Paper",
-                "summary": "summary-p1",
-                "authors": [],
-                "url": "https://pubmed.ncbi.nlm.nih.gov/123456/",
-            }
+                "source": "arxiv",
+                "id": "a2",
+                "title": "Another Paper",
+                "summary": "summary-a2",
+                "authors": ["author-b"],
+                "entry_id": "https://arxiv.org/abs/2401.00001",
+                "url": "https://arxiv.org/abs/2401.00001",
+                "pdf_url": "https://arxiv.org/pdf/2401.00001",
+            },
         ],
     )
     monkeypatch.setattr(paper_search_tools, "_register_authorized_papers", lambda _items: None)
@@ -93,7 +88,7 @@ def test_search_papers_combined(monkeypatch, paper_search_tools):
     results = json.loads(result_json)
     assert isinstance(results, list)
     assert len(results) == 2
-    assert {article.get("source") for article in results} == {"arxiv", "pubmed"}
+    assert all(article.get("source") == "arxiv" for article in results)
 
 def test_read_paper_content_basic(monkeypatch, paper_search_tools, temp_download_dir):
     """Test reading paper content."""
@@ -191,20 +186,15 @@ def test_read_paper_content_regex(monkeypatch, paper_search_tools):
                 assert "Transformer" in match or "transformer" in match.lower()
 
 
-def test_search_papers_interleaved_and_deduped(monkeypatch, paper_search_tools):
-    """Standalone merge strategy: interleaved merge + source-aware dedupe."""
+def test_search_papers_deduped(monkeypatch, paper_search_tools):
+    """Dedupe strategy: source-aware dedupe removes duplicate IDs."""
     arxiv_articles = [
         {"source": "arxiv", "id": "a1", "title": "A1", "summary": "sa1", "authors": ["x"]},
         {"source": "arxiv", "id": "a1", "title": "A1 duplicate", "summary": "dup", "authors": ["x"]},
         {"source": "arxiv", "id": "a2", "title": "A2", "summary": "sa2", "authors": ["y"]},
     ]
-    pubmed_articles = [
-        {"source": "pubmed", "id": "p1", "title": "P1", "summary": "sp1", "authors": []},
-        {"source": "pubmed", "id": "p2", "title": "P2", "summary": "sp2", "authors": []},
-    ]
 
     monkeypatch.setattr(paper_search_tools, "_get_arxiv_papers", lambda _q, _n: arxiv_articles)
-    monkeypatch.setattr(paper_search_tools, "_get_pubmed_papers", lambda _q, _n: pubmed_articles)
 
     called = {}
 
@@ -217,76 +207,13 @@ def test_search_papers_interleaved_and_deduped(monkeypatch, paper_search_tools):
     result = json.loads(result_json)
 
     assert isinstance(result, list)
-    assert len(result) == 4
-    # Interleave happens before dedupe. The second "a1" is dropped, keeping first-seen order.
-    assert [item["id"] for item in result] == ["a1", "p1", "p2", "a2"]
+    assert len(result) == 2
+    assert [item["id"] for item in result] == ["a1", "a2"]
     assert called["items"] == result
 
 
-def test_normalize_pubmed_article_compat_fields(paper_search_tools):
-    """Normalized PubMed article keeps existing compatibility fields."""
-    normalized = paper_search_tools._normalize_pubmed_article(
-        {
-            "source": "pubmed",
-            "title": "PubMed title",
-            "id": "12345",
-            "pmid": "12345",
-            "summary": "summary",
-            "pdf_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC1/pdf/",
-        }
-    )
-    assert normalized["source"] == "pubmed"
-    assert normalized["id"] == "12345"
-    assert normalized["title"] == "PubMed title"
-    assert "authors" in normalized
-    assert isinstance(normalized["authors"], list)
-    assert normalized["summary"] == "summary"
-
-
-def test_search_papers_pubmed_error_tolerant(monkeypatch, temp_cache_dir, temp_download_dir):
-    """PubMed structured error should not break array output."""
-    class FakePubMedClient:
-        def search(self, query, num_results):
-            return {
-                "articles": [],
-                "error": {"source": "pubmed", "code": "request_failed", "message": "boom"},
-            }
-
-    cache = CacheMiddleware(cache_dir=temp_cache_dir, ttl_seconds=60)
-    size = SizeMiddleware(max_chars=5000, max_articles=10)
-    tool = PaperSearchTools(
-        cache_middleware=cache,
-        size_middleware=size,
-        download_dir=temp_download_dir,
-        pubmed_client=FakePubMedClient(),
-    )
-
-    monkeypatch.setattr(
-        tool,
-        "_get_arxiv_papers",
-        lambda _q, _n: [
-            {
-                "source": "arxiv",
-                "id": "a1",
-                "title": "A1",
-                "summary": "s",
-                "authors": ["x"],
-                "entry_id": "http://arxiv.org/abs/a1",
-                "url": "http://arxiv.org/abs/a1",
-                "pdf_url": "http://arxiv.org/pdf/a1",
-            }
-        ],
-    )
-
-    result_json = tool.search_papers("error-tolerant", num_results=3)
-    result = json.loads(result_json)
-    assert isinstance(result, list)
-    assert len(result) >= 1
-    assert all("error" not in item for item in result if isinstance(item, dict))
-
-
 def test_register_authorized_papers_called_with_final_list(monkeypatch, temp_cache_dir, temp_download_dir):
-    """Ensure authorization registration uses final merged result list."""
+    """Ensure authorization registration uses final result list."""
     class FakePapersDB:
         def __init__(self):
             self.session_id = "test-session"
@@ -314,15 +241,10 @@ def test_register_authorized_papers_called_with_final_list(monkeypatch, temp_cac
         "_get_arxiv_papers",
         lambda _q, _n: [{"source": "arxiv", "id": "2401.00001", "title": "A", "summary": "sa", "entry_id": "https://arxiv.org/abs/2401.00001", "url": "https://arxiv.org/abs/2401.00001", "pdf_url": "https://arxiv.org/pdf/2401.00001"}],
     )
-    monkeypatch.setattr(
-        tool,
-        "_get_pubmed_papers",
-        lambda _q, _n: [{"source": "pubmed", "id": "123456", "pmid": "123456", "title": "P", "summary": "sp", "url": "https://pubmed.ncbi.nlm.nih.gov/123456/", "authors": []}],
-    )
 
     result = json.loads(tool.search_papers("auth-test", num_results=2))
     assert isinstance(result, list)
-    assert len(result) == 2
+    assert len(result) == 1
     assert fake_db.linked
     assert fake_db.refs
 
@@ -339,24 +261,18 @@ def test_search_paper_alias_matches_search_papers(monkeypatch, paper_search_tool
 
 
 def test_search_papers_uses_fetch_size_multiplier(monkeypatch, paper_search_tools):
-    """Standalone strategy fetches each source with num_results * 4."""
-    captured = {"arxiv": None, "pubmed": None}
+    """ArXiv fetch uses num_results * 4."""
+    captured = {"arxiv": None}
 
     def _fake_arxiv(_q, n):
         captured["arxiv"] = n
         return []
 
-    def _fake_pubmed(_q, n):
-        captured["pubmed"] = n
-        return []
-
     monkeypatch.setattr(paper_search_tools, "_get_arxiv_papers", _fake_arxiv)
-    monkeypatch.setattr(paper_search_tools, "_get_pubmed_papers", _fake_pubmed)
     monkeypatch.setattr(paper_search_tools, "_register_authorized_papers", lambda _items: None)
 
     paper_search_tools.search_papers("fetch-size", num_results=7)
     assert captured["arxiv"] == 28
-    assert captured["pubmed"] == 28
 
 
 def test_search_papers_cache_key_uses_schema_and_pdf_flag(monkeypatch, paper_search_tools):
@@ -373,7 +289,6 @@ def test_search_papers_cache_key_uses_schema_and_pdf_flag(monkeypatch, paper_sea
     monkeypatch.setattr(paper_search_tools.cache, "get", _fake_get)
     monkeypatch.setattr(paper_search_tools.cache, "set", _fake_set)
     monkeypatch.setattr(paper_search_tools, "_get_arxiv_papers", lambda _q, _n: [])
-    monkeypatch.setattr(paper_search_tools, "_get_pubmed_papers", lambda _q, _n: [])
     monkeypatch.setattr(paper_search_tools, "_register_authorized_papers", lambda _items: None)
 
     paper_search_tools.search_papers("cache-key", num_results=2)
@@ -395,41 +310,19 @@ def test_search_papers_cache_key_uses_schema_and_pdf_flag(monkeypatch, paper_sea
     assert set_args[3] is False
 
 
-def test_normalize_pubmed_article_fallbacks(paper_search_tools):
-    """Normalizer should backfill url and authors when standalone payload is sparse."""
-    normalized = paper_search_tools._normalize_pubmed_article(
-        {
-            "id": "67890",
-            "title": "Sparse",
-            "abstract": "Abstract only",
-            "authors": "not-a-list",
-        }
-    )
-    assert normalized["id"] == "67890"
-    assert normalized["pmid"] == "67890"
-    assert normalized["url"] == "https://pubmed.ncbi.nlm.nih.gov/67890/"
-    assert normalized["authors"] == []
-    assert normalized["summary"] == "Abstract only"
-
-
 def test_search_papers_pdf_filter_toggle(monkeypatch, paper_search_tools):
-    """When require_pdf_url_default=True, non-PDF records should be dropped before merge."""
+    """When require_pdf_url_default=True, non-PDF records should be dropped."""
     arxiv_articles = [
         {"source": "arxiv", "id": "a1", "title": "A1", "summary": "s", "authors": [], "pdf_url": ""},
         {"source": "arxiv", "id": "a2", "title": "A2", "summary": "s", "authors": [], "pdf_url": "http://x/a2.pdf"},
     ]
-    pubmed_articles = [
-        {"source": "pubmed", "id": "p1", "title": "P1", "summary": "s", "authors": [], "pdf_url": None},
-        {"source": "pubmed", "id": "p2", "title": "P2", "summary": "s", "authors": [], "pdf_url": "http://x/p2.pdf"},
-    ]
 
     paper_search_tools.require_pdf_url_default = True
     monkeypatch.setattr(paper_search_tools, "_get_arxiv_papers", lambda _q, _n: arxiv_articles)
-    monkeypatch.setattr(paper_search_tools, "_get_pubmed_papers", lambda _q, _n: pubmed_articles)
     monkeypatch.setattr(paper_search_tools, "_register_authorized_papers", lambda _items: None)
 
     result = json.loads(paper_search_tools.search_papers("pdf-filter", num_results=4))
-    assert [item["id"] for item in result] == ["a2", "p2"]
+    assert [item["id"] for item in result] == ["a2"]
 
 
 class _FakePapersDB:

@@ -26,8 +26,9 @@ from agno.utils.pprint import pprint_run_response
 
 # Import tools
 from agent.tools.paper_search import PaperSearchTools, SizeMiddleware
-from agent.tools.plotly_charts import PlotlyVisualizationTools
-from agent.tools.python_plotter import PythonPlottingTools
+# [DISABLED] Plotting tools temporarily disabled
+# from agent.tools.plotly_charts import PlotlyVisualizationTools
+# from agent.tools.python_plotter import PythonPlottingTools
 from agent.tools.file_tools import FileSystemTools
 from agent.tools.image_analyzer import ImageAnalysisTools
 from agent.session_repo_pg import SessionRepoPG, SessionRecord
@@ -35,7 +36,6 @@ from agent.papers_repo_pg import PapersRepoPG
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GLOBAL_PAPERS_CACHE_ROOT = PROJECT_ROOT / "papers" / "cache"
-GLOBAL_PAPERS_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
 # Database-based Cache (replaces JSON file cache)
@@ -84,19 +84,19 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
 ## Available Tools
 
 ### Paper Search
-- `search_paper(query, num_results=5)` - Search ArXiv and PubMed
+- `search_paper(query, num_results=5)` - Search ArXiv
 
 ### Paper Reading
 - `read_paper(paper_ref, action="cat", pattern=None, start_line=1, max_lines=200, case_sensitive=False)`
   - Fine-grained reading/searching on canonical paper Markdown
   - If not cached, automatically downloads/extracts PDF and materializes Markdown cache
 
-### Plotting & Visualization
-- `create_chart(code, filename, chart_type)` - Execute Python code to create charts (matplotlib/plotly); do not call `plt.savefig()` or `fig.write_image()` manually
-- `create_bar_chart(data, title, ...)` - Quick bar chart from data dict
-- `create_line_chart(x_data, y_data, title, ...)` - Quick line chart
-- `create_methodology_comparison(paper_reports_json)` - Sunburst chart comparing methodologies
-- `create_tool_frequency(paper_reports_json)` - Tool usage frequency chart
+# ### Plotting & Visualization (DISABLED)
+# - `create_chart(code, filename, chart_type)` - Execute Python code to create charts (matplotlib/plotly)
+# - `create_bar_chart(data, title, ...)` - Quick bar chart from data dict
+# - `create_line_chart(x_data, y_data, title, ...)` - Quick line chart
+# - `create_methodology_comparison(paper_reports_json)` - Sunburst chart comparing methodologies
+# - `create_tool_frequency(paper_reports_json)` - Tool usage frequency chart
 
 ### File & Image Understanding
 - `list_files(directory="")` - List files/folders in session sandbox and shared cache
@@ -111,8 +111,8 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
 2. **Deep dive**: Use `read_paper` for detailed reading/grep/head/tail/outline
    - Search 与 Read 需要分步执行，不要在同一轮对搜索结果批量一次性全部阅读
    - 例外：当用户明确提供单篇 `pdf_url` 时，可以直接调用 `read_paper` 读取该单篇论文
-3. **Visualize**: Use `create_chart` or quick chart tools to generate analytical plots
-   - 绘图代码只负责绘制，不要在代码中手动保存图片（不要调用 `plt.savefig` 或 `fig.write_image`）；工具会自动保存到当前 session 的目录
+# 3. **Visualize**: Use `create_chart` or quick chart tools to generate analytical plots (DISABLED)
+#    - 绘图代码只负责绘制，不要在代码中手动保存图片
 4. **Inspect images**: Use `read_image`/`analyze_image` for chart outputs, extracted figures, and local screenshots
 5. **Embed images**: All chart/image tools return a `markdown` field like `![chart](img://./xxx.png)`.
    Copy this exact Markdown into your response — the system will automatically render the image.
@@ -162,6 +162,7 @@ def create_paper_agent(
     Returns:
         Configured Agent instance.
     """
+    GLOBAL_PAPERS_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
     api_key = api_key or os.environ.get("MOONSHOT_API_KEY")
     if not api_key:
         raise ValueError(
@@ -194,8 +195,9 @@ def create_paper_agent(
     
     cache_middleware = DatabaseCacheMiddleware(papers_db, ttl_seconds=3600)
     size_middleware = SizeMiddleware(max_chars=50000, max_articles=default_num_results)
-    plot_output_dir = session_root / "plot_outputs" if session_root is not None else None
-    plotly_output_dir = session_root / "plotly_outputs" if session_root is not None else None
+    # [DISABLED] Plotting output dirs
+    # plot_output_dir = session_root / "plot_outputs" if session_root is not None else None
+    # plotly_output_dir = session_root / "plotly_outputs" if session_root is not None else None
     shared_papers_dir = GLOBAL_PAPERS_CACHE_ROOT
     allowed_file_dirs = [
         shared_papers_dir,
@@ -208,8 +210,8 @@ def create_paper_agent(
         allowed_file_dirs.extend(
             [
                 session_root,
-                session_root / "plot_outputs",
-                session_root / "plotly_outputs",
+                # session_root / "plot_outputs",    # [DISABLED]
+                # session_root / "plotly_outputs",  # [DISABLED]
                 session_root / "reports",
                 session_root / "md",
                 session_root / "extracted",
@@ -225,8 +227,9 @@ def create_paper_agent(
             download_dir=shared_papers_dir / "downloads",
             shared_cache_root=shared_papers_dir,
         ),
-        PlotlyVisualizationTools(output_dir=plotly_output_dir),
-        PythonPlottingTools(output_dir=plot_output_dir),
+        # [DISABLED] Plotting tools
+        # PlotlyVisualizationTools(output_dir=plotly_output_dir),
+        # PythonPlottingTools(output_dir=plot_output_dir),
         FileSystemTools(allowed_dirs=allowed_file_dirs),
         ImageAnalysisTools(
             api_key=api_key,
@@ -279,7 +282,6 @@ class PaperAgentRunner:
         self.workflow_model_id = workflow_model_id
         self.default_num_results = default_num_results
         self.sessions_root = Path(__file__).resolve().parent.parent / "papers" / "sessions"
-        self.sessions_root.mkdir(parents=True, exist_ok=True)
         
         self.session_db = SessionRepoPG()
         self.papers_db: Optional[PapersRepoPG] = None

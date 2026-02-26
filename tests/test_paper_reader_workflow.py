@@ -133,6 +133,7 @@ class TestPaperReaderWorkflow:
         paper_ref = "https://arxiv.org/pdf/2103.03404.pdf"
         paper_id = "2103_03404"
         md_path = workflow.md_dir / f"{paper_id}.md"
+        md_path.parent.mkdir(parents=True, exist_ok=True)
         md_path.write_text("# Title\nIntro line\n## Method\nUse FastQC pipeline\n", encoding="utf-8")
 
         workflow.db.register_authorized_refs([paper_ref])

@@ -86,7 +86,6 @@ class PubMedCache:
     
     def __init__(self, cache_dir: Path = CACHE_DIR, ttl_seconds: int = 3600):
         self.cache_dir = cache_dir
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.ttl_seconds = ttl_seconds
     
     def _get_cache_key(self, func_name: str, *args, **kwargs) -> str:
@@ -112,6 +111,7 @@ class PubMedCache:
     
     def set(self, func_name: str, result: str, *args, **kwargs) -> None:
         """Cache the result."""
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         cache_key = self._get_cache_key(func_name, *args, **kwargs)
         cache_path = self.cache_dir / f"{cache_key}.json"
         
@@ -198,10 +198,16 @@ class PubMedSearchTools:
             # Step 2: Fetch paper details
             records = self._retry("efetch", lambda: self._run_efetch(Entrez, id_list))
             
+            # Step 2.5: Batch fetch PMC IDs
+            pdf_urls = self._retry("elink", lambda: self._batch_get_pubmed_pmc_pdf_urls(Entrez, id_list)) if id_list else {}
+            
             # Step 3: Parse papers
             papers = []
             for article in records.get("PubmedArticle", []):
-                paper = self._parse_pubmed_article(article)
+                medline = article.get("MedlineCitation", {})
+                pmid = str(medline.get("PMID", ""))
+                pdf_url = pdf_urls.get(pmid)
+                paper = self._parse_pubmed_article(article, pdf_url=pdf_url)
                 if paper:
                     papers.append(paper.to_dict())
             
@@ -257,8 +263,36 @@ class PubMedSearchTools:
             return entrez.read(handle)
         finally:
             handle.close()
+            
+    def _batch_get_pubmed_pmc_pdf_urls(self, entrez, id_list: List[str]) -> Dict[str, str]:
+        """Batch fetch PMC PDF URLs for multiple PMIDs."""
+        handle = entrez.elink(dbfrom="pubmed", db="pmc", id=",".join(id_list))
+        try:
+            link_results = entrez.read(handle)
+            result = {}
+            for linkset in link_results:
+                linkset_ids = linkset.get("IdList", [])
+                if not linkset_ids:
+                    continue
+                pmid = str(linkset_ids[0])
+                
+                pmc_id = None
+                for link in linkset.get("LinkSetDb", []):
+                    if link.get("DbTo") == "pmc":
+                        for doc_id in link.get("Link", []):
+                            pmc_id = doc_id.get("Id")
+                            if pmc_id:
+                                break
+                    if pmc_id:
+                        break
+                
+                if pmc_id:
+                    result[pmid] = f"https://www.ncbi.nlm.nih.gov/pmc/articles/PMC{pmc_id}/pdf"
+            return result
+        finally:
+            handle.close()
     
-    def _parse_pubmed_article(self, article: Dict) -> Optional[PubMedPaper]:
+    def _parse_pubmed_article(self, article: Dict, pdf_url: Optional[str] = None) -> Optional[PubMedPaper]:
         """Parse a PubMed article XML into a PubMedPaper object."""
         try:
             medline = article.get("MedlineCitation", {})
@@ -301,9 +335,6 @@ class PubMedSearchTools:
                 if identifier.attributes.get("EIdType") == "doi":
                     doi = str(identifier)
                     break
-            
-            # Get PMC PDF URL
-            pdf_url = self._get_pubmed_pmc_pdf_url(pmid)
             
             # Extract PMC ID from PDF URL
             pmc_id = None

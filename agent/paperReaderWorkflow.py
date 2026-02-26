@@ -126,19 +126,10 @@ class PaperReaderWorkflow(Toolkit):
         self.session_id = session_id
         self.storage_mode = storage_mode
         self.papers_dir = papers_dir or PAPERS_DIR
-        self.papers_dir.mkdir(parents=True, exist_ok=True)
-
         self.downloads_dir = self.papers_dir / "downloads"
-        self.downloads_dir.mkdir(parents=True, exist_ok=True)
-
         self.extracted_dir = self.papers_dir / "extracted"
-        self.extracted_dir.mkdir(parents=True, exist_ok=True)
-
         self.md_dir = self.papers_dir / "md"
-        self.md_dir.mkdir(parents=True, exist_ok=True)
-
         self.reports_dir = self.papers_dir / "reports"
-        self.reports_dir.mkdir(parents=True, exist_ok=True)
         
         effective_session_id = session_id or "00000000-0000-0000-0000-000000000000"
         self.db = db or PapersRepoPG(session_id=effective_session_id)
@@ -230,6 +221,7 @@ class PaperReaderWorkflow(Toolkit):
         return False
 
     def _canonical_md_path(self, paper_id: str) -> Path:
+        self.md_dir.mkdir(parents=True, exist_ok=True)
         return self.md_dir / f"{paper_id}.md"
 
     def _build_canonical_md(self, paper_id: str, extracted: ExtractedContent) -> str:
@@ -328,6 +320,7 @@ class PaperReaderWorkflow(Toolkit):
     
     def _download_pdf(self, url: str, paper_id: str) -> Path:
         """Download PDF from URL (supports arXiv URLs)."""
+        self.downloads_dir.mkdir(parents=True, exist_ok=True)
         pdf_path = self.downloads_dir / f"{paper_id}.pdf"
         
         if pdf_path.exists():
@@ -687,6 +680,7 @@ class PaperReaderWorkflow(Toolkit):
                 filename_base = paper_id
             
             # Save MD report
+            self.reports_dir.mkdir(parents=True, exist_ok=True)
             md_path = self.reports_dir / f"{filename_base}.md"
             
             # Handle duplicate filenames
