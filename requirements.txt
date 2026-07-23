@@ -48,7 +48,7 @@ arxiv
 pyinstaller # Added for EXE packaging
 requests
 
-pillow~=11.1.0
+pillow~=12.3.0
 numpy~=2.2.2
 werkzeug # Added as Flask dependency, good to be explicit
 pytest # Added for unit testing
