@@ -5,6 +5,8 @@ interface Env {
   STEPFUN_MODEL: string;
 }
 
+import { frontendHtml } from "./frontend";
+
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 
 function corsHeaders(request: Request): Headers {
@@ -81,6 +83,12 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/health") {
       return responseJson(request, { status: "ok", service: "infinity-agents-edge", model: env.STEPFUN_MODEL });
+    }
+
+    if (request.method === "GET" && url.pathname === "/") {
+      return new Response(frontendHtml, {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+      });
     }
 
     if (request.method === "GET" && url.pathname === "/v1/models") {
