@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
-import { Paperclip, SendHorizontal, Square } from "lucide-react";
-import { useRef, type FormEvent, type RefObject } from "react";
+import { SendHorizontal, Square } from "lucide-react";
+import { type FormEvent, type RefObject } from "react";
 
 interface ComposerProps {
   input: string;
@@ -15,24 +15,21 @@ interface ComposerProps {
   onStop: () => void;
   onRetry: () => void;
   onDismissError: () => void;
+  unauthenticated?: boolean;
 }
 
 export function Composer({
   input,
   isLoading,
-  uploadingPdf,
-  uploadedPapers,
   inlineError,
   inputRef,
   onInputChange,
   onSubmit,
-  onUploadPdf,
   onStop,
   onRetry,
   onDismissError,
+  unauthenticated = false,
 }: ComposerProps) {
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
   return (
     <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-white via-white/95 to-transparent pt-10 print:hidden">
       <div className="max-w-3xl mx-auto px-4 pb-8">
@@ -49,43 +46,6 @@ export function Composer({
             </div>
           </div>
         )}
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <div className="flex flex-wrap gap-2 min-h-8">
-            {uploadedPapers.slice(0, 4).map((paper) => (
-              <span
-                key={paper.paper_id}
-                className="inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-[11px] text-zinc-600"
-                title={`${paper.original_filename} (${paper.paper_id})`}
-              >
-                {paper.original_filename} · {paper.paper_id}
-              </span>
-            ))}
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="application/pdf,.pdf"
-            className="hidden"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) {
-                onUploadPdf(file);
-              }
-              event.currentTarget.value = "";
-            }}
-          />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={uploadingPdf}
-            onClick={() => fileInputRef.current?.click()}
-            className="shrink-0"
-          >
-            <Paperclip className="h-4 w-4 mr-1" />
-            {uploadingPdf ? "上传中..." : "上传 PDF"}
-          </Button>
-        </div>
         <form onSubmit={onSubmit} className="relative group">
           <div className="relative flex items-center">
             <textarea
@@ -106,7 +66,7 @@ export function Composer({
                   onSubmit(e);
                 }
               }}
-              placeholder="Message Infinity..."
+              placeholder={unauthenticated ? "登录后即可开始对话…" : "Message Infinity..."}
               className="w-full bg-white/95 border border-[var(--hairline-strong)] rounded-2xl py-4 pl-4 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] transition-all duration-150 ease-[var(--easing-standard)] resize-none shadow-sm"
             />
             <Button

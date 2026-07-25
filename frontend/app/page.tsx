@@ -1,13 +1,14 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Plus } from "lucide-react";
+import { LogIn, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentNav } from "@/components/chat/AgentNav";
 import { SessionList } from "@/components/chat/SessionList";
 import { MessagePane } from "@/components/chat/MessagePane";
 import { Composer } from "@/components/chat/Composer";
 import { useChatController } from "@/hooks/use-chat-controller";
+import { redirectToLogin } from "@/lib/runtime-config";
 
 export default function ChatPage() {
   const router = useRouter();
@@ -53,9 +54,18 @@ export default function ChatPage() {
       <main className="flex-1 flex flex-col relative">
         <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between sticky top-0 bg-[var(--surface-1)] backdrop-blur-xl z-10 print:hidden">
           <div className="text-sm font-semibold tracking-tight text-zinc-700">Paper Agent</div>
-          <Button variant="outline" size="sm" className="text-zinc-600 hover:text-zinc-900" onClick={controller.handleExportPdf}>
-            导出 PDF
-          </Button>
+          <div className="flex items-center gap-2">
+            {controller.authStatus === "unauthenticated" ? (
+              <Button size="sm" className="gap-2" onClick={redirectToLogin}>
+                <LogIn size={15} />
+                登录 / 注册
+              </Button>
+            ) : (
+              <Button variant="outline" size="sm" className="text-zinc-600 hover:text-zinc-900" onClick={controller.handleExportPdf}>
+                导出 PDF
+              </Button>
+            )}
+          </div>
         </header>
 
         <MessagePane
@@ -65,6 +75,8 @@ export default function ChatPage() {
           runState={controller.currentRunState}
           statusText={controller.statusText}
           scrollRef={controller.scrollRef}
+          authStatus={controller.authStatus}
+          onLogin={redirectToLogin}
         />
 
         <Composer
@@ -86,6 +98,7 @@ export default function ChatPage() {
             void controller.retryLoadSessions();
           }}
           onDismissError={controller.dismissError}
+          unauthenticated={controller.authStatus === "unauthenticated"}
         />
       </main>
     </div>

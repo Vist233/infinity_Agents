@@ -1,4 +1,5 @@
 import type { RunPhase, TokenInfo } from "@/lib/chat-state";
+import { redirectToLogin } from "@/lib/runtime-config";
 
 export interface ChatRequestPayload {
   session_id: string;
@@ -40,7 +41,7 @@ export interface ChatErrorEvent {
 export type ChatEvent = ChatStatusEvent | ChatChunkEvent | ChatToolCallEvent | ChatDoneEvent | ChatErrorEvent;
 
 export interface StartChatStreamOptions {
-  wsBase: string;
+  apiBase: string;
   payload: ChatRequestPayload;
   onEvent: (event: ChatEvent) => void;
   onSocketError?: () => void;
@@ -51,6 +52,10 @@ export interface ChatStreamHandle {
   close: (code?: number, reason?: string) => void;
   getReadyState: () => number;
 }
+
+// Mirrors WebSocket readyState constants so existing call sites keep working.
+const OPEN = 1;
+const CLOSED = 3;
 
 const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "done", "error"]);
 
@@ -99,29 +104,92 @@ export function normalizeChatEvent(rawData: unknown): ChatEvent | null {
   }
 }
 
+/**
+ * Start a chat stream over Server-Sent Events. Issues a same-origin
+ * `POST /api/chat` with the session cookie (credentials: "include") and parses
+ * the `data: {...}` event stream. Returns a handle whose `close()` aborts the
+ * in-flight request, preserving the previous WebSocket-style contract.
+ */
 export function startChatStream(options: StartChatStreamOptions): ChatStreamHandle {
-  const ws = new WebSocket(`${options.wsBase}/ws/chat`);
+  const controller = new AbortController();
+  let readyState = OPEN;
 
-  ws.onopen = () => {
-    ws.send(JSON.stringify(options.payload));
-  };
-
-  ws.onmessage = (event) => {
-    const normalized = normalizeChatEvent(typeof event.data === "string" ? event.data : "");
-    if (!normalized) return;
-    options.onEvent(normalized);
-  };
-
-  ws.onerror = () => {
-    options.onSocketError?.();
-  };
-
-  ws.onclose = () => {
+  const finish = () => {
+    if (readyState === CLOSED) return;
+    readyState = CLOSED;
     options.onClose?.();
   };
 
+  (async () => {
+    let response: Response;
+    try {
+      response = await fetch(`${options.apiBase}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        credentials: "include",
+        body: JSON.stringify(options.payload),
+        signal: controller.signal,
+      });
+    } catch {
+      options.onSocketError?.();
+      finish();
+      return;
+    }
+
+    if (response.status === 401) {
+      redirectToLogin();
+      finish();
+      return;
+    }
+    if (!response.ok || !response.body) {
+      let message = `请求失败 (${response.status})`;
+      try {
+        const payload = (await response.json()) as { error?: { message?: string } };
+        if (payload?.error?.message) message = payload.error.message;
+      } catch {
+        // ignore
+      }
+      options.onEvent({ type: "error", message });
+      finish();
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const line = frame
+            .split("\n")
+            .map((l) => l.trim())
+            .find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          const data = line.slice(5).trim();
+          if (!data) continue;
+          const event = normalizeChatEvent(data);
+          if (event) options.onEvent(event);
+        }
+      }
+    } catch {
+      if (!controller.signal.aborted) {
+        options.onSocketError?.();
+      }
+    } finally {
+      finish();
+    }
+  })();
+
   return {
-    close: (code, reason) => ws.close(code, reason),
-    getReadyState: () => ws.readyState,
+    close: () => {
+      controller.abort();
+      finish();
+    },
+    getReadyState: () => readyState,
   };
 }
