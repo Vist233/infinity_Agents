@@ -57,16 +57,8 @@ htmlcov/
 .venv/
 env/
 
-# Frontend dependencies
-frontend/node_modules/
-cloudflare-worker/node_modules/
-cloudflare-worker/.wrangler/
-cloudflare-worker/300
-cloudflare-worker/wrangler.jsonc.bak
-
 # Runtime paper artifacts (generated locally)
-papers/cache/
-papers/sessions/
+papers/
 
 # Local generated figures
 normal_distribution.png
