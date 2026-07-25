@@ -22,6 +22,10 @@ function callbackUrl(env: Env): string {
   return `${env.APP_BASE_URL.replace(/\/$/, "")}${AUTH_CALLBACK_PATH}`;
 }
 
+function sessionCookie(sid: string): string {
+  return serializeCookie(SESSION_COOKIE, sid, { maxAge: SESSION_TTL_SECONDS, sameSite: "Lax" });
+}
+
 /** GET /auth/login — start the authorization-code flow. */
 export function handleLogin(request: Request, env: Env): Response {
   const url = new URL(request.url);
@@ -111,7 +115,7 @@ export async function handleCallback(request: Request, env: Env): Promise<Respon
   const headers = new Headers({ location: `${env.APP_BASE_URL.replace(/\/$/, "")}${safeReturn}` });
   headers.append(
     "set-cookie",
-    serializeCookie(SESSION_COOKIE, sid, { maxAge: SESSION_TTL_SECONDS, sameSite: "Lax" })
+    sessionCookie(sid)
   );
   headers.append("set-cookie", clearCookie(OAUTH_STATE_COOKIE));
   return new Response(null, { status: 302, headers });
@@ -121,7 +125,8 @@ export async function handleCallback(request: Request, env: Env): Promise<Respon
  * Resolve the authenticated user for a request. Two-layer check:
  *  1) valid site session cookie mapped to a stored session
  *  2) the stored access token verifies against JWKS (refreshing + rotating if expired)
- * Returns the user plus any Set-Cookie header to apply on the response.
+ * Returns the user and renews the site cookie on every successful API request.
+ * This makes the 30-day browser session sliding rather than fixed at login.
  */
 export async function resolveUser(
   request: Request,
@@ -148,7 +153,10 @@ export async function resolveUser(
 
   try {
     const payload = await verifyAccessToken(current.access_token, env);
-    return { user: { userId: payload.sub, email: payload.email ?? current.email, sid } };
+    return {
+      user: { userId: payload.sub, email: payload.email ?? current.email, sid },
+      setCookie: sessionCookie(sid)
+    };
   } catch {
     await revokeAuthSession(env, sid);
     return null;

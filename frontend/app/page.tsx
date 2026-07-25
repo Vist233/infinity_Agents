@@ -17,7 +17,7 @@ export default function ChatPage() {
   return (
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
       <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
-        <AgentNav onNavigate={(path) => router.push(path)} />
+        <AgentNav active="paper" onNavigate={(path) => router.push(path)} />
         <Button
           variant="outline"
           className="justify-start gap-2 bg-white/90 border-[var(--hairline)] shadow-sm hover:bg-white mt-3 rounded-xl"
