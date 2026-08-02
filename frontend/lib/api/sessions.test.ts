@@ -79,34 +79,16 @@ describe("sessions api", () => {
     );
   });
 
-  it("lists uploaded papers", async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => [{ paper_id: "upload_x", original_filename: "x.pdf" }],
-    } as Response);
-
+  it("returns no uploaded papers (upload disabled in v1)", async () => {
     const papers = await listSessionUploadedPapers("http://localhost:8008", "s1");
-    expect(papers).toHaveLength(1);
-    expect(papers[0].paper_id).toBe("upload_x");
+    expect(papers).toHaveLength(0);
   });
 
-  it("uploads session paper with multipart form", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ paper_id: "upload_y", original_filename: "y.pdf" }),
-    } as Response);
-    global.fetch = fetchMock;
-
+  it("rejects paper upload (unsupported in v1)", async () => {
     const file = new File(["%PDF-1.4"], "paper.pdf", { type: "application/pdf" });
-    const uploaded = await uploadSessionPaper("http://localhost:8008", "s1", file);
-
-    expect(uploaded.paper_id).toBe("upload_y");
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:8008/api/sessions/s1/uploads/papers",
-      expect.objectContaining({
-        method: "POST",
-        body: expect.any(FormData),
-      }),
-    );
+    await expect(uploadSessionPaper("http://localhost:8008", "s1", file)).rejects.toMatchObject({
+      status: 400,
+      detail: "upload_unsupported",
+    });
   });
 });

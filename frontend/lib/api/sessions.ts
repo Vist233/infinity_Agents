@@ -40,13 +40,19 @@ async function parseErrorResponse(response: Response): Promise<string> {
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(input, init);
+    response = await fetch(input, { credentials: "include", ...init });
   } catch (error) {
     throw createApiError(
       `Network request failed: ${error instanceof Error ? error.message : "unknown error"}`,
       undefined,
       "network_error",
     );
+  }
+
+  if (response.status === 401) {
+    // The public landing page is intentionally usable without a session.  Let
+    // the UI offer an explicit sign-in action instead of redirecting on load.
+    throw createApiError("Authentication required", 401, "unauthenticated");
   }
 
   if (!response.ok) {
@@ -91,36 +97,20 @@ export async function deleteSession(apiBase: string, sessionId: string): Promise
   });
 }
 
+// PDF upload is intentionally not supported in the public v1 (no filesystem /
+// PDF pipeline in the edge Worker). These stubs keep the existing call sites
+// compiling without hitting a non-existent endpoint.
 export async function uploadSessionPaper(
-  apiBase: string,
-  sessionId: string,
-  file: File,
+  _apiBase: string,
+  _sessionId: string,
+  _file: File,
 ): Promise<UploadedPaperItem> {
-  const form = new FormData();
-  form.append("file", file);
-
-  let response: Response;
-  try {
-    response = await fetch(`${apiBase}/api/sessions/${sessionId}/uploads/papers`, {
-      method: "POST",
-      body: form,
-    });
-  } catch (error) {
-    throw createApiError(
-      `Network request failed: ${error instanceof Error ? error.message : "unknown error"}`,
-      undefined,
-      "network_error",
-    );
-  }
-
-  if (!response.ok) {
-    const detail = await parseErrorResponse(response);
-    throw createApiError(`Request failed (${response.status})`, response.status, detail);
-  }
-  return response.json() as Promise<UploadedPaperItem>;
+  throw createApiError("PDF upload is not available in this version.", 400, "upload_unsupported");
 }
 
-export async function listSessionUploadedPapers(apiBase: string, sessionId: string): Promise<UploadedPaperItem[]> {
-  const data = await requestJson<unknown>(`${apiBase}/api/sessions/${sessionId}/uploads/papers`);
-  return Array.isArray(data) ? (data as UploadedPaperItem[]) : [];
+export async function listSessionUploadedPapers(
+  _apiBase: string,
+  _sessionId: string,
+): Promise<UploadedPaperItem[]> {
+  return [];
 }

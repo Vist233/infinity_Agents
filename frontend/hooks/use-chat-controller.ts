@@ -25,12 +25,12 @@ import {
   uploadSessionPaper,
   type UploadedPaperItem,
 } from "@/lib/api/sessions";
-import { getApiBase, getWsBase } from "@/lib/runtime-config";
+import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
 import { startChatStream, toFriendlyChatError, type ChatDoneEvent, type ChatEvent, type ChatStreamHandle } from "@/lib/ws/chat-stream";
 
 const isSocketOpen = (socket?: ChatStreamHandle | null) => {
   if (!socket) return false;
-  return socket.getReadyState() === WebSocket.OPEN || socket.getReadyState() === WebSocket.CONNECTING;
+  return socket.getReadyState() === 1;
 };
 
 const toTokenInfo = (payload?: ChatDoneEvent["token_info"]) => ({
@@ -41,7 +41,6 @@ const toTokenInfo = (payload?: ChatDoneEvent["token_info"]) => ({
 
 export function useChatController() {
   const apiBase = useMemo(() => getApiBase(), []);
-  const wsBase = useMemo(() => getWsBase(apiBase), [apiBase]);
   const [state, dispatch] = useReducer(chatReducer, INITIAL_CHAT_STATE);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -54,6 +53,7 @@ export function useChatController() {
   const sessionsRef = useRef<SessionItem[]>([]);
   const [uploadedPapersMap, setUploadedPapersMap] = useState<Record<string, UploadedPaperItem[]>>({});
   const [uploadingPdf, setUploadingPdf] = useState(false);
+  const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated">("checking");
 
   const sessionId = state.sessionId;
   const messages = useMemo(() => getMessagesForSession(state, sessionId), [state, sessionId]);
@@ -114,8 +114,15 @@ export function useChatController() {
       const data = await listSessions(apiBase);
       dispatch({ type: "set_sessions", sessions: data });
       dispatch({ type: "set_error", error: null });
+      setAuthStatus("authenticated");
       return data;
     } catch (error) {
+      if ((error as { status?: number }).status === 401) {
+        dispatch({ type: "set_sessions", sessions: [] });
+        dispatch({ type: "set_error", error: null });
+        setAuthStatus("unauthenticated");
+        return null;
+      }
       const message = error instanceof Error ? error.message : "无法连接后端服务";
       dispatch({ type: "set_error", error: `会话加载失败：${message}` });
       dispatch({ type: "set_sessions", sessions: [] });
@@ -385,6 +392,11 @@ export function useChatController() {
       const value = state.input.trim();
       if (!value) return;
 
+      if (authStatus === "unauthenticated") {
+        redirectToLogin();
+        return;
+      }
+
       let targetSessionId = state.sessionId;
       if (!targetSessionId) {
         targetSessionId = await createSessionIfNeeded();
@@ -527,7 +539,7 @@ export function useChatController() {
 
       try {
         const stream = startChatStream({
-          wsBase,
+          apiBase,
           payload: {
             session_id: targetSessionId,
             messages: messagesForRequest,
@@ -539,10 +551,10 @@ export function useChatController() {
             if (!isCurrentRequest()) return;
             appendAssistantContent(
               targetSessionId!,
-              accumulatedResponse ? "\n\n[Error] WebSocket 连接失败" : "[Error] WebSocket 连接失败",
+              accumulatedResponse ? "\n\n[Error] 网络连接失败" : "[Error] 网络连接失败",
             );
             finalize("error");
-            toast.error("WebSocket 连接失败。");
+            toast.error("网络连接失败。");
           },
           onClose: () => {
             if (!isCurrentRequest() || completed) return;
@@ -563,6 +575,7 @@ export function useChatController() {
     },
     [
       appendAssistantContent,
+      apiBase,
       createSessionIfNeeded,
       ensureSessionMessagesLoaded,
       maybeRenameSessionFromFirstInput,
@@ -572,7 +585,7 @@ export function useChatController() {
       setSessionRunState,
       state.input,
       state.sessionId,
-      wsBase,
+      authStatus,
     ],
   );
 
@@ -715,5 +728,6 @@ export function useChatController() {
     handleExportPdf,
     uploadedPapers,
     uploadingPdf,
+    authStatus,
   };
 }
