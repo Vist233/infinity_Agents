@@ -1,17 +1,23 @@
 # Infinity Agents Edge
 
-Cloudflare Worker edge API for the StepFun Coding Plan. It offers an OpenAI-compatible `POST /v1/chat/completions` endpoint and proxies streaming responses without exposing the upstream API key to clients.
+Cloudflare Worker edge API for the StepFun Coding Plan. It is an OIDC relying
+party for `https://auth.zhangyvjing.com` and proxies streaming responses without
+exposing the upstream API key to clients.
 
 ## Endpoints
 
 - `GET /health`
-- `GET /v1/models` (Bearer token required)
-- `POST /v1/chat/completions` (Bearer token required)
+- `GET /login`, `GET /auth/callback`, `GET /logout`
+- `GET /v1/models` (ZhangYvJing browser session required)
+- `POST /v1/chat/completions` (ZhangYvJing browser session required)
 - `POST /chat` (alias)
 
-The deployed Worker needs two secrets:
+The deployed Worker needs three secrets:
 
 - `STEPFUN_API_KEY`: StepFun Coding Plan key.
-- `CLIENT_API_KEY`: token required from API clients.
+- `ZHANG_AUTH_CLIENT_SECRET`: confidential secret for client `infinity-agents`.
+- `INFINITY_SESSION_SECRET`: independent HMAC secret for signed edge sessions.
 
-The original FastAPI service remains the runtime for PostgreSQL-backed sessions, PDF workflows, paper tools, and local code execution. Those capabilities require a container or VM rather than a Worker.
+The callback is fixed to `https://infinity.zhangyvjing.com/auth/callback`; the
+Worker uses OIDC Authorization Code + PKCE and validates ID token signature,
+issuer, audience, nonce, and expiry against provider discovery/JWKS.
