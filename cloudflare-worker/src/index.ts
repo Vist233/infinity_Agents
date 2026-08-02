@@ -1,4 +1,5 @@
 interface Env {
+  ASSETS: Fetcher;
   ZHANG_AUTH_CLIENT_SECRET: string;
   INFINITY_SESSION_SECRET: string;
   STEPFUN_API_KEY: string;
@@ -100,9 +101,9 @@ export default {
     // does not support a registered post-logout URI. Sign out of Infinity
     // locally while retaining the provider's SSO session for other apps.
     if (request.method === "GET" && url.pathname === "/logout") return redirect("/", [clearCookie(SESSION_COOKIE), clearCookie(TRANSACTION_COOKIE)]);
-    if (request.method === "GET" && url.pathname === "/") { const user = await currentUser(request, env); return new Response(frontendHtml(user), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } }); }
     if (request.method === "GET" && url.pathname === "/v1/models") { if (!await currentUser(request, env)) return responseJson({ error: { message: "Authentication required" } }, 401); return responseJson({ object: "list", data: [{ id: env.STEPFUN_MODEL, object: "model" }] }); }
     if (request.method === "POST" && (url.pathname === "/v1/chat/completions" || url.pathname === "/chat")) return forwardChat(request, env);
+    if (request.method === "GET" || request.method === "HEAD") return env.ASSETS.fetch(request);
     return responseJson({ error: { message: "Not found" } }, 404);
   },
 } satisfies ExportedHandler<Env>;

@@ -12,6 +12,9 @@
   "observability": {
     "enabled": true
   },
+  "assets": {
+    "directory": "../frontend/out"
+  },
   "vars": {
     "STEPFUN_BASE_URL": "https://api.stepfun.com/step_plan/v1",
     "STEPFUN_MODEL": "step-3.5-flash"
