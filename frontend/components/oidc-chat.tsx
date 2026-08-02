@@ -39,12 +39,16 @@ export function OidcChat() {
       const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
       while (true) {
         const { done, value } = await reader.read(); buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-        const events = buffer.split("\\n\\n"); buffer = events.pop() || "";
-        for (const raw of events) {
-          if (!raw.startsWith("data:")) continue;
-          const data = raw.slice(5).trim(); if (!data || data === "[DONE]") continue;
-          const delta = JSON.parse(data).choices?.[0]?.delta?.content;
-          if (typeof delta === "string") setMessages((current) => current.map((item, index) => index === current.length - 1 ? { ...item, content: item.content + delta } : item));
+        const lines = buffer.split(/\r?\n/); buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim(); if (!data || data === "[DONE]") continue;
+          try {
+            const delta = JSON.parse(data).choices?.[0]?.delta?.content;
+            if (typeof delta === "string") setMessages((current) => current.map((item, index) => index === current.length - 1 ? { ...item, content: item.content + delta } : item));
+          } catch {
+            // Ignore a malformed provider frame while continuing the response.
+          }
         }
         if (done) break;
       }
