@@ -58,6 +58,9 @@ pip install -r requirements.txt
 
 export DATABASE_URL="postgresql://app_user:your_password@localhost:5432/app_db"
 export MOONSHOT_API_KEY="your_api_key_here"
+# zhang-auth OIDC access tokens are required for every session API request.
+export OIDC_ISSUER="https://auth.zhangyvjing.com"
+export OIDC_AUDIENCE="infinity-agents"
 
 python -m uvicorn backend.app:app --host 127.0.0.1 --port 8008 --reload
 ```
@@ -69,6 +72,14 @@ Optional capability-specific variables:
 - `DASHSCOPE_API_KEY` for TraitAgent.
 - `PAPER_AGENT_CHAT_MODEL` and `PAPER_AGENT_VISION_MODEL` to select supported
   OpenAI-compatible models.
+- `OIDC_JWKS_URL` and `OIDC_JWKS_TTL_SECONDS` when using a non-default
+  zhang-auth JWKS endpoint.
+- `CORS_ALLOWED_ORIGINS` as a comma-separated allowlist (defaults to the
+  production site and local frontend).
+
+Session endpoints require `Authorization: Bearer <OIDC access token>`. The
+WebSocket endpoint accepts the same token only in its initial JSON frame:
+`{ "session_id": "…", "access_token": "…", "messages": [...] }`.
 
 ## Test
 

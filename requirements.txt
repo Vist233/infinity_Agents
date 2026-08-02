@@ -9,6 +9,7 @@ fastapi>=0.128.0
 feedparser
 openai>=2.16.0
 python-dotenv>=1.0.1
+PyJWT[crypto]>=2.10.1
 requests
 uvicorn>=0.40.0
 

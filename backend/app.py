@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import FileResponse
 from pathlib import Path as FilePath
 from pydantic import BaseModel
@@ -41,6 +41,7 @@ from backend.db import (
     upsert_session_context_compression_state,
     update_session_context_compression_state,
 )
+from backend.auth import Principal, TokenVerifier, require_user, verify_websocket_token
 
 logging.basicConfig(level=logging.INFO)
 
@@ -83,6 +84,7 @@ TOOL_KEEP_RECENT = max(1, _env_int("PAPER_AGENT_TOOL_KEEP_RECENT", 3))
 @asynccontextmanager
 async def lifespan(app):
     await init_db(app)
+    app.state.token_verifier = TokenVerifier()
     app.state.session_agents = {}
     app.state.session_meta = {}
     yield
@@ -537,9 +539,18 @@ async def _prepare_prompt_with_context_management(
     }
     return prompt, context_info
 
+_CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "https://infinity.zhangyvjing.com,http://localhost:3000",
+    ).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -590,29 +601,13 @@ def _infer_paper_id_from_shared_path(resolved: FilePath, shared_root: FilePath) 
 
 @app.get("/api/files/{file_path:path}")
 async def serve_file(file_path: str):
-    """Serve legacy files only (backward compatibility)."""
-    target = _resolve_relative_in_dirs(file_path, _LEGACY_ALLOWED_FILE_DIRS)
-    if target is None:
-        raise HTTPException(status_code=404, detail="File not found")
-
-    resolved = target.resolve()
-    allowed = any(
-        str(resolved).startswith(str(d.resolve()))
-        for d in _LEGACY_ALLOWED_FILE_DIRS
-    )
-    if (
-        not allowed
-        or str(resolved).startswith(str(_SESSIONS_ROOT.resolve()))
-        or not resolved.exists()
-        or not resolved.is_file()
-    ):
-        raise HTTPException(status_code=404, detail="File not found")
-    
-    return FileResponse(str(resolved))
+    # Files must always be served via a session-scoped route so ownership can
+    # be checked.  Keeping this route would make cached papers public.
+    raise HTTPException(status_code=404, detail="Use a session-scoped file URL")
 
 
 @app.get("/api/sessions/{session_id}/files/{file_path:path}")
-async def serve_session_file(session_id: str, file_path: str):
+async def serve_session_file(session_id: str, file_path: str, user: Principal = Depends(require_user)):
     """Serve files scoped to a specific session sandbox."""
     try:
         uuid.UUID(session_id)
@@ -620,12 +615,12 @@ async def serve_session_file(session_id: str, file_path: str):
         raise HTTPException(status_code=400, detail="Invalid session ID format")
 
     pool = app.state.db_pool
-    meta = await get_session(pool, session_id)
+    meta = await get_session(pool, session_id, user.user_id)
     if not meta:
         raise HTTPException(status_code=404, detail="Session not found")
 
     if (meta.get("storage_mode") or "legacy") == "legacy":
-        return await serve_file(file_path)
+        raise HTTPException(status_code=404, detail="Legacy session files are unavailable")
 
     session_root = _get_session_root(session_id).resolve()
     allowed_dirs = [
@@ -730,6 +725,9 @@ def _replace_image_refs_with_base64(text: str) -> str:
 class ChatRequest(BaseModel):
     session_id: str
     messages: List[Dict[str, Any]]
+    # WebSocket API cannot attach an Authorization header in browsers. This is
+    # sent only in the initial frame and never included in server responses.
+    access_token: str
     retry_attempt: int = 0
     client_request_id: Optional[str] = None
 
@@ -950,11 +948,11 @@ async def _send_status_event(
     await websocket.send_json(payload)
 
 @app.post("/api/sessions")
-async def create_session():
+async def create_session(user: Principal = Depends(require_user)):
     session_id = str(uuid.uuid4())
     try:
         pool = app.state.db_pool
-        await insert_session(pool, session_id, storage_mode="sandboxed")
+        await insert_session(pool, session_id, user.user_id, storage_mode="sandboxed")
         await _get_or_create_session_agent(session_id)
     except Exception:
         logging.exception("Failed to create session")
@@ -963,7 +961,7 @@ async def create_session():
     return {"session_id": session_id, "storage_mode": "sandboxed"}
 
 @app.get("/api/sessions")
-async def list_sessions():
+async def list_sessions(user: Principal = Depends(require_user)):
     """
     获取会话列表（按最近更新时间倒序）
     """
@@ -971,14 +969,14 @@ async def list_sessions():
     if not pool:
         raise HTTPException(status_code=500, detail="Database not initialized")
     try:
-        sessions = await get_all_sessions(pool)
+        sessions = await get_all_sessions(pool, user.user_id)
         return sessions
     except Exception:
         logging.exception("Failed to fetch sessions")
         raise HTTPException(status_code=500, detail="Failed to fetch sessions")
 
 @app.patch("/api/sessions/{session_id}/title")
-async def update_session_title_endpoint(session_id: str, payload: SessionTitleUpdate):
+async def update_session_title_endpoint(session_id: str, payload: SessionTitleUpdate, user: Principal = Depends(require_user)):
     try:
         uuid.UUID(session_id)
     except ValueError:
@@ -995,7 +993,7 @@ async def update_session_title_endpoint(session_id: str, payload: SessionTitleUp
         raise HTTPException(status_code=500, detail="Database not initialized")
 
     try:
-        updated = await update_session_title(pool, session_id, title)
+        updated = await update_session_title(pool, session_id, title, user.user_id)
         if not updated:
             raise HTTPException(status_code=404, detail="Session not found")
         return {"session_id": session_id, "title": title}
@@ -1006,7 +1004,7 @@ async def update_session_title_endpoint(session_id: str, payload: SessionTitleUp
         raise HTTPException(status_code=500, detail="Failed to update session title")
 
 @app.delete("/api/sessions/{session_id}")
-async def delete_session_endpoint(session_id: str):
+async def delete_session_endpoint(session_id: str, user: Principal = Depends(require_user)):
     try:
         uuid.UUID(session_id)
     except ValueError:
@@ -1017,7 +1015,7 @@ async def delete_session_endpoint(session_id: str):
         raise HTTPException(status_code=500, detail="Database not initialized")
 
     try:
-        deleted = await delete_session(pool, session_id)
+        deleted = await delete_session(pool, session_id, user.user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Session not found")
         return {"session_id": session_id}
@@ -1029,7 +1027,7 @@ async def delete_session_endpoint(session_id: str):
 
 
 @app.post("/api/sessions/{session_id}/uploads/papers")
-async def upload_session_paper(session_id: str, file: UploadFile = File(...)):
+async def upload_session_paper(session_id: str, file: UploadFile = File(...), user: Principal = Depends(require_user)):
     try:
         uuid.UUID(session_id)
     except ValueError:
@@ -1039,7 +1037,7 @@ async def upload_session_paper(session_id: str, file: UploadFile = File(...)):
     if not pool:
         raise HTTPException(status_code=500, detail="Database not initialized")
 
-    meta = await get_session(pool, session_id)
+    meta = await get_session(pool, session_id, user.user_id)
     if not meta:
         raise HTTPException(status_code=404, detail="Session not found")
     if (meta.get("storage_mode") or "legacy") == "legacy":
@@ -1142,7 +1140,7 @@ async def upload_session_paper(session_id: str, file: UploadFile = File(...)):
 
 
 @app.get("/api/sessions/{session_id}/uploads/papers")
-async def list_uploaded_papers(session_id: str):
+async def list_uploaded_papers(session_id: str, user: Principal = Depends(require_user)):
     try:
         uuid.UUID(session_id)
     except ValueError:
@@ -1152,7 +1150,7 @@ async def list_uploaded_papers(session_id: str):
     if not pool:
         raise HTTPException(status_code=500, detail="Database not initialized")
 
-    meta = await get_session(pool, session_id)
+    meta = await get_session(pool, session_id, user.user_id)
     if not meta:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -1176,10 +1174,11 @@ async def chat_ws_endpoint(websocket: WebSocket):
     try:
         raw_request = await websocket.receive_json()
         request = ChatRequest(**raw_request)
+        principal = await verify_websocket_token(websocket, request.access_token)
     except Exception:
         await websocket.send_json({
             "type": "error",
-            "message": "Invalid payload, expected {session_id, messages}.",
+            "message": "Invalid payload or authentication token.",
         })
         await websocket.close(code=1003)
         return
@@ -1194,11 +1193,28 @@ async def chat_ws_endpoint(websocket: WebSocket):
             user_index = i
             break
 
+    if not str(user_query).strip():
+        await websocket.send_json({"type": "error", "message": "A user message is required"})
+        await websocket.close(code=1003)
+        return
+
     active_stop_event: Optional[threading.Event] = None
     active_response_stream: Any = None
+    streamed_response_text = ""
+    assistant_persisted = False
 
     try:
         pool = app.state.db_pool
+        try:
+            uuid.UUID(session_id)
+        except ValueError:
+            await websocket.send_json({"type": "error", "message": "Invalid session ID format"})
+            return
+        meta = await get_session(pool, session_id, principal.user_id)
+        if not meta:
+            await websocket.send_json({"type": "error", "message": "Session not found"})
+            return
+        app.state.session_meta[session_id] = meta
         should_insert_user_message = request.retry_attempt <= 0
         if should_insert_user_message:
             await insert_message(pool, session_id, "user", user_query)
@@ -1313,6 +1329,7 @@ async def chat_ws_endpoint(websocket: WebSocket):
                 if content:
                     has_chunk = True
                     attempt_response += content
+                    streamed_response_text += content
                     await websocket.send_json({"type": "chunk", "content": content})
 
             if should_retry_attempt:
@@ -1332,6 +1349,7 @@ async def chat_ws_endpoint(websocket: WebSocket):
             return
 
         await insert_message(pool, session_id, "assistant", response_text)
+        assistant_persisted = True
 
         response_tokens = estimate_tokens(response_text)
         total_tokens = prompt_tokens + response_tokens
@@ -1351,10 +1369,22 @@ async def chat_ws_endpoint(websocket: WebSocket):
         _stop_stream_worker(active_stop_event, active_response_stream)
         active_stop_event = None
         active_response_stream = None
+        if streamed_response_text and not assistant_persisted:
+            try:
+                await insert_message(app.state.db_pool, session_id, "assistant", streamed_response_text)
+                assistant_persisted = True
+            except Exception:
+                logging.exception("Failed to persist partial assistant response")
     except Exception as e:
         _stop_stream_worker(active_stop_event, active_response_stream)
         active_stop_event = None
         active_response_stream = None
+        if streamed_response_text and not assistant_persisted:
+            try:
+                await insert_message(app.state.db_pool, session_id, "assistant", streamed_response_text)
+                assistant_persisted = True
+            except Exception:
+                logging.exception("Failed to persist partial assistant response")
         logging.exception("Error in websocket chat endpoint")
         try:
             await websocket.send_json({
@@ -1371,7 +1401,7 @@ async def chat_ws_endpoint(websocket: WebSocket):
             pass
 
 @app.get("/api/sessions/{session_id}/messages")
-async def get_session_history(session_id: str):
+async def get_session_history(session_id: str, user: Principal = Depends(require_user)):
     """
     获取指定会话的历史消息记录
     前端加载会话或切换会话时调用此接口
@@ -1386,12 +1416,16 @@ async def get_session_history(session_id: str):
         raise HTTPException(status_code=500, detail="Database not initialized")
 
     try:
+        if not await get_session(pool, session_id, user.user_id):
+            raise HTTPException(status_code=404, detail="Session not found")
         messages = await get_session_messages(pool, session_id)
         if not messages:
             return []
             
         return messages
 
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"Error fetching history for {session_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve chat history")

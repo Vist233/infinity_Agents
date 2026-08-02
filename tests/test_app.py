@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import backend.app as backend_app_module
+from backend.auth import Principal, require_user
 from agent.tools.pdf_extractor import ExtractedContent
 
 
@@ -20,16 +21,16 @@ def client(monkeypatch: pytest.MonkeyPatch):
     async def fake_close_db(app):
         return None
 
-    async def fake_get_all_sessions(_pool):
+    async def fake_get_all_sessions(_pool, _user_id):
         return []
 
-    async def fake_insert_session(_pool, _session_id, storage_mode="sandboxed"):
+    async def fake_insert_session(_pool, _session_id, _user_id, storage_mode="sandboxed"):
         return storage_mode
 
     async def fake_get_or_create_session_agent(_session_id):
         return object()
 
-    async def fake_get_session(_pool, _session_id):
+    async def fake_get_session(_pool, _session_id, _user_id=None):
         return {
             "session_id": _session_id,
             "title": "New chat",
@@ -90,8 +91,14 @@ def client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(backend_app_module, "insert_session_uploaded_paper", fake_insert_session_uploaded_paper)
     monkeypatch.setattr(backend_app_module, "list_session_uploaded_papers", fake_list_session_uploaded_papers)
 
+    async def fake_require_user():
+        return Principal(user_id="test-user")
+
+    backend_app_module.app.dependency_overrides[require_user] = fake_require_user
+
     with TestClient(backend_app_module.app) as test_client:
         yield test_client
+    backend_app_module.app.dependency_overrides.clear()
 
 
 def test_list_sessions_returns_json_list(client: TestClient):

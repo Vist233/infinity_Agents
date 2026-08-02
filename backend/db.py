@@ -14,13 +14,16 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
             """
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id UUID PRIMARY KEY,
+                    user_id TEXT,
                     title VARCHAR(255) DEFAULT 'New chat',
                     storage_mode VARCHAR(20) DEFAULT 'legacy',
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS storage_mode VARCHAR(20) DEFAULT 'legacy';
+                ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id TEXT;
                 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions (updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_sessions_user_updated_at ON sessions (user_id, updated_at DESC);
                 
                 CREATE TABLE IF NOT EXISTS messages (
                      message_id SERIAL PRIMARY KEY, -- 消息唯一 ID
@@ -221,6 +224,7 @@ async def close_db(app) -> None:
 async def insert_session(
     pool: asyncpg.Pool,
     session_id: str,
+    user_id: str,
     title: str = "新对话",
     storage_mode: str = "sandboxed",
 ) -> None:
@@ -228,10 +232,10 @@ async def insert_session(
     在 sessions 表中插入新记录
     """
     query = """
-        INSERT INTO sessions (session_id, title, storage_mode) 
-        VALUES ($1, $2, $3)
+        INSERT INTO sessions (session_id, user_id, title, storage_mode)
+        VALUES ($1, $2, $3, $4)
     """
-    await pool.execute(query, session_id, title, storage_mode)
+    await pool.execute(query, session_id, user_id, title, storage_mode)
 
 
 
@@ -262,18 +266,19 @@ async def insert_message(pool: asyncpg.Pool, session_id: str, role: str, content
         raise e
     
     
-async def get_all_sessions(pool):
+async def get_all_sessions(pool, user_id: str):
     """
     从数据库获取所有会话列表，按最后更新时间倒序排列
     """
     query = """
         SELECT session_id, title, created_at, updated_at, storage_mode
-        FROM sessions 
+        FROM sessions
+        WHERE user_id = $1
         ORDER BY updated_at DESC;
     """
     try:
         async with pool.acquire() as conn:
-            rows = await conn.fetch(query)
+            rows = await conn.fetch(query, user_id)
             
             return [
                 {
@@ -290,19 +295,19 @@ async def get_all_sessions(pool):
         return []
     
 
-async def update_session_title(pool: asyncpg.Pool, session_id: str, title: str) -> bool:
+async def update_session_title(pool: asyncpg.Pool, session_id: str, title: str, user_id: str) -> bool:
     """
     更新 sessions 标题，并刷新 updated_at。
     """
     query = """
         UPDATE sessions
         SET title = $2, updated_at = NOW()
-        WHERE session_id = $1
+        WHERE session_id = $1 AND user_id = $3
     """
     u_id = uuid.UUID(session_id)
     try:
         async with pool.acquire() as conn:
-            result = await conn.execute(query, u_id, title)
+            result = await conn.execute(query, u_id, title, user_id)
         parts = result.split(" ")
         if len(parts) == 2 and parts[0] == "UPDATE":
             return int(parts[1]) > 0
@@ -311,18 +316,18 @@ async def update_session_title(pool: asyncpg.Pool, session_id: str, title: str) 
     return False
 
 
-async def delete_session(pool: asyncpg.Pool, session_id: str) -> bool:
+async def delete_session(pool: asyncpg.Pool, session_id: str, user_id: str) -> bool:
     """
     删除 sessions 记录（messages 会级联删除）。
     """
     query = """
         DELETE FROM sessions
-        WHERE session_id = $1
+        WHERE session_id = $1 AND user_id = $2
     """
     u_id = uuid.UUID(session_id)
     try:
         async with pool.acquire() as conn:
-            result = await conn.execute(query, u_id)
+            result = await conn.execute(query, u_id, user_id)
         parts = result.split(" ")
         if len(parts) == 2 and parts[0] == "DELETE":
             return int(parts[1]) > 0
@@ -359,7 +364,7 @@ async def get_session_messages(pool, session_id: str):
         return []
 
 
-async def get_session(pool: asyncpg.Pool, session_id: str):
+async def get_session(pool: asyncpg.Pool, session_id: str, user_id: Optional[str] = None):
     """
     获取单个 session 元信息。
     """
@@ -367,12 +372,13 @@ async def get_session(pool: asyncpg.Pool, session_id: str):
         SELECT session_id, title, created_at, updated_at, storage_mode
         FROM sessions
         WHERE session_id = $1
+          AND ($2::text IS NULL OR user_id = $2)
         LIMIT 1;
     """
     u_id = uuid.UUID(session_id)
     try:
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(query, u_id)
+            row = await conn.fetchrow(query, u_id, user_id)
             if not row:
                 return None
             return {
