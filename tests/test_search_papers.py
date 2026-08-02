@@ -20,6 +20,7 @@ from pathlib import Path
 from collections import Counter
 from typing import Optional
 from datetime import datetime, timezone
+import pytest
 
 # ── 确保项目根目录在 sys.path ──
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -33,6 +34,14 @@ if env_path.exists():
         if line and not line.startswith("#") and "=" in line:
             key, _, value = line.partition("=")
             os.environ.setdefault(key.strip(), value.strip())
+
+# This file deliberately exercises live paper sources, PDF downloads, and a
+# PostgreSQL-backed cache.  Keep it out of the deterministic unit-test suite.
+if os.getenv("RUN_INTEGRATION_TESTS") != "1":
+    pytest.skip(
+        "requires PostgreSQL and live paper-source access; set RUN_INTEGRATION_TESTS=1 to run",
+        allow_module_level=True,
+    )
 
 # ── 导入项目模块 ──
 from agent.papers_repo_pg import PapersRepoPG

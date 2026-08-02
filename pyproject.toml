@@ -18,6 +18,10 @@ dependencies = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "integration: requires external services or live network access",
+]
 filterwarnings = [
     "ignore:builtin type SwigPyPacked has no __module__ attribute:DeprecationWarning",
     "ignore:builtin type SwigPyObject has no __module__ attribute:DeprecationWarning",

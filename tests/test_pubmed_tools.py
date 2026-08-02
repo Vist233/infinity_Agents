@@ -88,6 +88,7 @@ def test_pubmed_pmc_pdf_url_resolution(monkeypatch, tmp_path: Path):
         [
             [
                 {
+                    "IdList": ["12345678"],
                     "LinkSetDb": [
                         {
                             "DbTo": "pmc",

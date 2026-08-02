@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import requests
+
 from agno.tools import Toolkit
 from agno.utils.log import log_debug, logger
 
@@ -35,6 +37,15 @@ class ArxivTools(Toolkit):
             tools.append(self.read_arxiv_papers)
 
         super().__init__(name="arxiv_tools", tools=tools, **kwargs)
+
+    def _download_pdf(self, pdf_url: str, paper_id: str) -> Path:
+        """Download a paper without relying on a version-specific arxiv SDK API."""
+        filename = f"{paper_id.replace('/', '_')}.pdf"
+        destination = self.download_dir / filename
+        response = requests.get(pdf_url, timeout=60)
+        response.raise_for_status()
+        destination.write_bytes(response.content)
+        return destination
 
     def search_arxiv_and_return_articles(self, query: str, num_articles: int = 10) -> str:
         """Use this function to search arXiv for a query and return the top articles.
@@ -109,7 +120,7 @@ class ArxivTools(Toolkit):
                 }
                 if result.pdf_url:
                     log_debug(f"Downloading: {result.pdf_url}")
-                    pdf_path = result.download_pdf(dirpath=str(download_dir))
+                    pdf_path = self._download_pdf(result.pdf_url, result.get_short_id())
                     log_debug(f"To: {pdf_path}")
                     pdf_reader = PdfReader(pdf_path)
                     article["content"] = []
