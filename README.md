@@ -13,6 +13,29 @@ Generated papers, downloads, reports, and local databases stay out of Git.
   plotting tools.
 - **TraitAgent** — analyze breeding trait images with a vision-capable model.
 
+## Multi-source literature search
+
+PaperAgent exposes `search_literature` for public-source discovery. Its default
+sources are **PubMed**, **Europe PMC**, and **arXiv**; each source receives an
+8-second budget, so a slow provider returns a partial result instead of holding
+up the workflow. Use `sources` to opt into `semantic`, `openalex`, `pmc`, or
+`crossref`, and use `fields` to limit the returned metadata.
+
+```text
+search_literature(
+  query="Brassica resistance gene family",
+  fields=["title", "abstract", "doi", "pdf_url"],
+  open_access_only=true,
+  limit=5
+)
+```
+
+Search results are metadata only. Pass a returned public `pdf_url` to
+`read_paper` when full-text extraction is needed. The source adapters are a
+curated MIT-licensed subset of
+[`openags/paper-search-mcp`](https://github.com/openags/paper-search-mcp);
+the notice and license are in `agent/vendor/paper_search_mcp/`.
+
 ## Architecture
 
 ```text

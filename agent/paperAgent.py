@@ -26,6 +26,7 @@ from agno.utils.pprint import pprint_run_response
 
 # Import tools
 from agent.tools.paper_search import PaperSearchTools, SizeMiddleware
+from agent.tools.literature_search import LiteratureSearchTools
 # [DISABLED] Plotting tools temporarily disabled
 # from agent.tools.plotly_charts import PlotlyVisualizationTools
 # from agent.tools.python_plotter import PythonPlottingTools
@@ -84,7 +85,8 @@ PAPER_AGENT_INSTRUCTIONS = """You are an expert research assistant specialized i
 ## Available Tools
 
 ### Paper Search
-- `search_paper(query, num_results=5)` - Search ArXiv
+- `search_literature(query, sources="pubmed,europepmc,arxiv", fields=..., limit=5)` - Search public scholarly indexes with optional metadata fields
+- `search_paper(query, num_results=5)` - Legacy arXiv-only search
 
 ### Paper Reading
 - `read_paper(paper_ref, action="cat", pattern=None, start_line=1, max_lines=200, case_sensitive=False)`
@@ -227,6 +229,7 @@ def create_paper_agent(
         )
 
     tools = [
+        LiteratureSearchTools(),
         PaperSearchTools(
             enable_read=True,
             cache_middleware=cache_middleware,
