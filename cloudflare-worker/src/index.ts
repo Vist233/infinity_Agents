@@ -7,8 +7,6 @@ interface Env {
   STEPFUN_MODEL: string;
 }
 
-import { frontendHtml } from "./frontend";
-
 const ISSUER = "https://auth.zhangyvjing.com";
 const CLIENT_ID = "infinity-agents";
 const REDIRECT_URI = "https://infinity.zhangyvjing.com/auth/callback";
