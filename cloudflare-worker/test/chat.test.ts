@@ -175,6 +175,32 @@ describe("handleChat", () => {
     expect(response.status).toBe(404);
   });
 
+  it("persists an explicit assistant result when the tool loop reaches its limit", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("s1", "user-1");
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("stepfun.test")) {
+        return sseResponse([
+          JSON.stringify({
+            choices: [{
+              delta: { tool_calls: [{ index: 0, id: "call", function: { name: "search_paper", arguments: '{"query":"attention"}' } }] },
+              finish_reason: "tool_calls"
+            }]
+          })
+        ]);
+      }
+      if (url.includes("export.arxiv.org")) return textResponse(ARXIV_XML);
+      if (url.includes("esearch.fcgi")) return jsonResponse({ esearchresult: { idlist: [] } });
+      return textResponse("");
+    }) as unknown as typeof fetch;
+
+    const events = await readSse(await handleChat(makeRequest("s1", "keep searching"), env, USER));
+    expect(events.some((event) => event.type === "error")).toBe(true);
+    expect(events.some((event) => event.type === "done")).toBe(false);
+    expect(db.chatMessages.find((m) => m.role === "assistant")?.content).toContain("Tool loop reached");
+  });
+
   it("returns 429 and does not call StepFun once the daily quota is exhausted", async () => {
     const { env, db } = makeEnv({ DAILY_QUOTA: "1" });
     db.seedChatSession("s1", "user-1");

@@ -84,6 +84,18 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
     { role: "user", content: userContent }
   ];
 
+  // Keep the latest streamed text outside `start`: the platform can cancel an
+  // SSE response after the browser disconnects, and that must not make the
+  // user's question look like it was silently lost on the next page load.
+  let assistantText = "";
+  let assistantPersisted = false;
+  const persistAssistant = async (content: string) => {
+    if (assistantPersisted) return;
+    assistantPersisted = true;
+    await insertMessage(env, sessionId, "assistant", content);
+    await touchChatSession(env, sessionId);
+  };
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const startedAt = Date.now();
@@ -91,17 +103,21 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
       const emitStatus = (phase: string, extra: Record<string, unknown> = {}) =>
         emit({ type: "status", phase, elapsed_ms: Date.now() - startedAt, attempt: 1, max_attempts: 1, ...extra });
 
-      let assistantText = "";
       let quotaRefunded = false;
       try {
         emitStatus("thinking");
         assistantText = await runToolLoop(env, sessionId, modelMessages, emit, emitStatus);
         if (assistantText.trim()) {
-          await insertMessage(env, sessionId, "assistant", assistantText);
-          await touchChatSession(env, sessionId);
+          await persistAssistant(assistantText);
         }
         emit({ type: "done" });
       } catch (error) {
+        // Preserve anything the user has already seen.  This also records a
+        // clear terminal state when the upstream or tool loop fails.
+        const message = error instanceof Error ? error.message : "Chat failed";
+        await persistAssistant(
+          assistantText.trim() ? `${assistantText}\n\n[生成失败：${message}]` : `[生成失败：${message}]`
+        ).catch(() => undefined);
         // Refund the quota unit on hard failure so users aren't charged for errors.
         if (!quotaRefunded) {
           await decrementDailyUsageSafe(env, user.userId);
@@ -111,6 +127,13 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
       } finally {
         controller.close();
       }
+    },
+    async cancel() {
+      // A client-requested stop is still a real conversation turn.  Store the
+      // partial answer (or a terminal marker when no text arrived yet).
+      await persistAssistant(
+        assistantText.trim() ? `${assistantText}\n\n[生成已中断]` : "[生成已中断]"
+      ).catch(() => undefined);
     }
   });
 
@@ -165,6 +188,9 @@ async function runToolLoop(
     }
   }
 
+  if (!finalText.trim()) {
+    throw new Error(`Tool loop reached its ${MAX_TOOL_ITERATIONS}-step limit without a final answer`);
+  }
   return finalText;
 }
 

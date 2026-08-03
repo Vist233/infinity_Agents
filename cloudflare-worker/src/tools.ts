@@ -11,6 +11,7 @@ const ARXIV_API = "http://export.arxiv.org/api/query";
 const PUBMED_ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi";
 const PUBMED_ESUMMARY = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi";
 const PUBMED_EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi";
+const TOOL_FETCH_TIMEOUT_MS = 10_000;
 
 export interface PaperRecord {
   source: "arxiv" | "pubmed";
@@ -26,6 +27,21 @@ export interface PaperRecord {
 function truncate(text: string, max = 500): string {
   const t = (text ?? "").replace(/\s+/g, " ").trim();
   return t.length > max ? `${t.slice(0, max)}...` : t;
+}
+
+async function fetchToolSource(url: string, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TOOL_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response;
+  } catch (error) {
+    const reason = error instanceof Error && error.name === "AbortError" ? "timed out" : String(error);
+    throw new Error(`paper source request ${reason}`);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // --- lightweight XML helpers for the arXiv Atom feed ---
@@ -92,36 +108,28 @@ async function searchArxiv(query: string, maxResults: number): Promise<PaperReco
   url.searchParams.set("max_results", String(maxResults));
   url.searchParams.set("sortBy", "relevance");
   url.searchParams.set("sortOrder", "descending");
-  try {
-    const res = await fetch(url.toString(), { headers: { "user-agent": "infinity-agents/1.0" } });
-    if (!res.ok) return [];
-    const xml = await res.text();
-    return parseArxivFeed(xml, maxResults);
-  } catch {
-    return [];
-  }
+  const res = await fetchToolSource(url.toString(), { headers: { "user-agent": "infinity-agents/1.0" } });
+  const xml = await res.text();
+  return parseArxivFeed(xml, maxResults);
 }
 
 async function searchPubmed(query: string, maxResults: number): Promise<PaperRecord[]> {
-  try {
-    const searchUrl = new URL(PUBMED_ESEARCH);
-    searchUrl.searchParams.set("db", "pubmed");
-    searchUrl.searchParams.set("term", query);
-    searchUrl.searchParams.set("retmax", String(maxResults));
-    searchUrl.searchParams.set("retmode", "json");
-    const searchRes = await fetch(searchUrl.toString());
-    if (!searchRes.ok) return [];
-    const searchJson = (await searchRes.json()) as { esearchresult?: { idlist?: string[] } };
-    const ids = searchJson.esearchresult?.idlist ?? [];
-    if (ids.length === 0) return [];
+  const searchUrl = new URL(PUBMED_ESEARCH);
+  searchUrl.searchParams.set("db", "pubmed");
+  searchUrl.searchParams.set("term", query);
+  searchUrl.searchParams.set("retmax", String(maxResults));
+  searchUrl.searchParams.set("retmode", "json");
+  const searchRes = await fetchToolSource(searchUrl.toString());
+  const searchJson = (await searchRes.json()) as { esearchresult?: { idlist?: string[] } };
+  const ids = searchJson.esearchresult?.idlist ?? [];
+  if (ids.length === 0) return [];
 
     const sumUrl = new URL(PUBMED_ESUMMARY);
     sumUrl.searchParams.set("db", "pubmed");
     sumUrl.searchParams.set("id", ids.join(","));
     sumUrl.searchParams.set("retmode", "json");
-    const sumRes = await fetch(sumUrl.toString());
-    if (!sumRes.ok) return [];
-    const sumJson = (await sumRes.json()) as { result?: Record<string, any> };
+  const sumRes = await fetchToolSource(sumUrl.toString());
+  const sumJson = (await sumRes.json()) as { result?: Record<string, any> };
     const result = sumJson.result ?? {};
     const records: PaperRecord[] = [];
     for (const id of ids) {
@@ -140,10 +148,7 @@ async function searchPubmed(query: string, maxResults: number): Promise<PaperRec
         summary: truncate(item.title ?? "")
       });
     }
-    return records;
-  } catch {
-    return [];
-  }
+  return records;
 }
 
 function dedupe(records: PaperRecord[]): PaperRecord[] {
@@ -176,10 +181,21 @@ export async function searchPaper(
     records = JSON.parse(cached) as PaperRecord[];
   } else {
     const half = Math.ceil(n / 2);
-    const [arxiv, pubmed] = await Promise.all([
+    const [arxivResult, pubmedResult] = await Promise.allSettled([
       searchArxiv(q, n),
       searchPubmed(q, half)
     ]);
+    const arxiv = arxivResult.status === "fulfilled" ? arxivResult.value : [];
+    const pubmed = pubmedResult.status === "fulfilled" ? pubmedResult.value : [];
+    if (arxivResult.status === "rejected" && pubmedResult.status === "rejected") {
+      return JSON.stringify({
+        error: "Paper search is temporarily unavailable. Please retry shortly.",
+        sources: {
+          arxiv: String(arxivResult.reason),
+          pubmed: String(pubmedResult.reason)
+        }
+      });
+    }
     records = dedupe([...arxiv, ...pubmed]).slice(0, n);
     await cacheSet(env, cacheKey, JSON.stringify(records), PAPER_CACHE_TTL_SECONDS);
   }
