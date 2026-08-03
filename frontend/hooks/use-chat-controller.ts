@@ -47,6 +47,7 @@ export function useChatController() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const wsByRequestRef = useRef<Map<string, ChatStreamHandle>>(new Map());
   const runningRequestBySessionRef = useRef<Map<string, string>>(new Map());
+  const requestStartedAtRef = useRef<Map<string, number>>(new Map());
   const loadedSessionIdsRef = useRef<Set<string>>(new Set());
   const sessionMessagesMapRef = useRef<Record<string, Message[]>>({});
   const sessionLoadPromiseRef = useRef<Map<string, Promise<Message[]>>>(new Map());
@@ -441,6 +442,7 @@ export function useChatController() {
           : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
       runningRequestBySessionRef.current.set(targetSessionId, clientRequestId);
+      requestStartedAtRef.current.set(targetSessionId, Date.now());
       setSessionRunState(targetSessionId, {
         running: true,
         phase: "thinking",
@@ -470,6 +472,7 @@ export function useChatController() {
         completed = true;
         if (isCurrentRequest()) {
           runningRequestBySessionRef.current.delete(targetSessionId!);
+          requestStartedAtRef.current.delete(targetSessionId!);
         }
         wsByRequestRef.current.delete(clientRequestId);
         setSessionRunState(targetSessionId!, (prev) => ({
@@ -593,11 +596,17 @@ export function useChatController() {
     if (!state.sessionId) return;
     const requestId = runningRequestBySessionRef.current.get(state.sessionId);
     if (!requestId) return;
+    // A submit click can be delivered again by touchpads / accessibility
+    // drivers after React has already swapped the send icon for stop.  Do not
+    // let that duplicate event instantly abort the request the user just sent.
+    const startedAt = requestStartedAtRef.current.get(state.sessionId) ?? 0;
+    if (Date.now() - startedAt < 700) return;
     const ws = wsByRequestRef.current.get(requestId);
     if (isSocketOpen(ws)) {
       ws?.close(1000, "client_stop");
     }
     runningRequestBySessionRef.current.delete(state.sessionId);
+    requestStartedAtRef.current.delete(state.sessionId);
     wsByRequestRef.current.delete(requestId);
     setSessionRunState(state.sessionId, (prev) => ({
       ...prev,
