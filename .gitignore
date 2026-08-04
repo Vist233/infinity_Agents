@@ -14,6 +14,7 @@ app/uploads/
 uploads/
 *.exe
 *.spec
+!image-judge/apps/desktop/imagejudge.spec
 build/
 dist/
 spade.py
@@ -64,6 +65,9 @@ papers/
 cloudflare-worker/
 frontend/
 .wrangler/
+
+# Generated desktop release bundles (uploaded by GitHub Actions).
+package/
 
 # Local generated figures
 normal_distribution.png

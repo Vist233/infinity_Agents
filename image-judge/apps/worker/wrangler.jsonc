@@ -1,0 +1,59 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "image-judge-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-05-01",
+
+  // 路由到专用域名；下载页与 API 分开部署（文档 §17.4）
+  "routes": [{ "pattern": "image-judge-api.zhangyvjing.com/*", "zone_name": "zhangyvjing.com" }],
+
+  "vars": {
+    "ZHANG_AUTH_ISSUER": "https://auth.zhangyvjing.com",
+    "OIDC_CLIENT_ID": "image-judge-desktop",
+    // 桥接 Worker 固定的 Zhang Auth 回调（静态登记）
+    "OIDC_REDIRECT_URI": "https://image-judge-api.zhangyvjing.com/auth/callback",
+    "DASHSCOPE_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "MODEL_ID": "qwen3-vl-235b-a22b-instruct",
+    "DAILY_QUOTA": "30",
+    "ACCESS_TOKEN_TTL_SECONDS": "900",
+    "REFRESH_TOKEN_TTL_SECONDS": "2592000",
+    "MAX_IMAGE_BYTES": "10485760"
+  },
+
+  // 敏感项一律使用 Workers Secrets，绝不写入普通 vars（文档 §9.5）：
+  //   wrangler secret put DASHSCOPE_API_KEY
+  //   wrangler secret put ZHANG_AUTH_CLIENT_SECRET
+  //   wrangler secret put TOKEN_SIGNING_SECRET
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "image-judge-api",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "REPLACE_WITH_KV_NAMESPACE_ID"
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "USER_LOCK",
+        "class_name": "UserConcurrencyLock"
+      }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["UserConcurrencyLock"]
+    }
+  ]
+}

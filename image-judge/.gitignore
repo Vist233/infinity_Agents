@@ -1,0 +1,16 @@
+.venv/
+.pytest_cache/
+.wrangler/
+__pycache__/
+*.pyc
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.env
+.env*
+apps/worker/node_modules/
+apps/worker/.wrangler/
+apps/worker/.dev.vars
+apps/desktop/build/
+apps/desktop/dist/

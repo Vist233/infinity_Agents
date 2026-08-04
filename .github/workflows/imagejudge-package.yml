@@ -1,0 +1,121 @@
+name: Package ImageJudge
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags:
+      - "imagejudge-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: imagejudge-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows EXE
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install desktop dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r image-judge/requirements.txt "pyinstaller>=6.6"
+
+      - name: Build PyInstaller application
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "package/windows"
+          $workDir = Join-Path $env:GITHUB_WORKSPACE "package/.build/windows"
+          New-Item -ItemType Directory -Force -Path $releaseDir, $workDir | Out-Null
+          Set-Location (Join-Path $env:GITHUB_WORKSPACE "image-judge/apps/desktop")
+          python -m PyInstaller imagejudge.spec --noconfirm --clean `
+            --distpath $releaseDir --workpath $workDir
+          if (-not (Test-Path (Join-Path $releaseDir "ImageJudge/ImageJudge.exe"))) {
+            throw "ImageJudge.exe was not produced"
+          }
+
+      - name: Create Windows archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "$env:GITHUB_WORKSPACE/package/windows/ImageJudge" `
+            -DestinationPath "$env:GITHUB_WORKSPACE/package/ImageJudge-windows-x64.zip" -Force
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: imagejudge-windows
+          path: package/ImageJudge-windows-x64.zip
+          if-no-files-found: error
+
+  linux:
+    name: Linux DEB
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install desktop dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r image-judge/requirements.txt "pyinstaller>=6.6"
+
+      - name: Build PyInstaller application
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/package/linux" "$GITHUB_WORKSPACE/package/.build/linux"
+          cd image-judge/apps/desktop
+          python -m PyInstaller imagejudge.spec --noconfirm --clean \
+            --distpath "$GITHUB_WORKSPACE/package/linux" \
+            --workpath "$GITHUB_WORKSPACE/package/.build/linux"
+          test -x "$GITHUB_WORKSPACE/package/linux/ImageJudge/ImageJudge"
+
+      - name: Create Debian package
+        run: |
+          version="$(python -c 'import tomllib; print(tomllib.load(open("image-judge/pyproject.toml", "rb"))["project"]["version"])')"
+          IMAGEJUDGE_VERSION="$version" bash image-judge/scripts/package_linux_deb.sh \
+            "$GITHUB_WORKSPACE/package/linux/ImageJudge" "$GITHUB_WORKSPACE/package"
+
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v4
+        with:
+          name: imagejudge-linux
+          path: package/ImageJudge_*.deb
+          if-no-files-found: error
+
+  release:
+    name: Publish tagged release
+    if: startsWith(github.ref, 'refs/tags/imagejudge-v')
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: imagejudge-*
+          path: release
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
