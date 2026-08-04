@@ -95,8 +95,14 @@ export default {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") return responseJson({ status: "ok", service: "infinity-agents-edge", model: env.STEPFUN_MODEL });
 
-    // ImageJudge 使用独立的路径命名空间、D1/KV/DO 与令牌密钥。
-    if (url.pathname === "/image-judge" || url.pathname.startsWith("/image-judge/")) {
+    // ImageJudge 使用独立的路径命名空间、D1/KV/DO 与令牌密钥。精确的
+    // /image-judge 路径由静态前端页面使用；其下的 API 路径才交给 Worker。
+    const isImageJudgeApi =
+      url.pathname === "/image-judge/healthz" ||
+      url.pathname.startsWith("/image-judge/desktop/") ||
+      url.pathname.startsWith("/image-judge/auth/") ||
+      url.pathname.startsWith("/image-judge/api/");
+    if (isImageJudgeApi) {
       return handleImageJudge(request, env);
     }
 
