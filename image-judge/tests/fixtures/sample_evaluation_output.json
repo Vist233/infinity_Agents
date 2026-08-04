@@ -1,0 +1,45 @@
+{
+  "schema_version": "2.0",
+  "task_type": "CLASSIFICATION",
+  "predicted_category": "class_02",
+  "status": "CLASSIFIED",
+  "spotting_features": [
+    {
+      "feature_id": "top_closed",
+      "state": "PRESENT",
+      "evidence": "顶部轮廓连续闭合",
+      "supports": ["class_02"],
+      "contradicts": ["class_01"]
+    },
+    {
+      "feature_id": "side_open",
+      "state": "ABSENT",
+      "evidence": "两侧没有明显张开",
+      "supports": ["class_02"],
+      "contradicts": []
+    }
+  ],
+  "candidate_categories": [
+    {
+      "category_id": "class_02",
+      "rank": 1,
+      "match_strength": "STRONG",
+      "evidence": ["顶部闭合", "两侧收拢"]
+    },
+    {
+      "category_id": "class_01",
+      "rank": 2,
+      "match_strength": "WEAK",
+      "evidence": ["局部轮廓相似"]
+    }
+  ],
+  "image_quality": {
+    "reference": "GOOD",
+    "target": "GOOD"
+  },
+  "reasoning_summary": "目标图的可见轮廓更符合类型 class_02。",
+  "review": {
+    "required": false,
+    "reasons": []
+  }
+}

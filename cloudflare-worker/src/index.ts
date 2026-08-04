@@ -1,3 +1,6 @@
+import { handleImageJudge } from "./image-judge";
+export { ImageJudgeUserConcurrencyLock } from "./image-judge";
+
 interface Env {
   ASSETS: Fetcher;
   ZHANG_AUTH_CLIENT_SECRET: string;
@@ -5,6 +8,23 @@ interface Env {
   STEPFUN_API_KEY: string;
   STEPFUN_BASE_URL: string;
   STEPFUN_MODEL: string;
+
+  // ImageJudge 独立资源与 Secrets；不复用 Infinity 聊天会话/密钥。
+  IMAGE_JUDGE_DB: D1Database;
+  IMAGE_JUDGE_KV: KVNamespace;
+  IMAGE_JUDGE_USER_LOCK: DurableObjectNamespace;
+  IMAGE_JUDGE_ZHANG_AUTH_CLIENT_SECRET?: string;
+  IMAGE_JUDGE_TOKEN_SIGNING_SECRET?: string;
+  IMAGE_JUDGE_DASHSCOPE_API_KEY?: string;
+  IMAGE_JUDGE_ZHANG_AUTH_ISSUER: string;
+  IMAGE_JUDGE_OIDC_CLIENT_ID: string;
+  IMAGE_JUDGE_OIDC_REDIRECT_URI: string;
+  IMAGE_JUDGE_DASHSCOPE_BASE_URL: string;
+  IMAGE_JUDGE_MODEL_ID: string;
+  IMAGE_JUDGE_DAILY_QUOTA: string;
+  IMAGE_JUDGE_ACCESS_TOKEN_TTL_SECONDS: string;
+  IMAGE_JUDGE_REFRESH_TOKEN_TTL_SECONDS: string;
+  IMAGE_JUDGE_MAX_IMAGE_BYTES: string;
 }
 
 const ISSUER = "https://auth.zhangyvjing.com";
@@ -74,6 +94,12 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") return responseJson({ status: "ok", service: "infinity-agents-edge", model: env.STEPFUN_MODEL });
+
+    // ImageJudge 使用独立的路径命名空间、D1/KV/DO 与令牌密钥。
+    if (url.pathname === "/image-judge" || url.pathname.startsWith("/image-judge/")) {
+      return handleImageJudge(request, env);
+    }
+
     if (request.method === "GET" && url.pathname === "/login") {
       try {
       const transaction: Transaction = { state: random(), nonce: random(), verifier: random(48), exp: Math.floor(Date.now() / 1000) + 600 };
