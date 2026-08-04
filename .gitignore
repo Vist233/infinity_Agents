@@ -61,9 +61,8 @@ env/
 # Runtime paper artifacts (generated locally)
 papers/
 
-# Deployment surfaces live on the cloudflare-deploy branch, not on main.
+# Cloudflare Worker deployment surfaces remain exclusive to cloudflare-deploy.
 cloudflare-worker/
-frontend/
 .wrangler/
 
 # Generated desktop release bundles (uploaded by GitHub Actions).
