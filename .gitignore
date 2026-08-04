@@ -61,8 +61,7 @@ env/
 # Runtime paper artifacts (generated locally)
 papers/
 
-# Cloudflare Worker deployment surfaces remain exclusive to cloudflare-deploy.
-cloudflare-worker/
+# Cloudflare Worker sources are tracked on cloudflare-deploy.
 .wrangler/
 
 # Generated desktop release bundles (uploaded by GitHub Actions).
