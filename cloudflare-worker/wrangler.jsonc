@@ -99,4 +99,7 @@
   // Secrets (set via `wrangler secret put`, never committed):
   //   STEPFUN_API_KEY
   //   ZHANG_AUTH_CLIENT_SECRET
+  //   IMAGE_JUDGE_ZHANG_AUTH_CLIENT_SECRET
+  //   IMAGE_JUDGE_TOKEN_SIGNING_SECRET
+  //   IMAGE_JUDGE_DASHSCOPE_API_KEY (optional; local BYOK is used when absent)
 }
