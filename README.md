@@ -95,16 +95,6 @@ PostgreSQL integration check, configure `DATABASE_URL` and run:
 RUN_INTEGRATION_TESTS=1 pytest -q tests/test_search_papers.py
 ```
 
-## Docker
-
-```bash
-docker build -t infinity-agents .
-docker run --rm -p 8008:8008 \
-  -e DATABASE_URL="postgresql://app_user:your_password@host:5432/app_db" \
-  -e MOONSHOT_API_KEY="your_key" \
-  infinity-agents
-```
-
 ## Repository scope
 
 `main` intentionally contains only the Python runtime: `agent/`, `backend/`,
