@@ -9,6 +9,7 @@ import { MessagePane } from "@/components/chat/MessagePane";
 import { Composer } from "@/components/chat/Composer";
 import { useChatController } from "@/hooks/use-chat-controller";
 import { redirectToLogin } from "@/lib/runtime-config";
+import { LanguageToggle, useLanguage } from "@/lib/i18n";
 
 /**
  * PaperAgent is the canonical home page.  Keep the product navigation and the
@@ -18,6 +19,7 @@ import { redirectToLogin } from "@/lib/runtime-config";
 export default function ChatPage() {
   const router = useRouter();
   const controller = useChatController();
+  const { t } = useLanguage();
 
   return (
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
@@ -29,9 +31,9 @@ export default function ChatPage() {
           onClick={controller.handleNewChat}
         >
           <Plus size={16} />
-          New Chat
+          {t("home.newChat")}
         </Button>
-        <div className="mt-3 text-xs uppercase tracking-widest text-zinc-400 px-2">Recent Activities</div>
+        <div className="mt-3 text-xs uppercase tracking-widest text-zinc-400 px-2">{t("home.recentActivities")}</div>
         <SessionList
           sessions={controller.state.sessions}
           currentSessionId={controller.state.sessionId}
@@ -58,16 +60,17 @@ export default function ChatPage() {
 
       <main className="flex-1 flex flex-col relative min-w-0">
         <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between sticky top-0 bg-[var(--surface-1)] backdrop-blur-xl z-10 print:hidden">
-          <div className="text-sm font-semibold tracking-tight text-zinc-700">Paper Agent</div>
+          <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("home.paperAgent")}</div>
           <div className="flex items-center gap-2">
+            <LanguageToggle />
             {controller.authStatus === "unauthenticated" ? (
               <Button size="sm" className="gap-2" onClick={redirectToLogin}>
                 <LogIn size={15} />
-                Sign in / Register
+                {t("home.signInRegister")}
               </Button>
             ) : (
               <Button variant="outline" size="sm" className="text-zinc-600 hover:text-zinc-900" onClick={controller.handleExportPdf}>
-                Export PDF
+                {t("home.exportPdf")}
               </Button>
             )}
           </div>

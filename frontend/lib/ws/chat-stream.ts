@@ -1,4 +1,5 @@
 import type { RunPhase, TokenInfo } from "@/lib/chat-state";
+import { translate, type Language } from "@/lib/i18n";
 import { redirectToLogin } from "@/lib/runtime-config";
 
 export interface ChatRequestPayload {
@@ -59,9 +60,9 @@ const CLOSED = 3;
 
 const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "done", "error"]);
 
-export function toFriendlyChatError(message: string): string {
+export function toFriendlyChatError(message: string, language: Language = "en"): string {
   if (message.includes("paper_not_authorized_for_session")) {
-    return "This paper is not available in the current session. Search for it first, then read it.";
+    return translate(language, "error.paperUnavailable");
   }
   return message;
 }
