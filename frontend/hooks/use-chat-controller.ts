@@ -123,10 +123,10 @@ export function useChatController() {
         setAuthStatus("unauthenticated");
         return null;
       }
-      const message = error instanceof Error ? error.message : "无法连接后端服务";
-      dispatch({ type: "set_error", error: `会话加载失败：${message}` });
+      const message = error instanceof Error ? error.message : "Backend service is unavailable";
+      dispatch({ type: "set_error", error: `Failed to load sessions: ${message}` });
       dispatch({ type: "set_sessions", sessions: [] });
-      toast.error("会话加载失败，请检查后端是否启动。");
+      toast.error("Failed to load sessions. Check that the backend is running.");
       return null;
     }
   }, [apiBase]);
@@ -182,9 +182,9 @@ export function useChatController() {
     });
     void ensureSessionMessagesLoaded(sessionId).catch((error) => {
       console.error("Failed to load messages", error);
-      const message = error instanceof Error ? error.message : "未知错误";
-      setError(`消息加载失败：${message}`);
-      toast.error("消息加载失败，请重试。");
+      const message = error instanceof Error ? error.message : "Unknown error";
+      setError(`Failed to load messages: ${message}`);
+      toast.error("Failed to load messages. Try again.");
     });
     void loadUploadedPapers(sessionId);
   }, [sessionId, ensureSessionMessagesLoaded, loadUploadedPapers, setError]);
@@ -347,7 +347,7 @@ export function useChatController() {
         await refreshSessions();
       } catch (error) {
         console.error("Failed to update session title", error);
-        toast.error("会话标题更新失败。");
+        toast.error("Failed to update the session title.");
       }
     },
     [apiBase, refreshSessions, state.editingTitle],
@@ -357,7 +357,7 @@ export function useChatController() {
     (session: SessionItem) => {
       const runState = state.sessionRunMap[session.session_id] || DEFAULT_RUN_STATE;
       if (runState.running) {
-        toast.info("该会话正在处理，请先停止后再删除。");
+        toast.info("This session is still running. Stop it before deleting.");
         return;
       }
       dispatch({ type: "set_deleting_session", sessionId: session.session_id });
@@ -380,7 +380,7 @@ export function useChatController() {
         dispatch({ type: "set_deleting_session", sessionId: null });
       } catch (error) {
         console.error("Failed to delete session", error);
-        toast.error("删除会话失败。");
+        toast.error("Failed to delete the session.");
       }
     },
     [apiBase, refreshSessions],
@@ -401,15 +401,15 @@ export function useChatController() {
       if (!targetSessionId) {
         targetSessionId = await createSessionIfNeeded();
         if (!targetSessionId) {
-          setError("创建会话失败，请重试。");
-          toast.error("创建会话失败，请重试。");
+          setError("Failed to create a session. Try again.");
+          toast.error("Failed to create a session. Try again.");
           return;
         }
       }
 
       const runningRequest = runningRequestBySessionRef.current.get(targetSessionId);
       if (runningRequest) {
-        toast.info("该会话仍在处理中，请等待或先停止。");
+        toast.info("This session is still running. Wait or stop it first.");
         return;
       }
 
@@ -418,8 +418,8 @@ export function useChatController() {
           await ensureSessionMessagesLoaded(targetSessionId);
         } catch (error) {
           console.error("Failed to load conversation history before send", error);
-          setError("加载历史消息失败，请重试。");
-          toast.error("加载历史消息失败，请重试。");
+          setError("Failed to load conversation history. Try again.");
+          toast.error("Failed to load conversation history. Try again.");
           return;
         }
       }
@@ -527,7 +527,7 @@ export function useChatController() {
           return;
         }
         if (eventPayload.type === "error") {
-          const friendly = toFriendlyChatError(eventPayload.message || "连接出错");
+          const friendly = toFriendlyChatError(eventPayload.message || "Connection error");
           appendAssistantContent(
             targetSessionId!,
             accumulatedResponse ? `\n\n[Error] ${friendly}` : `[Error] ${friendly}`,
@@ -551,10 +551,10 @@ export function useChatController() {
             if (!isCurrentRequest()) return;
             appendAssistantContent(
               targetSessionId!,
-              accumulatedResponse ? "\n\n[Error] 网络连接失败" : "[Error] 网络连接失败",
+              accumulatedResponse ? "\n\n[Error] Network connection failed" : "[Error] Network connection failed",
             );
             finalize("error");
-            toast.error("网络连接失败。");
+            toast.error("Network connection failed.");
           },
           onClose: () => {
             if (!isCurrentRequest() || completed) return;
@@ -616,8 +616,8 @@ export function useChatController() {
         const next = [...current];
         if (next.length === 0) return current;
         const idx = next.length - 1;
-        if (next[idx].role === "assistant" && !next[idx].content.includes("[已手动中断]")) {
-          next[idx] = { ...next[idx], content: `${next[idx].content}\n\n[已手动中断]` };
+        if (next[idx].role === "assistant" && !next[idx].content.includes("[Stopped by user]")) {
+          next[idx] = { ...next[idx], content: `${next[idx].content}\n\n[Stopped by user]` };
         }
         return next;
       },
@@ -628,7 +628,7 @@ export function useChatController() {
     if (!file) return;
     const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
     if (!isPdf) {
-      toast.error("仅支持上传 PDF 文件。");
+      toast.error("Only PDF files are supported.");
       return;
     }
 
@@ -636,7 +636,7 @@ export function useChatController() {
     if (!targetSessionId) {
       targetSessionId = await createSessionIfNeeded();
       if (!targetSessionId) {
-        toast.error("创建会话失败，无法上传论文。");
+        toast.error("Failed to create a session, so the paper cannot be uploaded.");
         return;
       }
     }
@@ -657,17 +657,17 @@ export function useChatController() {
           {
             role: "assistant",
             content:
-              `已上传论文 **${uploaded.original_filename}**。\n` +
-              `引用: \`uploaded://${uploaded.paper_id}\`，可直接让我基于该论文生成操作手册。`,
+              `Uploaded paper **${uploaded.original_filename}**.\n` +
+              `Reference: \`uploaded://${uploaded.paper_id}\`. You can now ask PaperAgent to create a guide from it.`,
           },
         ],
       });
       loadedSessionIdsRef.current.add(targetSessionId);
-      toast.success(`上传完成：${uploaded.original_filename}`);
+      toast.success(`Uploaded: ${uploaded.original_filename}`);
     } catch (error) {
       console.error("Failed to upload pdf", error);
-      const message = error instanceof Error ? error.message : "未知错误";
-      toast.error(`上传失败：${message}`);
+      const message = error instanceof Error ? error.message : "Unknown error";
+      toast.error(`Upload failed: ${message}`);
     } finally {
       setUploadingPdf(false);
     }

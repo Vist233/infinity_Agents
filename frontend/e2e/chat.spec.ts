@@ -36,9 +36,9 @@ test("home page shows retry banner when sessions endpoint fails", async ({ page 
   });
 
   await page.goto("/");
-  await expect(page.getByText(/^会话加载失败：/)).toBeVisible();
+  await expect(page.getByText(/^Failed to load sessions:/)).toBeVisible();
   await page.getByRole("button", { name: "Retry" }).click();
-  await expect(page.getByText(/^会话加载失败：/)).toHaveCount(0);
+  await expect(page.getByText(/^Failed to load sessions:/)).toHaveCount(0);
 });
 
 test("switches session and deletes selected session", async ({ page }) => {

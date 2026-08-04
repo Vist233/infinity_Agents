@@ -208,7 +208,7 @@ export const getRunStateForSession = (state: ChatState, sessionId: string | null
 
 export const deriveSessionTitle = (rawInput: string) => {
   const normalized = rawInput.replace(/\s+/g, " ").trim();
-  if (!normalized) return "新对话";
+  if (!normalized) return "New chat";
   return normalized.length > 32 ? `${normalized.slice(0, 32)}...` : normalized;
 };
 

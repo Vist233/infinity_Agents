@@ -66,7 +66,7 @@ export function Composer({
                   onSubmit(e);
                 }
               }}
-              placeholder={unauthenticated ? "登录后即可开始对话…" : "Message Infinity..."}
+              placeholder={unauthenticated ? "Sign in to start a conversation..." : "Message PaperAgent..."}
               className="w-full bg-white/95 border border-[var(--hairline-strong)] rounded-2xl py-4 pl-4 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] transition-all duration-150 ease-[var(--easing-standard)] resize-none shadow-sm"
             />
             <Button
