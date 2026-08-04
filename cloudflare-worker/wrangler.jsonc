@@ -1,23 +1,38 @@
 {
+  // Infinity Agents edge Worker: static PaperAgent frontend, PaperAgent API,
+  // and the isolated ImageJudge API namespace.
   "name": "infinity-agents-edge",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-24",
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
+
   "routes": [
     {
       "pattern": "infinity.zhangyvjing.com",
       "custom_domain": true
     }
   ],
+
   "observability": {
     "enabled": true
   },
+
   "assets": {
-    "directory": "../frontend/out"
+    "directory": "../frontend/out",
+    "binding": "ASSETS",
+    "run_worker_first": true
   },
+
   "vars": {
     "STEPFUN_BASE_URL": "https://api.stepfun.com/step_plan/v1",
     "STEPFUN_MODEL": "step-3.5-flash",
+    "APP_BASE_URL": "https://infinity.zhangyvjing.com",
+    "ZHANG_AUTH_BASE_URL": "https://auth.zhangyvjing.com",
+    "ZHANG_AUTH_JWKS_URL": "https://auth.zhangyvjing.com/.well-known/jwks.json",
+    "ZHANG_AUTH_CLIENT_ID": "infinity-agents",
+    "ZHANG_AUTH_AUD": "zhang-services",
+    "DAILY_QUOTA": "20",
 
     "IMAGE_JUDGE_ZHANG_AUTH_ISSUER": "https://auth.zhangyvjing.com",
     "IMAGE_JUDGE_OIDC_CLIENT_ID": "image-judge-desktop",
@@ -29,7 +44,14 @@
     "IMAGE_JUDGE_REFRESH_TOKEN_TTL_SECONDS": "2592000",
     "IMAGE_JUDGE_MAX_IMAGE_BYTES": "10485760"
   },
+
   "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "infinity-agents-db",
+      "database_id": "9ee9ec94-cb42-40b5-8372-681c7b57c105",
+      "migrations_dir": "migrations-infinity"
+    },
     {
       "binding": "IMAGE_JUDGE_DB",
       "database_name": "image-judge-db",
@@ -37,12 +59,28 @@
       "migrations_dir": "migrations"
     }
   ],
+
   "kv_namespaces": [
     {
       "binding": "IMAGE_JUDGE_KV",
       "id": "fe1f3e47f5a94e4ca2b375ff3f9b2c79"
     }
   ],
+
+  "unsafe": {
+    "bindings": [
+      {
+        "name": "CHAT_RATE_LIMITER",
+        "type": "ratelimit",
+        "namespace_id": "1001",
+        "simple": {
+          "limit": 5,
+          "period": 60
+        }
+      }
+    ]
+  },
+
   "durable_objects": {
     "bindings": [
       {
@@ -51,15 +89,19 @@
       }
     ]
   },
+
   "migrations": [
     {
-      // 远端已登记此 tag；保留它以避免重复迁移同一个 DO 类。
+      // This tag already exists remotely; keep it stable for the ImageJudge DO.
       "tag": "v2-image-judge",
       "new_sqlite_classes": ["ImageJudgeUserConcurrencyLock"]
     }
   ],
 
-  // Secrets are temporary validation credentials; remove the platform model key after testing.
+  // Secrets are never committed. Configure the PaperAgent secrets separately
+  // from the ImageJudge secrets.
+  // wrangler secret put STEPFUN_API_KEY
+  // wrangler secret put ZHANG_AUTH_CLIENT_SECRET
   // wrangler secret put IMAGE_JUDGE_ZHANG_AUTH_CLIENT_SECRET
   // wrangler secret put IMAGE_JUDGE_TOKEN_SIGNING_SECRET
   // wrangler secret put IMAGE_JUDGE_DASHSCOPE_API_KEY
