@@ -1,19 +1,29 @@
 # Infinity Agents Frontend
 
-Next.js 16 + React 19 frontend for PaperAgent / CodeAgent / TraitRecognize.
+Next.js 16 + React 19 UI served at `https://infinity.zhangyvjing.com` as
+static assets by the companion Cloudflare Worker. It is not replaced by an
+inline Worker page.
 
-## Runtime Configuration
+## Authentication and chat
 
-Use `NEXT_PUBLIC_API_BASE` to point frontend requests to backend API.
+The UI calls same-origin endpoints only:
 
-```bash
-NEXT_PUBLIC_API_BASE=http://localhost:8008
-```
+- `GET /login` starts first-party ZhangYvJing OIDC login.
+- `GET /v1/models` determines whether the browser has an Infinity session.
+- `POST /v1/chat/completions` streams a chat response for an authenticated
+  session; a `401` is presented as a login prompt in the UI.
 
-If not provided, frontend falls back to:
+The Worker owns OIDC, the session cookie, and the upstream model key. The
+browser never receives either secret.
 
-- Browser `http(s)` pages: `${window.location.protocol}//${window.location.hostname}:8008`
-- Non-HTTP contexts (for example `file://`): `http://localhost:8008`
+## ImageJudge download page
+
+`/image-judge` is the public product page for the desktop ImageJudge client.
+It explains the reference-guided visual classification workflow and links to
+the latest GitHub Release. The release workflow on `main` publishes a Windows
+archive containing `ImageJudge.exe` and a Linux `.deb` package; the page itself
+remains part of the `cloudflare-deploy` branch and is served by the Infinity
+Edge Worker.
 
 ## Commands
 
@@ -25,6 +35,9 @@ npm run test:unit
 npm run test:e2e
 npm run build
 ```
+
+`npm run build` produces `out/`. The Worker configuration serves that directory
+through its `assets` binding when deployed.
 
 ## Test Strategy
 

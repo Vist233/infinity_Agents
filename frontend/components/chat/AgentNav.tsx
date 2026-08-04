@@ -4,13 +4,13 @@ import { FileText, Microscope, Terminal } from "lucide-react";
 
 interface AgentNavProps {
   onNavigate: (path: string) => void;
-  active: "paper" | "code" | "trait";
+  active: "paper" | "code" | "image-judge";
 }
 
 const items = [
   { id: "paper", label: "PaperAgent", path: "/", icon: FileText },
   { id: "code", label: "CodeAgent", path: "/code-agent", icon: Terminal },
-  { id: "trait", label: "TraitRecognize", path: "/trait-agent", icon: Microscope },
+  { id: "image-judge", label: "ImageJudge", path: "/image-judge", icon: Microscope },
 ] as const;
 
 export function AgentNav({ onNavigate, active }: AgentNavProps) {

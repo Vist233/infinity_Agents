@@ -1,67 +1,37 @@
--- infinity-agents-db schema (PaperAgent v1).
--- Stores only PaperAgent's own state keyed by the JWT `sub` (user_id).
--- Never references or copies zhang-auth's user tables.
+-- ImageJudge API Worker D1 初始迁移
+-- 用户映射、每日用量、撤销会话、幂等记录（文档 §9.3）
 
--- Site sessions established after the OAuth code exchange. The cookie carries
--- only the opaque `sid`; tokens live here server-side (HttpOnly by construction).
-CREATE TABLE IF NOT EXISTS auth_sessions (
-  sid TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  email TEXT,
-  access_token TEXT NOT NULL,
-  access_expires_at INTEGER NOT NULL, -- unix seconds
-  refresh_token TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  last_used_at INTEGER NOT NULL,
-  revoked_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
-
--- Chat sessions (conversations) owned by a user.
-CREATE TABLE IF NOT EXISTS chat_sessions (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  title TEXT NOT NULL DEFAULT 'New chat',
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_updated
-  ON chat_sessions(user_id, updated_at DESC);
-
-CREATE TABLE IF NOT EXISTS chat_messages (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id TEXT NOT NULL,
-  role TEXT NOT NULL, -- 'user' | 'assistant'
-  content TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
-);
-CREATE INDEX IF NOT EXISTS idx_chat_messages_session
-  ON chat_messages(session_id, id);
-
--- Per-session paper authorization: only papers surfaced via search/read in a
--- session may be read within that session.
-CREATE TABLE IF NOT EXISTS paper_authorizations (
-  session_id TEXT NOT NULL,
-  ref TEXT NOT NULL,
-  source TEXT NOT NULL,
-  title TEXT,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (session_id, ref)
+CREATE TABLE IF NOT EXISTS users (
+  sub         TEXT PRIMARY KEY,
+  email       TEXT,
+  name        TEXT,
+  created_at  INTEGER NOT NULL
 );
 
--- Search/read cache shared across sessions (keyed by a content hash).
-CREATE TABLE IF NOT EXISTS paper_cache (
-  cache_key TEXT PRIMARY KEY,
-  data TEXT NOT NULL,
-  expires_at INTEGER NOT NULL
+-- 每日额度：以 (user_sub, quota_date) 唯一键配合事务原子递增（文档 §9.2）
+CREATE TABLE IF NOT EXISTS usage_daily (
+  user_sub        TEXT NOT NULL,
+  quota_date      TEXT NOT NULL,           -- UTC 日期 yyyy-mm-dd
+  accepted_count  INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_sub, quota_date)
 );
-CREATE INDEX IF NOT EXISTS idx_paper_cache_expires ON paper_cache(expires_at);
 
--- Atomic daily conversation quota (Asia/Shanghai calendar day).
-CREATE TABLE IF NOT EXISTS daily_usage (
-  user_id TEXT NOT NULL,
-  day TEXT NOT NULL, -- YYYY-MM-DD in Asia/Shanghai
-  count INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (user_id, day)
+-- 平台代理会话（refresh token）；可撤销、可轮换
+CREATE TABLE IF NOT EXISTS sessions (
+  jti         TEXT PRIMARY KEY,
+  user_sub    TEXT NOT NULL,
+  issued_at   INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL,
+  revoked     INTEGER NOT NULL DEFAULT 0,
+  replaced_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_sub);
+
+-- 短期幂等记录（也可放 KV；此处保留 D1 侧审计）
+CREATE TABLE IF NOT EXISTS idempotency (
+  client_request_id TEXT NOT NULL,
+  user_sub          TEXT NOT NULL,
+  server_request_id TEXT NOT NULL,
+  created_at        INTEGER NOT NULL,
+  PRIMARY KEY (user_sub, client_request_id)
 );

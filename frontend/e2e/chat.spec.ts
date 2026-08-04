@@ -15,8 +15,9 @@ test("smoke routes render", async ({ page }) => {
   await page.goto("/code-agent");
   await expect(page.getByText("CodeAgent 安装教程")).toBeVisible();
 
-  await page.goto("/trait-agent");
-  await expect(page.getByText("TraitRecognize 演示视频")).toBeVisible();
+  await page.goto("/image-judge");
+  await expect(page.getByRole("heading", { name: "ImageJudge" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Download latest release" }).first()).toBeVisible();
 });
 
 test("home page shows retry banner when sessions endpoint fails", async ({ page }) => {
