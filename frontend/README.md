@@ -6,15 +6,18 @@ inline Worker page.
 
 ## Authentication and chat
 
-The UI calls same-origin endpoints only:
+The PaperAgent UI calls the same-origin session API:
 
-- `GET /login` starts first-party ZhangYvJing OIDC login.
-- `GET /v1/models` determines whether the browser has an Infinity session.
-- `POST /v1/chat/completions` streams a chat response for an authenticated
-  session; a `401` is presented as a login prompt in the UI.
+- `GET /auth/login` starts first-party Zhang Auth login.
+- `GET /api/sessions` loads the authenticated user's recent activities.
+- `POST /api/sessions` creates a conversation.
+- `GET /api/sessions/:id/messages` loads conversation history.
+- `PATCH /api/sessions/:id/title` and `DELETE /api/sessions/:id` manage a
+  conversation.
+- `POST /api/chat` returns the authenticated Agent response as an SSE stream.
 
-The Worker owns OIDC, the session cookie, and the upstream model key. The
-browser never receives either secret.
+The Worker owns OIDC, the opaque session cookie, the Infinity D1 session data,
+and the upstream model key. The browser never receives provider secrets.
 
 ## ImageJudge download page
 

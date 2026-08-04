@@ -360,7 +360,7 @@ def _render_uploaded_papers_block(uploaded_papers: List[Dict[str, Any]]) -> str:
         return ""
     lines = [
         "[Uploaded Papers]",
-        "用户上传了 PDF 论文，可用 read_paper('uploaded://{paper_id}') 阅读。",
+        "The user uploaded a PDF paper. Use read_paper('uploaded://{paper_id}') to read it.",
     ]
     for paper in uploaded_papers:
         paper_id = _truncate_text(paper.get("paper_id"), 128)
@@ -1342,9 +1342,9 @@ async def chat_ws_endpoint(websocket: WebSocket):
             break
 
         if not response_text:
-            message = "模型未返回正文内容。"
+            message = "The model returned no response content."
             if did_auto_retry:
-                message = "模型在8秒内未返回正文，已自动重试1次，仍未收到有效输出。"
+                message = "The model returned no response within 8 seconds. One retry also produced no usable output."
             await websocket.send_json({"type": "error", "message": message})
             return
 
@@ -1389,7 +1389,7 @@ async def chat_ws_endpoint(websocket: WebSocket):
         try:
             await websocket.send_json({
                 "type": "error",
-                "message": f"搜索文献时遇到点麻烦... ({str(e)})",
+                "message": f"The literature search encountered an error: {str(e)}",
             })
         except Exception:
             pass

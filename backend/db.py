@@ -225,7 +225,7 @@ async def insert_session(
     pool: asyncpg.Pool,
     session_id: str,
     user_id: str,
-    title: str = "新对话",
+    title: str = "New chat",
     storage_mode: str = "sandboxed",
 ) -> None:
     """

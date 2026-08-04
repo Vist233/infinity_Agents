@@ -27,7 +27,7 @@ describe("chat stream event normalization", () => {
 
 describe("friendly chat error", () => {
   it("maps paper authorization error", () => {
-    expect(toFriendlyChatError("paper_not_authorized_for_session")).toContain("当前会话可访问范围");
+    expect(toFriendlyChatError("paper_not_authorized_for_session")).toContain("not available in the current session");
   });
 
   it("returns original message for unknown errors", () => {

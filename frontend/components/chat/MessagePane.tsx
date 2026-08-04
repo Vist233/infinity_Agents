@@ -37,12 +37,12 @@ export function MessagePane({
               <Bot size={24} />
             </div>
             <div className="space-y-2">
-              <h2 className="text-2xl font-medium tracking-tight">登录后开始使用 Paper Agent</h2>
-              <p className="text-sm text-zinc-500 max-w-md">登录后可以保存会话，并使用论文检索与阅读功能。</p>
+              <h2 className="text-2xl font-medium tracking-tight">Sign in to use PaperAgent</h2>
+              <p className="text-sm text-zinc-500 max-w-md">Sign in to save conversations and use paper search and reading tools.</p>
             </div>
             <Button onClick={onLogin} className="gap-2 rounded-xl">
               <LogIn size={16} />
-              登录 / 注册
+              Sign in / Register
             </Button>
           </div>
         ) : messages.length === 0 ? (

@@ -61,7 +61,7 @@ const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "done", "erro
 
 export function toFriendlyChatError(message: string): string {
   if (message.includes("paper_not_authorized_for_session")) {
-    return "该论文不在当前会话可访问范围，请先使用 search_paper 检索后再读。";
+    return "This paper is not available in the current session. Search for it first, then read it.";
   }
   return message;
 }
@@ -96,7 +96,7 @@ export function normalizeChatEvent(rawData: unknown): ChatEvent | null {
       return { type: "done", token_info: (payload.token_info as Partial<TokenInfo> | undefined) ?? undefined };
     }
     if (payload.type === "error") {
-      return { type: "error", message: typeof payload.message === "string" ? payload.message : "连接出错" };
+      return { type: "error", message: typeof payload.message === "string" ? payload.message : "Connection error" };
     }
     return null;
   } catch {
@@ -142,7 +142,7 @@ export function startChatStream(options: StartChatStreamOptions): ChatStreamHand
       return;
     }
     if (!response.ok || !response.body) {
-      let message = `请求失败 (${response.status})`;
+      let message = `Request failed (${response.status})`;
       try {
         const payload = (await response.json()) as { error?: { message?: string } };
         if (payload?.error?.message) message = payload.error.message;
