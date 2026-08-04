@@ -1,4 +1,5 @@
 import type { SessionRunState } from "@/lib/chat-state";
+import { useLanguage } from "@/lib/i18n";
 
 interface RunStatusProps {
   isLoading: boolean;
@@ -7,6 +8,7 @@ interface RunStatusProps {
 }
 
 export function RunStatus({ isLoading, statusText, runState }: RunStatusProps) {
+  const { t } = useLanguage();
   if (!isLoading) return null;
 
   return (
@@ -20,7 +22,7 @@ export function RunStatus({ isLoading, statusText, runState }: RunStatusProps) {
               key={tool}
               className="inline-flex items-center rounded-full border border-zinc-300 bg-zinc-100 px-2.5 py-1 text-[11px] text-zinc-600"
             >
-              Running: {tool}
+              {t("run.running", { tool })}
             </span>
           ))}
         </div>

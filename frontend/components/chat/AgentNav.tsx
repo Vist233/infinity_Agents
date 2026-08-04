@@ -1,6 +1,7 @@
 "use client";
 
 import { FileText, Microscope, Terminal } from "lucide-react";
+import { useLanguage } from "@/lib/i18n";
 
 interface AgentNavProps {
   onNavigate: (path: string) => void;
@@ -8,15 +9,16 @@ interface AgentNavProps {
 }
 
 const items = [
-  { id: "paper", label: "PaperAgent", path: "/", icon: FileText },
-  { id: "code", label: "CodeAgent", path: "/code-agent", icon: Terminal },
-  { id: "image-judge", label: "ImageJudge", path: "/image-judge", icon: Microscope },
+  { id: "paper", labelKey: "nav.paper", path: "/", icon: FileText },
+  { id: "code", labelKey: "nav.code", path: "/code-agent", icon: Terminal },
+  { id: "image-judge", labelKey: "nav.imageJudge", path: "/image-judge", icon: Microscope },
 ] as const;
 
 export function AgentNav({ onNavigate, active }: AgentNavProps) {
+  const { t } = useLanguage();
   return (
     <div className="space-y-1">
-      <div className="text-[11px] uppercase tracking-[0.22em] text-zinc-400 px-2">Agents</div>
+      <div className="text-[11px] uppercase tracking-[0.22em] text-zinc-400 px-2">{t("nav.agents")}</div>
       <div className="space-y-1">
         {items.map((item) => {
           const Icon = item.icon;
@@ -29,11 +31,11 @@ export function AgentNav({ onNavigate, active }: AgentNavProps) {
                   ? "bg-zinc-900 text-zinc-50 shadow-sm"
                   : "text-zinc-600 hover:bg-zinc-100/80 hover:text-zinc-900"
               }`}
-              title={item.label}
+              title={t(item.labelKey)}
               onClick={() => onNavigate(item.path)}
             >
               <Icon size={16} />
-              <span className="truncate">{item.label}</span>
+              <span className="truncate">{t(item.labelKey)}</span>
             </button>
           );
         })}

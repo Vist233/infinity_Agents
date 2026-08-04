@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Loader2, MessageCircle, Pencil, Trash2, X } from "lucide-react";
 import { DEFAULT_RUN_STATE, type SessionItem, type SessionRunState } from "@/lib/chat-state";
+import { useLanguage } from "@/lib/i18n";
 
 interface SessionListProps {
   sessions: SessionItem[];
@@ -35,10 +36,11 @@ export function SessionList({
   onCancelDelete,
   onConfirmDelete,
 }: SessionListProps) {
+  const { t } = useLanguage();
   return (
     <div className="mt-2 space-y-1 overflow-y-auto">
       {sessions.length === 0 ? (
-        <div className="text-xs text-zinc-400 px-2 py-2">No activities</div>
+        <div className="text-xs text-zinc-400 px-2 py-2">{t("session.noActivities")}</div>
       ) : (
         sessions.map((session) => {
           const rowRunState = sessionRunMap[session.session_id] || DEFAULT_RUN_STATE;
@@ -93,7 +95,7 @@ export function SessionList({
                   title={session.title}
                   disabled={editingSessionId === session.session_id}
                 >
-                  {session.title || "Untitled"}
+                  {session.title || t("session.untitled")}
                 </button>
               )}
 
@@ -106,9 +108,9 @@ export function SessionList({
                     data-testid={`confirm-delete-${session.session_id}`}
                     className={isSelected ? "text-zinc-200 hover:bg-zinc-700" : "text-red-600 hover:bg-red-100"}
                     onClick={() => onConfirmDelete(session)}
-                    aria-label="Confirm delete session"
+                    aria-label={t("session.confirmDelete")}
                   >
-                    Confirm
+                    {t("session.confirm")}
                   </Button>
                   <Button
                     type="button"
@@ -117,7 +119,7 @@ export function SessionList({
                     data-testid={`cancel-delete-${session.session_id}`}
                     className={isSelected ? "text-zinc-200 hover:bg-zinc-700" : "text-zinc-500 hover:bg-zinc-200"}
                     onClick={onCancelDelete}
-                    aria-label="Cancel delete session"
+                    aria-label={t("session.cancelDelete")}
                   >
                     <X size={14} />
                   </Button>
@@ -130,7 +132,7 @@ export function SessionList({
                     className={`p-1 rounded-md transition-all duration-150 ${
                       editingSessionId === session.session_id ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
                     } ${isSelected ? "text-zinc-200 hover:bg-zinc-700" : "text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700"}`}
-                    aria-label="Edit session title"
+                    aria-label={t("session.edit")}
                   >
                     <Pencil size={14} />
                   </button>
@@ -140,7 +142,7 @@ export function SessionList({
                     className={`p-1 rounded-md transition-all duration-150 ${
                       editingSessionId === session.session_id ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
                     } ${isSelected ? "text-zinc-200 hover:bg-zinc-700" : "text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700"}`}
-                    aria-label="Delete session"
+                    aria-label={t("session.delete")}
                   >
                     <Trash2 size={14} />
                   </button>

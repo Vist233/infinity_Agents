@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { ToasterProvider } from "@/components/providers/toaster-provider";
+import { LanguageProvider } from "@/lib/i18n";
 
 export const metadata: Metadata = {
   title: "Infinity Agents",
@@ -13,9 +14,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="zh-CN">
       <body className="antialiased bg-[var(--app-bg)] text-foreground">
-        {children}
+        <LanguageProvider>{children}</LanguageProvider>
         <ToasterProvider />
       </body>
     </html>

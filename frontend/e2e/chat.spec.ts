@@ -10,14 +10,17 @@ test("smoke routes render", async ({ page }) => {
   });
 
   await page.goto("/");
+  await expect(page.getByText("今天想让我帮你做什么？")).toBeVisible();
+  await page.getByTestId("language-toggle").click();
   await expect(page.getByText("How can I help you today?")).toBeVisible();
+  await page.getByTestId("language-toggle").click();
 
   await page.goto("/code-agent");
   await expect(page.getByText("CodeAgent 安装教程")).toBeVisible();
 
   await page.goto("/image-judge");
   await expect(page.getByRole("heading", { name: "ImageJudge" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Download latest release" }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "下载最新版本" }).first()).toBeVisible();
 });
 
 test("home page shows retry banner when sessions endpoint fails", async ({ page }) => {
@@ -36,9 +39,9 @@ test("home page shows retry banner when sessions endpoint fails", async ({ page 
   });
 
   await page.goto("/");
-  await expect(page.getByText(/^Failed to load sessions:/)).toBeVisible();
-  await page.getByRole("button", { name: "Retry" }).click();
-  await expect(page.getByText(/^Failed to load sessions:/)).toHaveCount(0);
+  await expect(page.getByText(/^加载对话失败：/)).toBeVisible();
+  await page.getByRole("button", { name: "重试" }).click();
+  await expect(page.getByText(/^加载对话失败：/)).toHaveCount(0);
 });
 
 test("switches session and deletes selected session", async ({ page }) => {

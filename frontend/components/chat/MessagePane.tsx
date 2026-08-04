@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import type { Message, SessionRunState } from "@/lib/chat-state";
 import { RunStatus } from "@/components/chat/RunStatus";
 import type { RefObject } from "react";
+import { useLanguage } from "@/lib/i18n";
 
 interface MessagePaneProps {
   messages: Message[];
@@ -28,6 +29,7 @@ export function MessagePane({
   authStatus,
   onLogin,
 }: MessagePaneProps) {
+  const { t } = useLanguage();
   return (
     <ScrollArea className="flex-1 overflow-y-auto" ref={scrollRef}>
       <div id="chat-export-content" className="max-w-3xl mx-auto w-full px-4 pt-10 pb-32">
@@ -37,12 +39,12 @@ export function MessagePane({
               <Bot size={24} />
             </div>
             <div className="space-y-2">
-              <h2 className="text-2xl font-medium tracking-tight">Sign in to use PaperAgent</h2>
-              <p className="text-sm text-zinc-500 max-w-md">Sign in to save conversations and use paper search and reading tools.</p>
+              <h2 className="text-2xl font-medium tracking-tight">{t("auth.signInTitle")}</h2>
+              <p className="text-sm text-zinc-500 max-w-md">{t("auth.signInDescription")}</p>
             </div>
             <Button onClick={onLogin} className="gap-2 rounded-xl">
               <LogIn size={16} />
-              Sign in / Register
+              {t("auth.signIn")}
             </Button>
           </div>
         ) : messages.length === 0 ? (
@@ -50,7 +52,7 @@ export function MessagePane({
             <div className="w-12 h-12 rounded-full border border-zinc-200 flex items-center justify-center shadow-sm">
               <Bot size={24} />
             </div>
-            <h2 className="text-2xl font-medium tracking-tight">How can I help you today?</h2>
+            <h2 className="text-2xl font-medium tracking-tight">{t("home.emptyTitle")}</h2>
           </div>
         ) : (
           <div className="space-y-8">
@@ -70,7 +72,7 @@ export function MessagePane({
                     </Avatar>
                     <div className="flex flex-col gap-1.5 grow">
                       <span className="text-xs font-bold text-zinc-400 uppercase tracking-widest">
-                        {message.role === "user" ? "You" : "Assistant"}
+                        {message.role === "user" ? t("role.you") : t("role.assistant")}
                       </span>
                       <div className={`text-[15px] leading-7 ${message.role === "user" ? "text-zinc-700 whitespace-pre-wrap" : "text-zinc-900"}`}>
                         {message.role === "assistant" ? (

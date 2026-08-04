@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { SendHorizontal, Square } from "lucide-react";
 import { type FormEvent, type RefObject } from "react";
+import { useLanguage } from "@/lib/i18n";
 
 interface ComposerProps {
   input: string;
@@ -30,6 +31,7 @@ export function Composer({
   onDismissError,
   unauthenticated = false,
 }: ComposerProps) {
+  const { t } = useLanguage();
   return (
     <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-white via-white/95 to-transparent pt-10 print:hidden">
       <div className="max-w-3xl mx-auto px-4 pb-8">
@@ -38,10 +40,10 @@ export function Composer({
             <span>{inlineError}</span>
             <div className="flex items-center gap-2 shrink-0">
               <Button type="button" variant="outline" size="sm" onClick={onRetry}>
-                Retry
+                {t("composer.retry")}
               </Button>
               <Button type="button" variant="ghost" size="sm" onClick={onDismissError}>
-                Dismiss
+                {t("composer.dismiss")}
               </Button>
             </div>
           </div>
@@ -66,7 +68,7 @@ export function Composer({
                   onSubmit(e);
                 }
               }}
-              placeholder={unauthenticated ? "Sign in to start a conversation..." : "Message PaperAgent..."}
+              placeholder={unauthenticated ? t("composer.signInPlaceholder") : t("composer.messagePlaceholder")}
               className="w-full bg-white/95 border border-[var(--hairline-strong)] rounded-2xl py-4 pl-4 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] transition-all duration-150 ease-[var(--easing-standard)] resize-none shadow-sm"
             />
             <Button
@@ -79,7 +81,7 @@ export function Composer({
               {isLoading ? <Square className="h-4 w-4 text-white" /> : <SendHorizontal className="h-4 w-4 text-white" />}
             </Button>
           </div>
-          <p className="text-[11px] text-center text-zinc-400 mt-3">AI can make mistakes. Check important info.</p>
+          <p className="text-[11px] text-center text-zinc-400 mt-3">{t("composer.disclaimer")}</p>
         </form>
       </div>
     </div>

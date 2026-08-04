@@ -27,6 +27,7 @@ import {
 } from "@/lib/api/sessions";
 import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
 import { startChatStream, toFriendlyChatError, type ChatDoneEvent, type ChatEvent, type ChatStreamHandle } from "@/lib/ws/chat-stream";
+import { useLanguage } from "@/lib/i18n";
 
 const isSocketOpen = (socket?: ChatStreamHandle | null) => {
   if (!socket) return false;
@@ -40,6 +41,7 @@ const toTokenInfo = (payload?: ChatDoneEvent["token_info"]) => ({
 });
 
 export function useChatController() {
+  const { language, t } = useLanguage();
   const apiBase = useMemo(() => getApiBase(), []);
   const [state, dispatch] = useReducer(chatReducer, INITIAL_CHAT_STATE);
 
@@ -123,13 +125,13 @@ export function useChatController() {
         setAuthStatus("unauthenticated");
         return null;
       }
-      const message = error instanceof Error ? error.message : "Backend service is unavailable";
-      dispatch({ type: "set_error", error: `Failed to load sessions: ${message}` });
+      const message = error instanceof Error ? error.message : t("error.backendUnavailable");
+      dispatch({ type: "set_error", error: t("error.loadSessions", { message }) });
       dispatch({ type: "set_sessions", sessions: [] });
-      toast.error("Failed to load sessions. Check that the backend is running.");
+      toast.error(t("error.loadSessionsToast"));
       return null;
     }
-  }, [apiBase]);
+  }, [apiBase, t]);
 
   useEffect(() => {
     void loadSessions();
@@ -182,12 +184,12 @@ export function useChatController() {
     });
     void ensureSessionMessagesLoaded(sessionId).catch((error) => {
       console.error("Failed to load messages", error);
-      const message = error instanceof Error ? error.message : "Unknown error";
-      setError(`Failed to load messages: ${message}`);
-      toast.error("Failed to load messages. Try again.");
+      const message = error instanceof Error ? error.message : t("upload.unknown");
+      setError(t("error.loadMessages", { message }));
+      toast.error(t("error.loadMessagesToast"));
     });
     void loadUploadedPapers(sessionId);
-  }, [sessionId, ensureSessionMessagesLoaded, loadUploadedPapers, setError]);
+  }, [sessionId, ensureSessionMessagesLoaded, loadUploadedPapers, setError, t]);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -257,7 +259,7 @@ export function useChatController() {
         toTop: true,
         session: {
           session_id: createdSessionId,
-          title: "New chat",
+          title: language === "zh" ? "新对话" : "New chat",
           created_at: "",
           updated_at: "",
         },
@@ -271,7 +273,7 @@ export function useChatController() {
       console.error("Failed to create session", error);
       return null;
     }
-  }, [apiBase, state.sessionId]);
+  }, [apiBase, language, state.sessionId]);
 
   const maybeRenameSessionFromFirstInput = useCallback(
     async (firstInput: string, targetSessionId?: string | null) => {
@@ -320,8 +322,8 @@ export function useChatController() {
   );
 
   const handleEditSessionTitle = useCallback((session: SessionItem) => {
-    dispatch({ type: "set_editing_session", sessionId: session.session_id, title: session.title || "Untitled" });
-  }, []);
+    dispatch({ type: "set_editing_session", sessionId: session.session_id, title: session.title || t("session.untitled") });
+  }, [t]);
 
   const cancelInlineSessionTitle = useCallback(() => {
     dispatch({ type: "set_editing_session", sessionId: null, title: "" });
@@ -347,22 +349,22 @@ export function useChatController() {
         await refreshSessions();
       } catch (error) {
         console.error("Failed to update session title", error);
-        toast.error("Failed to update the session title.");
+        toast.error(t("error.updateTitle"));
       }
     },
-    [apiBase, refreshSessions, state.editingTitle],
+    [apiBase, refreshSessions, state.editingTitle, t],
   );
 
   const requestDeleteSession = useCallback(
     (session: SessionItem) => {
       const runState = state.sessionRunMap[session.session_id] || DEFAULT_RUN_STATE;
       if (runState.running) {
-        toast.info("This session is still running. Stop it before deleting.");
+        toast.info(t("error.runningDelete"));
         return;
       }
       dispatch({ type: "set_deleting_session", sessionId: session.session_id });
     },
-    [state.sessionRunMap],
+    [state.sessionRunMap, t],
   );
 
   const cancelDeleteSession = useCallback(() => {
@@ -380,10 +382,10 @@ export function useChatController() {
         dispatch({ type: "set_deleting_session", sessionId: null });
       } catch (error) {
         console.error("Failed to delete session", error);
-        toast.error("Failed to delete the session.");
+        toast.error(t("error.deleteSession"));
       }
     },
-    [apiBase, refreshSessions],
+    [apiBase, refreshSessions, t],
   );
 
   const handleSubmit = useCallback(
@@ -401,15 +403,15 @@ export function useChatController() {
       if (!targetSessionId) {
         targetSessionId = await createSessionIfNeeded();
         if (!targetSessionId) {
-          setError("Failed to create a session. Try again.");
-          toast.error("Failed to create a session. Try again.");
+          setError(t("error.createSession"));
+          toast.error(t("error.createSession"));
           return;
         }
       }
 
       const runningRequest = runningRequestBySessionRef.current.get(targetSessionId);
       if (runningRequest) {
-        toast.info("This session is still running. Wait or stop it first.");
+        toast.info(t("error.runningWait"));
         return;
       }
 
@@ -418,8 +420,8 @@ export function useChatController() {
           await ensureSessionMessagesLoaded(targetSessionId);
         } catch (error) {
           console.error("Failed to load conversation history before send", error);
-          setError("Failed to load conversation history. Try again.");
-          toast.error("Failed to load conversation history. Try again.");
+          setError(t("error.loadHistory"));
+          toast.error(t("error.loadHistory"));
           return;
         }
       }
@@ -527,7 +529,7 @@ export function useChatController() {
           return;
         }
         if (eventPayload.type === "error") {
-          const friendly = toFriendlyChatError(eventPayload.message || "Connection error");
+          const friendly = toFriendlyChatError(eventPayload.message || t("error.connection"), language);
           appendAssistantContent(
             targetSessionId!,
             accumulatedResponse ? `\n\n[Error] ${friendly}` : `[Error] ${friendly}`,
@@ -551,10 +553,10 @@ export function useChatController() {
             if (!isCurrentRequest()) return;
             appendAssistantContent(
               targetSessionId!,
-              accumulatedResponse ? "\n\n[Error] Network connection failed" : "[Error] Network connection failed",
+              accumulatedResponse ? `\n\n[Error] ${t("error.network")}` : `[Error] ${t("error.network")}`,
             );
             finalize("error");
-            toast.error("Network connection failed.");
+            toast.error(t("error.networkToast"));
           },
           onClose: () => {
             if (!isCurrentRequest() || completed) return;
@@ -586,6 +588,8 @@ export function useChatController() {
       state.input,
       state.sessionId,
       authStatus,
+      language,
+      t,
     ],
   );
 
@@ -628,7 +632,7 @@ export function useChatController() {
     if (!file) return;
     const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
     if (!isPdf) {
-      toast.error("Only PDF files are supported.");
+      toast.error(t("upload.onlyPdf"));
       return;
     }
 
@@ -636,7 +640,7 @@ export function useChatController() {
     if (!targetSessionId) {
       targetSessionId = await createSessionIfNeeded();
       if (!targetSessionId) {
-        toast.error("Failed to create a session, so the paper cannot be uploaded.");
+        toast.error(t("upload.createSession"));
         return;
       }
     }
@@ -656,22 +660,20 @@ export function useChatController() {
           ...current,
           {
             role: "assistant",
-            content:
-              `Uploaded paper **${uploaded.original_filename}**.\n` +
-              `Reference: \`uploaded://${uploaded.paper_id}\`. You can now ask PaperAgent to create a guide from it.`,
+            content: t("upload.message", { filename: uploaded.original_filename, paperId: uploaded.paper_id }),
           },
         ],
       });
       loadedSessionIdsRef.current.add(targetSessionId);
-      toast.success(`Uploaded: ${uploaded.original_filename}`);
+      toast.success(t("upload.success", { filename: uploaded.original_filename }));
     } catch (error) {
       console.error("Failed to upload pdf", error);
-      const message = error instanceof Error ? error.message : "Unknown error";
-      toast.error(`Upload failed: ${message}`);
+      const message = error instanceof Error ? error.message : t("upload.unknown");
+      toast.error(t("upload.failed", { message }));
     } finally {
       setUploadingPdf(false);
     }
-  }, [apiBase, createSessionIfNeeded, state.sessionId]);
+  }, [apiBase, createSessionIfNeeded, state.sessionId, t]);
 
   const handleExportPdf = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -682,19 +684,21 @@ export function useChatController() {
     const seconds = Math.max(0, Math.floor(currentRunState.elapsedMs / 1000));
     const attemptText = currentRunState.maxAttempts > 1 ? ` · ${currentRunState.attempt}/${currentRunState.maxAttempts}` : "";
     if (currentRunState.phase === "tool_running") {
-      const tool = currentRunState.toolName || currentRunState.activeTools[currentRunState.activeTools.length - 1] || "tool";
-      return `Running ${tool} (${seconds}s)${attemptText}`;
+      const tool = currentRunState.toolName || currentRunState.activeTools[currentRunState.activeTools.length - 1] || t("run.tool");
+      return language === "zh"
+        ? `运行中：${tool}（${seconds} 秒）${attemptText}`
+        : t("run.running", { tool }) + ` (${seconds}s)${attemptText}`;
     }
     if (currentRunState.phase === "retrying") {
-      const reason = currentRunState.reason === "first_chunk_timeout" ? "first chunk timeout" : "processing";
-      return `Retrying (${reason})${attemptText}`;
+      const reason = currentRunState.reason === "first_chunk_timeout" ? t("run.firstChunkTimeout") : t("run.processing");
+      return t("run.retrying", { reason, attempt: attemptText });
     }
     if (currentRunState.phase === "responding") {
-      return `Generating response (${seconds}s)${attemptText}`;
+      return t("run.generating", { seconds, attempt: attemptText });
     }
-    const suffix = currentRunState.hasReceivedToolCall && !currentRunState.hasReceivedChunk ? " · tool triggered" : "";
-    return `Thinking (${seconds}s)${attemptText}${suffix}`;
-  }, [currentRunState]);
+    const suffix = currentRunState.hasReceivedToolCall && !currentRunState.hasReceivedChunk ? t("run.toolTriggered") : "";
+    return t("run.thinking", { seconds, attempt: attemptText, suffix });
+  }, [currentRunState, language, t]);
 
   const uploadedPapers = useMemo(() => {
     if (!state.sessionId) return [];

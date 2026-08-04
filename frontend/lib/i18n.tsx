@@ -1,0 +1,265 @@
+"use client";
+
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+
+export type Language = "zh" | "en";
+
+const messages = {
+  zh: {
+    "language.switchToEnglish": "English",
+    "language.switchToChinese": "中文",
+    "nav.agents": "智能体",
+    "nav.paper": "PaperAgent",
+    "nav.code": "CodeAgent",
+    "nav.imageJudge": "ImageJudge",
+    "home.newChat": "新对话",
+    "home.recentActivities": "最近对话",
+    "home.paperAgent": "论文智能体",
+    "home.signInRegister": "登录 / 注册",
+    "home.exportPdf": "导出 PDF",
+    "auth.signInTitle": "登录后使用 PaperAgent",
+    "auth.signInDescription": "登录后即可保存对话，并使用论文检索和阅读工具。",
+    "auth.signIn": "登录 / 注册",
+    "home.emptyTitle": "今天想让我帮你做什么？",
+    "role.you": "你",
+    "role.assistant": "助手",
+    "composer.signInPlaceholder": "登录后开始对话…",
+    "composer.messagePlaceholder": "发送给 PaperAgent…",
+    "composer.retry": "重试",
+    "composer.dismiss": "关闭",
+    "composer.disclaimer": "AI 可能出错，请核查重要信息。",
+    "session.noActivities": "暂无对话",
+    "session.untitled": "未命名对话",
+    "session.confirm": "确认",
+    "session.cancel": "取消",
+    "session.edit": "编辑对话标题",
+    "session.delete": "删除对话",
+    "session.confirmDelete": "确认删除对话",
+    "session.cancelDelete": "取消删除对话",
+    "run.running": "运行中：{{tool}}",
+    "run.retrying": "重试中（{{reason}}）{{attempt}}",
+    "run.generating": "生成回答（{{seconds}} 秒）{{attempt}}",
+    "run.thinking": "思考中（{{seconds}} 秒）{{attempt}}{{suffix}}",
+    "run.firstChunkTimeout": "首段响应超时",
+    "run.processing": "处理中",
+    "run.toolTriggered": " · 工具已触发",
+    "run.tool": "工具",
+    "error.backendUnavailable": "后端服务不可用",
+    "error.loadSessions": "加载对话失败：{{message}}",
+    "error.loadSessionsToast": "加载对话失败，请确认服务正在运行。",
+    "error.loadMessages": "加载消息失败：{{message}}",
+    "error.loadMessagesToast": "加载消息失败，请重试。",
+    "error.createSession": "创建对话失败，请重试。",
+    "error.loadHistory": "发送前加载对话历史失败，请重试。",
+    "error.updateTitle": "更新对话标题失败。",
+    "error.runningDelete": "对话仍在运行，请先停止后再删除。",
+    "error.runningWait": "对话仍在运行，请等待或先停止。",
+    "error.deleteSession": "删除对话失败。",
+    "error.network": "网络连接失败",
+    "error.networkToast": "网络连接失败。",
+    "error.connection": "连接错误",
+    "error.paperUnavailable": "当前对话无法访问这篇论文。请先搜索它，再读取全文。",
+    "upload.onlyPdf": "只支持 PDF 文件。",
+    "upload.createSession": "创建对话失败，无法上传论文。",
+    "upload.success": "已上传：{{filename}}",
+    "upload.failed": "上传失败：{{message}}",
+    "upload.unknown": "未知错误",
+    "upload.message": "已上传论文 **{{filename}}**。\n参考：`uploaded://{{paperId}}`。现在可以让 PaperAgent 根据它生成阅读指南。",
+    "upload.unsupported": "当前版本暂不支持 PDF 上传。",
+    "error.pageTitle": "页面加载失败",
+    "error.pageDescription": "应用遇到错误，请重试或刷新页面。",
+    "error.retry": "重试",
+    "error.reload": "刷新",
+    "code.title": "CodeAgent 安装教程",
+    "code.description": "按照以下官方资料和命令即可完成 Codex 的安装与登录。",
+    "code.quickInstall": "快速安装命令",
+    "code.copy": "复制 {{command}}",
+    "code.guideCli": "Codex CLI 入门",
+    "code.guideRepo": "openai/codex",
+    "code.guideLogin": "使用 ChatGPT 登录 Codex",
+    "image.badge": "桌面视觉分类工具",
+    "image.description": "ImageJudge 是一款基于参考图的桌面图像分类工具。提供一张参考图，即可按你定义的类别对目标文件夹中的图片进行分类。",
+    "image.download": "下载最新版本",
+    "image.releaseNotes": "查看发行说明",
+    "image.platforms": "Windows：包含 ImageJudge.exe 的 ZIP · Linux：amd64 DEB 安装包",
+    "image.forTitle": "适用场景",
+    "image.forDescription": "适用于性状识别及其他视觉分类任务：用自然语言描述规则，并提供一张有代表性的参考图。",
+    "image.getTitle": "你将获得",
+    "image.resultOrder": "参考图优先的图片顺序",
+    "image.resultRows": "结构化 PASS / REVIEW / FAILED 结果",
+    "image.localData": "本地 SQLite 与 CSV 数据",
+    "image.quickStart": "快速开始",
+    "image.quickStartDescription": "默认流程只展示必要选项，把进阶设置收起。",
+    "image.usage": "使用方法",
+    "image.install": "安装",
+    "image.installDescription": "下载适合你操作系统的最新安装包并启动 ImageJudge。",
+    "image.choose": "选择图片",
+    "image.chooseDescription": "选择一张参考图和一个目标文件夹，文件夹默认递归扫描。",
+    "image.rule": "设置规则",
+    "image.ruleDescription": "用自然语言描述视觉类别或比较规则。",
+    "image.review": "查看结果",
+    "image.reviewDescription": "检查 PASS、REVIEW 和 FAILED 行，并导出结构化 CSV 或 SQLite 数据。",
+  },
+  en: {
+    "language.switchToEnglish": "English",
+    "language.switchToChinese": "中文",
+    "nav.agents": "Agents",
+    "nav.paper": "PaperAgent",
+    "nav.code": "CodeAgent",
+    "nav.imageJudge": "ImageJudge",
+    "home.newChat": "New chat",
+    "home.recentActivities": "Recent conversations",
+    "home.paperAgent": "Paper Agent",
+    "home.signInRegister": "Sign in / Register",
+    "home.exportPdf": "Export PDF",
+    "auth.signInTitle": "Sign in to use PaperAgent",
+    "auth.signInDescription": "Sign in to save conversations and use paper search and reading tools.",
+    "auth.signIn": "Sign in / Register",
+    "home.emptyTitle": "How can I help you today?",
+    "role.you": "You",
+    "role.assistant": "Assistant",
+    "composer.signInPlaceholder": "Sign in to start a conversation…",
+    "composer.messagePlaceholder": "Message PaperAgent…",
+    "composer.retry": "Retry",
+    "composer.dismiss": "Dismiss",
+    "composer.disclaimer": "AI can make mistakes. Check important info.",
+    "session.noActivities": "No conversations yet",
+    "session.untitled": "Untitled conversation",
+    "session.confirm": "Confirm",
+    "session.cancel": "Cancel",
+    "session.edit": "Edit conversation title",
+    "session.delete": "Delete conversation",
+    "session.confirmDelete": "Confirm delete conversation",
+    "session.cancelDelete": "Cancel delete conversation",
+    "run.running": "Running: {{tool}}",
+    "run.retrying": "Retrying ({{reason}}){{attempt}}",
+    "run.generating": "Generating response ({{seconds}}s){{attempt}}",
+    "run.thinking": "Thinking ({{seconds}}s){{attempt}}{{suffix}}",
+    "run.firstChunkTimeout": "first chunk timeout",
+    "run.processing": "processing",
+    "run.toolTriggered": " · tool triggered",
+    "run.tool": "tool",
+    "error.backendUnavailable": "Backend service is unavailable",
+    "error.loadSessions": "Failed to load sessions: {{message}}",
+    "error.loadSessionsToast": "Failed to load sessions. Check that the backend is running.",
+    "error.loadMessages": "Failed to load messages: {{message}}",
+    "error.loadMessagesToast": "Failed to load messages. Try again.",
+    "error.createSession": "Failed to create a session. Try again.",
+    "error.loadHistory": "Failed to load conversation history. Try again.",
+    "error.updateTitle": "Failed to update the conversation title.",
+    "error.runningDelete": "This conversation is still running. Stop it before deleting.",
+    "error.runningWait": "This conversation is still running. Wait or stop it first.",
+    "error.deleteSession": "Failed to delete the conversation.",
+    "error.network": "Network connection failed",
+    "error.networkToast": "Network connection failed.",
+    "error.connection": "Connection error",
+    "error.paperUnavailable": "This paper is not available in the current session. Search for it first, then read it.",
+    "upload.onlyPdf": "Only PDF files are supported.",
+    "upload.createSession": "Failed to create a session, so the paper cannot be uploaded.",
+    "upload.success": "Uploaded: {{filename}}",
+    "upload.failed": "Upload failed: {{message}}",
+    "upload.unknown": "Unknown error",
+    "upload.message": "Uploaded paper **{{filename}}**.\nReference: `uploaded://{{paperId}}`. You can now ask PaperAgent to create a guide from it.",
+    "upload.unsupported": "PDF upload is not available in this version.",
+    "error.pageTitle": "Page failed to load",
+    "error.pageDescription": "The application encountered an error. Try again or refresh the page.",
+    "error.retry": "Retry",
+    "error.reload": "Reload",
+    "code.title": "CodeAgent setup",
+    "code.description": "Use the official resources and commands below to install and sign in to Codex.",
+    "code.quickInstall": "Quick install commands",
+    "code.copy": "Copy {{command}}",
+    "code.guideCli": "Codex CLI getting started",
+    "code.guideRepo": "openai/codex",
+    "code.guideLogin": "Sign in to Codex with ChatGPT",
+    "image.badge": "Desktop visual classification",
+    "image.description": "ImageJudge is a focused desktop tool for reference-guided image classification. Provide one reference image and classify a target folder into the categories you define.",
+    "image.download": "Download latest release",
+    "image.releaseNotes": "View release notes",
+    "image.platforms": "Windows: ZIP with ImageJudge.exe · Linux: amd64 DEB package",
+    "image.forTitle": "What it is for",
+    "image.forDescription": "ImageJudge is designed for trait recognition and other visual category tasks where a human can describe the rule and provide a representative reference image.",
+    "image.getTitle": "What you get",
+    "image.resultOrder": "Reference-first image order",
+    "image.resultRows": "Structured PASS / REVIEW / FAILED results",
+    "image.localData": "Local SQLite and CSV projections",
+    "image.quickStart": "Quick start",
+    "image.quickStartDescription": "The default workflow keeps the important choices visible and the advanced controls out of the way.",
+    "image.usage": "Usage",
+    "image.install": "Install",
+    "image.installDescription": "Download the latest package for your operating system and launch ImageJudge.",
+    "image.choose": "Choose images",
+    "image.chooseDescription": "Select one reference image and a target folder. Folder scanning is recursive by default.",
+    "image.rule": "Set the rule",
+    "image.ruleDescription": "Describe the visual categories or comparison rule in plain language.",
+    "image.review": "Review results",
+    "image.reviewDescription": "Inspect PASS, REVIEW, and FAILED rows, then export the structured CSV or SQLite data.",
+  },
+} as const;
+
+export type TranslationKey = keyof typeof messages.en;
+type TranslationValues = Record<string, string | number>;
+
+function interpolate(template: string, values?: TranslationValues): string {
+  if (!values) return template;
+  return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(values[key] ?? ""));
+}
+
+export function translate(language: Language, key: TranslationKey, values?: TranslationValues): string {
+  const template = messages[language][key] ?? messages.en[key];
+  return interpolate(template, values);
+}
+
+interface LanguageContextValue {
+  language: Language;
+  setLanguage: (language: Language) => void;
+  t: (key: TranslationKey, values?: TranslationValues) => string;
+}
+
+const LanguageContext = createContext<LanguageContextValue | null>(null);
+const STORAGE_KEY = "infinity-agents-language";
+
+export function LanguageProvider({ children }: { children: ReactNode }) {
+  const [language, setLanguage] = useState<Language>("zh");
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (stored !== "zh" && stored !== "en") return;
+    const timer = window.setTimeout(() => setLanguage(stored), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_KEY, language);
+    document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
+  }, [language]);
+
+  const value = useMemo<LanguageContextValue>(
+    () => ({ language, setLanguage, t: (key, values) => translate(language, key, values) }),
+    [language],
+  );
+
+  return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
+}
+
+export function useLanguage(): LanguageContextValue {
+  const context = useContext(LanguageContext);
+  if (!context) throw new Error("useLanguage must be used inside LanguageProvider");
+  return context;
+}
+
+export function LanguageToggle() {
+  const { language, setLanguage, t } = useLanguage();
+  const nextLanguage: Language = language === "zh" ? "en" : "zh";
+  return (
+    <button
+      type="button"
+      data-testid="language-toggle"
+      className="rounded-lg border border-[var(--hairline)] bg-white/70 px-2.5 py-1.5 text-xs font-medium text-zinc-600 transition-colors hover:bg-white hover:text-zinc-900"
+      onClick={() => setLanguage(nextLanguage)}
+      aria-label={language === "zh" ? t("language.switchToEnglish") : t("language.switchToChinese")}
+    >
+      {language === "zh" ? "English" : "中文"}
+    </button>
+  );
+}
