@@ -31,7 +31,7 @@
     "ZHANG_AUTH_BASE_URL": "https://auth.zhangyvjing.com",
     "ZHANG_AUTH_JWKS_URL": "https://auth.zhangyvjing.com/.well-known/jwks.json",
     "ZHANG_AUTH_CLIENT_ID": "infinity-agents",
-    "ZHANG_AUTH_AUD": "zhang-services",
+    "ZHANG_AUTH_AUD": "infinity-agents",
     "DAILY_QUOTA": "20",
 
     "IMAGE_JUDGE_ZHANG_AUTH_ISSUER": "https://auth.zhangyvjing.com",

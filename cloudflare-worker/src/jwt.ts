@@ -5,10 +5,10 @@ import type { Env } from "./env";
 
 export interface AccessTokenPayload {
   sub: string;
-  email: string;
+  email?: string;
   role: string;
   iss: string;
-  aud: string;
+  aud: string | string[];
   type: string;
   iat: number;
   exp: number;
@@ -95,10 +95,66 @@ export async function verifyAccessToken(token: string, env: Env): Promise<Access
   if (payload.exp <= Math.floor(Date.now() / 1000)) {
     throw new Error("Access token expired");
   }
-  if (env.ZHANG_AUTH_AUD && payload.aud !== env.ZHANG_AUTH_AUD) {
+  const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+  if (env.ZHANG_AUTH_AUD && !audiences.includes(env.ZHANG_AUTH_AUD)) {
     throw new Error("Invalid audience");
   }
   return payload;
+}
+
+/** Verify an OIDC ID token and bind it to the login transaction nonce. */
+export async function verifyIdToken(token: string, env: Env, expectedNonce: string): Promise<void> {
+  const parts = token.split(".");
+  if (parts.length !== 3) throw new Error("Invalid ID token format");
+  const [encodedHeader, encodedPayload, encodedSignature] = parts;
+  let header: { alg?: string; kid?: string };
+  let payload: {
+    iss?: string;
+    sub?: string;
+    aud?: string | string[];
+    nonce?: string;
+    iat?: number;
+    exp?: number;
+  };
+  try {
+    header = JSON.parse(new TextDecoder().decode(base64UrlToBytes(encodedHeader))) as typeof header;
+    payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(encodedPayload))) as typeof payload;
+  } catch {
+    throw new Error("Invalid ID token claims");
+  }
+  if (header.alg !== "ES256" || !header.kid) throw new Error("Invalid ID token header");
+
+  const keys = await loadJwks(env);
+  const jwk = keys.find((key) => (key as JsonWebKey & { kid?: string }).kid === header.kid);
+  if (!jwk) throw new Error("Unknown ID token signing key");
+  const key = await crypto.subtle.importKey(
+    "jwk",
+    jwk,
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["verify"],
+  );
+  const valid = await crypto.subtle.verify(
+    { name: "ECDSA", hash: "SHA-256" },
+    key,
+    base64UrlToBytes(encodedSignature),
+    new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`),
+  );
+  if (!valid) throw new Error("ID token signature verification failed");
+
+  const now = Math.floor(Date.now() / 1000);
+  const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+  if (
+    payload.iss !== env.ZHANG_AUTH_BASE_URL.replace(/\/$/, "") ||
+    !audiences.includes(env.ZHANG_AUTH_CLIENT_ID) ||
+    payload.nonce !== expectedNonce ||
+    !payload.sub ||
+    typeof payload.exp !== "number" ||
+    payload.exp <= now ||
+    (typeof payload.iat === "number" && payload.iat > now + 60)
+  ) {
+    throw new Error("Invalid ID token claims");
+  }
 }
 
 /** Decode payload without verifying (used to read exp before deciding to refresh). */
