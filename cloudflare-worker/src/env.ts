@@ -9,6 +9,12 @@ export interface Env {
   ASSETS: Fetcher;
   CHAT_RATE_LIMITER: RateLimitBinding;
 
+  // ImageJudge uses isolated resources and secrets. It is routed through this
+  // Worker under /image-judge/* and never reads PaperAgent's chat database.
+  IMAGE_JUDGE_DB: D1Database;
+  IMAGE_JUDGE_KV: KVNamespace;
+  IMAGE_JUDGE_USER_LOCK: DurableObjectNamespace;
+
   // Vars
   STEPFUN_BASE_URL: string;
   STEPFUN_MODEL: string;
@@ -19,9 +25,22 @@ export interface Env {
   ZHANG_AUTH_AUD: string;
   DAILY_QUOTA: string;
 
+  IMAGE_JUDGE_ZHANG_AUTH_ISSUER: string;
+  IMAGE_JUDGE_OIDC_CLIENT_ID: string;
+  IMAGE_JUDGE_OIDC_REDIRECT_URI: string;
+  IMAGE_JUDGE_DASHSCOPE_BASE_URL: string;
+  IMAGE_JUDGE_MODEL_ID: string;
+  IMAGE_JUDGE_DAILY_QUOTA: string;
+  IMAGE_JUDGE_ACCESS_TOKEN_TTL_SECONDS: string;
+  IMAGE_JUDGE_REFRESH_TOKEN_TTL_SECONDS: string;
+  IMAGE_JUDGE_MAX_IMAGE_BYTES: string;
+
   // Secrets
   STEPFUN_API_KEY: string;
   ZHANG_AUTH_CLIENT_SECRET: string;
+  IMAGE_JUDGE_ZHANG_AUTH_CLIENT_SECRET?: string;
+  IMAGE_JUDGE_TOKEN_SIGNING_SECRET?: string;
+  IMAGE_JUDGE_DASHSCOPE_API_KEY?: string;
 }
 
 export const SESSION_COOKIE = "ia_session";
