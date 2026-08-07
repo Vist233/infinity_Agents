@@ -1,0 +1,100 @@
+"""Infinity Agent — Local development docker-compose configuration.
+
+Starts:
+- PostgreSQL (existing, assumed running)
+- Redis (for task queue and event streaming)
+- Worker A
+- Worker B
+"""
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  worker-a:
+    image: infinity-agent-worker:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.worker
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379/0
+      - WORKER_ID=worker-a
+      - CODE_AGENT_DOCKER_IMAGE=claude-code-env:v2
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./backend:/app/backend
+      - ./workspace:/workspace
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: python -m backend.code_agent.worker.consumer worker-a
+
+  worker-b:
+    image: infinity-agent-worker:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.worker
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379/0
+      - WORKER_ID=worker-b
+      - CODE_AGENT_DOCKER_IMAGE=claude-code-env:v2
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./backend:/app/backend
+      - ./workspace:/workspace
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: python -m backend.code_agent.worker.consumer worker-b
+
+  outbox-publisher:
+    image: infinity-agent-worker:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.worker
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./backend:/app/backend
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: python -c "
+import asyncio
+import logging
+from backend.code_agent.outbox import OutboxPublisher
+from backend.code_agent.redis_client import RedisClient
+import asyncpg
+import os
+
+logging.basicConfig(level=logging.INFO)
+async def main():
+    pool = await asyncpg.create_pool(os.environ['DATABASE_URL'])
+    redis = RedisClient(os.environ['REDIS_URL'])
+    publisher = OutboxPublisher(pool, redis, poll_interval=1.0)
+    await publisher.start()
+    try:
+        while True:
+            await asyncio.sleep(1)
+    except KeyboardInterrupt:
+        await publisher.stop()
+asyncio.run(main())
+"
+
+volumes:
+  redis-data:

@@ -19,6 +19,8 @@ import json
 import hashlib
 from agent.util import estimate_tokens
 import uuid
+
+logger = logging.getLogger(__name__)
 from backend.db import (
     insert_session,
     init_db,
@@ -87,7 +89,42 @@ async def lifespan(app):
     app.state.token_verifier = TokenVerifier()
     app.state.session_agents = {}
     app.state.session_meta = {}
+
+    # Start Outbox Publisher if Redis is available
+    try:
+        from backend.code_agent.outbox import OutboxPublisher
+        from backend.code_agent.redis_client import RedisClient
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        redis_client = RedisClient(redis_url)
+        await redis_client.connect()
+        if redis_client.is_connected:
+            app.state.outbox_publisher = OutboxPublisher(
+                app.state.db_pool, redis_client, poll_interval=1.0
+            )
+            await app.state.outbox_publisher.start()
+            app.state.redis_client = redis_client
+            logger.info("Outbox Publisher started")
+        else:
+            app.state.outbox_publisher = None
+            app.state.redis_client = None
+    except Exception as exc:
+        logger.warning("Outbox Publisher not started: %s", exc)
+        app.state.outbox_publisher = None
+        app.state.redis_client = None
+
     yield
+
+    # Cleanup
+    if hasattr(app.state, "outbox_publisher") and app.state.outbox_publisher:
+        try:
+            await app.state.outbox_publisher.stop()
+        except Exception:
+            pass
+    if hasattr(app.state, "redis_client") and app.state.redis_client:
+        try:
+            await app.state.redis_client.disconnect()
+        except Exception:
+            pass
     await close_db(app)
 
 app = FastAPI(lifespan=lifespan)
@@ -1435,3 +1472,713 @@ if __name__ == "__main__":
     if not os.getenv("MOONSHOT_API_KEY"):
         print("Warning: MOONSHOT_API_KEY not found in environment variables.")
     uvicorn.run(app, host="0.0.0.0", port=8008)
+
+
+# ============================================================================
+# CodeAgent Integration
+# ============================================================================
+
+import secrets
+
+from backend.code_agent.service import run_code_agent_stream
+from backend.code_agent.analysis_agent import run_analysis_stream
+
+
+import time
+
+class _CodeSessionState:
+    __slots__ = ("messages", "run_state", "created_at", "last_used")
+    def __init__(self) -> None:
+        self.messages: list[dict] = []
+        self.run_state: dict = {
+            "running": False,
+            "phase": None,
+            "toolName": None,
+            "elapsedMs": 0,
+            "attempt": 1,
+            "maxAttempts": 1,
+            "tokenInfo": None,
+            "terminal": None,
+        }
+        self.created_at = time.monotonic()
+        self.last_used = self.created_at
+
+
+_code_sessions: dict[str, _CodeSessionState] = {}
+_CODE_SESSION_TTL = 3600  # 1 hour idle timeout
+_CODE_SESSION_MAX = 1000  # max concurrent sessions
+_CODE_CLEANUP_INTERVAL = 300  # clean every 5 minutes
+_CODE_LAST_CLEANUP = [0.0]
+
+
+def _cleanup_code_sessions() -> None:
+    now = time.monotonic()
+    if now - _CODE_LAST_CLEANUP[0] < _CODE_CLEANUP_INTERVAL:
+        return
+    _CODE_LAST_CLEANUP[0] = now
+    expired = [sid for sid, s in _code_sessions.items() if now - s.last_used > _CODE_SESSION_TTL]
+    for sid in expired:
+        del _code_sessions[sid]
+    if len(_code_sessions) > _CODE_SESSION_MAX:
+        oldest_first = sorted(_code_sessions.items(), key=lambda item: item[1].last_used)
+        excess = len(_code_sessions) - _CODE_SESSION_MAX
+        for sid, _ in oldest_first[:excess]:
+            del _code_sessions[sid]
+
+
+@app.post("/api/code/sessions")
+async def create_code_session():
+    _cleanup_code_sessions()
+    session_id = secrets.token_hex(16)
+    _code_sessions[session_id] = _CodeSessionState()
+    return {"session_id": session_id}
+
+
+@app.get("/api/code/sessions/{session_id}/messages")
+async def get_code_session_messages(session_id: str):
+    _cleanup_code_sessions()
+    state = _code_sessions.get(session_id)
+    if not state:
+        return []
+    state.last_used = time.monotonic()
+    return state.messages
+
+
+@app.websocket("/ws/code")
+async def code_ws_endpoint(websocket: WebSocket):
+    """CodeAgent WebSocket endpoint.
+
+    Unlike /ws/chat, this endpoint intentionally does NOT require JWT auth.
+    CodeAgent sessions are anonymous and created via /api/code/sessions without
+    user authentication.
+    """
+    await websocket.accept()
+    session_id: str | None = None
+    state: _CodeSessionState | None = None
+    try:
+        raw = await websocket.receive_json()
+        session_id = raw.get("session_id")
+        messages = raw.get("messages", [])
+        _cleanup_code_sessions()
+        if not session_id or session_id not in _code_sessions:
+            await websocket.send_json({"type": "error", "message": "Invalid session_id"})
+            await websocket.close(code=1003)
+            return
+        state = _code_sessions[session_id]
+        state.last_used = time.monotonic()
+        user_query = ""
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                user_query = m.get("content", "")
+                break
+        if not user_query.strip():
+            await websocket.send_json({"type": "error", "message": "Empty query"})
+            await websocket.close(code=1003)
+            return
+        state.messages.append({"role": "user", "content": user_query})
+        state.run_state.update({"running": True, "phase": "thinking", "toolName": None, "terminal": None})
+        await websocket.send_json({"type": "status", "phase": "thinking", "elapsed_ms": 0, "attempt": 1, "max_attempts": 1})
+        response_text = ""
+
+        async def _safe_send(payload: Dict[str, Any]) -> None:
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                pass
+
+        async for event in run_code_agent_stream(user_query):
+            etype = event.get("type")
+            if etype == "status":
+                state.run_state["phase"] = event.get("phase")
+                state.run_state["toolName"] = event.get("tool_name")
+                state.run_state["elapsedMs"] = event.get("elapsed_ms", 0)
+                await _safe_send(event)
+            elif etype == "chunk":
+                response_text += event.get("content", "")
+                await _safe_send(event)
+            elif etype == "done":
+                state.run_state.update({"running": False, "phase": None, "terminal": "success", "tokenInfo": event.get("token_info")})
+                await _safe_send(event)
+            elif etype == "error":
+                state.run_state.update({"running": False, "phase": None, "terminal": "error"})
+                await _safe_send(event)
+        if response_text:
+            state.messages.append({"role": "assistant", "content": response_text})
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        logging.exception("CodeAgent WS error")
+        try:
+            await websocket.send_json({"type": "error", "message": str(exc)})
+        except Exception:
+            pass
+    finally:
+        if session_id and session_id in _code_sessions:
+            _code_sessions[session_id].last_used = time.monotonic()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+@app.websocket("/ws/analysis")
+async def analysis_ws_endpoint(websocket: WebSocket):
+    """Analysis Agent WebSocket endpoint.
+
+    Generates TaskSpec drafts from user conversations without executing
+    analysis directly.
+    """
+    await websocket.accept()
+    try:
+        raw = await websocket.receive_json()
+        session_id = raw.get("session_id")
+        messages = raw.get("messages", [])
+        if not session_id:
+            await websocket.send_json({"type": "error", "message": "Missing session_id"})
+            await websocket.close(code=1003)
+            return
+
+        user_query = ""
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                user_query = m.get("content", "")
+                break
+        if not user_query.strip():
+            await websocket.send_json({"type": "error", "message": "Empty query"})
+            await websocket.close(code=1003)
+            return
+
+        async def _safe_send(payload: Dict[str, Any]) -> None:
+            try:
+                await websocket.send_json(payload)
+            except Exception:
+                pass
+
+        async for event in run_analysis_stream(user_query, messages=messages):
+            await _safe_send(event)
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        logging.exception("AnalysisAgent WS error")
+        try:
+            await websocket.send_json({"type": "error", "message": str(exc)})
+        except Exception:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+# ============================================================================
+# Task Execution System (Infinity Agent)
+# ============================================================================
+
+from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
+
+from backend.code_agent.task_service import (
+    check_idempotency,
+    store_idempotency_key,
+    create_task_spec,
+    create_dataset_snapshot,
+    create_task,
+    get_task,
+    get_tasks_by_project,
+    update_task_status,
+    renew_lease,
+    create_task_event,
+    get_task_events,
+    create_outbox_event,
+    get_pending_outbox_events,
+    mark_outbox_published,
+    create_artifact,
+    get_artifacts_for_task,
+    get_artifact,
+    request_cancel_task,
+    TaskStatus,
+    TaskSpec,
+    DatasetSnapshot,
+    Task,
+)
+from backend.code_agent.redis_client import RedisClient
+
+
+# ---- Pydantic models ----
+
+class CreateTaskSpecRequest(BaseModel):
+    project_id: str
+    title: str
+    analysis_type: str
+    research_question: str
+    spec_json: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CreateDatasetRequest(BaseModel):
+    project_id: str
+    task_spec_id: str
+    original_filename: str
+    stored_path: str
+    file_hash_sha256: Optional[str] = None
+    validation_passed: bool = False
+
+
+class CreateTaskRequest(BaseModel):
+    project_id: str
+    task_spec_id: str
+    dataset_snapshot_id: str
+    title: str
+    idempotency_key: Optional[str] = None
+    max_attempts: int = Field(default=3, ge=1, le=10)
+
+
+class DatasetUploadResponse(BaseModel):
+    stored_path: str
+    file_hash_sha256: str
+    file_size_bytes: int
+
+
+class TaskResponse(BaseModel):
+    task_id: str
+    task_spec_id: str
+    dataset_snapshot_id: str
+    project_id: str
+    title: str
+    status: str
+    attempt_count: int
+    max_attempts: int
+    created_at: Optional[str] = None
+
+
+class TaskEventResponse(BaseModel):
+    task_event_id: int
+    event_type: str
+    event_data: Dict[str, Any]
+    created_at: Optional[str] = None
+
+
+class ArtifactResponse(BaseModel):
+    artifact_id: str
+    name: str
+    kind: str
+    storage_path: str
+    file_size_bytes: Optional[int] = None
+    checksum_sha256: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+# ---- Redis client singleton ----
+
+_redis_client: Optional[RedisClient] = None
+
+
+def get_redis_client() -> Optional[RedisClient]:
+    global _redis_client
+    if _redis_client is None:
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        _redis_client = RedisClient(redis_url)
+    return _redis_client
+
+
+# ---- Task API endpoints ----
+
+@app.post("/api/task-specs", response_model=Dict[str, Any])
+async def create_task_spec_endpoint(request: CreateTaskSpecRequest):
+    """Create a new TaskSpec."""
+    pool = app.state.db_pool
+    spec = TaskSpec(
+        task_spec_id=str(uuid.uuid4()),
+        project_id=request.project_id,
+        title=request.title,
+        analysis_type=request.analysis_type,
+        research_question=request.research_question,
+        spec_json=request.spec_json,
+    )
+    result = await create_task_spec(pool, spec)
+    return {
+        "task_spec_id": result.task_spec_id,
+        "revision": result.revision,
+        "status": result.status,
+        "created_at": result.created_at,
+    }
+
+
+@app.post("/api/dataset-snapshots/upload", response_model=Dict[str, Any])
+async def upload_dataset_endpoint(file: UploadFile = File(...)):
+    """Upload a dataset file and return its stored path + hash."""
+    import hashlib
+    import os
+    from pathlib import Path as FPath
+
+    upload_root = FPath(os.getenv("DATASET_UPLOAD_ROOT", "/tmp/uploaded-datasets"))
+    upload_root.mkdir(parents=True, exist_ok=True)
+
+    # Sanitize filename — reject path traversal
+    safe_name = FPath(file.filename or "dataset.bin").name
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Empty filename")
+
+    stored_path = str(upload_root / safe_name)
+
+    # Read file and compute SHA-256
+    content = await file.read()
+    file_hash = hashlib.sha256(content).hexdigest()
+
+    # Write file
+    with open(stored_path, "wb") as f:
+        f.write(content)
+
+    return {
+        "stored_path": stored_path,
+        "file_hash_sha256": file_hash,
+        "file_size_bytes": len(content),
+        "original_filename": file.filename,
+    }
+
+
+@app.post("/api/dataset-snapshots", response_model=Dict[str, Any])
+async def create_dataset_endpoint(request: CreateDatasetRequest):
+    """Create a dataset snapshot."""
+    pool = app.state.db_pool
+    snapshot = DatasetSnapshot(
+        dataset_snapshot_id=str(uuid.uuid4()),
+        task_spec_id=request.task_spec_id,
+        project_id=request.project_id,
+        original_filename=request.original_filename,
+        stored_path=request.stored_path,
+        validation_passed=request.validation_passed,
+    )
+    if request.file_hash_sha256:
+        snapshot.file_hash_sha256 = request.file_hash_sha256
+    result = await create_dataset_snapshot(pool, snapshot)
+    return {
+        "dataset_snapshot_id": result.dataset_snapshot_id,
+        "version": result.version,
+        "created_at": result.created_at,
+    }
+
+
+@app.post("/api/tasks", response_model=Dict[str, Any])
+async def create_task_endpoint(request: CreateTaskRequest):
+    """Create a new task with idempotency support."""
+    pool = app.state.db_pool
+
+    # Check idempotency
+    if request.idempotency_key:
+        existing = await check_idempotency(pool, request.idempotency_key)
+        if existing and existing["resource_type"] == "task":
+            existing_task = await get_task(pool, existing["resource_id"])
+            if existing_task:
+                return {
+                    "task_id": existing_task["task_id"],
+                    "status": existing_task["status"],
+                    "duplicate": True,
+                }
+
+    task = Task(
+        task_id=str(uuid.uuid4()),
+        task_spec_id=request.task_spec_id,
+        dataset_snapshot_id=request.dataset_snapshot_id,
+        project_id=request.project_id,
+        title=request.title,
+        status="queued",
+        max_attempts=request.max_attempts,
+    )
+
+    result, is_new = await create_task(pool, task, idempotency_key=request.idempotency_key)
+
+    # Publish to outbox if new
+    if is_new and result.task_id:
+        try:
+            await create_outbox_event(
+                pool,
+                aggregate_type="task",
+                aggregate_id=result.task_id,
+                event_type="task_queued",
+                payload={"task_id": result.task_id, "status": "queued"},
+            )
+        except Exception:
+            pass  # Outbox will be picked up by publisher
+
+    return {
+        "task_id": result.task_id,
+        "status": result.status,
+        "attempt_count": result.attempt_count,
+        "duplicate": False,
+    }
+
+
+@app.get("/api/tasks/{task_id}")
+async def get_task_endpoint(task_id: str):
+    """Get task details."""
+    pool = app.state.db_pool
+    task = await get_task(pool, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
+@app.get("/api/tasks/{task_id}/events", response_model=List[TaskEventResponse])
+async def get_task_events_endpoint(task_id: str, limit: int = 100):
+    """Get task events."""
+    pool = app.state.db_pool
+    events = await get_task_events(pool, task_id, limit=limit)
+    return events
+
+
+@app.get("/api/tasks/{task_id}/artifacts", response_model=List[ArtifactResponse])
+async def get_task_artifacts_endpoint(task_id: str):
+    """Get task artifacts."""
+    pool = app.state.db_pool
+    artifacts = await get_artifacts_for_task(pool, task_id)
+    return artifacts
+
+
+def _validate_artifact_path(storage_path: str) -> FilePath:
+    """Validate an artifact storage path for safe download.
+
+    Rejects symlinks, path traversal, and paths outside the allowed root.
+    """
+    resolved = FilePath(storage_path).resolve()
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="Artifact file not found")
+    if resolved.is_symlink():
+        raise HTTPException(status_code=403, detail="Symlinked artifacts are not allowed")
+    allowed_root = FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", "/tmp/task-outputs")).resolve()
+    try:
+        resolved.relative_to(allowed_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Artifact path is outside the allowed directory")
+    return resolved
+
+
+@app.get("/api/artifacts/{artifact_id}")
+async def download_artifact_endpoint(artifact_id: str):
+    """Download an artifact ZIP file."""
+    pool = app.state.db_pool
+    artifact = await get_artifact(pool, artifact_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    storage_path = artifact.get("storage_path") or ""
+    if not storage_path:
+        raise HTTPException(status_code=404, detail="Artifact has no storage path")
+
+    resolved = _validate_artifact_path(storage_path)
+    return FileResponse(
+        str(resolved),
+        media_type=artifact.get("content_type") or "application/zip",
+        filename=f"{artifact.get('name', 'artifact')}.zip",
+    )
+
+
+@app.post("/api/tasks/{task_id}/cancel")
+async def cancel_task_endpoint(task_id: str):
+    """Cancel a running or queued task."""
+    pool = app.state.db_pool
+    task = await get_task(pool, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task["status"] not in ("queued", "claimed", "running"):
+        raise HTTPException(status_code=400, detail=f"Cannot cancel task in status: {task['status']}")
+
+    if task["status"] in ("queued",):
+        result = await update_task_status(pool, task_id, TaskStatus.CANCELLED)
+        if not result:
+            raise HTTPException(status_code=400, detail="Failed to cancel task")
+        return {"task_id": task_id, "status": "cancelled"}
+
+    # For claimed/running tasks, request cancellation so the worker can
+    # gracefully stop the Docker container before finalizing the status.
+    result = await request_cancel_task(pool, task_id)
+    if not result:
+        raise HTTPException(status_code=400, detail="Failed to request cancellation")
+    return {"task_id": task_id, "status": result["status"], "cancel_requested": True}
+
+
+@app.get("/api/tasks")
+async def list_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50):
+    """List tasks, optionally filtered by project."""
+    pool = app.state.db_pool
+    if project_id:
+        tasks = await get_tasks_by_project(pool, project_id, limit=limit)
+    else:
+        # Return all recent tasks
+        query = """
+            SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, title,
+                   status, lease_owner, lease_token, lease_expires_at,
+                   active_attempt_id, attempt_count, max_attempts,
+                   result_artifact_id, error_message, created_by,
+                   created_at, updated_at, finished_at
+            FROM tasks
+            ORDER BY created_at DESC
+            LIMIT $1
+        """
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(query, limit)
+        tasks = [_task_row_to_dict(row) for row in rows]
+    return {"tasks": tasks}
+
+
+# ---- SSE endpoint for task events ----
+
+@app.get("/api/tasks/{task_id}/events/stream")
+async def task_events_sse_endpoint(task_id: str, last_event_id: Optional[str] = None):
+    """SSE endpoint for real-time task events."""
+    async def event_generator():
+        pool = app.state.db_pool
+        redis = get_redis_client()
+
+        # Send initial state
+        task = await get_task(pool, task_id)
+        if not task:
+            yield {"event": "error", "data": json.dumps({"message": "Task not found"})}
+            return
+
+        yield {
+            "event": "task_state",
+            "data": json.dumps({
+                "task_id": task_id,
+                "status": task["status"],
+                "attempt_count": task["attempt_count"],
+            }),
+        }
+
+        # If Redis is available, stream from there
+        if redis and redis.is_connected:
+            seen_ids = set()
+            if last_event_id:
+                seen_ids.add(last_event_id)
+
+            while True:
+                events = await redis.read_task_events(task_id, last_event_id=last_event_id, count=20)
+                for event in events:
+                    msg_id = event.get("_message_id", "")
+                    if msg_id in seen_ids:
+                        continue
+                    seen_ids.add(msg_id)
+                    last_event_id = msg_id
+
+                    yield {
+                        "event": event.get("event_type", "update"),
+                        "id": msg_id,
+                        "data": json.dumps(event),
+                    }
+
+                # Check if task is terminal
+                if task["status"] in ("succeeded", "failed", "cancelled", "timeout"):
+                    yield {"event": "task_terminal", "data": json.dumps({"status": task["status"]})}
+                    break
+
+                await asyncio.sleep(0.5)
+                # Refresh task status
+                task = await get_task(pool, task_id)
+                if not task:
+                    break
+        else:
+            # Fallback: poll database events
+            last_id = 0
+            while True:
+                events = await get_task_events(pool, task_id, limit=50)
+                for event in events:
+                    eid = event.get("task_event_id", 0)
+                    if eid > last_id:
+                        last_id = eid
+                        yield {
+                            "event": event.get("event_type", "update"),
+                            "data": json.dumps(event),
+                        }
+
+                task = await get_task(pool, task_id)
+                if not task or task["status"] in ("succeeded", "failed", "cancelled", "timeout"):
+                    break
+                await asyncio.sleep(1)
+
+    return EventSourceResponse(event_generator())
+
+
+# ---- Worker API endpoints ----
+
+@app.post("/api/worker/poll")
+async def worker_poll_endpoint():
+    """Worker polling endpoint for task discovery (fallback when Redis unavailable)."""
+    pool = app.state.db_pool
+    query = """
+        SELECT task_id, title, status, task_spec_id, dataset_snapshot_id, project_id
+        FROM tasks
+        WHERE status = 'queued'
+          AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+        ORDER BY created_at ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(query)
+    if not row:
+        return {"available": False}
+    return {
+        "available": True,
+        "task_id": str(row["task_id"]),
+        "task_spec_id": str(row["task_spec_id"]),
+        "dataset_snapshot_id": str(row["dataset_snapshot_id"]),
+        "project_id": str(row["project_id"]),
+        "title": row["title"],
+    }
+
+
+@app.post("/api/outbox/publish")
+async def publish_outbox_endpoint():
+    """Manually trigger outbox publishing (for when Redis is unavailable)."""
+    pool = app.state.db_pool
+    redis = get_redis_client()
+    if not redis or not redis.is_connected:
+        # Process in-process without Redis
+        events = await get_pending_outbox_events(pool, 50)
+        processed = 0
+        for event in events:
+            # Just mark as published
+            await mark_outbox_published(pool, event["outbox_event_id"])
+            processed += 1
+        return {"processed": processed, "mode": "in-process"}
+    return {"processed": 0, "mode": "redis"}
+
+
+@app.get("/api/worker/health")
+async def worker_health_endpoint():
+    """Health check for workers."""
+    redis = get_redis_client()
+    workers = []
+    if redis and redis.is_connected:
+        workers = await redis.get_alive_workers()
+    return {
+        "status": "healthy",
+        "redis_connected": redis.is_connected if redis else False,
+        "active_workers": workers,
+    }
+
+
+# ---- Helpers ----
+
+def _task_row_to_dict(row: Any) -> Dict[str, Any]:
+    """Convert a task row to a dictionary."""
+    return {
+        "task_id": str(row["task_id"]),
+        "task_spec_id": str(row["task_spec_id"]),
+        "dataset_snapshot_id": str(row["dataset_snapshot_id"]),
+        "project_id": str(row["project_id"]),
+        "title": row["title"],
+        "status": row["status"],
+        "lease_owner": row["lease_owner"],
+        "lease_token": row["lease_token"],
+        "lease_expires_at": row["lease_expires_at"].isoformat() if row["lease_expires_at"] else None,
+        "active_attempt_id": row["active_attempt_id"],
+        "attempt_count": row["attempt_count"],
+        "max_attempts": row["max_attempts"],
+        "result_artifact_id": row["result_artifact_id"],
+        "error_message": row["error_message"],
+        "created_by": row["created_by"],
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None,
+    }

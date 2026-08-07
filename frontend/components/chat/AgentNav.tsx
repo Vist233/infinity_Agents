@@ -1,17 +1,18 @@
 "use client";
 
-import { FileText, Microscope, Terminal } from "lucide-react";
+import { FileText, Microscope, Terminal, ListTodo } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 
 interface AgentNavProps {
   onNavigate: (path: string) => void;
-  active: "paper" | "code" | "image-judge";
+  active: "paper" | "code" | "image-judge" | "tasks";
 }
 
 const items = [
   { id: "paper", labelKey: "nav.paper", path: "/", icon: FileText },
   { id: "code", labelKey: "nav.code", path: "/code-agent", icon: Terminal },
   { id: "image-judge", labelKey: "nav.imageJudge", path: "/image-judge", icon: Microscope },
+  { id: "tasks", labelKey: "tasks.title", path: "/code-agent/tasks", icon: ListTodo },
 ] as const;
 
 export function AgentNav({ onNavigate, active }: AgentNavProps) {
