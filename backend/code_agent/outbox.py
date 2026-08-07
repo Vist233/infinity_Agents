@@ -87,13 +87,19 @@ class OutboxPublisher:
                         # Redis unavailable, skip for now
                         logger.warning("Redis unavailable, skipping outbox event %d", event["outbox_event_id"])
                 else:
-                    # Publish to event stream for SSE
+                    # Publish to event stream for SSE.
                     task_id = event["payload"].get("task_id")
+                    message_id = None
                     if task_id:
-                        await self._redis.publish_task_event(task_id, {
+                        message_id = await self._redis.publish_task_event(task_id, {
                             "event_type": event["event_type"],
                             "data": event["payload"],
                         })
+                    if message_id is None:
+                        # Redis unavailable — keep pending so the next pass
+                        # retries (mirrors the task-stream branch).
+                        logger.warning("Redis unavailable, skipping SSE outbox event %d", event["outbox_event_id"])
+                        continue
                     await mark_outbox_published(self._pool, event["outbox_event_id"])
                     published += 1
             except Exception as exc:
