@@ -1,255 +1,313 @@
 "use client";
 
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LanguageToggle, useLanguage } from "@/lib/i18n";
 import { AgentNav } from "@/components/chat/AgentNav";
-import { SessionList } from "@/components/chat/SessionList";
-import { MessagePane } from "@/components/chat/MessagePane";
-import { Composer } from "@/components/chat/Composer";
-import { useChatController } from "@/hooks/use-chat-controller";
 import { Button } from "@/components/ui/button";
-import { Plus, ListTodo } from "lucide-react";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  FileSearch,
+  FileArchive,
+  ListTodo,
+  Loader2,
+  RefreshCw,
+  UploadCloud,
+  CheckCircle2,
+} from "lucide-react";
+import {
+  createDatasetSnapshot,
+  createTask,
+  createTaskSpec,
+  getDefaultProject,
+  listTasks,
+  uploadDataset,
+  uploadMethodSource,
+  type TaskItem,
+  type TaskStatus,
+} from "@/lib/api/tasks";
+
+const STATUS_COLORS: Record<TaskStatus, string> = {
+  draft: "bg-zinc-200 text-zinc-600",
+  queued: "bg-blue-100 text-blue-700",
+  claimed: "bg-purple-100 text-purple-700",
+  running: "bg-amber-100 text-amber-700",
+  succeeded: "bg-emerald-100 text-emerald-700",
+  failed: "bg-red-100 text-red-700",
+  cancelled: "bg-zinc-200 text-zinc-500",
+  timeout: "bg-orange-100 text-orange-700",
+};
+
+const STATUS_LABEL: Record<TaskStatus, string> = {
+  draft: "tasks.statusDraft",
+  queued: "tasks.statusQueued",
+  claimed: "tasks.statusClaimed",
+  running: "tasks.statusRunning",
+  succeeded: "tasks.statusSucceeded",
+  failed: "tasks.statusFailed",
+  cancelled: "tasks.statusCancelled",
+  timeout: "tasks.statusTimeout",
+};
+
+const METHOD_DOC_ACCEPT = ".html,.htm,.pdf,.md,.txt,.doc,.docx";
+const DATASET_ACCEPT = ".zip";
 
 export default function CodeAgentPage() {
   const router = useRouter();
   const { t } = useLanguage();
-  const controller = useChatController();
 
-  const handleSubmit = async (event?: React.FormEvent) => {
-    event?.preventDefault();
-    const value = controller.state.input.trim();
-    if (!value) return;
-    if (controller.authStatus === "unauthenticated") {
-      window.location.assign("/auth/login");
+  const [title, setTitle] = useState("");
+  const [methodFile, setMethodFile] = useState<File | null>(null);
+  const [datasetFile, setDatasetFile] = useState<File | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createdTaskId, setCreatedTaskId] = useState<string | null>(null);
+
+  const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
+
+  const loadTasks = useCallback(async () => {
+    try {
+      const items = await listTasks();
+      setTasks(items);
+      setListError(null);
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTasks();
+    // Keep statuses fresh while the page is open.
+    const timer = setInterval(() => { void loadTasks(); }, 5000);
+    return () => clearInterval(timer);
+  }, [loadTasks]);
+
+  const canCreate = !!methodFile && !!datasetFile && !creating;
+
+  const handleCreate = async () => {
+    if (!methodFile || !datasetFile) {
+      setCreateError(t("tasks.requireBoth"));
       return;
     }
-
-    let targetSessionId: string | null = controller.state.sessionId;
-    if (!targetSessionId) {
-      try {
-        const res = await fetch("/api/code/sessions", { method: "POST", credentials: "include" });
-        if (!res.ok) {
-          controller.setError(t("error.createSession"));
-          return;
-        }
-        const data = await res.json();
-        if (!data.session_id) {
-          controller.setError(t("error.createSession"));
-          return;
-        }
-        targetSessionId = data.session_id;
-        controller.dispatch({ type: "set_session_id", sessionId: targetSessionId });
-        controller.dispatch({
-          type: "upsert_session",
-          toTop: true,
-          session: {
-            session_id: targetSessionId!,
-            title: value.slice(0, 32),
-            created_at: "",
-            updated_at: "",
-          },
-        });
-        controller.dispatch({ type: "set_session_messages", sessionId: targetSessionId!, messages: [] });
-      } catch (err) {
-        console.error("Failed to create code session:", err);
-        controller.setError(t("error.createSession"));
-        return;
-      }
-    }
-
-    const baseMessages = controller.sessionMessagesMapRef.current[targetSessionId!] || [];
-    const userMessage = { role: "user" as const, content: value };
-    const messagesForRequest = [...baseMessages, userMessage];
-    controller.dispatch({
-      type: "set_session_messages",
-      sessionId: targetSessionId!,
-      messages: [...baseMessages, userMessage, { role: "assistant", content: "" }],
-    });
-    controller.dispatch({ type: "set_input", input: "" });
-
-    const clientRequestId = crypto.randomUUID();
-    const isCurrent = () => controller.state.sessionRunMap[targetSessionId!]?.requestId === clientRequestId;
-    const finalize = (terminal: "success" | "error") => {
-      if (!isCurrent()) return;
-      controller.setSessionRunState(targetSessionId!, { running: false, phase: null, terminal, requestId: null });
-    };
-
-    const onEvent = (event: {
-      type: string;
-      phase?: string;
-      elapsed_ms?: number;
-      attempt?: number;
-      max_attempts?: number;
-      tool_name?: string;
-      reason?: string;
-      content?: string;
-      message?: string;
-    }) => {
-      if (!isCurrent()) return;
-      const toolName = event.tool_name || null;
-      switch (event.type) {
-        case "status":
-          controller.setSessionRunState(targetSessionId!, {
-            phase: event.phase as "thinking" | "tool_running" | "responding" | "retrying" | null,
-            elapsedMs: event.elapsed_ms || 0,
-            attempt: event.attempt || 1,
-            maxAttempts: event.max_attempts || 1,
-            toolName,
-            reason: event.reason || null,
-          });
-          break;
-        case "chunk":
-          controller.appendAssistantContent(targetSessionId!, event.content || "");
-          break;
-        case "tool_call":
-          controller.setSessionRunState(targetSessionId!, (prev) => ({
-            ...prev,
-            hasReceivedToolCall: true,
-            toolName,
-            activeTools: Array.isArray(prev.activeTools) && prev.activeTools && toolName && prev.activeTools.includes(toolName)
-              ? prev.activeTools
-              : [...(prev.activeTools as string[]), ...(toolName ? [toolName] : [])],
-          }));
-          break;
-        case "done":
-          finalize("success");
-          void controller.refreshSessions();
-          break;
-        case "error":
-          controller.appendAssistantContent(targetSessionId!, `\n\n[Error] ${event.message || t("error.connection")}`);
-          finalize("error");
-          break;
-      }
-    };
-
-    let ws: WebSocket | null = null;
+    setCreating(true);
+    setCreateError(null);
+    setCreatedTaskId(null);
     try {
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const host = window.location.host;
-      ws = new WebSocket(`${proto}//${host}/ws/code`);
-
-      ws.onopen = () => {
-        ws!.send(JSON.stringify({
-          session_id: targetSessionId!,
-          messages: messagesForRequest,
-          client_request_id: clientRequestId,
-        }));
-      };
-
-      ws.onmessage = (evt) => {
-        try {
-          const event = JSON.parse(evt.data);
-          onEvent(event);
-          if (event.type === "done" || event.type === "error") {
-            ws!.close(1000, "completed");
-          }
-        } catch {
-          onEvent({ type: "chunk", content: evt.data });
-        }
-      };
-
-      ws.onerror = () => {
-        controller.appendAssistantContent(targetSessionId!, `\n\n[Error] ${t("error.network")}`);
-        finalize("error");
-      };
-
-      ws.onclose = () => {
-        if (!isCurrent()) return;
-        const state = controller.state.sessionRunMap[targetSessionId!];
-        if (state && state.running) {
-          finalize("error");
-        }
-      };
-
-      controller.wsByRequestRef.current.set(clientRequestId, {
-        close: () => ws?.close(1000, "client_stop"),
-        getReadyState: () => ws ? ws.readyState : 3,
+      const project = await getDefaultProject();
+      const taskTitle = title.trim() || datasetFile.name.replace(/\.zip$/i, "");
+      const spec = await createTaskSpec({
+        project_id: project.project_id,
+        title: taskTitle,
+        analysis_type: "generic",
       });
+      const method = await uploadMethodSource(methodFile);
+      const upload = await uploadDataset(datasetFile);
+      const dataset = await createDatasetSnapshot({
+        project_id: project.project_id,
+        task_spec_id: spec.task_spec_id,
+        original_filename: datasetFile.name,
+        stored_path: upload.stored_path,
+        file_hash_sha256: upload.file_hash_sha256,
+        validation_passed: true,
+      });
+      const task = await createTask({
+        project_id: project.project_id,
+        task_spec_id: spec.task_spec_id,
+        dataset_snapshot_id: dataset.dataset_snapshot_id,
+        title: taskTitle,
+        method_source_id: method.method_source_id,
+        idempotency_key: crypto.randomUUID(),
+      });
+      setCreatedTaskId(task.task_id);
+      setTitle("");
+      setMethodFile(null);
+      setDatasetFile(null);
+      void loadTasks();
     } catch (err) {
-      console.error("CodeAgent WS failed:", err);
-      finalize("error");
+      setCreateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreating(false);
     }
   };
 
-  const sessionId = controller.state.sessionId;
-  const messages = controller.sessionMessagesMapRef.current[sessionId || ""] || [];
-  const currentRunState = controller.state.sessionRunMap[sessionId || ""] || { running: false, phase: null };
-  const isLoading = !!currentRunState.running;
-  const statusText = controller.statusText;
-  const scrollRef = { current: null as HTMLDivElement | null };
-  const inputRef = { current: null as HTMLTextAreaElement | null };
-  const setInput = (input: string) => controller.dispatch({ type: "set_input", input });
-  const uiError = controller.state.uiError;
-  const dismissError = () => controller.setError(null);
+  const formatDate = useMemo(
+    () => (iso: string) => {
+      if (!iso) return "-";
+      try {
+        return new Date(iso).toLocaleString();
+      } catch {
+        return iso;
+      }
+    },
+    [],
+  );
 
   return (
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
       <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
         <AgentNav active="code" onNavigate={(path: string) => router.push(path)} />
-        <Button variant="outline" className="justify-start gap-2 bg-white/90 border-[var(--hairline)] shadow-sm hover:bg-white mt-3 rounded-xl" onClick={controller.handleNewChat}>
-          <Plus size={16} />
-          {t("home.newChat")}
-        </Button>
-        <Button variant="outline" className="justify-start gap-2 bg-white/90 border-[var(--hairline)] shadow-sm hover:bg-white mt-2 rounded-xl" onClick={() => router.push("/code-agent/tasks")}>
-          <ListTodo size={16} />
-          {t("tasks.title")}
-        </Button>
-        <div className="mt-3 text-xs uppercase tracking-widest text-zinc-400 px-2">{t("home.recentActivities")}</div>
-        <SessionList
-          sessions={controller.state.sessions}
-          currentSessionId={sessionId}
-          editingSessionId={controller.state.editingSessionId}
-          editingTitle={controller.state.editingTitle}
-          deletingSessionId={controller.state.deletingSessionId}
-          sessionRunMap={controller.state.sessionRunMap}
-          onSwitchSession={controller.handleSwitchSession}
-          onEditSessionTitle={controller.handleEditSessionTitle}
-          onEditingTitleChange={controller.setEditingTitle}
-          onSaveSessionTitle={(sid: string) => { void controller.saveInlineSessionTitle(sid); }}
-          onCancelEditing={controller.cancelInlineSessionTitle}
-          onRequestDelete={controller.requestDeleteSession}
-          onCancelDelete={controller.cancelDeleteSession}
-          onConfirmDelete={controller.confirmDeleteSession}
-        />
         <div className="flex-1" />
         <div className="p-2 text-xs text-zinc-400 text-center tracking-tighter">v1.0.0 @ 2026</div>
       </aside>
+
       <main className="flex-1 flex flex-col relative min-w-0">
         <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between sticky top-0 bg-[var(--surface-1)] backdrop-blur-xl z-10 print:hidden">
-          <div className="text-sm font-semibold tracking-tight text-zinc-700">CodeAgent</div>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" className="gap-1.5 text-xs" onClick={() => router.push("/code-agent/tasks")}>
-              <ListTodo size={14} />
-              {t("tasks.title")}
-            </Button>
-            <LanguageToggle />
+            <ListTodo size={16} className="text-zinc-500" />
+            <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("tasks.title")}</div>
           </div>
+          <LanguageToggle />
         </header>
-        <MessagePane
-          messages={messages}
-          sessionId={sessionId}
-          isLoading={isLoading}
-          runState={currentRunState}
-          statusText={statusText}
-          scrollRef={scrollRef}
-          authStatus={controller.authStatus}
-          onLogin={() => { window.location.assign("/auth/login"); }}
-        />
-        <Composer
-          input={controller.state.input}
-          isLoading={isLoading}
-          uploadingPdf={false}
-          uploadedPapers={[]}
-          inlineError={uiError}
-          inputRef={inputRef}
-          onInputChange={setInput}
-          onSubmit={handleSubmit}
-          onUploadPdf={() => {}}
-          onStop={controller.handleStopGeneration}
-          onRetry={() => { void controller.refreshSessions(); }}
-          onDismissError={dismissError}
-          unauthenticated={controller.authStatus === "unauthenticated"}
-        />
+
+        <ScrollArea className="flex-1">
+          <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-6">
+            {/* New task card: upload an execution document + a dataset ZIP. */}
+            <section className="rounded-2xl border border-[var(--hairline)] bg-white/80 p-5 space-y-4">
+              <div className="text-sm font-semibold text-zinc-700">{t("tasks.newTask")}</div>
+              <p className="text-xs text-zinc-500">{t("tasks.newTaskDescription")}</p>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-4 cursor-pointer hover:border-zinc-400 transition-colors">
+                  <div className="flex items-center gap-2 text-sm font-medium text-zinc-700">
+                    <FileSearch size={16} className="text-zinc-500" />
+                    {t("tasks.methodDoc")}
+                  </div>
+                  <div className="text-xs text-zinc-400">{t("tasks.methodDocHint")}</div>
+                  <input
+                    type="file"
+                    accept={METHOD_DOC_ACCEPT}
+                    className="text-xs text-zinc-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-zinc-100 file:text-zinc-700 hover:file:bg-zinc-200"
+                    onChange={(e) => setMethodFile(e.target.files?.[0] || null)}
+                  />
+                  {methodFile && (
+                    <span className="text-xs text-emerald-600 truncate">{methodFile.name}</span>
+                  )}
+                </label>
+
+                <label className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-4 cursor-pointer hover:border-zinc-400 transition-colors">
+                  <div className="flex items-center gap-2 text-sm font-medium text-zinc-700">
+                    <FileArchive size={16} className="text-zinc-500" />
+                    {t("tasks.dataset")}
+                  </div>
+                  <div className="text-xs text-zinc-400">{t("tasks.datasetHint")}</div>
+                  <input
+                    type="file"
+                    accept={DATASET_ACCEPT}
+                    className="text-xs text-zinc-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-zinc-100 file:text-zinc-700 hover:file:bg-zinc-200"
+                    onChange={(e) => setDatasetFile(e.target.files?.[0] || null)}
+                  />
+                  {datasetFile && (
+                    <span className="text-xs text-emerald-600 truncate">
+                      {datasetFile.name} ({(datasetFile.size / 1024 / 1024).toFixed(1)} MB)
+                    </span>
+                  )}
+                </label>
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <input
+                  type="text"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder={t("tasks.taskTitlePlaceholder")}
+                  className="flex-1 rounded-xl border border-[var(--hairline)] bg-white/90 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-300"
+                />
+                <Button className="gap-2 rounded-xl" disabled={!canCreate} onClick={() => { void handleCreate(); }}>
+                  {creating ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />}
+                  {creating ? t("tasks.creating") : t("tasks.create")}
+                </Button>
+              </div>
+
+              {createError && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {t("tasks.createFailed").replace("{{message}}", createError)}
+                </div>
+              )}
+              {createdTaskId && (
+                <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                  <CheckCircle2 size={16} />
+                  {t("tasks.createSuccess")}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto"
+                    onClick={() => router.push(`/code-agent/tasks/${createdTaskId}`)}
+                  >
+                    {t("tasks.view")}
+                  </Button>
+                </div>
+              )}
+            </section>
+
+            {/* Task list */}
+            <section className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold text-zinc-700">{t("tasks.subtitle")}</div>
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setLoading(true); void loadTasks(); }} disabled={loading}>
+                  <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+                  {t("composer.retry")}
+                </Button>
+              </div>
+
+              {listError && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {t("tasks.listFailedToast")}: {listError}
+                </div>
+              )}
+
+              {!loading && tasks.length === 0 && !listError && (
+                <div className="flex flex-col items-center justify-center py-16 text-center rounded-2xl border border-dashed border-zinc-200 bg-white/60">
+                  <ListTodo size={36} className="text-zinc-300 mb-3" />
+                  <p className="text-sm text-zinc-500">{t("tasks.empty")}</p>
+                  <p className="text-xs text-zinc-400 mt-1">{t("tasks.emptyDescription")}</p>
+                </div>
+              )}
+
+              {tasks.length > 0 && (
+                <div className="rounded-2xl border border-[var(--hairline)] bg-white/80 overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-[var(--hairline)] bg-zinc-50/60 text-left">
+                        <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.id")}</th>
+                        <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.titleColumn")}</th>
+                        <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.status")}</th>
+                        <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.attempts")}</th>
+                        <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.createdAt")}</th>
+                        <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.actions")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tasks.map((task) => (
+                        <tr key={task.task_id} className="border-b border-[var(--hairline)] last:border-b-0 hover:bg-zinc-50/60 transition-colors">
+                          <td className="px-4 py-3 font-mono text-xs text-zinc-500 max-w-[140px] truncate">{task.task_id}</td>
+                          <td className="px-4 py-3 text-sm font-medium">{task.title}</td>
+                          <td className="px-4 py-3">
+                            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[task.status] || "bg-zinc-200 text-zinc-600"}`}>
+                              {t(STATUS_LABEL[task.status] as never)}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-zinc-600">
+                            {task.attempt_count}/{task.max_attempts}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-zinc-500 whitespace-nowrap">{formatDate(task.created_at)}</td>
+                          <td className="px-4 py-3">
+                            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => router.push(`/code-agent/tasks/${task.task_id}`)}>
+                              {t("tasks.view")}
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </div>
+        </ScrollArea>
       </main>
     </div>
   );

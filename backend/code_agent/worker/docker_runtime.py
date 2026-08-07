@@ -51,7 +51,10 @@ async def run_docker_task(
         f"Input directory: {input_mount} (read-only)\n"
         f"Output directory: {output_mount} (read-write)\n"
         f"Task spec: {json.dumps(task_spec)}\n"
-        f"Execute the analysis using method sources in {input_mount}/.\n"
+        f"The input directory contains method source documents (HTML/PDF workflow\n"
+        f"instructions) and the dataset. The dataset is either in a data/ subfolder\n"
+        f"or placed directly in the input directory root. Read the method source\n"
+        f"documents first and follow them to analyze the dataset.\n"
         f"Save all results to {output_mount}/\n"
     )
 
@@ -62,6 +65,29 @@ async def run_docker_task(
         "--pids-limit=512",
         f"--cpus=2", "--memory=2g", "--memory-swap=2g",
         "--read-only",
+        # A writable /tmp is mandatory under --read-only (design doc §24).
+        "--tmpfs", "/tmp:size=512m",
+    ]
+
+    # Optional restricted network (design doc §24). The Job Container needs
+    # outbound HTTPS for the LLM API by default, so the network is left
+    # enabled unless an explicit network (e.g. "none") is configured.
+    job_network = os.getenv("CODE_AGENT_JOB_NETWORK", "").strip()
+    if job_network:
+        cmd += [f"--network={job_network}"]
+
+    # Optional non-root user inside the executor image (design doc §24).
+    job_user = os.getenv("CODE_AGENT_JOB_USER", "").strip()
+    if job_user:
+        cmd += ["--user", job_user]
+
+    # Pass through LLM API credentials from the Worker environment
+    # (design doc §41 — secrets are never baked into images).
+    for name, value in os.environ.items():
+        if (name.startswith("ANTHROPIC_") or name == "STEPFUN_API_KEY") and value:
+            cmd += ["-e", f"{name}={value}"]
+
+    cmd += [
         "-v", f"{work_dir}:{input_mount}:ro",
         "-v", f"{out_dir}:{output_mount}",
         docker_image,
@@ -165,3 +191,24 @@ async def get_docker_image_exists(image: str) -> bool:
         return proc.returncode == 0
     except Exception:
         return False
+
+
+async def get_image_digest(image: str) -> Optional[str]:
+    """Resolve the immutable image ID for reproducibility (design doc §25).
+
+    Stores the image ID (sha256) rather than a mutable tag so attempts can
+    be reproduced later.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "image", "inspect", "--format", "{{.Id}}", image,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            return None
+        digest = stdout.decode("utf-8", errors="replace").strip()
+        return digest or None
+    except Exception:
+        return None

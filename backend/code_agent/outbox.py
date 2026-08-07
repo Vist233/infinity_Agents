@@ -36,7 +36,7 @@ class OutboxPublisher:
             return
         self._running = True
         await self._redis.connect()
-        await self._redis.ensure_consumer_group(STREAM_TASKS_EXECUTE := "stream:tasks:execute", "task-workers-v1")
+        await self._redis.ensure_consumer_group("stream:tasks:execute", "task-workers-v1")
         self._task = asyncio.create_task(self._publish_loop())
         logger.info("Outbox Publisher started")
 
@@ -72,8 +72,9 @@ class OutboxPublisher:
 
         for event in events:
             try:
-                if event["event_type"] == "task_created":
-                    # Publish to task execution stream
+                if event["event_type"] in ("task_created", "task_queued"):
+                    # Publish to task execution stream (covers both first-run
+                    # and requeued retries).
                     message_id = await self._redis.publish_task({
                         "task_id": event["payload"].get("task_id"),
                         "event_type": event["event_type"],
@@ -103,3 +104,36 @@ class OutboxPublisher:
             logger.debug("Published %d outbox events", published)
 
         return published
+
+
+async def _main() -> None:
+    """CLI entry: run the Outbox Publisher as a standalone process."""
+    import os
+
+    import asyncpg
+
+    from backend.code_agent.redis_client import RedisClient
+
+    logging.basicConfig(level=logging.INFO)
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL is required")
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+    pool = await asyncpg.create_pool(database_url, min_size=1, max_size=5)
+    redis_client = RedisClient(redis_url)
+    publisher = OutboxPublisher(pool, redis_client, poll_interval=1.0)
+    await publisher.start()
+    try:
+        while True:
+            await asyncio.sleep(1)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    finally:
+        await publisher.stop()
+        await pool.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(_main())

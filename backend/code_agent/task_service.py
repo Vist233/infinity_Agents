@@ -9,6 +9,7 @@ Handles:
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 from datetime import datetime, timezone
@@ -18,6 +19,7 @@ from backend.code_agent.models import (
     Artifact,
     DatasetSnapshot,
     IdempotencyKey,
+    MethodSource,
     OutboxEvent,
     Task,
     TaskAttempt,
@@ -29,6 +31,94 @@ from backend.code_agent.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Well-known UUID for the default project so that fresh deployments and
+# idempotent re-creation always converge on the same row.
+DEFAULT_PROJECT_ID = "00000000-0000-0000-0000-000000000001"
+
+
+# ============================================================================
+# Projects
+# ============================================================================
+
+async def ensure_default_project(pool) -> Dict[str, Any]:
+    """Create the default project if missing and return it."""
+    query = """
+        INSERT INTO projects (project_id, name, description)
+        VALUES ($1::uuid, 'Default Project', 'Default project created at startup')
+        ON CONFLICT (project_id) DO UPDATE SET updated_at = projects.updated_at
+        RETURNING project_id, name, created_at
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(query, DEFAULT_PROJECT_ID)
+    return {
+        "project_id": str(row["project_id"]),
+        "name": row["name"],
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    }
+
+
+# ============================================================================
+# Method Sources
+# ============================================================================
+
+async def create_method_source(pool, source: MethodSource) -> MethodSource:
+    """Register an uploaded method source document (HTML/PDF/...)."""
+    query = """
+        INSERT INTO method_sources (method_source_id, project_id, task_spec_id,
+            original_filename, stored_path, content_type, file_size_bytes,
+            file_hash_sha256, created_at)
+        VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, NOW())
+        RETURNING method_source_id, created_at
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            query,
+            source.method_source_id,
+            source.project_id,
+            source.task_spec_id,
+            source.original_filename,
+            source.stored_path,
+            source.content_type,
+            source.file_size_bytes,
+            source.file_hash_sha256,
+        )
+    return MethodSource(
+        method_source_id=str(row["method_source_id"]),
+        project_id=source.project_id,
+        task_spec_id=source.task_spec_id,
+        original_filename=source.original_filename,
+        stored_path=source.stored_path,
+        content_type=source.content_type,
+        file_size_bytes=source.file_size_bytes,
+        file_hash_sha256=source.file_hash_sha256,
+        created_at=row["created_at"].isoformat(),
+    )
+
+
+async def get_method_source(pool, method_source_id: str) -> Optional[Dict[str, Any]]:
+    """Get a method source by ID."""
+    query = """
+        SELECT method_source_id, project_id, task_spec_id, original_filename,
+               stored_path, content_type, file_size_bytes, file_hash_sha256, created_at
+        FROM method_sources
+        WHERE method_source_id = $1::uuid
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(query, method_source_id)
+    if not row:
+        return None
+    return {
+        "method_source_id": str(row["method_source_id"]),
+        "project_id": str(row["project_id"]),
+        "task_spec_id": str(row["task_spec_id"]) if row["task_spec_id"] else None,
+        "original_filename": row["original_filename"],
+        "stored_path": row["stored_path"],
+        "content_type": row["content_type"],
+        "file_size_bytes": row["file_size_bytes"],
+        "file_hash_sha256": row["file_hash_sha256"],
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    }
 
 
 # ============================================================================
@@ -93,7 +183,7 @@ async def create_task_spec(pool, spec: TaskSpec) -> TaskSpec:
             spec.domain,
             spec.analysis_type,
             spec.research_question,
-            spec.spec_json,
+            json.dumps(spec.spec_json or {}),
             spec.schema_version,
             spec.status,
             spec.created_by,
@@ -178,8 +268,8 @@ async def create_dataset_snapshot(pool, snapshot: DatasetSnapshot) -> DatasetSna
             snapshot.stored_path,
             snapshot.file_size_bytes,
             snapshot.file_hash_sha256,
-            snapshot.metadata,
-            snapshot.validation_result,
+            json.dumps(snapshot.metadata or {}),
+            json.dumps(snapshot.validation_result or {}),
             snapshot.validation_passed,
             snapshot.version,
         )
@@ -214,8 +304,8 @@ async def create_task(
 
     query = """
         INSERT INTO tasks (task_id, task_spec_id, dataset_snapshot_id, project_id,
-            title, status, max_attempts, created_by, created_at, updated_at)
-        VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, NOW(), NOW())
+            method_source_id, title, status, max_attempts, created_by, created_at, updated_at)
+        VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, NOW(), NOW())
         RETURNING task_id, status, attempt_count, created_at
     """
     async with pool.acquire() as conn:
@@ -226,6 +316,7 @@ async def create_task(
                 task.task_spec_id,
                 task.dataset_snapshot_id,
                 task.project_id,
+                task.method_source_id,
                 task.title,
                 task.status,
                 task.max_attempts,
@@ -270,7 +361,7 @@ async def create_task(
 async def get_task(pool, task_id: str) -> Optional[Dict[str, Any]]:
     """Get a task by ID."""
     query = """
-        SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, title,
+        SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id, title,
                status, lease_owner, lease_token, lease_expires_at,
                active_attempt_id, attempt_count, max_attempts,
                result_artifact_id, error_message, created_by,
@@ -288,7 +379,7 @@ async def get_task(pool, task_id: str) -> Optional[Dict[str, Any]]:
 async def get_tasks_by_project(pool, project_id: str, limit: int = 50) -> List[Dict[str, Any]]:
     """Get tasks for a project."""
     query = """
-        SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, title,
+        SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id, title,
                status, lease_owner, lease_token, lease_expires_at,
                active_attempt_id, attempt_count, max_attempts,
                result_artifact_id, error_message, created_by,
@@ -309,6 +400,7 @@ def _task_row_to_dict(row: Any) -> Dict[str, Any]:
         "task_spec_id": str(row["task_spec_id"]),
         "dataset_snapshot_id": str(row["dataset_snapshot_id"]),
         "project_id": str(row["project_id"]),
+        "method_source_id": str(row["method_source_id"]) if row.get("method_source_id") else None,
         "title": row["title"],
         "status": row["status"],
         "lease_owner": row["lease_owner"],
@@ -364,7 +456,7 @@ async def try_claim_task(
           AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
           AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
         RETURNING task_id, attempt_count, task_spec_id, dataset_snapshot_id,
-                  project_id, title, max_attempts
+                  project_id, method_source_id, title, max_attempts
     """
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -423,6 +515,7 @@ async def try_claim_task(
         "task_spec_id": str(row["task_spec_id"]),
         "dataset_snapshot_id": str(row["dataset_snapshot_id"]),
         "project_id": str(row["project_id"]),
+        "method_source_id": str(row["method_source_id"]) if row.get("method_source_id") else None,
         "title": row["title"],
         "attempt_index": attempt_index,
         "attempt_id": attempt_row["task_attempt_id"],
@@ -498,6 +591,50 @@ async def update_task_status(
     }
 
 
+async def requeue_task(
+    pool,
+    task_id: str,
+    lease_token: str,
+    next_attempt: datetime,
+    error_message: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Put a failed task back in the queue for its next attempt.
+
+    Only the lease holder (matching token) may requeue. Sets next_attempt_at
+    so the claim query respects the backoff delay.
+    """
+    query = """
+        UPDATE tasks
+        SET status = 'queued', lease_owner = NULL, lease_token = NULL,
+            lease_expires_at = NULL, next_attempt_at = $3,
+            error_message = $4, updated_at = NOW()
+        WHERE task_id = $1::uuid AND lease_token = $2
+        RETURNING task_id, status, attempt_count
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(query, task_id, lease_token, next_attempt, error_message)
+    if not row:
+        return None
+    await create_task_event(
+        pool,
+        task_id=task_id,
+        event_type="task_requeued",
+        event_data={"next_attempt_at": next_attempt.isoformat(), "error": error_message},
+    )
+    await create_outbox_event(
+        pool,
+        aggregate_type="task",
+        aggregate_id=task_id,
+        event_type="task_queued",
+        payload={"task_id": task_id, "status": "queued"},
+    )
+    return {
+        "task_id": str(row["task_id"]),
+        "status": row["status"],
+        "attempt_count": row["attempt_count"],
+    }
+
+
 async def request_cancel_task(pool, task_id: str) -> Optional[Dict[str, Any]]:
     """Request cancellation of a running task.
 
@@ -561,7 +698,7 @@ async def create_task_event(
     """
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            query, task_id, task_attempt_id, event_type, event_data or {}
+            query, task_id, task_attempt_id, event_type, json.dumps(event_data or {})
         )
     return TaskEvent(
         task_event_id=row["task_event_id"],
@@ -615,7 +752,7 @@ async def create_outbox_event(
         RETURNING outbox_event_id, created_at
     """
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(query, aggregate_type, aggregate_id, event_type, payload)
+        row = await conn.fetchrow(query, aggregate_type, aggregate_id, event_type, json.dumps(payload or {}))
     return OutboxEvent(
         outbox_event_id=row["outbox_event_id"],
         aggregate_type=aggregate_type,
@@ -701,7 +838,7 @@ async def create_artifact(pool, artifact: Artifact) -> Artifact:
             artifact.file_size_bytes,
             artifact.checksum_sha256,
             artifact.content_type,
-            artifact.metadata,
+            json.dumps(artifact.metadata or {}),
         )
     return Artifact(
         artifact_id=artifact.artifact_id,
@@ -805,15 +942,19 @@ async def complete_task_attempt(
     exit_code: Optional[int] = None,
     error_message: Optional[str] = None,
     token_usage: Optional[Dict[str, Any]] = None,
+    executor_image_digest: Optional[str] = None,
+    failure_code: Optional[str] = None,
 ) -> None:
     """Complete a task attempt."""
     query = """
         UPDATE task_attempts
         SET status = $2, finished_at = NOW(), exit_code = $3,
-            error_message = $4, token_usage = $5::jsonb
+            error_message = $4, token_usage = $5::jsonb,
+            executor_image_digest = $6, failure_code = $7
         WHERE task_attempt_id = $1
     """
     async with pool.acquire() as conn:
         await conn.execute(
-            query, attempt_id, status, exit_code, error_message, token_usage or {}
+            query, attempt_id, status, exit_code, error_message,
+            json.dumps(token_usage or {}), executor_image_digest, failure_code,
         )

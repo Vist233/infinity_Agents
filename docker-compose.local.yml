@@ -1,17 +1,22 @@
-"""Infinity Agent — Local development docker-compose configuration.
-
-Starts:
-- PostgreSQL (existing, assumed running)
-- Redis (for task queue and event streaming)
-- Worker A
-- Worker B
-"""
+# Infinity Agent — Local development docker-compose configuration.
+#
+# Starts:
+# - Redis (task queue + event streaming)
+# - Worker A / Worker B (Docker-out-of-Docker via /var/run/docker.sock)
+# - Outbox Publisher (delivers queued tasks to the Redis stream)
+#
+# PostgreSQL is NOT part of this stack. Point DATABASE_URL at your own
+# instance. From inside these containers, a database on the host machine
+# must be addressed via host.docker.internal (never "localhost").
+#
+# All connection settings come from worker.env (see worker.env.example):
+#   docker compose -f docker-compose.local.yml --env-file worker.env up -d
 
 services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes
@@ -26,12 +31,12 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile.worker
+    env_file: ${WORKER_ENV_FILE:-worker.env}
     environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=redis://redis:6379/0
       - WORKER_ID=worker-a
-      - CODE_AGENT_DOCKER_IMAGE=claude-code-env:v2
-      - DOCKER_HOST=unix:///var/run/docker.sock
+      # Default to the compose-local Redis; override in worker.env for remote.
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres@host.docker.internal:5450/infinity_agents}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./backend:/app/backend
@@ -46,12 +51,11 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile.worker
+    env_file: ${WORKER_ENV_FILE:-worker.env}
     environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=redis://redis:6379/0
       - WORKER_ID=worker-b
-      - CODE_AGENT_DOCKER_IMAGE=claude-code-env:v2
-      - DOCKER_HOST=unix:///var/run/docker.sock
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres@host.docker.internal:5450/infinity_agents}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./backend:/app/backend
@@ -66,35 +70,16 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile.worker
+    env_file: ${WORKER_ENV_FILE:-worker.env}
     environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres@host.docker.internal:5450/infinity_agents}
     volumes:
       - ./backend:/app/backend
     depends_on:
       redis:
         condition: service_healthy
-    command: python -c "
-import asyncio
-import logging
-from backend.code_agent.outbox import OutboxPublisher
-from backend.code_agent.redis_client import RedisClient
-import asyncpg
-import os
-
-logging.basicConfig(level=logging.INFO)
-async def main():
-    pool = await asyncpg.create_pool(os.environ['DATABASE_URL'])
-    redis = RedisClient(os.environ['REDIS_URL'])
-    publisher = OutboxPublisher(pool, redis, poll_interval=1.0)
-    await publisher.start()
-    try:
-        while True:
-            await asyncio.sleep(1)
-    except KeyboardInterrupt:
-        await publisher.stop()
-asyncio.run(main())
-"
+    command: python -m backend.code_agent.outbox
 
 volumes:
   redis-data:

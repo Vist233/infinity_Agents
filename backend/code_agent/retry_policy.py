@@ -4,6 +4,21 @@ from __future__ import annotations
 
 import random
 from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+# Failures that should NOT be retried automatically (design doc §35.2).
+NON_RETRYABLE_FAILURE_CODES = {
+    "verification_failed",
+    "invalid_spec",
+    "dataset_invalid",
+}
+
+
+def is_retryable(failure_code: Optional[str]) -> bool:
+    """Classify a failure code as retryable or not (design doc §35)."""
+    if not failure_code:
+        return True
+    return failure_code not in NON_RETRYABLE_FAILURE_CODES
 
 
 def calculate_retry_delay(attempt_count: int, base_delay_seconds: float = 5.0, max_delay_seconds: float = 300.0) -> timedelta:

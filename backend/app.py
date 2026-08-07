@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import FileResponse
 from pathlib import Path as FilePath
 from pydantic import BaseModel
@@ -87,6 +87,13 @@ TOOL_KEEP_RECENT = max(1, _env_int("PAPER_AGENT_TOOL_KEEP_RECENT", 3))
 async def lifespan(app):
     await init_db(app)
     app.state.token_verifier = TokenVerifier()
+
+    # Ensure the default project exists (design doc §13.1).
+    try:
+        from backend.code_agent.task_service import ensure_default_project
+        await ensure_default_project(app.state.db_pool)
+    except Exception as exc:
+        logger.warning("Could not ensure default project: %s", exc)
     app.state.session_agents = {}
     app.state.session_meta = {}
 
@@ -1697,9 +1704,12 @@ from backend.code_agent.task_service import (
     get_artifacts_for_task,
     get_artifact,
     request_cancel_task,
+    ensure_default_project,
+    create_method_source,
     TaskStatus,
     TaskSpec,
     DatasetSnapshot,
+    MethodSource,
     Task,
 )
 from backend.code_agent.redis_client import RedisClient
@@ -1710,8 +1720,10 @@ from backend.code_agent.redis_client import RedisClient
 class CreateTaskSpecRequest(BaseModel):
     project_id: str
     title: str
-    analysis_type: str
-    research_question: str
+    # The execution document is free-form (HTML/PDF), so structured spec
+    # fields are optional and default to a generic analysis task.
+    analysis_type: str = "generic"
+    research_question: str = ""
     spec_json: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -1729,6 +1741,7 @@ class CreateTaskRequest(BaseModel):
     task_spec_id: str
     dataset_snapshot_id: str
     title: str
+    method_source_id: Optional[str] = None
     idempotency_key: Optional[str] = None
     max_attempts: int = Field(default=3, ge=1, le=10)
 
@@ -1783,8 +1796,117 @@ def get_redis_client() -> Optional[RedisClient]:
 
 # ---- Task API endpoints ----
 
+# Upload limits (design doc §40): streamed to disk, never held in memory.
+MAX_DATASET_UPLOAD_BYTES = int(os.getenv("DATASET_UPLOAD_MAX_BYTES", str(5 * 1024**3)))
+MAX_METHOD_SOURCE_BYTES = int(os.getenv("METHOD_SOURCE_MAX_BYTES", str(200 * 1024**2)))
+
+_METHOD_SOURCE_EXTENSIONS = {".html", ".htm", ".pdf", ".md", ".txt", ".doc", ".docx"}
+
+
+async def _require_task_api_key(request: Request) -> None:
+    """Optional shared-secret gate for the Task API (design doc §41 MVP).
+
+    When TASK_API_TOKEN is set, Task API requests must carry it in the
+    X-API-Key header. Unset = local development mode (open access).
+    """
+    import hmac
+
+    expected = os.getenv("TASK_API_TOKEN", "").strip()
+    if not expected:
+        return
+    provided = request.headers.get("X-API-Key", "")
+    if not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+
+
+async def _stream_upload_to_disk(file: UploadFile, dest_dir: FilePath, max_bytes: int) -> Dict[str, Any]:
+    """Stream an upload to disk in chunks with a hard size cap (design doc §40)."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = FilePath(file.filename or "upload.bin").name or "upload.bin"
+    stored_path = dest_dir / f"{uuid.uuid4().hex[:12]}-{safe_name}"
+
+    hasher = hashlib.sha256()
+    size = 0
+    try:
+        with open(stored_path, "wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Upload exceeds limit of {max_bytes} bytes",
+                    )
+                hasher.update(chunk)
+                f.write(chunk)
+    except HTTPException:
+        stored_path.unlink(missing_ok=True)
+        raise
+    return {
+        "stored_path": str(stored_path),
+        "file_hash_sha256": hasher.hexdigest(),
+        "file_size_bytes": size,
+        "original_filename": file.filename or safe_name,
+    }
+
+
+@app.get("/api/projects/default", response_model=Dict[str, Any])
+async def get_default_project_endpoint(_: None = Depends(_require_task_api_key)):
+    """Return the default project, creating it on first use (design doc §13.1)."""
+    pool = app.state.db_pool
+    return await ensure_default_project(pool)
+
+
+@app.post("/api/method-sources/upload", response_model=Dict[str, Any])
+async def upload_method_source_endpoint(
+    file: UploadFile = File(...),
+    _: None = Depends(_require_task_api_key),
+):
+    """Upload a method source document (HTML/PDF/...) describing the workflow.
+
+    The execution document format is intentionally free-form (design doc §4):
+    a saved web page or PDF that the Job Container reads as instructions.
+    """
+    safe_name = FilePath(file.filename or "").name
+    if not safe_name or FilePath(safe_name).suffix.lower() not in _METHOD_SOURCE_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported method source type; allowed: {', '.join(sorted(_METHOD_SOURCE_EXTENSIONS))}",
+        )
+
+    upload_root = FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", "/tmp/uploaded-method-sources"))
+    upload = await _stream_upload_to_disk(file, upload_root, MAX_METHOD_SOURCE_BYTES)
+
+    pool = app.state.db_pool
+    project = await ensure_default_project(pool)
+    source = MethodSource(
+        method_source_id=str(uuid.uuid4()),
+        project_id=project["project_id"],
+        original_filename=upload["original_filename"],
+        stored_path=upload["stored_path"],
+        content_type=file.content_type,
+        file_size_bytes=upload["file_size_bytes"],
+        file_hash_sha256=upload["file_hash_sha256"],
+    )
+    result = await create_method_source(pool, source)
+    return {
+        "method_source_id": result.method_source_id,
+        "project_id": result.project_id,
+        "original_filename": result.original_filename,
+        "stored_path": result.stored_path,
+        "file_hash_sha256": result.file_hash_sha256,
+        "file_size_bytes": result.file_size_bytes,
+        "created_at": result.created_at,
+    }
+
+
 @app.post("/api/task-specs", response_model=Dict[str, Any])
-async def create_task_spec_endpoint(request: CreateTaskSpecRequest):
+async def create_task_spec_endpoint(
+    request: CreateTaskSpecRequest,
+    _: None = Depends(_require_task_api_key),
+):
     """Create a new TaskSpec."""
     pool = app.state.db_pool
     spec = TaskSpec(
@@ -1805,40 +1927,24 @@ async def create_task_spec_endpoint(request: CreateTaskSpecRequest):
 
 
 @app.post("/api/dataset-snapshots/upload", response_model=Dict[str, Any])
-async def upload_dataset_endpoint(file: UploadFile = File(...)):
-    """Upload a dataset file and return its stored path + hash."""
-    import hashlib
-    import os
-    from pathlib import Path as FPath
-
-    upload_root = FPath(os.getenv("DATASET_UPLOAD_ROOT", "/tmp/uploaded-datasets"))
-    upload_root.mkdir(parents=True, exist_ok=True)
-
-    # Sanitize filename — reject path traversal
-    safe_name = FPath(file.filename or "dataset.bin").name
+async def upload_dataset_endpoint(
+    file: UploadFile = File(...),
+    _: None = Depends(_require_task_api_key),
+):
+    """Upload a dataset file (streamed to disk with a size cap)."""
+    safe_name = FilePath(file.filename or "dataset.bin").name
     if not safe_name:
         raise HTTPException(status_code=400, detail="Empty filename")
 
-    stored_path = str(upload_root / safe_name)
-
-    # Read file and compute SHA-256
-    content = await file.read()
-    file_hash = hashlib.sha256(content).hexdigest()
-
-    # Write file
-    with open(stored_path, "wb") as f:
-        f.write(content)
-
-    return {
-        "stored_path": stored_path,
-        "file_hash_sha256": file_hash,
-        "file_size_bytes": len(content),
-        "original_filename": file.filename,
-    }
+    upload_root = FilePath(os.getenv("DATASET_UPLOAD_ROOT", "/tmp/uploaded-datasets"))
+    return await _stream_upload_to_disk(file, upload_root, MAX_DATASET_UPLOAD_BYTES)
 
 
 @app.post("/api/dataset-snapshots", response_model=Dict[str, Any])
-async def create_dataset_endpoint(request: CreateDatasetRequest):
+async def create_dataset_endpoint(
+    request: CreateDatasetRequest,
+    _: None = Depends(_require_task_api_key),
+):
     """Create a dataset snapshot."""
     pool = app.state.db_pool
     snapshot = DatasetSnapshot(
@@ -1860,7 +1966,10 @@ async def create_dataset_endpoint(request: CreateDatasetRequest):
 
 
 @app.post("/api/tasks", response_model=Dict[str, Any])
-async def create_task_endpoint(request: CreateTaskRequest):
+async def create_task_endpoint(
+    request: CreateTaskRequest,
+    _: None = Depends(_require_task_api_key),
+):
     """Create a new task with idempotency support."""
     pool = app.state.db_pool
 
@@ -1881,6 +1990,7 @@ async def create_task_endpoint(request: CreateTaskRequest):
         task_spec_id=request.task_spec_id,
         dataset_snapshot_id=request.dataset_snapshot_id,
         project_id=request.project_id,
+        method_source_id=request.method_source_id,
         title=request.title,
         status="queued",
         max_attempts=request.max_attempts,
@@ -1910,7 +2020,7 @@ async def create_task_endpoint(request: CreateTaskRequest):
 
 
 @app.get("/api/tasks/{task_id}")
-async def get_task_endpoint(task_id: str):
+async def get_task_endpoint(task_id: str, _: None = Depends(_require_task_api_key)):
     """Get task details."""
     pool = app.state.db_pool
     task = await get_task(pool, task_id)
@@ -1920,7 +2030,11 @@ async def get_task_endpoint(task_id: str):
 
 
 @app.get("/api/tasks/{task_id}/events", response_model=List[TaskEventResponse])
-async def get_task_events_endpoint(task_id: str, limit: int = 100):
+async def get_task_events_endpoint(
+    task_id: str,
+    limit: int = 100,
+    _: None = Depends(_require_task_api_key),
+):
     """Get task events."""
     pool = app.state.db_pool
     events = await get_task_events(pool, task_id, limit=limit)
@@ -1928,7 +2042,7 @@ async def get_task_events_endpoint(task_id: str, limit: int = 100):
 
 
 @app.get("/api/tasks/{task_id}/artifacts", response_model=List[ArtifactResponse])
-async def get_task_artifacts_endpoint(task_id: str):
+async def get_task_artifacts_endpoint(task_id: str, _: None = Depends(_require_task_api_key)):
     """Get task artifacts."""
     pool = app.state.db_pool
     artifacts = await get_artifacts_for_task(pool, task_id)
@@ -1954,7 +2068,7 @@ def _validate_artifact_path(storage_path: str) -> FilePath:
 
 
 @app.get("/api/artifacts/{artifact_id}")
-async def download_artifact_endpoint(artifact_id: str):
+async def download_artifact_endpoint(artifact_id: str, _: None = Depends(_require_task_api_key)):
     """Download an artifact ZIP file."""
     pool = app.state.db_pool
     artifact = await get_artifact(pool, artifact_id)
@@ -1974,7 +2088,7 @@ async def download_artifact_endpoint(artifact_id: str):
 
 
 @app.post("/api/tasks/{task_id}/cancel")
-async def cancel_task_endpoint(task_id: str):
+async def cancel_task_endpoint(task_id: str, _: None = Depends(_require_task_api_key)):
     """Cancel a running or queued task."""
     pool = app.state.db_pool
     task = await get_task(pool, task_id)
@@ -1998,7 +2112,11 @@ async def cancel_task_endpoint(task_id: str):
 
 
 @app.get("/api/tasks")
-async def list_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50):
+async def list_tasks_endpoint(
+    project_id: Optional[str] = None,
+    limit: int = 50,
+    _: None = Depends(_require_task_api_key),
+):
     """List tasks, optionally filtered by project."""
     pool = app.state.db_pool
     if project_id:
@@ -2006,7 +2124,7 @@ async def list_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50)
     else:
         # Return all recent tasks
         query = """
-            SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, title,
+            SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id, title,
                    status, lease_owner, lease_token, lease_expires_at,
                    active_attempt_id, attempt_count, max_attempts,
                    result_artifact_id, error_message, created_by,
@@ -2024,7 +2142,11 @@ async def list_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50)
 # ---- SSE endpoint for task events ----
 
 @app.get("/api/tasks/{task_id}/events/stream")
-async def task_events_sse_endpoint(task_id: str, last_event_id: Optional[str] = None):
+async def task_events_sse_endpoint(
+    task_id: str,
+    last_event_id: Optional[str] = None,
+    _: None = Depends(_require_task_api_key),
+):
     """SSE endpoint for real-time task events."""
     async def event_generator():
         pool = app.state.db_pool
@@ -2167,6 +2289,7 @@ def _task_row_to_dict(row: Any) -> Dict[str, Any]:
         "task_spec_id": str(row["task_spec_id"]),
         "dataset_snapshot_id": str(row["dataset_snapshot_id"]),
         "project_id": str(row["project_id"]),
+        "method_source_id": str(row["method_source_id"]) if row.get("method_source_id") else None,
         "title": row["title"],
         "status": row["status"],
         "lease_owner": row["lease_owner"],

@@ -83,14 +83,14 @@ async def run_worker(
 
 async def _lease_reaper_loop(worker_id: str, db_pool, lease_seconds: int) -> None:
     """Renew own leases and reap expired leases from other workers."""
-    from datetime import timedelta
+    from datetime import timedelta, timezone
     from datetime import datetime as dt
     from backend.code_agent.retry_policy import calculate_retry_delay
     from backend.code_agent.task_service import create_outbox_event
 
     while True:
         try:
-            now = dt.now()
+            now = dt.now(timezone.utc)
             new_expiry = now + timedelta(seconds=lease_seconds)
 
             # Renew own leases
@@ -231,6 +231,7 @@ async def _process_next_task(
             docker_image=docker_image,
             db_pool=db_pool,
             redis_client=redis_client,
+            method_source_id=claimed.get("method_source_id"),
             cancel_event=cancel_event,
         )
 
@@ -251,12 +252,35 @@ async def _process_next_task(
             )
             logger.info("Worker %s succeeded task %s", worker_id, task_id)
         else:
-            await update_task_status(
-                db_pool, task_id,
-                "failed",
-                lease_token=claimed["lease_token"],
-                error_message=result.get("error", "Unknown error"),
-            )
+            # Failure classification (design doc §35): retryable failures are
+            # requeued with exponential backoff until max_attempts is reached.
+            from backend.code_agent.retry_policy import is_retryable, next_attempt_at
+            from backend.code_agent.task_service import requeue_task
+
+            failure_code = result.get("failure_code")
+            error_message = result.get("error", "Unknown error")
+            retried = False
+            if (
+                is_retryable(failure_code)
+                and claimed["attempt_index"] < claimed["max_attempts"]
+            ):
+                next_at = next_attempt_at(claimed["attempt_index"])
+                requeued = await requeue_task(
+                    db_pool, task_id, claimed["lease_token"], next_at, error_message
+                )
+                if requeued:
+                    retried = True
+                    logger.info(
+                        "Worker %s requeued task %s for attempt %d at %s",
+                        worker_id, task_id, claimed["attempt_index"] + 1, next_at.isoformat(),
+                    )
+            if not retried:
+                await update_task_status(
+                    db_pool, task_id,
+                    "failed",
+                    lease_token=claimed["lease_token"],
+                    error_message=error_message,
+                )
     except Exception as exc:
         logger.error("Worker %s error for task %s: %s", worker_id, task_id, exc)
         try:
@@ -275,3 +299,39 @@ async def _process_next_task(
         except asyncio.CancelledError:
             pass
         await redis_client.ack_message(message_id)
+
+
+async def _main(worker_id: str) -> None:
+    """CLI entry: connect to PostgreSQL + Redis and run the worker loop."""
+    import os
+
+    import asyncpg
+
+    from backend.code_agent.redis_client import RedisClient
+
+    logging.basicConfig(level=logging.INFO)
+
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise SystemExit("DATABASE_URL is required")
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    docker_image = os.getenv("CODE_AGENT_DOCKER_IMAGE", "claude-code-env:v2")
+
+    pool = await asyncpg.create_pool(database_url, min_size=1, max_size=5)
+    redis_client = RedisClient(redis_url)
+    await redis_client.connect()
+    if not redis_client.is_connected:
+        logger.warning("Redis unavailable; worker will rely on DB polling fallback")
+
+    try:
+        await run_worker(worker_id, pool, redis_client, docker_image=docker_image)
+    finally:
+        await redis_client.disconnect()
+        await pool.close()
+
+
+if __name__ == "__main__":
+    import sys
+
+    worker_arg = sys.argv[1] if len(sys.argv) > 1 else "worker-default"
+    asyncio.run(_main(worker_arg))

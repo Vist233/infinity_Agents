@@ -206,6 +206,15 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 -- Task Execution System (Infinity Agent)
                 -- ============================================================================
 
+                CREATE TABLE IF NOT EXISTS projects (
+                    project_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    created_by TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+
                 CREATE TABLE IF NOT EXISTS task_specs (
                     task_spec_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                     project_id UUID NOT NULL,
@@ -224,6 +233,19 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_task_specs_project ON task_specs (project_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_task_specs_status ON task_specs (status);
+
+                CREATE TABLE IF NOT EXISTS method_sources (
+                    method_source_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    project_id UUID NOT NULL REFERENCES projects(project_id),
+                    task_spec_id UUID REFERENCES task_specs(task_spec_id),
+                    original_filename TEXT NOT NULL,
+                    stored_path TEXT NOT NULL,
+                    content_type TEXT,
+                    file_size_bytes BIGINT,
+                    file_hash_sha256 CHAR(64),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_method_sources_project ON method_sources (project_id, created_at DESC);
 
                 CREATE TABLE IF NOT EXISTS dataset_snapshots (
                     dataset_snapshot_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -354,6 +376,7 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMPTZ;
                 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
                 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
+                ALTER TABLE tasks ADD COLUMN IF NOT EXISTS method_source_id UUID;
                 ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS container_id TEXT;
                 ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS executor_image_digest TEXT;
                 ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS failure_code VARCHAR(50);

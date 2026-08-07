@@ -7,6 +7,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, RefreshCw, Download, PlayCircle, CheckCircle2, XCircle, Clock, AlertTriangle } from "lucide-react";
 import { useRouter, useParams } from "next/navigation";
+import { getApiBase } from "@/lib/runtime-config";
 
 type TaskStatus = "draft" | "queued" | "claimed" | "running" | "succeeded" | "failed" | "cancelled" | "timeout";
 
@@ -106,9 +107,9 @@ export default function TaskDetailPage() {
     setError(null);
     try {
       const [taskRes, eventsRes, artifactsRes] = await Promise.all([
-        fetch(`/api/tasks/${taskId}`),
-        fetch(`/api/tasks/${taskId}/events`),
-        fetch(`/api/tasks/${taskId}/artifacts`),
+        fetch(`${getApiBase()}/api/tasks/${taskId}`),
+        fetch(`${getApiBase()}/api/tasks/${taskId}/events`),
+        fetch(`${getApiBase()}/api/tasks/${taskId}/artifacts`),
       ]);
       if (!taskRes.ok) throw new Error(`HTTP ${taskRes.status}`);
       const taskData = await taskRes.json();
@@ -133,7 +134,7 @@ export default function TaskDetailPage() {
     try {
       const proto = window.location.protocol === "https:" ? "https:" : "http:";
       const host = window.location.host;
-      es = new EventSource(`${proto}//${host}/api/tasks/${taskId}/events/stream`);
+      es = new EventSource(`${proto}//${host}${getApiBase()}/api/tasks/${taskId}/events/stream`);
       es.onopen = () => setSseConnected(true);
       es.onerror = () => setSseConnected(false);
       es.addEventListener("task_state", (e) => {
@@ -164,7 +165,7 @@ export default function TaskDetailPage() {
     setCancelling(true);
     setCancelSuccess(false);
     try {
-      const res = await fetch(`/api/tasks/${taskId}/cancel`, { method: "POST" });
+      const res = await fetch(`${getApiBase()}/api/tasks/${taskId}/cancel`, { method: "POST" });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.detail || `HTTP ${res.status}`);
@@ -184,7 +185,7 @@ export default function TaskDetailPage() {
   return (
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
       <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
-        <AgentNav active="tasks" onNavigate={(path) => router.push(path)} />
+        <AgentNav active="code" onNavigate={(path) => router.push(path)} />
       </aside>
       <main className="flex-1 flex flex-col relative min-w-0">
         <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between sticky top-0 bg-[var(--surface-1)] backdrop-blur-xl z-10 print:hidden">
@@ -294,7 +295,7 @@ export default function TaskDetailPage() {
                             <td className="px-4 py-3 text-xs text-zinc-600">{formatBytes(a.file_size_bytes)}</td>
                             <td className="px-4 py-3 font-mono text-xs text-zinc-500">{a.checksum_sha256 ? a.checksum_sha256.slice(0, 12) + "..." : "-"}</td>
                             <td className="px-4 py-3">
-                              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1" onClick={() => window.open(`/api/artifacts/${a.artifact_id}`, "_blank")}>
+                              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1" onClick={() => window.open(`${getApiBase()}/api/artifacts/${a.artifact_id}`, "_blank")}>
                                 <Download size={14} />
                                 {t("tasks.view")}
                               </Button>

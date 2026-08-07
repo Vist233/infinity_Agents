@@ -8,13 +8,9 @@ const MOCK_TASKS = [
     project_id: "proj-1",
     title: "DESeq2 Differential Expression",
     status: "succeeded",
-    lease_owner: null,
-    lease_token: null,
-    lease_expires_at: null,
-    active_attempt_id: null,
     attempt_count: 1,
     max_attempts: 3,
-    result_artifact_id: "artifact-1",
+    result_artifact_id: null,
     error_message: null,
     created_by: null,
     created_at: "2026-08-07T01:00:00Z",
@@ -28,10 +24,6 @@ const MOCK_TASKS = [
     project_id: "proj-1",
     title: "Biopython Sequence Analysis",
     status: "running",
-    lease_owner: "worker-1",
-    lease_token: "token-abc",
-    lease_expires_at: "2026-08-07T02:00:00Z",
-    active_attempt_id: 2,
     attempt_count: 1,
     max_attempts: 3,
     result_artifact_id: null,
@@ -76,8 +68,31 @@ const MOCK_ARTIFACTS = [
   },
 ];
 
-test("CodeAgent tasks page loads and displays tasks", async ({ page }) => {
-  await page.route("**/api/tasks", async (route) => {
+test("CodeAgent main page shows the new-task form and task list", async ({ page }) => {
+  await page.route("**/api/tasks*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      body: JSON.stringify({ tasks: MOCK_TASKS }),
+      contentType: "application/json",
+    });
+  });
+
+  await page.goto("/code-agent");
+  // New task card
+  await expect(page.getByText("执行文档")).toBeVisible();
+  await expect(page.getByText("数据集")).toBeVisible();
+  await expect(page.getByRole("button", { name: "创建任务" })).toBeVisible();
+  // Task list
+  await expect(page.getByRole("columnheader", { name: "ID" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "标题" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "DESeq2 Differential Expression" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Biopython Sequence Analysis" })).toBeVisible();
+  await expect(page.getByText("成功")).toBeVisible();
+  await expect(page.getByText("运行中")).toBeVisible();
+});
+
+test("CodeAgent /tasks index redirects to the main page", async ({ page }) => {
+  await page.route("**/api/tasks*", async (route) => {
     await route.fulfill({
       status: 200,
       body: JSON.stringify({ tasks: MOCK_TASKS }),
@@ -86,12 +101,8 @@ test("CodeAgent tasks page loads and displays tasks", async ({ page }) => {
   });
 
   await page.goto("/code-agent/tasks");
-  await expect(page.getByRole("columnheader", { name: "ID" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "标题" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "DESeq2 Differential Expression" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "Biopython Sequence Analysis" })).toBeVisible();
-  await expect(page.getByText("成功")).toBeVisible();
-  await expect(page.getByText("运行中")).toBeVisible();
+  await expect(page).toHaveURL(/\/code-agent\/?$/);
+  await expect(page.getByRole("button", { name: "创建任务" })).toBeVisible();
 });
 
 test("CodeAgent task detail page loads with events and artifacts", async ({ page }) => {
@@ -124,32 +135,6 @@ test("CodeAgent task detail page loads with events and artifacts", async ({ page
   await expect(page.getByText("成功")).toBeVisible();
   await expect(page.getByText("result.zip")).toBeVisible();
   await expect(page.getByText("task_state").first()).toBeVisible();
-});
-
-test("CodeAgent analysis page loads and shows form elements", async ({ page }) => {
-  await page.goto("/code-agent/analysis");
-  await expect(page.getByRole("heading", { name: "Analysis Agent" })).toBeVisible();
-  await expect(page.getByText("Research Goal", { exact: true })).toBeVisible();
-  await expect(page.getByText("Dataset", { exact: true })).toBeVisible();
-  await expect(page.getByText("Agent Output")).toBeVisible();
-});
-
-test("CodeAgent main page has navigation to tasks", async ({ page }) => {
-  await page.route("**/api/sessions", async (route) => {
-    await route.fulfill({ status: 200, body: "[]", contentType: "application/json" });
-  });
-  await page.route("**/api/tasks", async (route) => {
-    await route.fulfill({
-      status: 200,
-      body: JSON.stringify({ tasks: MOCK_TASKS }),
-      contentType: "application/json",
-    });
-  });
-
-  await page.goto("/code-agent");
-  await expect(page.getByText("今天想让我帮你做什么？")).toBeVisible();
-  await page.getByRole("button", { name: "任务" }).first().click();
-  await expect(page.getByRole("cell", { name: "DESeq2 Differential Expression" })).toBeVisible();
 });
 
 test("Task detail page shows task information correctly", async ({ page }) => {

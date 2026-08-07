@@ -100,6 +100,7 @@ class Task:
     task_spec_id: str = ""
     dataset_snapshot_id: str = ""
     project_id: str = ""
+    method_source_id: Optional[str] = None
     title: str = ""
     status: str = "draft"
     phase: Optional[str] = None
@@ -178,6 +179,28 @@ class Artifact:
     checksum_sha256: Optional[str] = None
     content_type: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: str = ""
+
+
+@dataclass
+class Project:
+    project_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = ""
+    description: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: str = ""
+
+
+@dataclass
+class MethodSource:
+    method_source_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    project_id: str = ""
+    task_spec_id: Optional[str] = None
+    original_filename: str = ""
+    stored_path: str = ""
+    content_type: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    file_hash_sha256: Optional[str] = None
     created_at: str = ""
 
 

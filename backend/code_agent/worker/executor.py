@@ -11,6 +11,8 @@ import json
 import logging
 import os
 import asyncio
+import shutil
+import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
 
@@ -28,6 +30,7 @@ async def execute_task(
     db_pool,
     redis_client,
     *,
+    method_source_id: Optional[str] = None,
     output_base_dir: str = "/tmp/task-outputs",
     cancel_event: Optional[asyncio.Event] = None,
 ) -> Dict[str, Any]:
@@ -48,6 +51,10 @@ async def execute_task(
     # Load task spec for context
     task_spec = await _get_task_spec(db_pool, task_spec_id)
     dataset = await _get_dataset(db_pool, dataset_snapshot_id)
+    method_source = None
+    if method_source_id:
+        from backend.code_agent.task_service import get_method_source
+        method_source = await get_method_source(db_pool, method_source_id)
 
     # Report running status
     await _report_status(redis_client, task_id, "running", {
@@ -59,15 +66,18 @@ async def execute_task(
     # Run Docker container
     success = False
     error_message = None
+    failure_code = None
     output_files = []
     exit_code = None
     cancelled = False
+    image_digest = await _get_image_digest(docker_image)
 
     try:
         async for event in _run_docker_execution(
             task_id=task_id,
             task_spec=task_spec,
             dataset=dataset,
+            method_source=method_source,
             docker_image=docker_image,
             work_dir=task_work_dir,
             output_dir=task_output_dir,
@@ -90,6 +100,7 @@ async def execute_task(
                 output_files = await _collect_outputs(task_output_dir)
             elif event["type"] == "error":
                 error_message = event.get("message", "Unknown error")
+                failure_code = "execution_error"
                 success = False
             elif event["type"] == "cancelled":
                 cancelled = True
@@ -100,6 +111,7 @@ async def execute_task(
     except Exception as exc:
         logger.error("Task %s execution failed: %s", task_id, exc)
         error_message = str(exc)
+        failure_code = "execution_error"
         success = False
 
     # Complete the attempt
@@ -110,13 +122,15 @@ async def execute_task(
         status="succeeded" if success else "failed",
         exit_code=0 if success else 1,
         error_message=error_message,
+        executor_image_digest=image_digest,
+        failure_code=None if success else failure_code,
     )
 
     if cancelled:
         return {"success": False, "cancelled": True, "error": error_message}
 
     if not success:
-        return {"success": False, "error": error_message}
+        return {"success": False, "error": error_message, "failure_code": failure_code}
 
     # Verify outputs
     await _report_status(redis_client, task_id, "running", {
@@ -129,6 +143,9 @@ async def execute_task(
         return {
             "success": False,
             "error": f"Verification failed: {', '.join(f['message'] for f in verification['failures'])}",
+            # Verification failures are deterministic — retrying won't help
+            # (design doc §35.2).
+            "failure_code": "verification_failed",
         }
 
     # Create artifacts
@@ -182,6 +199,7 @@ async def _run_docker_execution(
     task_id: str,
     task_spec: Dict[str, Any],
     dataset: Dict[str, Any],
+    method_source: Optional[Dict[str, Any]],
     docker_image: str,
     work_dir: Path,
     output_dir: Path,
@@ -191,38 +209,80 @@ async def _run_docker_execution(
     """Run the actual Docker execution."""
     from backend.code_agent.worker.docker_runtime import run_docker_task
 
-    # Determine case directory from task spec
-    analysis_type = task_spec.get("analysis_type", "")
-    case_mapping = {
-        "rnaseq_deseq2": "1",
-        "biopython": "2",
-        "scanpy": "3",
-    }
-    case_num = case_mapping.get(analysis_type, "")
+    input_dir = None
 
-    # Use the pre-existing case data if available
-    case_base = Path(
-        os.getenv(
-            "CODE_AGENT_CASE_DIR",
-            "/Users/zhangyvjing/Library/Mobile Documents/com~apple~CloudDocs/Code/CodeExcuteGoalDriven/GoalDrivenAttempt/test/case",
-        )
-    )
+    # Preferred path: assemble the task input directory from the uploaded
+    # method source document + dataset snapshot (design doc §8.5).
+    if (dataset and dataset.get("stored_path")) or (
+        method_source and method_source.get("stored_path")
+    ):
+        input_dir = work_dir / "input"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        if dataset and dataset.get("stored_path"):
+            _stage_dataset(Path(dataset["stored_path"]), input_dir / "data")
+        if method_source and method_source.get("stored_path"):
+            src = Path(method_source["stored_path"])
+            if src.exists():
+                shutil.copy2(src, input_dir / src.name)
 
-    case_dir = None
-    if case_num and (case_base / case_num).exists():
-        case_dir = str(case_base / case_num)
+    # Fallback: pre-existing case directories from the validation phase.
+    if input_dir is None:
+        analysis_type = task_spec.get("analysis_type", "")
+        case_mapping = {
+            "rnaseq_deseq2": "1",
+            "biopython": "2",
+            "scanpy": "3",
+        }
+        case_num = case_mapping.get(analysis_type, "")
+        case_base = Path(os.getenv("CODE_AGENT_CASE_DIR", "/workspace/case"))
+        if case_num and (case_base / case_num).exists():
+            input_dir = case_base / case_num
 
     # Run Docker
     async for event in run_docker_task(
         task_id=task_id,
         task_spec_id=task_spec.get("task_spec_id", ""),
-        dataset_snapshot_id=dataset.get("dataset_snapshot_id", ""),
+        dataset_snapshot_id=dataset.get("dataset_snapshot_id", "") if dataset else "",
         docker_image=docker_image,
-        case_dir=case_dir,
+        case_dir=str(input_dir) if input_dir else None,
         output_dir=str(output_dir),
         cancel_event=cancel_event,
     ):
         yield event
+
+
+def _stage_dataset(stored_path: Path, dest_dir: Path) -> None:
+    """Copy or safely extract the dataset snapshot into the input dir."""
+    import zipfile
+
+    if not stored_path.exists():
+        logger.warning("Dataset stored_path does not exist: %s", stored_path)
+        return
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    if stored_path.suffix.lower() == ".zip":
+        base = dest_dir.resolve()
+        with zipfile.ZipFile(stored_path, "r") as zf:
+            for info in zf.infolist():
+                # Block path traversal inside the archive
+                target = (base / info.filename).resolve()
+                if not str(target).startswith(str(base)):
+                    logger.warning("Skipping unsafe archive entry: %s", info.filename)
+                    continue
+                zf.extract(info, dest_dir)
+    elif stored_path.is_file():
+        shutil.copy2(stored_path, dest_dir / stored_path.name)
+    elif stored_path.is_dir():
+        shutil.copytree(stored_path, dest_dir / stored_path.name, dirs_exist_ok=True)
+
+
+async def _get_image_digest(docker_image: str) -> Optional[str]:
+    """Resolve the image ID/digest for reproducibility records (design §25)."""
+    from backend.code_agent.worker.docker_runtime import get_image_digest
+    try:
+        return await get_image_digest(docker_image)
+    except Exception:
+        return None
 
 
 async def _collect_outputs(output_dir: Path) -> list:
@@ -279,7 +339,7 @@ async def _create_artifacts(
     from backend.code_agent.task_service import create_artifact
     import zipfile
 
-    artifact_id = f"artifact-{task_id[:8]}"
+    artifact_id = f"artifact-{uuid.uuid4()}"
 
     # Create manifest
     manifest = {

@@ -150,7 +150,8 @@ class TestRegressionChains:
             )
 
         assert result["success"] is True
-        assert result["artifact_id"] == "artifact-task-1"
+        # D11: artifact ids are unique per attempt (uuid), not per task.
+        assert result["artifact_id"].startswith("artifact-")
         assert len(result["output_files"]) == 2
         assert redis.publish_task_event.called
 
@@ -192,7 +193,7 @@ class TestRegressionChains:
             )
 
         assert result["success"] is True
-        assert result["artifact_id"] == "artifact-task-2"
+        assert result["artifact_id"].startswith("artifact-")
         assert len(result["output_files"]) == 2
 
     @pytest.mark.asyncio
