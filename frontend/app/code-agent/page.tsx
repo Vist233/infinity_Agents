@@ -59,6 +59,9 @@ export default function CodeAgentPage() {
   const [title, setTitle] = useState("");
   const [methodFile, setMethodFile] = useState<File | null>(null);
   const [datasetFile, setDatasetFile] = useState<File | null>(null);
+  // Bumped after a successful create to remount the native file inputs —
+  // React state alone cannot clear an <input type=file>'s residual filename.
+  const [formKey, setFormKey] = useState(0);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createdTaskId, setCreatedTaskId] = useState<string | null>(null);
@@ -126,6 +129,7 @@ export default function CodeAgentPage() {
       setTitle("");
       setMethodFile(null);
       setDatasetFile(null);
+      setFormKey((k) => k + 1);
       void loadTasks();
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : String(err));
@@ -178,6 +182,7 @@ export default function CodeAgentPage() {
                   </div>
                   <div className="text-xs text-zinc-400">{t("tasks.methodDocHint")}</div>
                   <input
+                    key={`method-${formKey}`}
                     type="file"
                     accept={METHOD_DOC_ACCEPT}
                     className="text-xs text-zinc-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-zinc-100 file:text-zinc-700 hover:file:bg-zinc-200"
@@ -195,6 +200,7 @@ export default function CodeAgentPage() {
                   </div>
                   <div className="text-xs text-zinc-400">{t("tasks.datasetHint")}</div>
                   <input
+                    key={`dataset-${formKey}`}
                     type="file"
                     accept={DATASET_ACCEPT}
                     className="text-xs text-zinc-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-zinc-100 file:text-zinc-700 hover:file:bg-zinc-200"

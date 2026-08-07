@@ -32,6 +32,25 @@ from backend.code_agent.models import (
 
 logger = logging.getLogger(__name__)
 
+
+def _jsonb_to_dict(value: Any) -> Dict[str, Any]:
+    """Normalize a jsonb column into a dict.
+
+    asyncpg returns jsonb columns as JSON strings unless a custom codec is
+    registered, while test fakes return dicts — handle both.
+    """
+    if not value:
+        return {}
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    if isinstance(value, dict):
+        return value
+    return {}
+
 # Well-known UUID for the default project so that fresh deployments and
 # idempotent re-creation always converge on the same row.
 DEFAULT_PROJECT_ID = "00000000-0000-0000-0000-000000000001"
@@ -235,7 +254,7 @@ async def get_task_spec(pool, task_spec_id: str) -> Optional[Dict[str, Any]]:
         "domain": row["domain"],
         "analysis_type": row["analysis_type"],
         "research_question": row["research_question"],
-        "spec_json": dict(row["spec_json"]) if row["spec_json"] else {},
+        "spec_json": _jsonb_to_dict(row["spec_json"]),
         "schema_version": row["schema_version"],
         "status": row["status"],
         "created_by": row["created_by"],
@@ -533,6 +552,10 @@ async def update_task_status(
     **extra_fields: Any,
 ) -> Optional[Dict[str, Any]]:
     """Update task status with optional lease verification."""
+    # Callers historically passed bare strings; normalize to the enum so
+    # `.value` below never crashes on "failed"/"succeeded" literals.
+    if isinstance(new_status, str):
+        new_status = TaskStatus(new_status)
     # Build dynamic update
     set_clauses = ["status = $2", "updated_at = NOW()"]
     values = [task_id, new_status.value]
@@ -727,7 +750,7 @@ async def get_task_events(pool, task_id: str, limit: int = 100) -> List[Dict[str
             "task_id": str(row["task_id"]),
             "task_attempt_id": row["task_attempt_id"],
             "event_type": row["event_type"],
-            "event_data": dict(row["event_data"]) if row["event_data"] else {},
+            "event_data": _jsonb_to_dict(row["event_data"]),
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         }
         for row in rows
@@ -782,7 +805,7 @@ async def get_pending_outbox_events(pool, limit: int = 50) -> List[Dict[str, Any
             "aggregate_type": row["aggregate_type"],
             "aggregate_id": str(row["aggregate_id"]),
             "event_type": row["event_type"],
-            "payload": dict(row["payload"]) if row["payload"] else {},
+            "payload": _jsonb_to_dict(row["payload"]),
             "retry_count": row["retry_count"],
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         }
@@ -872,7 +895,7 @@ async def get_artifacts_for_task(pool, task_id: str) -> List[Dict[str, Any]]:
             "file_size_bytes": row["file_size_bytes"],
             "checksum_sha256": row["checksum_sha256"],
             "content_type": row["content_type"],
-            "metadata": dict(row["metadata"]) if row["metadata"] else {},
+            "metadata": _jsonb_to_dict(row["metadata"]),
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         }
         for row in rows
@@ -903,7 +926,7 @@ async def get_artifact(pool, artifact_id: str) -> Optional[Dict[str, Any]]:
         "file_size_bytes": row["file_size_bytes"],
         "checksum_sha256": row["checksum_sha256"],
         "content_type": row["content_type"],
-        "metadata": dict(row["metadata"]) if row["metadata"] else {},
+        "metadata": _jsonb_to_dict(row["metadata"]),
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
     }
 

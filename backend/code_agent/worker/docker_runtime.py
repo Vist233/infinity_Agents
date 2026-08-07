@@ -82,10 +82,12 @@ async def run_docker_task(
         cmd += ["--user", job_user]
 
     # Pass through LLM API credentials from the Worker environment
-    # (design doc §41 — secrets are never baked into images).
+    # (design doc §41 — secrets are never baked into images). Pass only the
+    # variable NAME so docker inherits the value from our environment; the
+    # secret never appears in the process command line (`ps aux`).
     for name, value in os.environ.items():
         if (name.startswith("ANTHROPIC_") or name == "STEPFUN_API_KEY") and value:
-            cmd += ["-e", f"{name}={value}"]
+            cmd += ["-e", name]
 
     cmd += [
         "-v", f"{work_dir}:{input_mount}:ro",

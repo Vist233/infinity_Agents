@@ -595,6 +595,7 @@ _CORS_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1807,7 +1808,9 @@ async def _require_task_api_key(request: Request) -> None:
     """Optional shared-secret gate for the Task API (design doc §41 MVP).
 
     When TASK_API_TOKEN is set, Task API requests must carry it in the
-    X-API-Key header. Unset = local development mode (open access).
+    X-API-Key header. Browser EventSource cannot set custom headers, so the
+    `api_key` query parameter is accepted ONLY on the SSE stream endpoint
+    (URLs can leak into logs/referers). Unset = local dev mode (open access).
     """
     import hmac
 
@@ -1815,6 +1818,8 @@ async def _require_task_api_key(request: Request) -> None:
     if not expected:
         return
     provided = request.headers.get("X-API-Key", "")
+    if not provided and request.url.path.rstrip("/").endswith("/events/stream"):
+        provided = request.query_params.get("api_key") or ""
     if not hmac.compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
 
@@ -1841,7 +1846,9 @@ async def _stream_upload_to_disk(file: UploadFile, dest_dir: FilePath, max_bytes
                     )
                 hasher.update(chunk)
                 f.write(chunk)
-    except HTTPException:
+    except Exception:
+        # Clean up the partial file on ANY failure (size cap, client
+        # disconnect, IO error) so aborted uploads never leak.
         stored_path.unlink(missing_ok=True)
         raise
     return {
@@ -1947,6 +1954,15 @@ async def create_dataset_endpoint(
 ):
     """Create a dataset snapshot."""
     pool = app.state.db_pool
+    # The executor mounts/copies stored_path verbatim, so it must point inside
+    # a known upload root — never anywhere else on the filesystem.
+    allowed_roots = [
+        FilePath(os.getenv("DATASET_UPLOAD_ROOT", "/tmp/uploaded-datasets")).resolve(),
+        FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", "/tmp/uploaded-method-sources")).resolve(),
+    ]
+    resolved = FilePath(request.stored_path).resolve()
+    if not any(resolved.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=400, detail="stored_path is outside the upload root")
     snapshot = DatasetSnapshot(
         dataset_snapshot_id=str(uuid.uuid4()),
         task_spec_id=request.task_spec_id,

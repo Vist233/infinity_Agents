@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ArrowLeft, RefreshCw, Download, PlayCircle, CheckCircle2, XCircle, Clock, AlertTriangle } from "lucide-react";
 import { useRouter, useParams } from "next/navigation";
 import { getApiBase } from "@/lib/runtime-config";
+import { getJson, cancelTask, downloadArtifact, taskEventStreamUrl } from "@/lib/api/tasks";
 
 type TaskStatus = "draft" | "queued" | "claimed" | "running" | "succeeded" | "failed" | "cancelled" | "timeout";
 
@@ -106,17 +107,14 @@ export default function TaskDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const [taskRes, eventsRes, artifactsRes] = await Promise.all([
-        fetch(`${getApiBase()}/api/tasks/${taskId}`),
-        fetch(`${getApiBase()}/api/tasks/${taskId}/events`),
-        fetch(`${getApiBase()}/api/tasks/${taskId}/artifacts`),
+      const [taskData, evts, arts] = await Promise.all([
+        getJson<TaskDetail>(`${getApiBase()}/api/tasks/${taskId}`),
+        getJson<TaskEvent[] | { events?: TaskEvent[] }>(`${getApiBase()}/api/tasks/${taskId}/events`).catch(() => []),
+        getJson<Artifact[]>(`${getApiBase()}/api/tasks/${taskId}/artifacts`).catch(() => []),
       ]);
-      if (!taskRes.ok) throw new Error(`HTTP ${taskRes.status}`);
-      const taskData = await taskRes.json();
       setTask(taskData);
-      const evts = eventsRes.ok ? await eventsRes.json() : [];
-      setEvents(Array.isArray(evts) ? evts : []);
-      const arts = artifactsRes.ok ? await artifactsRes.json() : [];
+      const evtList = Array.isArray(evts) ? evts : (evts?.events ?? []);
+      setEvents(Array.isArray(evtList) ? evtList : []);
       setArtifacts(Array.isArray(arts) ? arts : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -131,12 +129,27 @@ export default function TaskDetailPage() {
     if (!taskId) return;
     let es: EventSource | null = null;
     let timer: ReturnType<typeof setInterval> | null = null;
+    let failures = 0;
     try {
-      const proto = window.location.protocol === "https:" ? "https:" : "http:";
-      const host = window.location.host;
-      es = new EventSource(`${proto}//${host}${getApiBase()}/api/tasks/${taskId}/events/stream`);
-      es.onopen = () => setSseConnected(true);
-      es.onerror = () => setSseConnected(false);
+      // taskEventStreamUrl builds the correct same-origin URL (and carries
+      // the optional api_key query param — EventSource cannot set headers).
+      es = new EventSource(taskEventStreamUrl(taskId));
+      es.onopen = () => {
+        failures = 0;
+        setSseConnected(true);
+      };
+      es.onerror = () => {
+        setSseConnected(false);
+        failures += 1;
+        // A persistently failing stream (e.g. 404) would otherwise reconnect
+        // forever and flood the console — fall back to polling after a few
+        // attempts.
+        if (failures >= 3 && es) {
+          es.close();
+          es = null;
+          if (!timer) timer = setInterval(loadDetail, 3000);
+        }
+      };
       es.addEventListener("task_state", (e) => {
         const data = JSON.parse((e as MessageEvent).data);
         if (data.status) setTask((prev) => prev ? { ...prev, status: data.status } : prev);
@@ -165,11 +178,7 @@ export default function TaskDetailPage() {
     setCancelling(true);
     setCancelSuccess(false);
     try {
-      const res = await fetch(`${getApiBase()}/api/tasks/${taskId}/cancel`, { method: "POST" });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || `HTTP ${res.status}`);
-      }
+      await cancelTask(taskId);
       setCancelSuccess(true);
       loadDetail();
     } catch (err) {
@@ -295,7 +304,7 @@ export default function TaskDetailPage() {
                             <td className="px-4 py-3 text-xs text-zinc-600">{formatBytes(a.file_size_bytes)}</td>
                             <td className="px-4 py-3 font-mono text-xs text-zinc-500">{a.checksum_sha256 ? a.checksum_sha256.slice(0, 12) + "..." : "-"}</td>
                             <td className="px-4 py-3">
-                              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1" onClick={() => window.open(`${getApiBase()}/api/artifacts/${a.artifact_id}`, "_blank")}>
+                              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1" onClick={() => { void downloadArtifact(a.artifact_id, `${a.name || "artifact"}.zip`); }}>
                                 <Download size={14} />
                                 {t("tasks.view")}
                               </Button>

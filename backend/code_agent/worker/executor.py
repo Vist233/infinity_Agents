@@ -184,14 +184,15 @@ async def _get_dataset(db_pool, dataset_snapshot_id: str) -> Dict[str, Any]:
         row = await conn.fetchrow(query, dataset_snapshot_id)
     if not row:
         return {}
+    from backend.code_agent.task_service import _jsonb_to_dict
     return {
         "dataset_snapshot_id": str(row["dataset_snapshot_id"]),
         "original_filename": row["original_filename"],
         "stored_path": row["stored_path"],
         "file_size_bytes": row["file_size_bytes"],
         "file_hash_sha256": row["file_hash_sha256"],
-        "metadata": dict(row["metadata"]) if row["metadata"] else {},
-        "validation_result": dict(row["validation_result"]) if row["validation_result"] else {},
+        "metadata": _jsonb_to_dict(row["metadata"]),
+        "validation_result": _jsonb_to_dict(row["validation_result"]),
     }
 
 
@@ -222,7 +223,8 @@ async def _run_docker_execution(
             _stage_dataset(Path(dataset["stored_path"]), input_dir / "data")
         if method_source and method_source.get("stored_path"):
             src = Path(method_source["stored_path"])
-            if src.exists():
+            # Same upload-root confinement as datasets (defense in depth).
+            if src.exists() and _inside_upload_roots(src):
                 shutil.copy2(src, input_dir / src.name)
 
     # Fallback: pre-existing case directories from the validation phase.
@@ -251,9 +253,28 @@ async def _run_docker_execution(
         yield event
 
 
+def _inside_upload_roots(path: Path) -> bool:
+    """True only if the resolved path lives inside a known upload root."""
+    allowed_roots = [
+        Path(os.getenv("DATASET_UPLOAD_ROOT", "/tmp/uploaded-datasets")).resolve(),
+        Path(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", "/tmp/uploaded-method-sources")).resolve(),
+    ]
+    try:
+        resolved = path.resolve()
+        return any(resolved.is_relative_to(root) for root in allowed_roots)
+    except OSError:
+        return False
+
+
 def _stage_dataset(stored_path: Path, dest_dir: Path) -> None:
     """Copy or safely extract the dataset snapshot into the input dir."""
     import zipfile
+
+    # Defense in depth: even though the API validates stored_path against the
+    # upload roots, the worker must never mount arbitrary filesystem paths.
+    if not _inside_upload_roots(stored_path):
+        logger.warning("Refusing to stage dataset outside upload roots: %s", stored_path)
+        return
 
     if not stored_path.exists():
         logger.warning("Dataset stored_path does not exist: %s", stored_path)
@@ -264,9 +285,11 @@ def _stage_dataset(stored_path: Path, dest_dir: Path) -> None:
         base = dest_dir.resolve()
         with zipfile.ZipFile(stored_path, "r") as zf:
             for info in zf.infolist():
-                # Block path traversal inside the archive
+                # Block path traversal inside the archive. is_relative_to
+                # avoids the classic startswith("...data") vs "...data2"
+                # prefix-match bypass.
                 target = (base / info.filename).resolve()
-                if not str(target).startswith(str(base)):
+                if not target.is_relative_to(base):
                     logger.warning("Skipping unsafe archive entry: %s", info.filename)
                     continue
                 zf.extract(info, dest_dir)

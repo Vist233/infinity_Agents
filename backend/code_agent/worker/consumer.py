@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Any
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +174,46 @@ async def _heartbeat_loop(worker_id: str, redis_client, interval: int) -> None:
         await asyncio.sleep(interval)
 
 
+async def _fail_or_requeue(
+    db_pool,
+    worker_id: str,
+    task_id: str,
+    claimed: Dict[str, Any],
+    *,
+    failure_code: Optional[str],
+    error_message: str,
+) -> None:
+    """Failure classification (design doc §35).
+
+    Retryable failures are requeued with exponential backoff until
+    max_attempts is reached; everything else terminates as 'failed'.
+    """
+    from backend.code_agent.retry_policy import is_retryable, next_attempt_at
+    from backend.code_agent.task_service import requeue_task, update_task_status
+    from backend.code_agent.models import TaskStatus
+
+    if (
+        is_retryable(failure_code)
+        and claimed["attempt_index"] < claimed["max_attempts"]
+    ):
+        next_at = next_attempt_at(claimed["attempt_index"])
+        requeued = await requeue_task(
+            db_pool, task_id, claimed["lease_token"], next_at, error_message
+        )
+        if requeued:
+            logger.info(
+                "Worker %s requeued task %s for attempt %d at %s",
+                worker_id, task_id, claimed["attempt_index"] + 1, next_at.isoformat(),
+            )
+            return
+    await update_task_status(
+        db_pool, task_id,
+        TaskStatus.FAILED,
+        lease_token=claimed["lease_token"],
+        error_message=error_message,
+    )
+
+
 async def _process_next_task(
     worker_id: str,
     db_pool,
@@ -244,50 +284,29 @@ async def _process_next_task(
             )
             logger.info("Worker %s cancelled task %s", worker_id, task_id)
         elif result.get("success"):
+            from backend.code_agent.models import TaskStatus
             await update_task_status(
                 db_pool, task_id,
-                "succeeded",
+                TaskStatus.SUCCEEDED,
                 lease_token=claimed["lease_token"],
                 result_artifact_id=result.get("artifact_id"),
             )
             logger.info("Worker %s succeeded task %s", worker_id, task_id)
         else:
-            # Failure classification (design doc §35): retryable failures are
-            # requeued with exponential backoff until max_attempts is reached.
-            from backend.code_agent.retry_policy import is_retryable, next_attempt_at
-            from backend.code_agent.task_service import requeue_task
-
-            failure_code = result.get("failure_code")
-            error_message = result.get("error", "Unknown error")
-            retried = False
-            if (
-                is_retryable(failure_code)
-                and claimed["attempt_index"] < claimed["max_attempts"]
-            ):
-                next_at = next_attempt_at(claimed["attempt_index"])
-                requeued = await requeue_task(
-                    db_pool, task_id, claimed["lease_token"], next_at, error_message
-                )
-                if requeued:
-                    retried = True
-                    logger.info(
-                        "Worker %s requeued task %s for attempt %d at %s",
-                        worker_id, task_id, claimed["attempt_index"] + 1, next_at.isoformat(),
-                    )
-            if not retried:
-                await update_task_status(
-                    db_pool, task_id,
-                    "failed",
-                    lease_token=claimed["lease_token"],
-                    error_message=error_message,
-                )
+            await _fail_or_requeue(
+                db_pool, worker_id, task_id, claimed,
+                failure_code=result.get("failure_code"),
+                error_message=result.get("error", "Unknown error"),
+            )
     except Exception as exc:
         logger.error("Worker %s error for task %s: %s", worker_id, task_id, exc)
+        # Unexpected worker-side errors (Redis/DB hiccups etc.) are transient
+        # infrastructure failures — classify them as retryable (design doc §35)
+        # instead of terminating the task immediately.
         try:
-            await update_task_status(
-                db_pool, task_id,
-                "failed",
-                lease_token=claimed["lease_token"],
+            await _fail_or_requeue(
+                db_pool, worker_id, task_id, claimed,
+                failure_code="infrastructure_error",
                 error_message=_sanitize_error(str(exc)),
             )
         except Exception:

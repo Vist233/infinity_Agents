@@ -51,7 +51,7 @@ export interface DatasetUploadInfo {
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(input, { credentials: "include", ...init });
+    response = await fetch(input, { credentials: "include", ...init, headers: { ...authHeaders(), ...(init?.headers || {}) } });
   } catch (error) {
     throw new Error(
       `Network request failed: ${error instanceof Error ? error.message : "unknown error"}`,
@@ -72,8 +72,24 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+// Optional shared secret (backend TASK_API_TOKEN). When the backend runs in
+// protected mode, the browser injects this key; unset = open local mode.
+function getTaskApiKey(): string {
+  return process.env.NEXT_PUBLIC_TASK_API_TOKEN?.trim() || "";
+}
+
+function authHeaders(): Record<string, string> {
+  const key = getTaskApiKey();
+  return key ? { "X-API-Key": key } : {};
+}
+
 export async function getDefaultProject(): Promise<ProjectInfo> {
   return requestJson(`${getApiBase()}/api/projects/default`);
+}
+
+/** Generic authenticated GET against the Task API (shared key injection). */
+export function getJson<T>(url: string): Promise<T> {
+  return requestJson<T>(url);
 }
 
 export async function uploadMethodSource(file: File): Promise<MethodSourceInfo> {
@@ -144,7 +160,28 @@ export function artifactDownloadUrl(artifactId: string): string {
   return `${getApiBase()}/api/artifacts/${artifactId}`;
 }
 
+/** Download an artifact via fetch+Blob so the X-API-Key header is attached
+ *  (a plain `window.open` cannot carry custom headers, which would 401
+ *  when TASK_API_TOKEN is enabled). */
+export async function downloadArtifact(artifactId: string, filename = "artifact.zip"): Promise<void> {
+  const res = await fetch(artifactDownloadUrl(artifactId), {
+    credentials: "include",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export function taskEventStreamUrl(taskId: string): string {
-  // EventSource cannot send credentials; keep same-origin relative URLs.
-  return `${getApiBase()}/api/tasks/${taskId}/events/stream`;
+  // EventSource cannot send custom headers, so the key travels as a query
+  // parameter (backend accepts ?api_key= as an SSE fallback).
+  const key = getTaskApiKey();
+  const suffix = key ? `?api_key=${encodeURIComponent(key)}` : "";
+  return `${getApiBase()}/api/tasks/${taskId}/events/stream${suffix}`;
 }
