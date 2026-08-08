@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
 
-import backend.app as backend_app_module
 from backend.code_agent.analysis_agent import validate_task_spec, run_analysis_stream
 
 
@@ -85,42 +83,3 @@ class TestAnalysisStream:
         spec = draft_events[0]["task_spec"]
         assert spec["analysis_type"] == "biopython"
         assert validate_task_spec(spec) == []
-
-
-class TestAnalysisWebSocket:
-    @pytest.fixture(autouse=True)
-    def _mock_db(self, monkeypatch):
-        async def fake_init_db(app):
-            app.state.db_pool = object()
-            app.state.session_agents = {}
-            app.state.session_meta = {}
-
-        async def fake_close_db(app):
-            return None
-
-        monkeypatch.setattr(backend_app_module, "init_db", fake_init_db)
-        monkeypatch.setattr(backend_app_module, "close_db", fake_close_db)
-
-    @pytest.fixture(autouse=True)
-    def _no_api_key(self, monkeypatch):
-        monkeypatch.delenv("STEPFUN_API_KEY", raising=False)
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-
-    def test_analysis_ws_returns_task_spec_draft(self):
-        client = TestClient(backend_app_module.app)
-        with client.websocket_connect("/ws/analysis") as ws:
-            ws.send_json({
-                "session_id": "analysis-session",
-                "messages": [{"role": "user", "content": "case1 RNA-seq"}],
-            })
-            events = []
-            while True:
-                data = ws.receive_json()
-                events.append(data)
-                if data.get("type") == "done":
-                    break
-        types = [e["type"] for e in events]
-        assert "task_spec_draft" in types
-        draft = next(e for e in events if e.get("type") == "task_spec_draft")
-        assert "task_spec" in draft
-        assert draft["task_spec"]["analysis_type"] == "rnaseq_deseq2"

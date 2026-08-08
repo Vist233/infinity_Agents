@@ -17,6 +17,7 @@ import logging
 import mimetypes
 import json
 import hashlib
+import time
 from agent.util import estimate_tokens
 import uuid
 
@@ -994,6 +995,15 @@ async def _send_status_event(
 
 @app.post("/api/sessions")
 async def create_session(user: Principal = Depends(require_user)):
+    # Session creation shares the paperAgent throttle to stop session spamming.
+    allowed, _remaining = await _check_user_rate_limit(user.user_id, action="create_session")
+    if not allowed:
+        limit, window = _rate_limit_settings()
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded: at most {limit} requests per {window}s",
+            headers={"Retry-After": str(window)},
+        )
     session_id = str(uuid.uuid4())
     try:
         pool = app.state.db_pool
@@ -1227,6 +1237,22 @@ async def chat_ws_endpoint(websocket: WebSocket):
         })
         await websocket.close(code=1003)
         return
+
+    # Per-user rate limit for basic-tier users (default: 3 requests per 60s,
+    # configurable via PAPER_CHAT_RATE_LIMIT / PAPER_CHAT_RATE_WINDOW).
+    # Automatic retries of a failed generation are not re-counted.
+    if request.retry_attempt <= 0:
+        allowed, _remaining = await _check_user_rate_limit(principal.user_id, action="chat")
+        if not allowed:
+            limit, window = _rate_limit_settings()
+            await websocket.send_json({
+                "type": "error",
+                "code": "rate_limited",
+                "message": f"Rate limit exceeded: at most {limit} requests per {window}s. Please retry later.",
+                "retry_after": window,
+            })
+            await websocket.close(code=1008)
+            return
 
     session_id = request.session_id
     user_query = ""
@@ -1483,203 +1509,6 @@ if __name__ == "__main__":
 
 
 # ============================================================================
-# CodeAgent Integration
-# ============================================================================
-
-import secrets
-
-from backend.code_agent.service import run_code_agent_stream
-from backend.code_agent.analysis_agent import run_analysis_stream
-
-
-import time
-
-class _CodeSessionState:
-    __slots__ = ("messages", "run_state", "created_at", "last_used")
-    def __init__(self) -> None:
-        self.messages: list[dict] = []
-        self.run_state: dict = {
-            "running": False,
-            "phase": None,
-            "toolName": None,
-            "elapsedMs": 0,
-            "attempt": 1,
-            "maxAttempts": 1,
-            "tokenInfo": None,
-            "terminal": None,
-        }
-        self.created_at = time.monotonic()
-        self.last_used = self.created_at
-
-
-_code_sessions: dict[str, _CodeSessionState] = {}
-_CODE_SESSION_TTL = 3600  # 1 hour idle timeout
-_CODE_SESSION_MAX = 1000  # max concurrent sessions
-_CODE_CLEANUP_INTERVAL = 300  # clean every 5 minutes
-_CODE_LAST_CLEANUP = [0.0]
-
-
-def _cleanup_code_sessions() -> None:
-    now = time.monotonic()
-    if now - _CODE_LAST_CLEANUP[0] < _CODE_CLEANUP_INTERVAL:
-        return
-    _CODE_LAST_CLEANUP[0] = now
-    expired = [sid for sid, s in _code_sessions.items() if now - s.last_used > _CODE_SESSION_TTL]
-    for sid in expired:
-        del _code_sessions[sid]
-    if len(_code_sessions) > _CODE_SESSION_MAX:
-        oldest_first = sorted(_code_sessions.items(), key=lambda item: item[1].last_used)
-        excess = len(_code_sessions) - _CODE_SESSION_MAX
-        for sid, _ in oldest_first[:excess]:
-            del _code_sessions[sid]
-
-
-@app.post("/api/code/sessions")
-async def create_code_session():
-    _cleanup_code_sessions()
-    session_id = secrets.token_hex(16)
-    _code_sessions[session_id] = _CodeSessionState()
-    return {"session_id": session_id}
-
-
-@app.get("/api/code/sessions/{session_id}/messages")
-async def get_code_session_messages(session_id: str):
-    _cleanup_code_sessions()
-    state = _code_sessions.get(session_id)
-    if not state:
-        return []
-    state.last_used = time.monotonic()
-    return state.messages
-
-
-@app.websocket("/ws/code")
-async def code_ws_endpoint(websocket: WebSocket):
-    """CodeAgent WebSocket endpoint.
-
-    Unlike /ws/chat, this endpoint intentionally does NOT require JWT auth.
-    CodeAgent sessions are anonymous and created via /api/code/sessions without
-    user authentication.
-    """
-    await websocket.accept()
-    session_id: str | None = None
-    state: _CodeSessionState | None = None
-    try:
-        raw = await websocket.receive_json()
-        session_id = raw.get("session_id")
-        messages = raw.get("messages", [])
-        _cleanup_code_sessions()
-        if not session_id or session_id not in _code_sessions:
-            await websocket.send_json({"type": "error", "message": "Invalid session_id"})
-            await websocket.close(code=1003)
-            return
-        state = _code_sessions[session_id]
-        state.last_used = time.monotonic()
-        user_query = ""
-        for m in reversed(messages):
-            if m.get("role") == "user":
-                user_query = m.get("content", "")
-                break
-        if not user_query.strip():
-            await websocket.send_json({"type": "error", "message": "Empty query"})
-            await websocket.close(code=1003)
-            return
-        state.messages.append({"role": "user", "content": user_query})
-        state.run_state.update({"running": True, "phase": "thinking", "toolName": None, "terminal": None})
-        await websocket.send_json({"type": "status", "phase": "thinking", "elapsed_ms": 0, "attempt": 1, "max_attempts": 1})
-        response_text = ""
-
-        async def _safe_send(payload: Dict[str, Any]) -> None:
-            try:
-                await websocket.send_json(payload)
-            except Exception:
-                pass
-
-        async for event in run_code_agent_stream(user_query):
-            etype = event.get("type")
-            if etype == "status":
-                state.run_state["phase"] = event.get("phase")
-                state.run_state["toolName"] = event.get("tool_name")
-                state.run_state["elapsedMs"] = event.get("elapsed_ms", 0)
-                await _safe_send(event)
-            elif etype == "chunk":
-                response_text += event.get("content", "")
-                await _safe_send(event)
-            elif etype == "done":
-                state.run_state.update({"running": False, "phase": None, "terminal": "success", "tokenInfo": event.get("token_info")})
-                await _safe_send(event)
-            elif etype == "error":
-                state.run_state.update({"running": False, "phase": None, "terminal": "error"})
-                await _safe_send(event)
-        if response_text:
-            state.messages.append({"role": "assistant", "content": response_text})
-    except WebSocketDisconnect:
-        pass
-    except Exception as exc:
-        logging.exception("CodeAgent WS error")
-        try:
-            await websocket.send_json({"type": "error", "message": str(exc)})
-        except Exception:
-            pass
-    finally:
-        if session_id and session_id in _code_sessions:
-            _code_sessions[session_id].last_used = time.monotonic()
-        try:
-            await websocket.close()
-        except Exception:
-            pass
-
-
-@app.websocket("/ws/analysis")
-async def analysis_ws_endpoint(websocket: WebSocket):
-    """Analysis Agent WebSocket endpoint.
-
-    Generates TaskSpec drafts from user conversations without executing
-    analysis directly.
-    """
-    await websocket.accept()
-    try:
-        raw = await websocket.receive_json()
-        session_id = raw.get("session_id")
-        messages = raw.get("messages", [])
-        if not session_id:
-            await websocket.send_json({"type": "error", "message": "Missing session_id"})
-            await websocket.close(code=1003)
-            return
-
-        user_query = ""
-        for m in reversed(messages):
-            if m.get("role") == "user":
-                user_query = m.get("content", "")
-                break
-        if not user_query.strip():
-            await websocket.send_json({"type": "error", "message": "Empty query"})
-            await websocket.close(code=1003)
-            return
-
-        async def _safe_send(payload: Dict[str, Any]) -> None:
-            try:
-                await websocket.send_json(payload)
-            except Exception:
-                pass
-
-        async for event in run_analysis_stream(user_query, messages=messages):
-            await _safe_send(event)
-    except WebSocketDisconnect:
-        pass
-    except Exception as exc:
-        logging.exception("AnalysisAgent WS error")
-        try:
-            await websocket.send_json({"type": "error", "message": str(exc)})
-        except Exception:
-            pass
-    finally:
-        try:
-            await websocket.close()
-        except Exception:
-            pass
-
-
-# ============================================================================
 # Task Execution System (Infinity Agent)
 # ============================================================================
 
@@ -1699,8 +1528,6 @@ from backend.code_agent.task_service import (
     create_task_event,
     get_task_events,
     create_outbox_event,
-    get_pending_outbox_events,
-    mark_outbox_published,
     create_artifact,
     get_artifacts_for_task,
     get_artifact,
@@ -1822,6 +1649,23 @@ async def _require_task_api_key(request: Request) -> None:
         provided = request.query_params.get("api_key") or ""
     if not hmac.compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+
+
+def _rate_limit_settings() -> tuple[int, int]:
+    """(limit, window_seconds) for per-user paperAgent request throttling."""
+    limit = int(os.getenv("PAPER_CHAT_RATE_LIMIT", "3"))
+    window = int(os.getenv("PAPER_CHAT_RATE_WINDOW", "60"))
+    return limit, window
+
+
+async def _check_user_rate_limit(user_id: str, action: str) -> tuple[bool, int]:
+    """Fixed-window per-user rate limit. Fails open when Redis is unavailable."""
+    redis = get_redis_client()
+    if not redis or not redis.is_connected:
+        return True, -1
+    limit, window = _rate_limit_settings()
+    allowed, remaining = await redis.check_rate_limit(user_id, limit, window, action=action)
+    return allowed, remaining
 
 
 async def _stream_upload_to_disk(file: UploadFile, dest_dir: FilePath, max_bytes: int) -> Dict[str, Any]:
@@ -2075,7 +1919,9 @@ def _validate_artifact_path(storage_path: str) -> FilePath:
         raise HTTPException(status_code=404, detail="Artifact file not found")
     if resolved.is_symlink():
         raise HTTPException(status_code=403, detail="Symlinked artifacts are not allowed")
-    allowed_root = FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", "/tmp/task-outputs")).resolve()
+    allowed_root = FilePath(
+        os.getenv("ARTIFACT_DOWNLOAD_ROOT", "/workspace/task-outputs")
+    ).resolve()
     try:
         resolved.relative_to(allowed_root)
     except ValueError:
@@ -2168,6 +2014,15 @@ async def task_events_sse_endpoint(
         pool = app.state.db_pool
         redis = get_redis_client()
 
+        # Heartbeat: yield a ": keep-alive" comment every 15s so proxies and
+        # browsers don't time out idle connections. Close the stream after a
+        # bounded lifetime (default 2h); the frontend reconnects automatically
+        # with last_event_id, so no events are lost.
+        keepalive_seconds = 15.0
+        max_connection_seconds = float(os.getenv("SSE_MAX_CONNECTION_SECONDS", "7200"))
+        started_at = time.monotonic()
+        last_activity = started_at
+
         # Send initial state
         task = await get_task(pool, task_id)
         if not task:
@@ -2209,6 +2064,14 @@ async def task_events_sse_endpoint(
                     yield {"event": "task_terminal", "data": json.dumps({"status": task["status"]})}
                     break
 
+                if time.monotonic() - started_at >= max_connection_seconds:
+                    break
+                if events:
+                    last_activity = time.monotonic()
+                elif time.monotonic() - last_activity >= keepalive_seconds:
+                    yield {"comment": "keep-alive"}
+                    last_activity = time.monotonic()
+
                 await asyncio.sleep(0.5)
                 # Refresh task status
                 task = await get_task(pool, task_id)
@@ -2231,6 +2094,13 @@ async def task_events_sse_endpoint(
                 task = await get_task(pool, task_id)
                 if not task or task["status"] in ("succeeded", "failed", "cancelled", "timeout"):
                     break
+                if time.monotonic() - started_at >= max_connection_seconds:
+                    break
+                if events:
+                    last_activity = time.monotonic()
+                elif time.monotonic() - last_activity >= keepalive_seconds:
+                    yield {"comment": "keep-alive"}
+                    last_activity = time.monotonic()
                 await asyncio.sleep(1)
 
     return EventSourceResponse(event_generator())
@@ -2239,7 +2109,7 @@ async def task_events_sse_endpoint(
 # ---- Worker API endpoints ----
 
 @app.post("/api/worker/poll")
-async def worker_poll_endpoint():
+async def worker_poll_endpoint(_: None = Depends(_require_task_api_key)):
     """Worker polling endpoint for task discovery (fallback when Redis unavailable)."""
     pool = app.state.db_pool
     query = """
@@ -2266,24 +2136,32 @@ async def worker_poll_endpoint():
 
 
 @app.post("/api/outbox/publish")
-async def publish_outbox_endpoint():
-    """Manually trigger outbox publishing (for when Redis is unavailable)."""
-    pool = app.state.db_pool
+async def publish_outbox_endpoint(_: None = Depends(_require_task_api_key)):
+    """Manually trigger outbox publishing.
+
+    Requires a connected Redis: events are only marked published after they
+    are actually delivered to the stream. When Redis is down the request is
+    rejected (503) — silently marking events published would lose them.
+    """
     redis = get_redis_client()
     if not redis or not redis.is_connected:
-        # Process in-process without Redis
-        events = await get_pending_outbox_events(pool, 50)
-        processed = 0
-        for event in events:
-            # Just mark as published
-            await mark_outbox_published(pool, event["outbox_event_id"])
-            processed += 1
-        return {"processed": processed, "mode": "in-process"}
-    return {"processed": 0, "mode": "redis"}
+        raise HTTPException(
+            status_code=503,
+            detail="Redis unavailable; outbox events are kept pending for automatic recovery",
+        )
+    pool = app.state.db_pool
+    publisher = getattr(app.state, "outbox_publisher", None)
+    if publisher is not None:
+        processed = await publisher._publish_batch()
+    else:
+        # No in-process publisher (e.g. tests) — run one ad-hoc batch.
+        from backend.code_agent.outbox import OutboxPublisher
+        processed = await OutboxPublisher(pool, redis)._publish_batch()
+    return {"processed": processed, "mode": "redis"}
 
 
 @app.get("/api/worker/health")
-async def worker_health_endpoint():
+async def worker_health_endpoint(_: None = Depends(_require_task_api_key)):
     """Health check for workers."""
     redis = get_redis_client()
     workers = []

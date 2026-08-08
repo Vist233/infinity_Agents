@@ -337,15 +337,18 @@ class RedisClient:
     # Rate Limiting
     # ========================================================================
 
-    async def check_rate_limit(self, user_id: str, limit: int, window_seconds: int) -> tuple[bool, int]:
+    async def check_rate_limit(
+        self, user_id: str, limit: int, window_seconds: int, action: str = "create_task"
+    ) -> tuple[bool, int]:
         """Check if user is within rate limit.
 
-        Returns (is_allowed, remaining_count).
+        Fixed-window counter keyed by (user_id, action). Returns
+        (is_allowed, remaining_count). Fails open when Redis is unavailable.
         """
         if not self._client:
             return True, limit
         try:
-            key = f"{RATE_LIMIT_PREFIX}{user_id}:create_task"
+            key = f"{RATE_LIMIT_PREFIX}{user_id}:{action}"
             current = await self._client.get(key)
             if current is None:
                 await self._client.set(key, 1, ex=window_seconds)

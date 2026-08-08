@@ -31,7 +31,7 @@ async def execute_task(
     redis_client,
     *,
     method_source_id: Optional[str] = None,
-    output_base_dir: str = "/tmp/task-outputs",
+    output_base_dir: Optional[str] = None,
     cancel_event: Optional[asyncio.Event] = None,
 ) -> Dict[str, Any]:
     """Execute a task end-to-end.
@@ -44,6 +44,11 @@ async def execute_task(
     5. Upload artifacts
     6. Report results
     """
+    if output_base_dir is None:
+        # Shared with the API server's ARTIFACT_DOWNLOAD_ROOT so artifacts
+        # written by the worker are downloadable from the host. The compose
+        # stack mounts ./workspace at /workspace for exactly this reason.
+        output_base_dir = os.getenv("ARTIFACT_STORAGE_ROOT", "/workspace/task-outputs")
     task_work_dir = Path(output_base_dir) / task_id
     task_output_dir = task_work_dir / "output"
     task_output_dir.mkdir(parents=True, exist_ok=True)

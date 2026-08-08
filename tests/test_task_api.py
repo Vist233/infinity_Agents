@@ -200,4 +200,6 @@ class TestTaskAPIEndpoints:
 
     def test_outbox_publish(self, client):
         r = client.post("/api/outbox/publish")
-        assert r.status_code in (200, 500)
+        # 503 is expected when Redis is unavailable: events must never be
+        # marked published without being delivered.
+        assert r.status_code in (200, 500, 503)

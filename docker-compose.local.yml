@@ -19,9 +19,13 @@ services:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
-    command: redis-server --appendonly yes
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    # Optional password: set REDIS_PASSWORD in worker.env for production.
+    # Unset = open access (local development only).
+    command: sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"; else exec redis-server --appendonly yes; fi'
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli $${REDIS_PASSWORD:+-a $$REDIS_PASSWORD} ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -39,8 +43,10 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql://postgres@host.docker.internal:5450/infinity_agents}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./backend:/app/backend
+      # Artifacts land here inside the container; the host sees them under ./workspace,
+      # where the API server downloads them from (ARTIFACT_DOWNLOAD_ROOT).
       - ./workspace:/workspace
+      # For live code debugging, temporarily re-add: - ./backend:/app/backend
     depends_on:
       redis:
         condition: service_healthy
@@ -58,8 +64,8 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql://postgres@host.docker.internal:5450/infinity_agents}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./backend:/app/backend
       - ./workspace:/workspace
+      # For live code debugging, temporarily re-add: - ./backend:/app/backend
     depends_on:
       redis:
         condition: service_healthy
@@ -74,8 +80,7 @@ services:
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - DATABASE_URL=${DATABASE_URL:-postgresql://postgres@host.docker.internal:5450/infinity_agents}
-    volumes:
-      - ./backend:/app/backend
+    # Runs from the image's baked-in code; add - ./backend:/app/backend only when debugging.
     depends_on:
       redis:
         condition: service_healthy

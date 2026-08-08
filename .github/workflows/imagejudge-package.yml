@@ -90,12 +90,16 @@ jobs:
           version="$(python -c 'import tomllib; print(tomllib.load(open("image-judge/pyproject.toml", "rb"))["project"]["version"])')"
           IMAGEJUDGE_VERSION="$version" bash image-judge/scripts/package_linux_deb.sh \
             "$GITHUB_WORKSPACE/package/linux/ImageJudge" "$GITHUB_WORKSPACE/package"
+          # Fixed artifact name so `releases/latest/download/ImageJudge-linux-amd64.deb`
+          # keeps working across versions (version stays in the deb metadata).
+          mv "$GITHUB_WORKSPACE/package/ImageJudge_${version}_amd64.deb" \
+            "$GITHUB_WORKSPACE/package/ImageJudge-linux-amd64.deb"
 
       - name: Upload Linux package
         uses: actions/upload-artifact@v4
         with:
           name: imagejudge-linux
-          path: package/ImageJudge_*.deb
+          path: package/ImageJudge-linux-amd64.deb
           if-no-files-found: error
 
   release:

@@ -54,9 +54,19 @@ PostgreSQL CAS 抢占分发。新增一台 Worker 不需要任何注册中心—
 # 1. Worker 日志应出现 "Connected to Redis" / claim 日志
 docker logs worker-$(hostname) --tail 20
 
-# 2. API 侧确认 Worker 存活（需要 Redis 可达）
-curl http://<api-host>:8000/api/worker/health
+# 2. API 侧确认 Worker 存活（需要 Redis 可达；设置了 TASK_API_TOKEN 时需带 key）
+curl -H "X-API-Key: <TASK_API_TOKEN>" http://<api-host>:8000/api/worker/health
 ```
+
+## 生产部署安全清单（必须）
+
+| # | 配置 | 说明 |
+|---|------|------|
+| 1 | `TASK_API_TOKEN` | **必须设置**。未设置时整个 Task API（含 worker/outbox 端点）对任何能访问服务器的人开放。前端需用相同的 `NEXT_PUBLIC_TASK_API_TOKEN` 构建 |
+| 2 | `REDIS_PASSWORD` | **必须设置**。Redis 默认无密码，局域网内任何人可读写任务流。设置后 `REDIS_URL` 要写成 `redis://:密码@host:6379/0` |
+| 3 | PostgreSQL 访问控制 | 不要对公网开放 5450 端口；远程 Worker 建议走内网/VPN |
+| 4 | `ANTHROPIC_API_KEY` | 只写进 worker.env（已 gitignore），永远不要进镜像或代码 |
+
 
 ## 常见问题
 
