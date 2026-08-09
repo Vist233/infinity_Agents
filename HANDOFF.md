@@ -1,7 +1,8 @@
 # Infinity Agents — Handoff / 交接文档
 
-> 最后更新：2026-08-07
-> 状态：后端测试 254/254 通过（2 个 pre-existing arxiv 网络测试因 HTTP 429 失败，与本项目无关），前端测试 47/47 通过，TypeScript 干净，构建通过。
+> 最后更新：2026-08-09
+> 分支：`stepfun-agent-developing`（最新提交 `fe7fda9`，生产加固五阶段全部完成）
+> 状态：后端 267 passed + 1 skipped（不含 3 个长时真实 Docker 集成测试），前端 vitest 28 passed，tsc 干净，next build 通过。
 
 ---
 
@@ -11,11 +12,11 @@ Infinity Agents 是一个多智能体工作台，包含三条产品线：
 
 | 产品 | 路径 | 说明 |
 |------|------|------|
-| **PaperAgent** | `/`（前端）+ `backend/paper_agent/`（后端） | 检索、阅读和整理论文 |
-| **CodeAgent** | `/code-agent`（前端）+ `backend/code_agent/`（后端） | 基于 Claude Code 的科学数据分析执行引擎 |
-| **ImageJudge** | `/image-judge`（前端）+ `image-judge/`（桌面端） | 基于参考图的桌面图像分类工具 |
+| **PaperAgent** | `/`（前端）+ `agent/`（后端） | 检索、阅读和整理论文（PubMed / Europe PMC / arXiv），OIDC 登录后使用 |
+| **CodeAgent** | `/code-agent`（前端）+ `backend/code_agent/`（后端） | 基于 Claude Code 的科学数据分析任务执行引擎（Infinity Agent） |
+| **ImageJudge** | `/image-judge`（下载页）+ `image-judge/`（桌面端源码） | 基于参考图的桌面图像分类工具，GitHub Release 分发 |
 
-本文件重点记录 **CodeAgent 任务执行系统（Infinity Agent）** 的架构与实现状态。
+本文件重点记录 **CodeAgent 任务执行系统** 的架构与实现状态，以及 2026-08 生产加固后的运维要点。
 
 ---
 
@@ -23,12 +24,12 @@ Infinity Agents 是一个多智能体工作台，包含三条产品线：
 
 | 层 | 技术 |
 |----|------|
-| 前端 | Next.js 14 (App Router), React, TypeScript, Tailwind CSS, Vitest |
+| 前端 | Next.js 14 (App Router), React, TypeScript, Tailwind CSS, Vitest + Playwright |
 | 后端 | FastAPI, Python 3.11, asyncpg, SSE-Starlette |
-| 数据库 | PostgreSQL（asyncpg 驱动） |
-| 任务队列 | Redis Streams (redis-py >= 5.0) |
-| 执行 | Docker 容器隔离运行 Claude Code |
-| 认证 | Zhang Auth OIDC（生产）/ 本地开发跳过 |
+| 数据库 | PostgreSQL（asyncpg 驱动；本地开发在 Docker 容器 `prisma-postgres-1`，端口 5450，trust 认证） |
+| 任务队列 | Redis Streams (redis-py >= 5.0)；本地容器 `infinity-redis`，端口 6379 |
+| 执行 | Docker 容器隔离运行 Claude Code（DooD：Worker 容器挂载宿主机 docker.sock） |
+| 认证 | OIDC（生产）/ 本地开发可跳过；Task API 使用共享密钥 `TASK_API_TOKEN` |
 
 ---
 
@@ -37,345 +38,194 @@ Infinity Agents 是一个多智能体工作台，包含三条产品线：
 ```text
 用户浏览器
     |
-    | REST + SSE
+    | REST + SSE（/api/* 由前端 :3000 rewrites 代理到后端 :8000）
     v
-FastAPI Backend (app.py)
+FastAPI Backend (backend/app.py)
     |
-    |--- Task API (创建/查询/取消/SSE)
-    |--- WebSocket /ws/code（CodeAgent 对话）
-    |--- WebSocket /ws/analysis（Analysis Agent 对话）
-    |--- PaperAgent API
-    |--- ImageJudge API
+    |--- Task API（创建/查询/取消/SSE/产物下载，X-API-Key 鉴权）
+    |--- PaperAgent API + /ws/chat（OIDC + 每用户限流）
+    |--- ImageJudge 下载页（纯静态，无后端）
     |
-    +--- PostgreSQL（任务状态、事件、产物）
-    +--- Redis（Stream 队列 + 事件流 + 心跳 + 进度缓存）
+    +--- PostgreSQL（任务状态、事件、产物、Outbox）
+    +--- Redis（Stream 队列 + SSE 事件流 + 心跳 + 限流计数器）
     |
-    +--- Worker A / Worker B（消费 Redis Stream，Docker 执行）
+    +--- Worker A / Worker B / ...（消费 Redis Stream，Docker 执行）
             |
-            | Docker run --network=none --cap-drop=ALL ...
-            |   claude --print <prompt>
-            |
+            | docker run --cap-drop=ALL --security-opt=no-new-privileges ...
+            |   claude --print <prompt>（Job Container）
             v
-        分析产物 → Verifier 验证 → Artifact 原子发布
+        产物收集 → Verifier 验证 → Artifact 原子发布 → SSE 推送
 ```
 
-### 数据流
+### 数据流（任务创建 → 完成）
 
 ```
-用户创建 Task
-  → POST /api/tasks (幂等性检查 + DB 插入)
-    → OutboxEvent 写入 outbox_events 表
-      → OutboxPublisher 读取 pending → 写入 Redis Stream `stream:tasks:execute`
-        → Worker 消费 → try_claim_task (CAS) → Docker 执行
-          → 产物收集 → Verifier 验证 → Artifact 发布
+前端上传执行文档(method source) + ZIP 数据集 → POST /api/task-specs + /api/dataset-snapshots
+  → POST /api/tasks（幂等性检查 + DB 插入 status=queued）
+    → OutboxEvent 写入 outbox_events 表（pending）
+      → OutboxPublisher 轮询 pending → 写入 Redis Stream `stream:tasks:execute`
+        → Worker 消费 → try_claim_task (CAS 原子认领) → Docker 执行
+          → 产物收集 → Verifier 验证 → Artifact ZIP 原子发布
             → Task 状态 → succeeded/failed/cancelled/timeout
-              → SSE 推送给前端
+              → task_events 表 + Redis Stream → SSE 推送给前端
 ```
+
+**可靠性要点（Outbox 模式）**：任务创建先写 DB，Redis 宕机时事件保持 pending，
+Redis 恢复后 OutboxPublisher 自动排空——已用真实停机测试验证。
+`/api/outbox/publish` 在 Redis 不可用时**返回 503 拒绝**，绝不静默标记 published（防丢事件）。
+
+### Worker 水平扩展
+
+新 Worker 节点**无需注册**：只需配置 `worker.env`（REDIS_URL + DATABASE_URL + API key）
+指向共享的 Redis 与 PostgreSQL，启动后自动加入任务竞争队列（CAS 保证同一任务只被一个
+Worker 认领）。详见 `docs/WORKER_ONBOARDING.md`。
 
 ---
 
-## 4. 已完成的 Phase
+## 4. 目录结构
 
-### Phase 0 ✅ — 冻结现有成功 Case
-- PaperAgent、ImageJudge 功能正常运行
-- 三个 Case 可手动通过 Docker 执行成功
+```
+infinity_Agents/
+├── backend/
+│   ├── app.py                          # FastAPI 主应用（PaperAgent + Task API + SSE）
+│   ├── auth.py                         # OIDC: require_user / verify_websocket_token
+│   ├── db.py                           # 数据库初始化 + 全部 schema（21 张表）
+│   ├── Dockerfile.worker               # Worker 镜像（代码烘焙进镜像，不再热挂载）
+│   ├── code_agent/
+│   │   ├── models.py                   # Task/TaskSpec 数据模型 + 状态机 TRANSITIONS
+│   │   ├── task_service.py             # 服务层（CRUD、CAS claim、requeue、Outbox、Artifact）
+│   │   ├── redis_client.py             # Redis 客户端（Stream/心跳/限流；断连时 fail-open）
+│   │   ├── outbox.py                   # OutboxPublisher（lifespan 自动启动轮询）
+│   │   ├── retry_policy.py             # 失败分类 + 指数退避(full jitter)
+│   │   ├── verifier.py                 # 多级验证器（file/format/content/... + 领域规则）
+│   │   ├── analysis_agent.py           # TaskSpec 生成（LLM，无 key 时降级 mock）
+│   │   └── worker/
+│   │       ├── consumer.py             # Worker 主循环 + Lease Reaper + 失败分类路由
+│   │       ├── docker_runtime.py       # Job Container 运行器（cancel_event + 安全参数）
+│   │       └── executor.py             # 执行编排（产物写入 ARTIFACT_STORAGE_ROOT）
+├── frontend/
+│   ├── app/
+│   │   ├── page.tsx                    # 首页（PaperAgent 聊天）
+│   │   ├── code-agent/
+│   │   │   ├── page.tsx                # 任务创建（执行文档 + ZIP 数据集上传）+ 任务列表
+│   │   │   └── tasks/[task_id]/        # 任务详情（SSE 实时事件 + 产物下载）
+│   │   └── image-judge/page.tsx        # ImageJudge 下载页（Windows/Linux 平台直链）
+│   └── lib/                            # i18n.tsx（中英）、api/tasks.ts、runtime-config.ts
+├── image-judge/                        # 桌面端源码 + 打包脚本
+├── .github/workflows/imagejudge-package.yml  # Windows EXE + Linux DEB 打包发布
+├── docker-compose.local.yml            # Redis + worker-a/b + outbox-publisher
+├── worker.env.example                  # 远程 Worker 接入配置模板
+├── docs/
+│   ├── LOCAL_DEVELOPMENT.md            # 本地开发指南
+│   └── WORKER_ONBOARDING.md            # Worker 接入 + 生产安全清单
+├── tests/                              # 后端测试（23 个文件）
+└── HANDOFF.md                          # 本文件
+```
 
-### Phase 1 ✅ — TaskSpec 与数据库状态机
-**文件**：
-- `backend/db.py` — 新增 8 张表（见第 5 节）
-- `backend/code_agent/models.py` — 数据模型 + 状态机
-- `backend/code_agent/task_service.py` — 服务层（CRUD、CAS、Outbox）
-
-### Phase 2 ✅ — Redis Stream + 两个 Worker
-**文件**：
-- `backend/code_agent/redis_client.py` — Redis 客户端（Stream、心跳、限速、XAUTOCLAIM 恢复）
-- `backend/code_agent/outbox.py` — Outbox Publisher（lifespan 自动启动）
-- `backend/code_agent/worker/consumer.py` — Worker 主循环 + Lease Reaper（含退避重试）
-
-### Phase 3 ✅ — Docker Executor
-**文件**：
-- `backend/code_agent/worker/docker_runtime.py` — Docker 运行器（支持 cancel_event）
-- `backend/code_agent/worker/executor.py` — 任务执行编排（验证 + 打包）
-
-### Phase 4 ✅ — Verifier 与结果发布
-- 执行器内置 `_verify_outputs`（检查 deliverables + manifest.json + checksum）
-- `_create_artifacts` 创建 ZIP 包 + artifact 记录
-- `Artifact` 原子发布流程：写临时目录 → 验证 → ZIP → sha256 → 数据库登记
-
-### Phase 5 ✅ — SSE 与前端任务页
-**文件**：
-- `frontend/app/code-agent/tasks/page.tsx` — 任务列表页
-- `frontend/app/code-agent/tasks/[task_id]/page.tsx` — 任务详情页（含实时 SSE）
-- `frontend/app/code-agent/page.tsx` — 添加任务页入口
-- `frontend/components/chat/AgentNav.tsx` — 导航添加任务入口
-- `frontend/lib/i18n.tsx` — 新增 30+ 翻译键
-
-### Phase 6 ✅ — Analysis Agent（完整版）
-**文件**：
-- `backend/code_agent/analysis_agent.py` — Analysis Agent 核心逻辑
-  - `validate_task_spec(spec)` — TaskSpec 模式验证
-  - `run_analysis_stream(user_input, messages)` — 生成 TaskSpec 草稿
-  - **实时 LLM 集成**：通过 `AsyncAnthropic` 调用 StepFun API（step-3.7-flash）
-  - 环境变量：`STEPFUN_API_KEY` / `ANTHROPIC_API_KEY` + `ANTHROPIC_BASE_URL`
-  - 无 API key 时自动降级到确定性 mock（测试友好）
-  - 流式传输 LLM 响应到前端
-- `backend/app.py` — 新增 `/ws/analysis` WebSocket 端点
-  - 返回 `task_spec_draft` 事件（含 machine-readable TaskSpec JSON）
-  - 自动询问科学澄清（对照组、阈值、参考基因组）
-  - 不直接执行分析，仅生成 TaskSpec
-
-### Phase 7 ✅ — 全链路回归测试（Mock + Real Docker 就绪）
-**文件**：
-- `tests/test_regression.py` — 三个 Case 的回归测试 harness
-  - Case 1: DESeq2 (rnaseq_deseq2)
-  - Case 2: Biopython
-  - Case 3: scanpy
-  - 通过 Mock Docker runtime 验证 TaskSpec → Dataset → create_task → Executor → Artifact 全链路
-  - Docker mount points 已修复（`/workspace/input` + `/workspace/output` 稳定挂载）
-  - 支持真实 Docker 集成测试（`@pytest.mark.integration`，3 个 case 测试已就绪）
+**注意**：旧的聊天室（`/ws/code`、`/ws/analysis`、`/api/code/sessions`）与
+`/code-agent/analysis` 页面已在重构中删除，任务创建改由 `/code-agent` 页面的
+"执行文档 + 数据集" 表单完成。
 
 ---
 
 ## 5. 数据库 schema
 
-位于 `backend/db.py` 的 `init_db()` 中，共 8 张新表：
+`backend/db.py` 的 `init_db()` 共 21 张表：
 
-### task_specs
-任务规格定义（由 Analysis Agent 生成）。
+- **PaperAgent**：sessions, messages, paper_records, authorized_paper_refs,
+  session_paper_links, session_uploaded_papers, paper_cache, paper_records_global,
+  paper_cache_global, session_tool_calls, session_context_compression
+- **Task 系统**（核心 9 张）：projects, task_specs, method_sources,
+  dataset_snapshots, tasks, task_attempts, task_events, outbox_events, artifacts,
+  idempotency_keys
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| task_spec_id | UUID PK | 主键 |
-| project_id | UUID | 项目 ID |
-| revision | INT | 版本号，默认 1 |
-| title | TEXT | 标题 |
-| domain | VARCHAR(50) | 领域，默认 'bioinformatics' |
-| analysis_type | VARCHAR(50) | 分析类型（如 rnaseq_deseq2） |
-| research_question | TEXT | 研究问题 |
-| spec_json | JSONB | 核心规格：deliverables / clarifications |
-| schema_version | VARCHAR(10) | Schema 版本，默认 '1.0' |
-| status | VARCHAR(20) | draft / active / archived |
-| frozen_at | TIMESTAMPTZ | 冻结时间（从 draft → active） |
+### tasks 表关键字段
 
-### dataset_snapshots
-数据集快照。
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| dataset_snapshot_id | UUID PK | |
-| task_spec_id | UUID FK | 关联 TaskSpec |
-| project_id | UUID | |
-| original_filename | TEXT | 原始文件名 |
-| stored_path | TEXT | 存储路径 |
-| file_size_bytes | BIGINT | |
-| file_hash_sha256 | CHAR(64) | SHA256 |
-| metadata | JSONB | |
-| validation_result | JSONB | 验证结果 |
-| validation_passed | BOOLEAN | 是否通过验证 |
-| version | INT | 版本号 |
-
-### tasks
-任务表。
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| task_id | UUID PK | |
-| task_spec_id | UUID FK | |
-| dataset_snapshot_id | UUID FK | |
-| project_id | UUID | |
-| title | TEXT | |
-| status | VARCHAR(20) | draft / queued / claimed / running / succeeded / failed / cancelled / timeout |
-| phase | VARCHAR(50) | RUNNING 的子状态：preparing / executing / verifying / packaging |
-| priority | INT | 优先级 |
-| version | INT | 乐观锁版本 |
-| lease_owner | TEXT | 当前持有 lease 的 worker_id |
-| lease_token | CHAR(32) | Lease 令牌 |
-| lease_expires_at | TIMESTAMPTZ | Lease 过期时间 |
-| active_attempt_id | BIGINT | 当前活跃的 attempt |
-| attempt_count | INT | 已尝试次数 |
-| max_attempts | INT | 最大重试次数，默认 3 |
-| cancel_requested_at | TIMESTAMPTZ | 取消请求时间 |
-| next_attempt_at | TIMESTAMPTZ | 下次重试时间（退避） |
-| result_artifact_id | TEXT | 成功后的产物 ID |
-| error_message | TEXT | 错误信息（已 sanitize） |
-| created_by | TEXT | 创建者 |
-| created_at | TIMESTAMPTZ | |
-| updated_at | TIMESTAMPTZ | |
-| started_at | TIMESTAMPTZ | 开始执行时间 |
-| finished_at | TIMESTAMPTZ | 完成时间 |
+| 字段 | 说明 |
+|------|------|
+| status | draft / queued / claimed / running / succeeded / failed / cancelled / timeout |
+| phase | RUNNING 子状态：preparing / executing / verifying / packaging |
+| lease_owner / lease_token / lease_expires_at | CAS 租约三元组 |
+| attempt_count / max_attempts（默认 3） | 重试计数 |
+| next_attempt_at | 退避重试的到期时间，claim 时要求 `<= NOW()` |
+| error_message | 已 sanitize 的错误信息（≤500 字符） |
 
 ### task_attempts
-每次执行记录。
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| task_attempt_id | BIGSERIAL PK | |
-| task_id | UUID FK | |
-| worker_id | TEXT | 执行 Worker ID |
-| status | VARCHAR(20) | running / succeeded / failed |
-| attempt_index | INT | 第几次尝试 |
-| container_id | TEXT | Docker 容器 ID |
-| executor_image_digest | TEXT | 镜像 digest |
-| docker_container_id | TEXT | Docker 容器 ID（旧字段，保留兼容） |
-| started_at | TIMESTAMPTZ | |
-| finished_at | TIMESTAMPTZ | |
-| exit_code | INT | 退出码 |
-| error_message | TEXT | 错误信息 |
-| failure_code | VARCHAR(50) | 失败分类码 |
-| failure_detail | TEXT | 失败详情 |
-| token_usage | JSONB | Token 使用量 |
-
-### task_events
-任务事件日志。
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| task_event_id | BIGSERIAL PK | |
-| task_id | UUID FK | |
-| task_attempt_id | BIGINT FK | |
-| event_type | VARCHAR(50) | 事件类型 |
-| event_data | JSONB | 事件详情 |
-| created_at | TIMESTAMPTZ | |
+每次执行一条记录：worker_id、attempt_index、container_id、exit_code、
+failure_code（失败分类码）、failure_detail、token_usage。
 
 ### outbox_events
-Outbox 事件（可靠发布模式）。
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| outbox_event_id | BIGSERIAL PK | |
-| aggregate_type | VARCHAR(50) | 聚合类型，默认 'task' |
-| aggregate_id | UUID | 关联 ID |
-| event_type | VARCHAR(50) | 事件类型 |
-| payload | JSONB | 事件载荷 |
-| status | VARCHAR(20) | pending / published / failed |
-| published_at | TIMESTAMPTZ | 发布时间 |
-| retry_count | INT | 重试次数 |
-| last_error | TEXT | 最后一次错误 |
-| next_attempt_at | TIMESTAMPTZ | 下次重试时间 |
-| created_at | TIMESTAMPTZ | |
+status: pending / published / failed；含 retry_count、last_error、next_attempt_at。
+OutboxPublisher 只发布 pending；发布失败保持 pending 等待下轮。
 
 ### artifacts
-产物记录。
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| artifact_id | TEXT PK | 产物 ID |
-| task_id | UUID FK | |
-| task_attempt_id | BIGINT FK | |
-| name | TEXT | 产物名称 |
-| kind | VARCHAR(20) | 产物类型 |
-| storage_backend | VARCHAR(20) | 存储后端，默认 'local' |
-| storage_path | TEXT | 存储路径 |
-| file_size_bytes | BIGINT | |
-| checksum_sha256 | CHAR(64) | SHA256 校验 |
-| content_type | TEXT | MIME 类型 |
-| metadata | JSONB | 元数据 |
-| created_at | TIMESTAMPTZ | |
+artifact_id、storage_path、checksum_sha256、content_type；下载时受
+`ARTIFACT_DOWNLOAD_ROOT` 白名单约束。
 
-### idempotency_keys
-幂等性键表。
+### method_sources（执行文档）
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| idempotency_key | CHAR(64) PK | 幂等键值 |
-| user_id | TEXT | 用户 ID |
-| resource_type | VARCHAR(50) | 资源类型（task 等） |
-| resource_id | UUID | 关联资源 ID |
-| request_hash | TEXT | 请求哈希 |
-| created_at | TIMESTAMPTZ | |
-| expires_at | TIMESTAMPTZ | 过期时间（默认 +24h） |
+用户上传的执行方法文档（HTML/PDF 等自由格式），任务通过 `method_source_id` 关联。
 
 ---
 
 ## 6. 状态机
 
-### TaskStatus 枚举
-
 ```
 draft → queued → claimed → running → succeeded
-                     |          |          |
-                     |          |          +→ failed
-                     |          |          +→ timeout
-                     |          |          +→ cancelled
-                     |          |
-                     |          +→ queued (re-queue)
-                     |
-                     +→ cancelled
+          ↑          |          |
+          |          |          +→ failed / timeout / cancelled
+          |          +→ cancelled
+          +← failed/timeout（可重试时 re-queue，带 next_attempt_at 退避）
 ```
 
-**允许的转换**（`TRANSITIONS` 字典）：
+**失败分类**（`retry_policy.py`）：
+- 不可重试：`verification_failed`、`invalid_spec`、`dataset_invalid` → 直接 failed
+- 可重试：`infrastructure_error`、`execution_error`、None → attempt_count < max_attempts
+  时 requeue，延迟 = `random(0, min(5 * 2^attempt, 300))` 秒（指数退避 + full jitter）
 
-| 当前状态 | 可转换到 |
-|----------|----------|
-| draft | queued, cancelled |
-| queued | claimed, cancelled |
-| claimed | running, queued (释放), cancelled |
-| running | succeeded, failed, timeout, cancelled |
-| succeeded | （无出边，终态） |
-| failed | queued（重试） |
-| cancelled | （无出边，终态） |
-| timeout | queued（重试） |
-
-### TaskPhase（RUNNING 的子状态）
-
-- `preparing` — 准备环境
-- `executing` — 执行中
-- `verifying` — 验证产物
-- `packaging` — 打包产物
-
-### TaskAttempt 状态
-
-- `running` → `succeeded` / `failed`
+**CAS 保护**：`try_claim_task` 原子 UPDATE（queued + 租约过期 + 退避到期）；
+`requeue_task` / `update_task_status` 要求 `WHERE lease_token = $2`，防止过期 Worker
+醒来后污染已被接管的任务。
 
 ---
 
 ## 7. 后端 API 端点
 
-### Task 管理
+### PaperAgent（OIDC 鉴权：`require_user` / WebSocket token）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| POST/GET/DELETE | `/api/sessions[/{id}]` | 会话管理（POST 受限流保护） |
+| POST/GET | `/api/sessions/{id}/uploads/papers` | 论文上传 |
+| GET | `/api/sessions/{id}/messages` | 历史消息 |
+| WS | `/ws/chat` | 聊天流（受限流保护：默认 3 次/分钟/用户） |
+
+### Task API（`X-API-Key: TASK_API_TOKEN` 鉴权；SSE 用 `?api_key=`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/projects/default` | 默认项目 |
+| POST | `/api/method-sources/upload` | 上传执行文档 |
 | POST | `/api/task-specs` | 创建 TaskSpec |
-| POST | `/api/dataset-snapshots` | 创建数据集快照 |
+| POST | `/api/dataset-snapshots/upload`、`/api/dataset-snapshots` | 数据集上传/登记 |
 | POST | `/api/tasks` | 创建任务（支持 idempotency_key） |
-| GET | `/api/tasks/{task_id}` | 获取任务详情 |
-| GET | `/api/tasks` | 列出任务（可选 ?project_id=） |
-| POST | `/api/tasks/{task_id}/cancel` | 取消任务（运行中设置 cancel_requested_at） |
-| GET | `/api/tasks/{task_id}/events` | 获取任务事件列表 |
-| GET | `/api/tasks/{task_id}/events/stream` | SSE 实时事件流 |
-| GET | `/api/tasks/{task_id}/artifacts` | 获取任务产物列表 |
-| GET | `/api/artifacts/{artifact_id}` | 下载产物 ZIP（带路径遍历保护） |
+| GET | `/api/tasks`、`/api/tasks/{id}` | 列表 / 详情 |
+| POST | `/api/tasks/{id}/cancel` | 取消（运行中置 cancel_requested_at） |
+| GET | `/api/tasks/{id}/events`、`/events/stream` | 事件列表 / SSE 实时流 |
+| GET | `/api/tasks/{id}/artifacts`、`/api/artifacts/{id}` | 产物列表 / 下载 ZIP |
+| POST | `/api/worker/poll` | Worker 轮询 fallback（Redis 不可用时） |
+| POST | `/api/outbox/publish` | 手动触发 Outbox 排空（Redis 断连时返回 503） |
+| GET | `/api/worker/health` | 健康检查 |
 
-### Worker
+### SSE 行为（`/api/tasks/{id}/events/stream`）
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/worker/poll` | Worker 轮询（Redis 不可用时的 fallback， respects next_attempt_at） |
-| POST | `/api/outbox/publish` | 手动触发 Outbox 发布 |
-| GET | `/api/worker/health` | Worker 健康检查 |
-
-### WebSocket
-
-| 路径 | 说明 |
-|------|------|
-| `/ws/code` | CodeAgent 对话（匿名 session） |
-| `/ws/analysis` | Analysis Agent 对话（生成 TaskSpec 草稿） |
-
-### SSE 事件类型
-
-- `task_state` — 任务状态变更（`{status, attempt_count}`）
-- `task_terminal` — 任务到达终态
-- `update` — 通用更新
-- `task_spec_draft` — Analysis Agent 返回 TaskSpec 草稿
-
-### 前端页面路由
-
-| 路径 | 组件 | 说明 |
-|------|------|------|
-| `/code-agent` | `app/code-agent/page.tsx` | CodeAgent 主界面 |
-| `/code-agent/analysis` | `app/code-agent/analysis/page.tsx` | Analysis Agent（TaskSpec 草稿 + 数据集上传 + 创建任务） |
-| `/code-agent/tasks` | `app/code-agent/tasks/page.tsx` | 任务列表 |
-| `/code-agent/tasks/{task_id}` | `app/code-agent/tasks/[task_id]/page.tsx` | 任务详情（含 SSE 实时事件） |
+- 优先从 Redis Stream 读事件；Redis 不可用时回退 DB 轮询 task_events 表
+- 支持 `last_event_id` 断点续传（前端自动重连）
+- 每 15 秒发送 `: keep-alive` 心跳注释；连接最长 2 小时后优雅关闭
+  （`SSE_MAX_CONNECTION_SECONDS` 可调），前端重连不丢事件
 
 ---
 
@@ -386,306 +236,187 @@ draft → queued → claimed → running → succeeded
 ```
 run_worker(worker_id, db_pool, redis_client, docker_image)
   ├── ensure_consumer_group("stream:tasks:execute", "task-workers-v1")
-  ├── _heartbeat_loop — 每 15s 更新 Redis heartbeat
-  ├── _lease_reaper_loop — 每 10s
-  │     ├── 续期自己持有的 lease
-  │     └── 清理过期 lease（带退避重试：next_attempt_at + 指数退避 + 抖动）
-  └── _process_next_task — 循环
-        ├── consume_tasks (Redis Stream XREADGROUP, block 5s)
-        ├── try_claim_task (CAS: queued + lease_expired + next_attempt_at 已到期 → claimed)
-        ├── execute_task (executor.py)
+  ├── _heartbeat_loop        — 每 15s 更新 Redis 心跳
+  ├── _lease_reaper_loop     — 每 10s 扫描过期租约
+  │     ├── attempt_count < 3 → requeue（带退避 next_attempt_at）
+  │     └── attempt_count ≥ 3 → failed
+  └── _process_next_task     — 循环
+        ├── consume_tasks (XREADGROUP, block 5s)
+        ├── try_claim_task (CAS)
+        ├── execute_task (executor.py) + 后台取消检测协程
+        ├── 失败 → _fail_or_requeue（按 failure_code 分类）
         └── ack_message (XACK)
-```
-
-### 执行流程（executor.py）
-
-```
-execute_task
-  ├── _get_task_spec, _get_dataset
-  ├── _run_docker_execution
-  │     └── run_docker_task (docker_runtime.py)
-  │           └── docker run --cap-drop=ALL --security-opt=no-new-privileges ... claude --print <prompt>
-  ├── _collect_outputs
-  ├── _verify_outputs (deliverables + manifest.json + checksum)
-  └── _create_artifacts (ZIP + artifact 记录)
 ```
 
 ### 取消流程
 
-1. 用户点击取消 → POST `/api/tasks/{id}/cancel`
-2. 数据库设置 `cancel_requested_at = NOW()`，返回 `cancel_requested: true`
-3. Worker 在 `_process_next_task` 中通过后台协程轮询检测 `cancel_requested_at`
-4. 设置 `cancel_event` → `run_docker_task` 收到信号
-5. 向 Docker 容器发 SIGTERM → 等 30s → SIGKILL
-6. Executor 收到 `cancelled` 事件，完成 attempt 记录
-7. Worker 调用 `update_task_status(..., CANCELLED)`
-8. 前端 SSE 收到 `task_terminal`，刷新状态
+用户取消 → DB 置 `cancel_requested_at` → Worker 后台协程检测 → `cancel_event` →
+Job 容器 SIGTERM（30s 宽限）→ SIGKILL → 状态置 cancelled → SSE 推送终态。
 
-### 重试退避流程
+### Redis 客户端 fail-open
 
-1. Lease Reaper 检测到过期 lease
-2. 如果 `attempt_count < 3`：计算 `next_attempt_at = NOW() + 指数退避 + 全抖动`
-3. 更新任务：`status = 'queued'`, `next_attempt_at = <calculated>`
-4. 创建 `outbox_event`（`task_queued`），由 OutboxPublisher 重新发布到 Redis Stream
-5. Worker 通过 `try_claim_task` 或 `worker_poll_endpoint` 只领取 `next_attempt_at <= NOW()` 的任务
+`redis_client.py` 所有方法在连接不可用时返回安全默认值
+（None / [] / False / (True, limit)），Redis 宕机不会拖垮 API 与 Worker 进程；
+任务投递依赖 Outbox 在恢复后补齐。
 
 ---
 
-## 9. 关键安全措施
+## 9. 安全措施（2026-08 生产加固后）
 
-### 错误信息 sanitize
+| 项 | 状态 |
+|----|------|
+| Task API 全部端点（含 worker/outbox）要求 `TASK_API_TOKEN` | ✅ 无 token 时全开放仅限本地开发 |
+| `/api/outbox/publish` Redis 断连返回 503，不静默丢事件 | ✅ |
+| Redis 可选密码（compose `REDIS_PASSWORD` → requirepass） | ✅ 生产必须设置 |
+| paperAgent `/ws/chat` + `/api/sessions` 每用户 3 次/分钟限流 | ✅ fail-open；`PAPER_CHAT_RATE_LIMIT/WINDOW` 可调 |
+| 错误 sanitize（路径/URI/凭证脱敏 + 500 字符截断） | ✅ `_sanitize_error` |
+| Docker 隔离（cap-drop=ALL、no-new-privileges、pids-limit、只读根、CPU/内存限制） | ✅ 网络已启用（需调 LLM API），`CODE_AGENT_JOB_NETWORK=none` 可关 |
+| 产物下载白名单 + 禁符号链接 + 禁路径遍历 | ✅ `ARTIFACT_DOWNLOAD_ROOT` |
+| LLM 密钥透传用 `-e NAME`（不进容器 argv） | ✅ |
+| SSE 心跳 15s + 2h 连接上限 | ✅ |
 
-`consumer.py` 中的 `_sanitize_error()` 过滤：
-- 文件路径（如 `/path/to/file.py:123`）
-- Traceback 头部
-- 数据库连接字符串
-- 密码/密钥/token 等凭证
-- 截断到 500 字符
-
-### Docker 隔离
-
-- `--cap-drop=ALL` — 移除所有 capabilities
-- `--security-opt=no-new-privileges` — 防止提权
-- `--pids-limit=512` — 限制进程数
-- `--read-only` — 只读根文件系统
-- `--cpus=2 --memory=2g --memory-swap=2g` — 资源限制
-- 网络已启用，允许 claude CLI 调用外部 API（StepFun API）
-
-### 产物下载安全
-
-- `GET /api/artifacts/{artifact_id}` 验证 `storage_path` 在 `ARTIFACT_DOWNLOAD_ROOT`（默认 `/tmp/task-outputs`）内
-- 拒绝符号链接（`resolved.is_symlink()` → 403）
-- 拒绝路径遍历（`resolved.relative_to(allowed_root)` → 403）
-
-### 幂等性
-
-- `idempotency_keys` 表保证创建任务的幂等性
-- `ON CONFLICT DO NOTHING` 处理并发 duplicate key
-- 幂等键 24 小时过期
+**生产部署必配**（详见 `docs/WORKER_ONBOARDING.md` 安全清单）：
+`TASK_API_TOKEN`（前端需同值 `NEXT_PUBLIC_TASK_API_TOKEN` 构建）、
+`REDIS_PASSWORD`、PostgreSQL 不暴露公网。
 
 ---
 
-## 10. 前端状态
-
-### 已实现页面
-
-1. **Analysis Agent** (`/code-agent/analysis`) — TaskSpec 草稿生成、JSON 展示、数据集上传、创建任务
-2. **任务列表** (`/code-agent/tasks`) — 表格展示所有任务，支持刷新
-3. **任务详情** (`/code-agent/tasks/{id}`) — 状态卡片、产物表格（含下载）、事件日志、实时 SSE
-4. **CodeAgent 主页** — 侧边栏添加任务入口，顶部添加任务按钮
-
-### 技术细节
-
-- 所有新页面复用现有 `AgentNav`、`Button`、`ScrollArea`、`Composer` 组件
-- i18n 新增 30+ 中英文翻译键（`tasks.*` + `analysis.*`）
-- SSE 连接状态通过 `LIVE` badge 展示
-- 产物下载通过 `/api/artifacts/{artifact_id}` 提供
-
-### 测试
-
-- 前端：47 tests pass（含 10 个 Analysis Agent 页面测试 + 17 concurrency/recovery tests + 3 SSE reconnection tests）
-- 后端：254 tests pass（含 18 concurrency/recovery tests + 6 regression tests + 16 verifier tests），2 个 pre-existing arxiv 网络测试因 HTTP 429 失败（与本项目无关）
-- 构建：`npm run build` 通过
-
----
-
-## 11. 待实施（按优先级）
-
-### 立即
-- [ ] 将 Analysis Agent 的 mock runtime 替换为真实 PaperAgent + LLM 调用（已集成 StepFun API，需配置 key）
-- [x] 前端 Analysis Agent 页面（/code-agent/analysis）— 已实现 TaskSpec 草稿确认 + Dataset 上传 + 创建任务
-
-### 短期
-- [x] Five-level verifier（文件、格式、内容、执行、重现性） — 已实现
-- [x] 真实 Docker 集成测试（case1/case2/case3 在 CI 中运行） — 已添加 @pytest.mark.integration 测试
-- [x] 前端任务创建表单（TaskSpec + Dataset 上传 + 确认创建） — Analysis Agent 页面已实现
-
-### 中期
-- [ ] Redis 重启后 pending message 自动恢复监控
-- [ ] 多 Worker 并发竞争测试
-- [ ] Outbox 重复发布防护测试
-
----
-
-## 12. 目录结构
-
-```
-infinity_Agents/
-├── backend/
-│   ├── app.py                          # FastAPI 主应用（含所有 API 路由）
-│   ├── db.py                           # 数据库初始化 + schema
-│   ├── requirements.txt
-│   ├── code_agent/
-│   │   ├── __init__.py                 # 导出所有公共 API
-│   │   ├── service.py                  # CodeAgent 对话服务（原有）
-│   │   ├── analysis_agent.py           # Analysis Agent（TaskSpec 生成 + LLM 集成）
-│   │   ├── retry_policy.py             # 重试退避策略（指数退避 + 抖动）
-│   │   ├── verifier.py                 # 五级验证器（file/format/content/execution/reproducibility）
-│   │   ├── models.py                   # Task/TaskSpec/TaskAttempt 等数据模型
-│   │   ├── task_service.py             # 任务服务层（CRUD、CAS、Outbox、Artifact）
-│   │   ├── redis_client.py             # Redis 客户端（Stream + 心跳 + 限速 + XAUTOCLAIM）
-│   │   ├── outbox.py                   # Outbox Publisher
-│   │   └── worker/
-│   │       ├── __init__.py
-│   │       ├── consumer.py             # Worker 主循环 + Lease Reaper（含退避）
-│   │       ├── docker_runtime.py       # Docker 执行器（支持 cancel_event + 稳定挂载点 + 网络已启用）
-│   │       └── executor.py             # 任务执行编排（五级验证 + 打包）
-├── frontend/
-│   ├── app/
-│   │   ├── layout.tsx
-│   │   ├── page.tsx                    # 首页（PaperAgent）
-│   │   ├── code-agent/
-│   │   │   ├── page.tsx                # CodeAgent 主界面
-│   │   │   ├── analysis/
-│   │   │   │   ├── page.tsx            # Analysis Agent 页面
-│   │   │   │   └── __tests__/
-│   │   │   │       └── page.test.tsx   # Analysis Agent 页面测试
-│   │   │   ├── tasks/
-│   │   │   │   ├── page.tsx            # 任务列表页
-│   │   │   │   └── [task_id]/
-│   │   │   │       └── page.tsx        # 任务详情页
-│   │   │   └── __tests__/
-│   │   │       └── page.test.tsx
-│   │   └── image-judge/
-│   ├── components/
-│   │   ├── chat/
-│   │   │   ├── AgentNav.tsx            # 侧边导航
-│   │   │   ├── SessionList.tsx
-│   │   │   ├── MessagePane.tsx
-│   │   │   └── Composer.tsx
-│   │   └── ui/
-│   │       ├── button.tsx
-│   │       ├── scroll-area.tsx
-│   │       └── avatar.tsx
-│   ├── lib/
-│   │   ├── i18n.tsx                    # 国际化（中英）
-│   │   └── chat-state.ts               # Chat 状态管理
-│   └── hooks/
-│       └── use-chat-controller.ts
-├── docs/
-│   └── LOCAL_DEVELOPMENT.md
-├── image-judge/                        # 桌面端（Qt）
-├── tests/                              # 后端测试
-│   ├── test_artifact_download.py       # GAP 1
-│   ├── test_cancellation.py            # GAP 4
-│   ├── test_analysis_agent.py          # GAP 2
-│   ├── test_security.py                # GAP 7
-│   ├── test_regression.py              # GAP 3（含 real Docker 集成测试）
-│   ├── test_retry_and_recovery.py      # GAP 5 + GAP 6
-│   └── ...
-└── README.md
-```
-
----
-
-## 13. 环境变量
+## 10. 环境变量
 
 ```env
-# 必需
-DATABASE_URL=postgresql://user:pass@host:5432/dbname
+# --- API 服务器 ---
+DATABASE_URL=postgresql://postgres@localhost:5450/infinity_agents
+REDIS_URL=redis://localhost:6379/0            # 带密码: redis://:pass@host:6379/0
+TASK_API_TOKEN=<shared-secret>                # 生产必须；前端 NEXT_PUBLIC_TASK_API_TOKEN 同值
+ARTIFACT_DOWNLOAD_ROOT=$(pwd)/workspace/task-outputs  # API 读产物的目录
+# PAPER_CHAT_RATE_LIMIT=3 / PAPER_CHAT_RATE_WINDOW=60 / SSE_MAX_CONNECTION_SECONDS=7200
 
-# Redis（Worker 需要）
-REDIS_URL=redis://localhost:6379/0
-
-# 可选
-MOONSHOT_API_KEY=xxx                    # PaperAgent 需要
-CODE_AGENT_CASE_DIR=/path/to/cases      # Case 数据目录
-ARTIFACT_DOWNLOAD_ROOT=/tmp/task-outputs # 产物下载根目录（默认）
+# --- Worker（worker.env，见 worker.env.example）---
+REDIS_URL / DATABASE_URL / TASK_API_TOKEN
+CODE_AGENT_DOCKER_IMAGE=claude-code-env:v2    # Job 容器镜像
+ANTHROPIC_API_KEY=<...>                       # 透传进 Job 容器
+ARTIFACT_STORAGE_ROOT=/workspace/task-outputs # Worker 写产物的目录（容器内）
+# REDIS_PASSWORD / CODE_AGENT_JOB_NETWORK / CODE_AGENT_JOB_USER 可选
 ```
+
+**artifact 存储一致性**：Worker 写 `ARTIFACT_STORAGE_ROOT`（容器内
+`/workspace/task-outputs`），经 compose 的 `./workspace` 挂载暴露到宿主机；
+API 服务器用 `ARTIFACT_DOWNLOAD_ROOT` 指向同一宿主机目录。
 
 ---
 
-## 14. 本地运行
+## 11. 本地运行
 
 ```bash
-# 1. 启动 PostgreSQL（确保有数据库）
+# 1. PostgreSQL（Docker 容器 prisma-postgres-1，端口 5450，trust 认证）
+#    数据库名 infinity_agents，应用启动时 init_db() 自动建表
 
-# 2. 启动 FastAPI
-cd backend
+# 2. Redis + Worker + Outbox（compose，配置来自 worker.env）
+docker compose -f docker-compose.local.yml --env-file worker.env up -d
+
+# 3. API 服务器
 pyenv shell Agent
-pip install -r requirements.txt
-uvicorn app:app --host 127.0.0.1 --port 8008 --reload
+DATABASE_URL="postgresql://postgres@localhost:5450/infinity_agents" \
+REDIS_URL="redis://localhost:6379/0" \
+ARTIFACT_DOWNLOAD_ROOT="$PWD/workspace/task-outputs" \
+uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
 
-# 3. 启动 Redis
-redis-server
-
-# 4. 启动 Worker（至少一个）
-# Worker 通过 run_worker() 启动，需在独立进程中运行
-python -c "from backend.code_agent.worker.consumer import run_worker; import asyncio; asyncio.run(run_worker('worker-1', app.state.db_pool, app.state.redis_client))"
-
-# 5. 启动前端
-cd frontend
-npm install
-npm run dev
+# 4. 前端（:3000，rewrites 代理 /api/* → :8000）
+cd frontend && npm install && npm run dev
 ```
+
+远程 Worker 接入（只装 Docker + 填 worker.env）见 `docs/WORKER_ONBOARDING.md`。
 
 ---
 
-## 15. 测试
+## 12. 测试
 
 ```bash
-# 后端
-cd /Users/zhangyvjing/icloud/code/infinity_Agents
-DATABASE_URL="postgresql://test:test@127.0.0.1:5432/infinity_test" python3 -m pytest tests/ -q
-# 当前：211 passed, 1 skipped (excluding network-dependent tools tests)
+# 后端全量（排除 3 个长时真实 Docker 集成测试）
+DATABASE_URL="postgresql://postgres@localhost:5450/infinity_agents" \
+REDIS_URL="redis://localhost:6379/0" \
+python -m pytest tests/ -q -k "not real_docker"
+# 当前：267 passed, 1 skipped
 
 # 前端
-cd frontend && npx vitest run
-# 当前：47 passed
-
-# TypeScript 检查
-cd frontend && npx tsc --noEmit
-# 当前：clean
-
-# 构建
-cd frontend && npm run build
-# 当前：通过
+cd frontend && npx vitest run   # 28 passed（5 个文件）
+npx tsc --noEmit                # clean
+npx next build                  # 通过
 ```
 
-### 本轮新增测试文件
-- `tests/test_concurrency_recovery.py` — 17 个并发/恢复测试（Tests A-H）
-- `tests/test_sse_reconnection.py` — 3 个 SSE 重连测试
-- `tests/test_verifier.py` — verifier 基础 + 领域规则测试
+### 关键测试文件
+
+| 文件 | 覆盖 |
+|------|------|
+| `test_fault_injection.py` | 34 个韧性测试：Redis 宕机 Outbox、Worker 崩溃 Reaper、失败分类、CAS 竞争、错误脱敏、DB 断连、SSE 断流 |
+| `test_rate_limit.py` | 11 个：窗口计数、用户/action 隔离、过期重置、fail-open、env 配置 |
+| `test_concurrency_recovery.py` / `test_retry_and_recovery.py` | 并发 claim、租约恢复、退避重试 |
+| `test_sse_reconnection.py` | SSE last_event_id 断点续传 |
+| `test_security.py` / `test_artifact_download.py` | 路径遍历、符号链接、白名单 |
+| `test_regression.py` | case1/2/3 全链路（mock Docker；`@pytest.mark.integration` 为真实 Docker） |
+| `frontend/app/image-judge/__tests__/page.test.tsx` | 下载直链、平台探测、推荐卡片 |
 
 ---
 
-## 16. 关键设计决策
+## 13. 关键设计决策
 
-1. **Outbox 模式**：状态变更先写 PostgreSQL outbox_events 表，再由 OutboxPublisher 异步发布到 Redis Stream。保证 DB 和消息队列一致性。
-
-2. **CAS 租约**：Worker 通过 `UPDATE ... WHERE status='queued' AND (lease_expires_at IS NULL OR lease_expires_at < NOW()) AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())` 原子性认领任务，避免竞态。
-
-3. **Lease Reaper**：每个 Worker 运行 reaper 循环，续期自己的 lease 并清理死 Worker 的过期 lease，实现故障自动恢复。重试时使用指数退避 + 全抖动（`retry_policy.py`），并写入 `next_attempt_at`。
-
-4. **幂等性**：创建任务时支持 `idempotency_key`，重复提交返回同一任务。通过 `idempotency_keys` 表 + `ON CONFLICT DO NOTHING` 实现。
-
-5. **错误 sanitize**：所有存入 `error_message` 的错误信息都经过 `_sanitize_error()` 过滤，防止路径/凭证泄露。
-
-6. **Docker 零信任**：容器完全隔离，无网络、无特权、只读根文件系统。
-
-7. **产物下载安全**：ZIP 路径遍历保护 + 符号链接拒绝 + 根目录白名单。
-
----
-
-## 17. 已知问题与限制
-
-1. **Analysis Agent LLM 需要 API Key**：已集成 StepFun API，需要设置 `STEPFUN_API_KEY` 环境变量。无 key 时自动降级到确定性 mock。
-2. **Five-Level Verifier 已增强**：已实现 file/format/content/execution/reproducibility/domain 六层验证，包含 DESeq2、Biopython、scanpy 领域规则。
-3. **全链路回归测试**：三个 Case 的 Docker 执行已 mock，真实 Docker 集成测试已就绪（`@pytest.mark.integration`）。
-4. **产物下载前端页面**：任务详情页已包含下载按钮，后端 endpoint 已实现。
-5. **Docker 网络已启用**：已移除 `--network=none`，允许 claude CLI 调用外部 API（StepFun API），保留所有其他安全限制。
-6. **Worker Reaper SQL 已修复**：修复了 `next_attempt_at = $3` 参数索引错误，改为 `$2`。
-7. **网络依赖测试已隔离**：arxiv 相关测试因外部网络问题会超时，已排除在常规 CI 外。
+1. **Outbox 模式**：状态变更先写 DB outbox_events，OutboxPublisher 异步发布到 Redis
+   Stream；Redis 宕机事件保持 pending，恢复后自动排空。**绝不**在未投递成功时标记
+   published（503 显式失败优于静默丢事件）。
+2. **CAS 租约**：认领/回写全部带 lease_token 条件的原子 UPDATE，杜绝双 Worker 竞争
+   与僵尸 Worker 污染。
+3. **Lease Reaper**：每 Worker 10s 扫描过期租约，实现崩溃自动接管 + 退避重试。
+4. **Redis fail-open**：Redis 是加速器而非真相源，断连时全链路降级可用
+   （DB 轮询 SSE、worker/poll fallback、限流放行）。
+5. **Worker 无注册水平扩展**：连上共享 Redis + PG 即自动加入竞争。
+6. **产物目录共享**：Worker 与 API 通过 `./workspace` 挂载共享同一 artifact 目录，
+   消除容器内外路径脑裂。
+7. **幂等性**：`idempotency_keys` 表（24h 过期）+ ON CONFLICT DO NOTHING。
 
 ---
 
-## 18. 下一步行动
+## 14. ImageJudge 发布流程
 
-1. **配置 Docker 内 Claude Code 认证**：配置 API key 或 OAuth，使真实 Docker 执行能够调用外部 API
-2. **端到端 Docker 测试**：在 CI 中运行 case1/case2/case3 的真实 Docker 测试（已添加 `@pytest.mark.integration`）
-3. **性能测试**：验证 10+ Worker 并发下的 Lease Reaper 和 Outbox Publisher 性能
-4. **Verifier 领域规则扩展**：已完成 DESeq2、Biopython、scanpy 领域规则，可按需扩展更多
-5. **Analysis Agent 前端增强**：完善 `/code-agent/analysis` 页面的 TaskSpec 草稿确认流程
-6. **SSE 重连测试覆盖**：已添加 `tests/test_sse_reconnection.py`，验证 `last_event_id` 恢复
+- 工作流 `.github/workflows/imagejudge-package.yml`：Windows PyInstaller EXE →
+  `ImageJudge-windows-x64.zip`；Linux → 固定名 `ImageJudge-linux-amd64.deb`
+- 打 tag `imagejudge-v*` 触发 release job，资产附到 GitHub Release
+- 下载页（`/image-judge`）使用 `releases/latest/download/<固定名>` 直链，
+  点击直接下载（不跳 GitHub 页面），自动探测平台并高亮"推荐"卡片
+- **待办**：deb 改名后需发布新 tag（如 `imagejudge-v0.2.1`）才能让 Linux 直链生效
 
 ---
+
+## 15. 已知问题与限制
+
+1. **Analysis Agent（`analysis_agent.py`）保留为库**：`/ws/analysis` 端点已删除，
+   `run_analysis_stream` 仅被单元测试使用；如需恢复对话式 TaskSpec 生成需重新接端点。
+2. **真实 Docker 集成测试**：`test_regression.py` 的 3 个 case（`real_docker`）耗时长，
+   常规运行用 `-k "not real_docker"` 排除，发布前建议手动跑一次。
+3. **arxiv 网络测试**：依赖外部 API，偶发 HTTP 429，与本项目代码无关。
+4. **TASK_API_TOKEN 未设置 = 全开放**：本地开发可接受，生产必须设置
+   （否则任何人可创建/取消任务、触发 worker 端点）。
+5. **限流为固定窗口**：分钟边界处理论上限是 2×limit/分钟，满足基础用户场景；
+   如需更严格可升级为滑动窗口。
+
+---
+
+## 16. 下一步行动（建议优先级）
+
+1. **发布 ImageJudge 新 tag**（`imagejudge-v0.2.1`）激活 Linux 下载直链
+2. **生产部署**：按 `docs/WORKER_ONBOARDING.md` 安全清单配置
+   TASK_API_TOKEN + REDIS_PASSWORD，验证远程 Worker 接入
+3. **端到端验证**：compose 起 worker → 真实任务 → 产物下载全链路
+4. **性能验证**：10+ Worker 并发下 Lease Reaper / Outbox Publisher 表现
+5. **监控**：outbox pending 堆积告警、worker 心跳丢失告警、限流触发统计
+
+---
+
+## 17. 最近变更历史
+
+| 提交 | 说明 |
+|------|------|
+| `fe7fda9` | 生产加固五阶段：端点鉴权、限流、下载直链、artifact 统一、SSE 心跳 + 死代码清理 |
+| `db0b84f` | 故障注入测试套件（34 个）+ Outbox SSE 事件丢失修复 |
+| `038151a` | 代码审查修复：安全加固、jsonb 处理、状态机修正 |
+| `9c2b817` | 任务链对齐设计：method sources、失败重试、Worker 接入 |
+| `560ef4c` | StepFun 开发前的系统快照 |
