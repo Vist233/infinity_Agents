@@ -265,16 +265,12 @@ async function handleTaskConfirmation(
   }
 
   const task = await getOwnedTask(env, taskId, user.userId);
-  if (!task || task.status !== "queued") {
-    return errorJson("Queued task not found", 404, "TASK_NOT_FOUND");
+  if (!task) {
+    return errorJson("Task not found", 404, "TASK_NOT_FOUND");
   }
 
   if (confirmation.task_id !== taskId || task.chat_confirmation_id !== confirmationId) {
     return errorJson("Task is not bound to this confirmation", 409, "TASK_CONFIRMATION_MISMATCH");
-  }
-
-  if (!(await claimChatTaskConfirmation(env, confirmationId, taskId))) {
-    return errorJson("Task confirmation has already been used", 409, "TASK_CONFIRMATION_USED");
   }
 
   let args: TaskConfirmationArgs = {
@@ -327,10 +323,22 @@ async function handleTaskConfirmation(
     },
   ];
 
+  // Claim only after every operation above has succeeded. If history loading
+  // fails, the card remains pending and the user can retry.
+  if (!(await claimChatTaskConfirmation(env, confirmationId, taskId))) {
+    return errorJson("Task confirmation has already been used", 409, "TASK_CONFIRMATION_USED");
+  }
+
   return streamModelLoop(env, user, sessionId, modelMessages, false, false, {
-    onResult: async () => {
-      const completed = await completeChatTaskConfirmation(env, confirmationId, taskId, nowSeconds());
-      if (!completed) throw new Error("Task confirmation could not be completed");
+    onResult: async (result) => {
+      if (result.status === "completed") {
+        const completed = await completeChatTaskConfirmation(env, confirmationId, taskId, nowSeconds());
+        if (!completed) throw new Error("Task confirmation could not be completed");
+      } else {
+        // A second task request pauses the resumed loop again. Keep the
+        // original confirmation retryable until the current loop completes.
+        await reopenChatTaskConfirmation(env, confirmationId);
+      }
     },
     onError: async () => {
       await reopenChatTaskConfirmation(env, confirmationId);
