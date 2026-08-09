@@ -12,6 +12,7 @@ import { handleChat } from "./chat";
 import { currentDailyUsage } from "./quota";
 import { handleImageJudge } from "./image-judge";
 import { handleTaskApi } from "./tasks";
+import { handleWorkerControlApi } from "./worker-control";
 
 export { ImageJudgeUserConcurrencyLock } from "./image-judge";
 
@@ -75,6 +76,14 @@ export default {
     }
     if (method === "POST" && pathname === "/auth/logout") {
       return handleLogout(request, env);
+    }
+
+    // Worker control is authenticated with a revocable per-machine bearer
+    // credential, not with a browser OIDC cookie. Keep it ahead of the generic
+    // `/api/*` user session resolver so a Worker can enroll/poll without ever
+    // receiving browser-session semantics.
+    if (pathname.startsWith("/api/worker/v1/")) {
+      return handleWorkerControlApi(request, env);
     }
 
     if (pathname === "/api" || pathname.startsWith("/api/")) {

@@ -428,7 +428,7 @@ async function handleArtifact(artifactId: string, env: Env, user: AuthedUser): P
   const artifact = await env.DB.prepare(
     `SELECT a.name, a.content_type, a.object_key
      FROM artifacts a JOIN tasks t ON t.task_id = a.task_id
-     WHERE a.artifact_id = ?1 AND t.created_by = ?2`
+     WHERE a.artifact_id = ?1 AND t.created_by = ?2 AND a.status = 'published'`
   ).bind(artifactId, user.userId).first<{ name: string; content_type: string | null; object_key: string }>();
   if (!artifact || !env.RESOURCE_BUCKET) return errorJson("Artifact not found", 404, "ARTIFACT_NOT_FOUND");
   const object = await env.RESOURCE_BUCKET.get(artifact.object_key);
@@ -448,20 +448,28 @@ async function handleWorkerEnrollment(request: Request, env: Env, user: AuthedUs
   const body = await jsonBody(request);
   const workerId = String(body?.worker_id ?? "").trim();
   const namespace = String(body?.namespace ?? "").trim();
-  const ttl = Math.min(3600, Math.max(30, Number(body?.ttl_seconds || 600)));
+  const requestedTrust = String(body?.trust_level ?? "owner_trusted").trim();
+  const trustLevel = new Set(["owner_trusted", "institution_trusted", "student_untrusted"]).has(requestedTrust)
+    ? requestedTrust
+    : "owner_trusted";
+  const requestedTtl = Number(body?.ttl_seconds || 600);
+  const ttl = Number.isFinite(requestedTtl) ? Math.min(3600, Math.max(30, requestedTtl)) : 600;
   if (!workerId || workerId.length > 120 || !namespace || namespace.length > 120) return errorJson("Invalid worker enrollment request", 400, "INVALID_ENROLLMENT");
   const rawToken = `${taskId()}${taskId().replaceAll("-", "")}`;
   const tokenHash = await sha256(rawToken);
   const expires = nowSeconds() + ttl;
   await env.DB.prepare(
     `INSERT INTO worker_enrollments
-      (worker_id, namespace, user_id, token_hash, expires_at, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+      (worker_id, namespace, user_id, token_hash, expires_at, created_at, trust_level, status)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending')
      ON CONFLICT(worker_id, namespace) DO UPDATE SET
        user_id = excluded.user_id, token_hash = excluded.token_hash,
-       expires_at = excluded.expires_at, used_at = NULL, revoked_at = NULL`
-  ).bind(workerId, namespace, user.userId, tokenHash, expires, nowSeconds()).run();
-  return json({ worker_id: workerId, namespace, enrollment_token: rawToken, expires_at: iso(expires), one_time: true }, 201);
+       expires_at = excluded.expires_at, used_at = NULL, revoked_at = NULL,
+       credential_hash = NULL, credential_expires_at = NULL, public_key = NULL,
+       trust_level = excluded.trust_level, status = 'pending', version = NULL,
+       capabilities_json = '[]', last_seen_at = NULL`
+  ).bind(workerId, namespace, user.userId, tokenHash, expires, nowSeconds(), trustLevel).run();
+  return json({ worker_id: workerId, namespace, trust_level: trustLevel, enrollment_token: rawToken, expires_at: iso(expires), one_time: true }, 201);
 }
 
 async function handleRevokeEnrollment(workerId: string, request: Request, env: Env, user: AuthedUser): Promise<Response> {
@@ -469,7 +477,7 @@ async function handleRevokeEnrollment(workerId: string, request: Request, env: E
   const namespace = new URL(request.url).searchParams.get("namespace") || "";
   if (!namespace) return errorJson("namespace is required", 400, "INVALID_ENROLLMENT");
   const result = await env.DB.prepare(
-    "UPDATE worker_enrollments SET revoked_at = ?3 WHERE worker_id = ?1 AND namespace = ?2 AND user_id = ?4 AND revoked_at IS NULL"
+    "UPDATE worker_enrollments SET revoked_at = ?3, status = 'revoked', credential_hash = NULL, credential_expires_at = NULL WHERE worker_id = ?1 AND namespace = ?2 AND user_id = ?4 AND revoked_at IS NULL"
   ).bind(workerId, namespace, nowSeconds(), user.userId).run();
   if ((result.meta?.changes ?? 0) !== 1) return errorJson("Active Worker enrollment not found", 404, "ENROLLMENT_NOT_FOUND");
   return json({ worker_id: workerId, namespace, status: "revoked" });
@@ -504,7 +512,7 @@ export async function handleTaskApi(request: Request, env: Env, user: AuthedUser
     if (suffix === "events/stream" && method === "GET") return handleTaskEventStream(current, env);
     if (suffix === "artifacts" && method === "GET") {
       const result = await env.DB.prepare(
-        "SELECT artifact_id, name, kind, file_size_bytes, checksum_sha256, created_at FROM artifacts WHERE task_id = ?1 ORDER BY created_at DESC"
+        "SELECT artifact_id, name, kind, file_size_bytes, checksum_sha256, created_at FROM artifacts WHERE task_id = ?1 AND status = 'published' ORDER BY created_at DESC"
       ).bind(current.task_id).all<Record<string, unknown>>();
       return json((result.results ?? []).map((artifact) => ({ ...artifact, created_at: iso(Number(artifact.created_at)) })));
     }

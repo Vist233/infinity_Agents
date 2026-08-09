@@ -50,6 +50,32 @@ describe("Infinity Edge route composition", () => {
     expect(await response.json()).toMatchObject({ error: { code: "UNAUTHENTICATED" } });
   });
 
+  it("keeps Worker control credentials separate from browser OIDC", async () => {
+    const response = await worker.fetch(
+      new Request("https://app.test/api/worker/v1/poll", {
+        method: "POST",
+        body: JSON.stringify({ available_slots: 1 }),
+        headers: { "content-type": "application/json" },
+      }),
+      testEnv(),
+    );
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ error: { code: "WORKER_UNAUTHENTICATED" } });
+  });
+
+  it("validates enrollment before touching the D1 token store", async () => {
+    const response = await worker.fetch(
+      new Request("https://app.test/api/worker/v1/enroll", {
+        method: "POST",
+        body: JSON.stringify({}),
+        headers: { "content-type": "application/json" },
+      }),
+      testEnv(),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "INVALID_ENROLLMENT" } });
+  });
+
   it("falls back to the Next static export for product pages", async () => {
     const response = await worker.fetch(new Request("https://app.test/"), testEnv());
     expect(response.status).toBe(200);
