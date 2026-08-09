@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" role="img" aria-labelledby="title desc">
+  <title id="title">Leaf upload one</title>
+  <desc id="desc">A target leaf with a small number of visible spots.</desc>
+  <rect width="960" height="540" rx="28" fill="#f4f6ed"/>
+  <path d="M455 470C430 352 455 246 532 138C606 35 745 54 814 84C800 203 742 315 640 386C578 428 510 456 455 470Z" fill="#78a968"/>
+  <path d="M459 456C532 332 612 225 778 101M532 332L502 260M612 225L590 158" fill="none" stroke="#dcefcf" stroke-width="9" stroke-linecap="round"/>
+  <g fill="#b66b52"><circle cx="697" cy="215" r="14"/><circle cx="733" cy="279" r="10"/><circle cx="651" cy="302" r="8"/></g>
+</svg>

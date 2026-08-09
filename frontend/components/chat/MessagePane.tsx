@@ -1,7 +1,9 @@
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import MarkdownRenderer from "@/components/markdown-renderer";
-import { Bot, LogIn, User } from "lucide-react";
+import Image from "next/image";
+import logo from "@/app/icon.png";
+import { LogIn, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Message, SessionRunState } from "@/lib/chat-state";
 import { TaskConfirmationCard } from "@/components/analysis/TaskConfirmationCard";
@@ -39,7 +41,7 @@ export function MessagePane({
         {authStatus === "unauthenticated" ? (
           <div className="h-[60vh] flex flex-col items-center justify-center space-y-4 text-center">
             <div className="w-12 h-12 rounded-full border border-zinc-200 flex items-center justify-center shadow-sm bg-white">
-              <Bot size={24} />
+              <Image src={logo} alt="Infinity Agents" width={40} height={40} className="rounded-full" />
             </div>
             <div className="space-y-2">
               <h2 className="text-2xl font-medium tracking-tight">{t("auth.signInTitle")}</h2>
@@ -53,7 +55,7 @@ export function MessagePane({
         ) : messages.length === 0 ? (
           <div className="h-[60vh] flex flex-col items-center justify-center space-y-4">
             <div className="w-12 h-12 rounded-full border border-zinc-200 flex items-center justify-center shadow-sm">
-              <Bot size={24} />
+              <Image src={logo} alt="Infinity Agents" width={40} height={40} className="rounded-full" />
             </div>
             <h2 className="text-2xl font-medium tracking-tight">{t("home.emptyTitle")}</h2>
           </div>
@@ -70,7 +72,7 @@ export function MessagePane({
                       }`}
                     >
                       <AvatarFallback className="bg-transparent">
-                        {message.role === "user" ? <User size={16} /> : <Bot size={16} className="text-zinc-100" />}
+                        {message.role === "user" ? <User size={16} /> : <Image src={logo} alt="" width={32} height={32} className="h-full w-full object-cover" />}
                       </AvatarFallback>
                     </Avatar>
                     <div className="flex flex-col gap-1.5 grow">

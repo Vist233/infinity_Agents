@@ -1,194 +1,180 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
-import { useRouter } from "next/navigation";
-import { ArrowDownToLine, Check, ExternalLink, FileImage, Microscope } from "lucide-react";
+import Image from "next/image";
+import { useMemo, useState } from "react";
+import { FileImage, Microscope } from "lucide-react";
 import { AgentNav } from "@/components/chat/AgentNav";
-import { Button } from "@/components/ui/button";
-import { LanguageToggle, useLanguage, type TranslationKey } from "@/lib/i18n";
+import { UserFooter } from "@/components/workspace/UserFooter";
+import { MobileWorkspaceDrawer } from "@/components/workspace/MobileWorkspaceDrawer";
+import { useLanguage } from "@/lib/i18n";
+import { useRouter } from "next/navigation";
 
-const RELEASE_URL = "https://github.com/Vist233/infinity_Agents/releases/latest";
-const WINDOWS_DOWNLOAD_URL =
-  "https://github.com/Vist233/infinity_Agents/releases/latest/download/ImageJudge-windows-x64.zip";
-const LINUX_DOWNLOAD_URL =
-  "https://github.com/Vist233/infinity_Agents/releases/latest/download/ImageJudge-linux-amd64.deb";
-
-type Platform = "windows" | "linux" | "other";
-
-function detectPlatform(): Platform {
-  if (typeof navigator === "undefined") return "other";
-  const ua = navigator.userAgent.toLowerCase();
-  if (ua.includes("win")) return "windows";
-  if (ua.includes("linux") || ua.includes("x11")) return "linux";
-  return "other";
+interface ExampleImage {
+  src: string;
+  alt: string;
+  label: string;
+  result?: "pass" | "review" | "failed";
 }
 
-const subscribeToPlatform = () => () => {};
+interface ImageExample {
+  id: string;
+  title: string;
+  summary: string;
+  description: string;
+  rule: string;
+  categories: string[];
+  reference: ExampleImage;
+  uploads: ExampleImage[];
+}
 
-const steps: Array<[string, TranslationKey, TranslationKey]> = [
-  ["1", "image.install", "image.installDescription"],
-  ["2", "image.choose", "image.chooseDescription"],
-  ["3", "image.rule", "image.ruleDescription"],
-  ["4", "image.review", "image.reviewDescription"],
+const EXAMPLES: ImageExample[] = [
+  {
+    id: "leaf-spots",
+    title: "叶片病斑等级示例",
+    summary: "参考图分类 · 叶片病斑",
+    description: "使用参考叶片对上传图片中的可见病斑进行等级判断，结果保留人工复核入口。",
+    rule: "比较病斑的数量、面积和分布，仅输出有图像依据的类别。",
+    categories: ["无明显病斑", "少量病斑", "明显病斑", "待人工复核"],
+    reference: { src: "/trait-examples/leaf-reference.svg", alt: "参考叶片", label: "参考图片" },
+    uploads: [
+      { src: "/trait-examples/leaf-upload-01.svg", alt: "上传叶片一", label: "上传图片 01 · 少量病斑", result: "pass" },
+      { src: "/trait-examples/leaf-upload-02.svg", alt: "上传叶片二", label: "上传图片 02 · 明显病斑", result: "review" },
+    ],
+  },
+  {
+    id: "sequence",
+    title: "图像序列检查示例",
+    summary: "参考图分类 · 序列结构",
+    description: "用一张结构参考图展示上传文件的视觉序列检查，帮助用户理解规则和结果解释。",
+    rule: "检查关键节点是否出现以及顺序是否符合示例规则。",
+    categories: ["符合规则", "缺少节点", "顺序异常", "待人工复核"],
+    reference: { src: "/trait-examples/sequence-reference.svg", alt: "序列参考图", label: "参考图片" },
+    uploads: [
+      { src: "/trait-examples/sequence-reference.svg", alt: "上传序列一", label: "上传图片 01 · 符合规则", result: "pass" },
+      { src: "/trait-examples/leaf-upload-01.svg", alt: "上传序列二", label: "上传图片 02 · 待复核", result: "review" },
+    ],
+  },
 ];
 
-const resultKeys: TranslationKey[] = ["image.resultOrder", "image.resultRows", "image.localData"];
+function ExampleList({ selectedId, onSelect }: { selectedId: string; onSelect: (id: string) => void }) {
+  const { t } = useLanguage();
+  return (
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="image-example-list">
+      <div className="flex items-center gap-2 px-1 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
+        <FileImage size={14} />
+        <span>{t("image.examplesTitle")}</span>
+      </div>
+      <div className="mt-2 min-h-0 space-y-1 overflow-y-auto">
+        {EXAMPLES.map((example) => (
+          <button
+            type="button"
+            key={example.id}
+            className={`w-full rounded-xl px-2.5 py-2.5 text-left transition-colors ${selectedId === example.id ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-100/80 hover:text-zinc-900"}`}
+            onClick={() => onSelect(example.id)}
+            data-testid={`image-example-${example.id}`}
+          >
+            <span className="block truncate text-sm font-medium">{example.title}</span>
+            <span className={`mt-1 block truncate text-xs ${selectedId === example.id ? "text-zinc-300" : "text-zinc-400"}`}>{example.summary}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function ImageJudgePage() {
   const router = useRouter();
   const { t } = useLanguage();
-  // Detect the visitor's platform without an effect-driven state update.
-  const platform = useSyncExternalStore(subscribeToPlatform, detectPlatform, () => "other");
-
-  const downloadCards = [
-    {
-      key: "windows" as const,
-      label: t("image.downloadWindows"),
-      url: WINDOWS_DOWNLOAD_URL,
-      hint: t("image.installWindowsHint"),
-    },
-    {
-      key: "linux" as const,
-      label: t("image.downloadLinux"),
-      url: LINUX_DOWNLOAD_URL,
-      hint: t("image.installLinuxHint"),
-    },
-  ];
-  if (platform === "linux") downloadCards.reverse();
+  const [selectedId, setSelectedId] = useState(EXAMPLES[0].id);
+  const selected = useMemo(() => EXAMPLES.find((example) => example.id === selectedId) ?? EXAMPLES[0], [selectedId]);
 
   return (
-    <div className="flex min-h-screen bg-transparent text-zinc-900 font-sans">
-      <aside className="w-[260px] shrink-0 bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl">
+    <div className="flex h-screen min-h-0 bg-transparent font-sans text-zinc-900">
+      <aside className="hidden min-h-0 w-[320px] shrink-0 flex-col border-r border-[var(--hairline)] bg-[var(--surface-1)] p-3 backdrop-blur-xl md:flex">
         <AgentNav active="traits" onNavigate={(path) => router.push(path)} />
+        <div className="mt-4 min-h-0 flex-1 border-t border-[var(--hairline)] pt-4">
+          <ExampleList selectedId={selected.id} onSelect={setSelectedId} />
+        </div>
+        <div className="mt-3">
+          <UserFooter />
+        </div>
       </aside>
 
-      <main className="flex-1 min-w-0 overflow-y-auto">
-        <header className="h-14 border-b border-[var(--hairline)] flex items-center justify-between px-4 bg-[var(--surface-1)] backdrop-blur-xl sticky top-0 z-10">
+      <main className="min-w-0 flex-1 overflow-y-auto">
+        <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-[var(--hairline)] bg-[var(--surface-1)] px-4 backdrop-blur-xl">
           <div className="flex items-center gap-2 text-sm font-semibold tracking-tight text-zinc-700">
+            <MobileWorkspaceDrawer active="traits" onNavigate={(path) => router.push(path)}>
+              <ExampleList selectedId={selected.id} onSelect={setSelectedId} />
+            </MobileWorkspaceDrawer>
             <Microscope className="h-4 w-4" />
-            ImageJudge
-          </div>
-          <div className="flex items-center gap-2">
-            <LanguageToggle />
-            <Button asChild size="sm" className="rounded-xl">
-              <a href="#download" aria-label={t("image.download")}>
-                <ArrowDownToLine className="h-4 w-4" />
-                {t("image.download")}
-              </a>
-            </Button>
+            {t("nav.traits")}
           </div>
         </header>
 
-        <div className="max-w-5xl mx-auto px-5 py-10 md:px-8 md:py-14 space-y-8">
-          <section className="rounded-3xl border border-zinc-200 bg-white/90 p-7 md:p-10 shadow-sm backdrop-blur">
-            <div className="max-w-3xl">
-              <div className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-600">
-                <FileImage className="h-3.5 w-3.5" />
-                {t("image.badge")}
+        <div className="mx-auto max-w-5xl space-y-6 p-4 md:p-8">
+          <section className="rounded-3xl border border-zinc-200 bg-white/90 p-6 shadow-sm md:p-8">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-600">
+                  <FileImage className="h-3.5 w-3.5" />
+                  {t("image.examplesBadge")}
+                </div>
+                <h1 className="mt-4 text-3xl font-semibold tracking-tight md:text-4xl">{selected.title}</h1>
+                <p className="mt-3 max-w-3xl text-sm leading-7 text-zinc-600">{selected.description}</p>
               </div>
-              <h1 className="mt-5 text-4xl font-semibold tracking-tight md:text-5xl">ImageJudge</h1>
-              <p className="mt-4 text-lg leading-8 text-zinc-600">{t("image.description")}</p>
-              <div className="mt-7 flex flex-wrap items-center gap-3">
-                <Button asChild size="lg" className="rounded-xl">
-                  <a href="#download" aria-label={t("image.download")}>
-                    <ArrowDownToLine className="h-4 w-4" />
-                    {t("image.download")}
-                  </a>
-                </Button>
-                <Button asChild size="lg" variant="outline" className="rounded-xl border-zinc-200">
-                  <a href={RELEASE_URL} target="_blank" rel="noreferrer">
-                    <ExternalLink className="h-4 w-4" />
-                    {t("image.releaseNotes")}
-                  </a>
-                </Button>
-              </div>
-              <p className="mt-3 text-xs text-zinc-400">{t("image.platforms")}</p>
+              <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs text-zinc-500">{t("image.compatibilityMode")}</span>
             </div>
           </section>
 
-          <section id="download" className="rounded-3xl border border-zinc-200 bg-white/90 p-7 md:p-8 shadow-sm scroll-mt-20">
-            <h2 className="text-2xl font-semibold tracking-tight">{t("image.downloadTitle")}</h2>
-            <div className="mt-6 grid gap-4 md:grid-cols-2">
-              {downloadCards.map((card) => {
-                const recommended = card.key === platform;
-                return (
-                  <div
-                    key={card.key}
-                    className={`rounded-2xl border p-6 ${
-                      recommended ? "border-zinc-900 ring-1 ring-zinc-900 bg-white" : "border-zinc-200 bg-zinc-50/80"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="text-base font-semibold">{card.label}</h3>
-                      {recommended && (
-                        <span className="rounded-full bg-zinc-900 px-2.5 py-0.5 text-xs font-medium text-white">
-                          {t("image.recommended")}
-                        </span>
-                      )}
-                    </div>
-                    <Button
-                      asChild
-                      size="lg"
-                      variant={recommended ? "default" : "outline"}
-                      className="mt-5 w-full rounded-xl"
-                    >
-                      <a href={card.url} aria-label={card.label}>
-                        <ArrowDownToLine className="h-4 w-4" />
-                        {card.label}
-                      </a>
-                    </Button>
-                    <p className="mt-4 text-sm leading-6 text-zinc-500">{card.hint}</p>
-                  </div>
-                );
-              })}
+          <section className="rounded-3xl border border-zinc-200 bg-white/90 p-6 shadow-sm md:p-8" data-testid="reference-images-section">
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-semibold tracking-tight">{t("image.referenceImages")}</h2>
+                <p className="mt-1 text-sm text-zinc-500">{t("image.referenceImagesHint")}</p>
+              </div>
+              <span className="text-xs uppercase tracking-[0.18em] text-zinc-400">01</span>
             </div>
-            <a
-              href={RELEASE_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-6 inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-800"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              {t("image.releaseNotes")}
-            </a>
+            <div className="mt-5 overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50">
+              <Image src={selected.reference.src} alt={selected.reference.alt} width={960} height={540} className="h-auto w-full" priority />
+              <div className="border-t border-zinc-200 px-4 py-3 text-sm font-medium text-zinc-700">{selected.reference.label}</div>
+            </div>
+          </section>
+
+          <section className="rounded-3xl border border-zinc-200 bg-white/90 p-6 shadow-sm md:p-8" data-testid="uploaded-images-section">
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-semibold tracking-tight">{t("image.uploadedImages")}</h2>
+                <p className="mt-1 text-sm text-zinc-500">{t("image.uploadedImagesHint")}</p>
+              </div>
+              <span className="text-xs uppercase tracking-[0.18em] text-zinc-400">{selected.uploads.length.toString().padStart(2, "0")}</span>
+            </div>
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              {selected.uploads.map((image) => (
+                <figure key={image.label} className="overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50">
+                  <Image src={image.src} alt={image.alt} width={960} height={540} className="h-auto w-full" />
+                  <figcaption className="border-t border-zinc-200 px-4 py-3">
+                    <div className="text-sm font-medium text-zinc-700">{image.label}</div>
+                    <div className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${image.result === "pass" ? "bg-emerald-100 text-emerald-700" : image.result === "failed" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>
+                      {t(image.result === "pass" ? "image.resultPass" : image.result === "failed" ? "image.resultFailed" : "image.resultReview" as never)}
+                    </div>
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
           </section>
 
           <section className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-2xl border border-zinc-200 bg-white/85 p-6 shadow-sm">
-              <h2 className="text-base font-semibold">{t("image.forTitle")}</h2>
-              <p className="mt-3 text-sm leading-6 text-zinc-600">{t("image.forDescription")}</p>
+            <div className="rounded-2xl border border-zinc-200 bg-white/90 p-6 shadow-sm">
+              <h2 className="text-base font-semibold">{t("image.analysisDescription")}</h2>
+              <p className="mt-3 text-sm leading-7 text-zinc-600">{selected.description}</p>
+              <div className="mt-4 rounded-xl bg-zinc-50 px-4 py-3 text-sm leading-6 text-zinc-600"><span className="font-medium text-zinc-800">{t("image.analysisRule")}：</span>{selected.rule}</div>
             </div>
-            <div className="rounded-2xl border border-zinc-200 bg-white/85 p-6 shadow-sm">
-              <h2 className="text-base font-semibold">{t("image.getTitle")}</h2>
-              <ul className="mt-3 space-y-2 text-sm leading-6 text-zinc-600">
-                {resultKeys.map((key) => (
-                  <li key={key} className="flex items-start gap-2">
-                    <Check className="mt-1 h-4 w-4 shrink-0 text-emerald-600" />
-                    {t(key)}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </section>
-
-          <section className="rounded-3xl border border-zinc-200 bg-white/90 p-7 md:p-8 shadow-sm">
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <h2 className="text-2xl font-semibold tracking-tight">{t("image.quickStart")}</h2>
-                <p className="mt-2 text-sm text-zinc-500">{t("image.quickStartDescription")}</p>
+            <div className="rounded-2xl border border-zinc-200 bg-white/90 p-6 shadow-sm">
+              <h2 className="text-base font-semibold">{t("image.judgmentCategories")}</h2>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {selected.categories.map((category) => <span key={category} className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-sm text-zinc-600">{category}</span>)}
               </div>
-              <span className="text-xs uppercase tracking-[0.2em] text-zinc-400">{t("image.usage")}</span>
-            </div>
-            <div className="mt-7 grid gap-4 md:grid-cols-2">
-              {steps.map(([number, titleKey, descriptionKey]) => (
-                <div key={number} className="rounded-2xl border border-zinc-200 bg-zinc-50/80 p-5">
-                  <div className="flex items-center gap-3">
-                    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-zinc-900 text-xs font-semibold text-white">{number}</span>
-                    <h3 className="font-medium">{t(titleKey)}</h3>
-                  </div>
-                  <p className="mt-3 text-sm leading-6 text-zinc-600">{t(descriptionKey)}</p>
-                </div>
-              ))}
+              <p className="mt-5 text-xs leading-5 text-zinc-400">{t("image.reviewHint")}</p>
             </div>
           </section>
         </div>

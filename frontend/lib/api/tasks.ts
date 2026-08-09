@@ -66,6 +66,7 @@ export interface WorkerRegistration {
   namespace: string;
   trust_level: "owner_trusted" | "institution_trusted" | "student_untrusted";
   status: "active" | "revoked" | "draining" | string;
+  presence: "online" | "offline" | "never_seen";
   credential_expires_at: string | null;
   last_seen_at: string | null;
   created_at: string | null;
@@ -172,11 +173,13 @@ export async function createTask(input: {
   chat_confirmation_id?: string | false;
   submission_source?: "task_center";
   agent_confirmation?: boolean;
+  direct?: boolean;
 }): Promise<{ task_id: string; status: string; duplicate?: boolean }> {
-  return requestJson(`${getApiBase()}/api/tasks`, {
+  const { direct, ...body } = input;
+  return requestJson(`${getApiBase()}${direct ? "/api/tasks/direct" : "/api/tasks"}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
+    body: JSON.stringify(body),
   });
 }
 

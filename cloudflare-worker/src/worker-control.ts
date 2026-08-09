@@ -1,5 +1,6 @@
 import type { Env } from "./env";
 import { errorJson, json, nowSeconds } from "./http";
+import { workerTrustLevelFromRole } from "./tasks";
 
 /**
  * Cloudflare-native Worker control plane.
@@ -37,6 +38,7 @@ interface EnrollmentRow {
   trust_level: string;
   status: string;
   credential_expires_at: number | null;
+  current_role?: string | null;
 }
 
 interface AttemptRow {
@@ -126,7 +128,8 @@ async function authenticateWorker(request: Request, env: Env): Promise<WorkerCon
   if (!token) return null;
   const hash = await sha256(token);
   const persistent = await env.DB.prepare(
-    `SELECT worker_id, namespace, user_id, trust_level, status, credential_expires_at
+    `SELECT worker_id, namespace, user_id, trust_level, status, credential_expires_at,
+            (SELECT role FROM user_access_roles WHERE user_id = worker_registrations.user_id) AS current_role
      FROM worker_registrations
      WHERE credential_hash = ?1
        AND status = 'active'
@@ -138,13 +141,14 @@ async function authenticateWorker(request: Request, env: Env): Promise<WorkerCon
       workerId: persistent.worker_id,
       namespace: persistent.namespace,
       userId: persistent.user_id,
-      trustLevel: persistent.trust_level,
+      trustLevel: workerTrustLevelFromRole(persistent.current_role),
       status: persistent.status,
     };
   }
 
   const legacy = await env.DB.prepare(
-    `SELECT worker_id, namespace, user_id, trust_level, status, credential_expires_at
+    `SELECT worker_id, namespace, user_id, trust_level, status, credential_expires_at,
+            (SELECT role FROM user_access_roles WHERE user_id = worker_enrollments.user_id) AS current_role
      FROM worker_enrollments
      WHERE credential_hash = ?1
        AND status = 'active'
@@ -156,7 +160,7 @@ async function authenticateWorker(request: Request, env: Env): Promise<WorkerCon
     workerId: legacy.worker_id,
     namespace: legacy.namespace,
     userId: legacy.user_id,
-    trustLevel: legacy.trust_level,
+    trustLevel: workerTrustLevelFromRole(legacy.current_role),
     status: legacy.status,
   };
 }
@@ -316,7 +320,21 @@ async function reapExpired(env: Env): Promise<void> {
   ]);
 }
 
+async function touchWorkerPresence(env: Env, context: WorkerContext, now = nowSeconds()): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE worker_registrations SET last_seen_at = ?3
+       WHERE worker_id = ?1 AND namespace = ?2 AND status = 'active'`
+    ).bind(context.workerId, context.namespace, now),
+    env.DB.prepare(
+      `UPDATE worker_enrollments SET last_seen_at = ?3
+       WHERE worker_id = ?1 AND namespace = ?2 AND status = 'active'`
+    ).bind(context.workerId, context.namespace, now),
+  ]);
+}
+
 async function handlePoll(request: Request, env: Env, context: WorkerContext): Promise<Response> {
+  await touchWorkerPresence(env, context);
   await reapExpired(env);
   const body = await bodyJson(request);
   const availableSlots = Math.min(4, Math.max(0, Number(body?.available_slots ?? 1)));
@@ -765,16 +783,7 @@ async function workerHealth(env: Env, context: WorkerContext): Promise<Response>
     `SELECT attempt_id, task_id, fencing_epoch, lease_expires_at, status
      FROM worker_attempts WHERE worker_id = ?1 AND namespace = ?2 AND status IN ('claimed', 'running') ORDER BY created_at DESC LIMIT 4`
   ).bind(context.workerId, context.namespace).all<Record<string, unknown>>();
-  await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE worker_registrations SET last_seen_at = ?3
-       WHERE worker_id = ?1 AND namespace = ?2 AND status = 'active'`
-    ).bind(context.workerId, context.namespace, now),
-    env.DB.prepare(
-      `UPDATE worker_enrollments SET last_seen_at = ?3
-       WHERE worker_id = ?1 AND namespace = ?2 AND status = 'active'`
-    ).bind(context.workerId, context.namespace, now),
-  ]);
+  await touchWorkerPresence(env, context, now);
   return json({ worker_id: context.workerId, namespace: context.namespace, trust_level: context.trustLevel, status: "active", attempts: attempts.results ?? [] });
 }
 

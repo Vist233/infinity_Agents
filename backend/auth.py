@@ -32,6 +32,7 @@ class Principal:
     subject: str = ""
     email: str | None = None
     session_id: str | None = None
+    role: str | None = None
 
 
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "infinity_session")
@@ -67,6 +68,8 @@ def create_session_cookie(principal: Principal, *, ttl_seconds: int = 8 * 60 * 6
     }
     if principal.email:
         payload["email"] = principal.email
+    if principal.role:
+        payload["role"] = principal.role
     encoded = _b64(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
     signature = _b64(hmac.new(_session_secret(), f"{_COOKIE_VERSION}.{encoded}".encode("ascii"), hashlib.sha256).digest())
     return f"{_COOKIE_VERSION}.{encoded}.{signature}"
@@ -92,6 +95,7 @@ def principal_from_session_cookie(value: str) -> Principal:
             subject=subject,
             email=str(claims.get("email")) if claims.get("email") else None,
             session_id=str(claims.get("sid")) if claims.get("sid") else None,
+            role=str(claims.get("role")) if claims.get("role") else None,
         )
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired session") from exc
@@ -155,7 +159,13 @@ class TokenVerifier:
             user_id = str(claims.get("sub") or "").strip()
             if not user_id:
                 raise jwt.InvalidTokenError("Missing subject")
-            return Principal(user_id=user_id, issuer=settings.oidc_issuer, subject=user_id)
+            role = claims.get("role")
+            return Principal(
+                user_id=user_id,
+                issuer=settings.oidc_issuer,
+                subject=user_id,
+                role=str(role).strip() if role else None,
+            )
         except HTTPException:
             raise
         except (jwt.PyJWTError, TypeError, ValueError) as exc:

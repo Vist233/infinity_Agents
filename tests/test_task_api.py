@@ -174,6 +174,15 @@ class TestTaskAPIEndpoints:
         })
         assert r.status_code in (200, 500)
 
+    def test_create_task_direct_route(self, client):
+        r = client.post("/api/tasks/direct", json={
+            "project_id": "proj-123", "task_spec_id": "s1",
+            "dataset_snapshot_id": "d1", "title": "Direct test",
+            "chat_confirmation_id": False,
+            "submission_source": "task_center",
+        })
+        assert r.status_code in (200, 500)
+
     def test_get_task_not_found(self, client):
         assert client.get("/api/tasks/nonexistent").status_code == 404
 

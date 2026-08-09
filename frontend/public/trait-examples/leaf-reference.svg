@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" role="img" aria-labelledby="title desc">
+  <title id="title">Leaf reference image</title>
+  <desc id="desc">A calm green reference leaf on a pale background.</desc>
+  <rect width="960" height="540" rx="28" fill="#edf7ee"/>
+  <path d="M480 470C455 355 470 250 540 145C610 40 750 52 820 78C810 192 755 310 650 382C590 423 530 449 480 470Z" fill="#6ea96b"/>
+  <path d="M482 456C548 340 621 239 784 99M548 340L507 266M621 239L594 168M680 184L735 145M596 293L690 259" fill="none" stroke="#d7f0d1" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="738" cy="238" r="20" fill="#c7e4b9" opacity=".75"/>
+  <circle cx="685" cy="315" r="14" fill="#c7e4b9" opacity=".75"/>
+</svg>

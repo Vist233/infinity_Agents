@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, FileArchive, FileSearch, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/lib/i18n";
@@ -27,6 +27,12 @@ interface PreparedInputs {
   datasetFile: File;
 }
 
+interface TaskCreationCardProps {
+  resetKey?: number;
+  onCreated?: (taskId: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
+}
+
 function idempotencyKey(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return `task-center-${crypto.randomUUID()}`;
@@ -35,7 +41,7 @@ function idempotencyKey(): string {
 }
 
 /** Direct task-center submission. It uses the same TaskSpec/Task function path as the Agent card. */
-export function TaskCreationCard() {
+export function TaskCreationCard({ resetKey = 0, onCreated, onDirtyChange }: TaskCreationCardProps) {
   const { t } = useLanguage();
   const [title, setTitle] = useState("");
   const [methodFile, setMethodFile] = useState<File | null>(null);
@@ -44,7 +50,27 @@ export function TaskCreationCard() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createdTaskId, setCreatedTaskId] = useState<string | null>(null);
+  const [titleEdited, setTitleEdited] = useState(false);
   const requestKeyRef = useRef(idempotencyKey());
+
+  useEffect(() => {
+    if (resetKey === 0) return;
+    setTitle("");
+    setMethodFile(null);
+    setDatasetFile(null);
+    setPrepared(null);
+    setError(null);
+    setCreatedTaskId(null);
+    setTitleEdited(false);
+    requestKeyRef.current = idempotencyKey();
+    onDirtyChange?.(false);
+  }, [onDirtyChange, resetKey]);
+
+  function markDirty() {
+    setCreatedTaskId(null);
+    setError(null);
+    onDirtyChange?.(true);
+  }
 
   const submit = async () => {
     if (!methodFile || !datasetFile) {
@@ -54,7 +80,7 @@ export function TaskCreationCard() {
     setSubmitting(true);
     setError(null);
     try {
-      const taskTitle = title.trim() || datasetFile.name.replace(/\.zip$/i, "");
+      const taskTitle = title.trim() || methodFile.name.replace(/\.[^.]+$/, "");
       let inputs = prepared;
       const canReuse = inputs
         && inputs.title === taskTitle
@@ -100,8 +126,11 @@ export function TaskCreationCard() {
         idempotency_key: requestKeyRef.current,
         chat_confirmation_id: false,
         submission_source: "task_center",
+        direct: true,
       });
       setCreatedTaskId(task.task_id);
+      onDirtyChange?.(false);
+      onCreated?.(task.task_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -120,20 +149,53 @@ export function TaskCreationCard() {
         <label className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 bg-white/60 p-4 cursor-pointer hover:border-zinc-400 transition-colors">
           <div className="flex items-center gap-2 text-sm font-medium text-zinc-700"><FileSearch size={16} className="text-zinc-500" />{t("tasks.methodDoc")}</div>
           <div className="text-xs text-zinc-400">{t("tasks.methodDocHint")}</div>
-          <input type="file" accept={METHOD_DOC_ACCEPT} disabled={submitting || Boolean(createdTaskId)} className="text-xs text-zinc-600" onChange={(event) => { setMethodFile(event.target.files?.[0] || null); setCreatedTaskId(null); }} />
+          <input
+            type="file"
+            accept={METHOD_DOC_ACCEPT}
+            disabled={submitting || Boolean(createdTaskId)}
+            className="text-xs text-zinc-600"
+            onChange={(event) => {
+              const file = event.target.files?.[0] || null;
+              setMethodFile(file);
+              setPrepared(null);
+              markDirty();
+              if (file && !titleEdited) setTitle(file.name.replace(/\.[^.]+$/, ""));
+            }}
+          />
           {methodFile && <span className="text-xs text-emerald-600 truncate">{methodFile.name}</span>}
         </label>
 
         <label className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 bg-white/60 p-4 cursor-pointer hover:border-zinc-400 transition-colors">
           <div className="flex items-center gap-2 text-sm font-medium text-zinc-700"><FileArchive size={16} className="text-zinc-500" />{t("tasks.dataset")}</div>
           <div className="text-xs text-zinc-400">{t("tasks.datasetHint")}</div>
-          <input type="file" accept={DATASET_ACCEPT} disabled={submitting || Boolean(createdTaskId)} className="text-xs text-zinc-600" onChange={(event) => { setDatasetFile(event.target.files?.[0] || null); setCreatedTaskId(null); }} />
+          <input
+            type="file"
+            accept={DATASET_ACCEPT}
+            disabled={submitting || Boolean(createdTaskId)}
+            className="text-xs text-zinc-600"
+            onChange={(event) => {
+              setDatasetFile(event.target.files?.[0] || null);
+              setPrepared(null);
+              markDirty();
+            }}
+          />
           {datasetFile && <span className="text-xs text-emerald-600 truncate">{datasetFile.name} ({(datasetFile.size / 1024 / 1024).toFixed(1)} MB)</span>}
         </label>
       </div>
 
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <input type="text" value={title} onChange={(event) => { setTitle(event.target.value); setCreatedTaskId(null); }} disabled={submitting || Boolean(createdTaskId)} placeholder={t("tasks.taskTitlePlaceholder")} className="flex-1 rounded-xl border border-[var(--hairline)] bg-white/90 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-300" />
+        <input
+          type="text"
+          value={title}
+          onChange={(event) => {
+            setTitle(event.target.value);
+            setTitleEdited(true);
+            markDirty();
+          }}
+          disabled={submitting || Boolean(createdTaskId)}
+          placeholder={t("tasks.taskTitlePlaceholder")}
+          className="flex-1 rounded-xl border border-[var(--hairline)] bg-white/90 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-300"
+        />
         <Button className="gap-2 rounded-xl" disabled={Boolean(createdTaskId) || !methodFile || !datasetFile || submitting} onClick={() => { void submit(); }}>
           {submitting ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
           {submitting ? t("tasks.creating") : createdTaskId ? t("tasks.createSuccess") : t("tasks.create")}

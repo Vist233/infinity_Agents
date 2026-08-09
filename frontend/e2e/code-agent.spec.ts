@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const MOCK_TASKS = [
   {
@@ -10,12 +10,7 @@ const MOCK_TASKS = [
     status: "succeeded",
     attempt_count: 1,
     max_attempts: 3,
-    result_artifact_id: null,
-    error_message: null,
-    created_by: null,
     created_at: "2026-08-07T01:00:00Z",
-    updated_at: "2026-08-07T01:30:00Z",
-    finished_at: "2026-08-07T01:30:00Z",
   },
   {
     task_id: "task-2",
@@ -26,144 +21,70 @@ const MOCK_TASKS = [
     status: "running",
     attempt_count: 1,
     max_attempts: 3,
-    result_artifact_id: null,
-    error_message: null,
-    created_by: null,
     created_at: "2026-08-07T02:00:00Z",
-    updated_at: "2026-08-07T02:05:00Z",
-    finished_at: null,
   },
 ];
 
-const MOCK_EVENTS = [
-  {
-    task_event_id: 1,
-    event_type: "task_state",
-    event_data: { status: "queued", attempt_count: 0 },
-    created_at: "2026-08-07T01:00:00Z",
-  },
-  {
-    task_event_id: 2,
-    event_type: "task_state",
-    event_data: { status: "claimed", attempt_count: 1 },
-    created_at: "2026-08-07T01:01:00Z",
-  },
-  {
-    task_event_id: 3,
-    event_type: "task_state",
-    event_data: { status: "running", attempt_count: 1 },
-    created_at: "2026-08-07T01:02:00Z",
-  },
-];
-
-const MOCK_ARTIFACTS = [
-  {
-    artifact_id: "artifact-task-1",
-    name: "result.zip",
-    kind: "result_archive",
-    storage_path: "/tmp/task-outputs/task-1/result.zip",
-    file_size_bytes: 102400,
-    checksum_sha256: "abc123def456",
-    created_at: "2026-08-07T01:30:00Z",
-  },
-];
-
-test("CodeAgent main page shows the new-task form and task list", async ({ page }) => {
-  await page.route("**/api/tasks*", async (route) => {
-    await route.fulfill({
-      status: 200,
-      body: JSON.stringify({ tasks: MOCK_TASKS }),
-      contentType: "application/json",
-    });
+async function mockTaskList(page: Page) {
+  await mockSettings(page);
+  await page.route("**/api/tasks?*", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify({ tasks: MOCK_TASKS }), contentType: "application/json" });
   });
+  await page.route("**/api/tasks", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify({ tasks: MOCK_TASKS }), contentType: "application/json" });
+  });
+}
 
+async function mockSettings(page: Page) {
+  await page.route("**/api/settings", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify({ settings: { locale: "zh" } }), contentType: "application/json" });
+  });
+  await page.route("**/api/me", async (route) => {
+    await route.fulfill({ status: 401, body: JSON.stringify({ error: { code: "UNAUTHENTICATED" } }), contentType: "application/json" });
+  });
+}
+
+test("Task Center shows direct creation, task list, and collapsed Workers", async ({ page }) => {
+  await mockTaskList(page);
   await page.goto("/code-agent");
-  // New task card
-  await expect(page.getByText("执行文档")).toBeVisible();
-  await expect(page.getByText("数据集")).toBeVisible();
+
+  await expect(page.getByTestId("task-creation-card")).toBeVisible();
+  await expect(page.getByText("执行文档", { exact: true })).toBeVisible();
+  await expect(page.getByText("数据集", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "创建任务" })).toBeVisible();
-  // Task list
-  await expect(page.getByRole("columnheader", { name: "ID" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "标题" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "DESeq2 Differential Expression" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "Biopython Sequence Analysis" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /DESeq2 Differential Expression/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Biopython Sequence Analysis/ })).toBeVisible();
   await expect(page.getByText("成功")).toBeVisible();
   await expect(page.getByText("运行中")).toBeVisible();
+  await expect(page.getByTestId("worker-enrollment-namespace")).toHaveCount(0);
 });
 
-test("CodeAgent /tasks index redirects to the main page", async ({ page }) => {
-  await page.route("**/api/tasks*", async (route) => {
-    await route.fulfill({
-      status: 200,
-      body: JSON.stringify({ tasks: MOCK_TASKS }),
-      contentType: "application/json",
-    });
-  });
-
-  await page.goto("/code-agent/tasks");
-  await expect(page).toHaveURL(/\/code-agent\/?$/);
-  await expect(page.getByRole("button", { name: "创建任务" })).toBeVisible();
+test("Task Center opens the new-task draft from the left workspace", async ({ page }) => {
+  await mockTaskList(page);
+  await page.goto("/code-agent");
+  await page.getByTestId("new-task-button").click();
+  await expect(page.getByTestId("task-creation-card")).toBeVisible();
 });
 
-test("CodeAgent task detail page loads with events and artifacts", async ({ page }) => {
+test("Task detail page loads through the task selected in the center", async ({ page }) => {
+  await mockSettings(page);
   await page.route("**/api/tasks/task-1", async (route) => {
-    await route.fulfill({
-      status: 200,
-      body: JSON.stringify(MOCK_TASKS[0]),
-      contentType: "application/json",
-    });
+    await route.fulfill({ status: 200, body: JSON.stringify(MOCK_TASKS[0]), contentType: "application/json" });
   });
 
-  await page.route("**/api/tasks/task-1/events", async (route) => {
-    await route.fulfill({
-      status: 200,
-      body: JSON.stringify(MOCK_EVENTS),
-      contentType: "application/json",
-    });
-  });
-
-  await page.route("**/api/tasks/task-1/artifacts", async (route) => {
-    await route.fulfill({
-      status: 200,
-      body: JSON.stringify(MOCK_ARTIFACTS),
-      contentType: "application/json",
-    });
-  });
-
-  await page.goto("/code-agent/tasks/task-1");
+  await page.goto("/code-agent/tasks/?task_id=task-1");
   await expect(page.getByRole("heading", { name: "DESeq2 Differential Expression" })).toBeVisible();
   await expect(page.getByText("成功")).toBeVisible();
-  await expect(page.getByText("result.zip")).toBeVisible();
-  await expect(page.getByText("task_state").first()).toBeVisible();
 });
 
-test("Task detail page shows task information correctly", async ({ page }) => {
+test("Task detail page preserves a running task and exposes cancellation", async ({ page }) => {
+  await mockSettings(page);
   await page.route("**/api/tasks/task-2", async (route) => {
-    await route.fulfill({
-      status: 200,
-      body: JSON.stringify(MOCK_TASKS[1]),
-      contentType: "application/json",
-    });
+    await route.fulfill({ status: 200, body: JSON.stringify(MOCK_TASKS[1]), contentType: "application/json" });
   });
 
-  await page.route("**/api/tasks/task-2/events", async (route) => {
-    await route.fulfill({
-      status: 200,
-      body: JSON.stringify(MOCK_EVENTS),
-      contentType: "application/json",
-    });
-  });
-
-  await page.route("**/api/tasks/task-2/artifacts", async (route) => {
-    await route.fulfill({
-      status: 200,
-      body: JSON.stringify([]),
-      contentType: "application/json",
-    });
-  });
-
-  await page.goto("/code-agent/tasks/task-2");
+  await page.goto("/code-agent/tasks/?task_id=task-2");
   await expect(page.getByRole("heading", { name: "Biopython Sequence Analysis" })).toBeVisible();
   await expect(page.getByText("运行中")).toBeVisible();
-  await expect(page.getByText("1").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "取消" })).toBeVisible();
 });

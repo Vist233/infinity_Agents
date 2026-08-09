@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, CheckCircle2, RefreshCw, XCircle } from "lucide-react";
 import { AgentNav } from "@/components/chat/AgentNav";
 import { Button } from "@/components/ui/button";
-import { LanguageToggle, useLanguage } from "@/lib/i18n";
+import { useLanguage } from "@/lib/i18n";
 import { cancelTask, getJson } from "@/lib/api/tasks";
 
 type TaskStatus = "draft" | "queued" | "claimed" | "running" | "succeeded" | "failed" | "cancelled" | "timeout";
@@ -36,7 +36,7 @@ export default function TaskDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!taskId) return;
     setLoading(true);
     setError(null);
@@ -47,7 +47,7 @@ export default function TaskDetailPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [taskId]);
 
   useEffect(() => {
     setTaskId(new URLSearchParams(window.location.search).get("task_id"));
@@ -58,7 +58,7 @@ export default function TaskDetailPage() {
     if (!taskId) return;
     const timer = window.setInterval(() => { void load(); }, 5000);
     return () => window.clearInterval(timer);
-  }, [taskId]);
+  }, [load, taskId]);
 
   const terminal = task ? ["succeeded", "failed", "cancelled", "timeout"].includes(task.status) : true;
 
@@ -73,7 +73,7 @@ export default function TaskDetailPage() {
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.push("/code-agent")}><ArrowLeft size={16} /></Button>
             <div className="text-sm font-semibold text-zinc-700">{t("tasks.detailTitle")}</div>
           </div>
-          <div className="flex items-center gap-2"><LanguageToggle /><Button variant="outline" size="sm" onClick={() => { void load(); }} disabled={loading}><RefreshCw size={14} className={loading ? "animate-spin" : ""} /></Button></div>
+          <div className="flex items-center gap-2"><Button variant="outline" size="sm" onClick={() => { void load(); }} disabled={loading}><RefreshCw size={14} className={loading ? "animate-spin" : ""} /></Button></div>
         </header>
         <div className="flex-1 overflow-y-auto p-4 md:p-6">
           {!taskId && <div className="max-w-3xl mx-auto rounded-2xl border border-zinc-200 bg-white/80 p-6 text-sm text-zinc-500">{t("tasks.emptyDescription")}</div>}

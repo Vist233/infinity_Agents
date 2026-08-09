@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" role="img" aria-labelledby="title desc">
+  <title id="title">Sequence reference</title>
+  <desc id="desc">A reference plate for a simple visual sequence example.</desc>
+  <rect width="960" height="540" rx="28" fill="#eef2fa"/>
+  <rect x="150" y="105" width="660" height="330" rx="22" fill="#fff" stroke="#cbd5e1" stroke-width="6"/>
+  <path d="M245 360h470M265 360V215M265 360l92-85 80 50 92-105 100 140" fill="none" stroke="#5b78ad" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="357" cy="275" r="12" fill="#e9a74d"/><circle cx="437" cy="325" r="12" fill="#e9a74d"/><circle cx="529" cy="220" r="12" fill="#e9a74d"/><circle cx="629" cy="360" r="12" fill="#e9a74d"/>
+</svg>

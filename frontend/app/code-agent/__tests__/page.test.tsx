@@ -29,6 +29,11 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
+vi.mock("@/lib/api/auth", () => ({
+  getCurrentUser: vi.fn().mockResolvedValue({ id: "user-1", email: "tester@example.com", name: "Tester" }),
+  logout: vi.fn(),
+}));
+
 import { createTask, listTasks } from "@/lib/api/tasks";
 
 const MOCK_TASKS = [
@@ -48,11 +53,13 @@ const MOCK_TASKS = [
 describe("Task center", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.setItem("infinity-agents-locale-cache", "zh");
     (listTasks as ReturnType<typeof vi.fn>).mockResolvedValue(MOCK_TASKS);
   });
 
   afterEach(() => {
     cleanup();
+    window.localStorage.removeItem("infinity-agents-locale-cache");
     vi.useRealTimers();
   });
 

@@ -6,6 +6,7 @@ import type { Env } from "./env";
 export interface AccessTokenPayload {
   sub: string;
   email?: string;
+  name?: string;
   role: string;
   iss: string;
   aud: string | string[];

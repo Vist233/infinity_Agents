@@ -1,7 +1,7 @@
 import type { Env } from "./env";
 import { SESSION_COOKIE, CSRF_COOKIE, OAUTH_STATE_COOKIE, AUTH_CALLBACK_PATH } from "./env";
 import { clearCookie, errorJson, json, nowSeconds, parseCookies, sameOrigin, serializeCookie } from "./http";
-import { getAuthSession, insertAuthSession, revokeAuthSession, updateAuthSessionTokens } from "./db";
+import { getAuthSession, insertAuthSession, revokeAuthSession, updateAuthSessionTokens, upsertUserAccessRole } from "./db";
 import { verifyAccessToken } from "./jwt";
 import { verifyIdToken } from "./jwt";
 
@@ -20,6 +20,7 @@ interface OidcTransaction {
 export interface AuthedUser {
   userId: string;
   email: string | null;
+  name?: string | null;
   sid: string;
   /** Zhang Auth role used for server-side Worker trust assignment. */
   role?: string;
@@ -248,8 +249,9 @@ export async function resolveUser(
     }
     const setCookies = [sessionCookie(sid)];
     if (!cookies[CSRF_COOKIE]) setCookies.push(csrfCookie(randomToken(32)));
+    await upsertUserAccessRole(env, payload.sub, payload.role ?? "user");
     return {
-      user: { userId: payload.sub, email: payload.email ?? current.email, sid, role: payload.role ?? "user" },
+      user: { userId: payload.sub, email: payload.email ?? current.email, name: payload.name ?? null, sid, role: payload.role ?? "user" },
       setCookies,
     };
   } catch {

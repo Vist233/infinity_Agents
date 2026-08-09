@@ -477,12 +477,19 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     worker_id TEXT PRIMARY KEY,
                     credential_hash CHAR(64) NOT NULL,
                     namespace TEXT NOT NULL,
+                    user_id TEXT,
+                    trust_level VARCHAR(32) NOT NULL DEFAULT 'institution_trusted',
                     status VARCHAR(20) NOT NULL DEFAULT 'active',
                     enrolled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     revoked_at TIMESTAMPTZ,
-                    last_seen_at TIMESTAMPTZ
+                    last_seen_at TIMESTAMPTZ,
+                    credential_expires_at TIMESTAMPTZ
                 );
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS user_id TEXT;
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS trust_level VARCHAR(32) NOT NULL DEFAULT 'institution_trusted';
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS credential_expires_at TIMESTAMPTZ;
                 CREATE INDEX IF NOT EXISTS idx_worker_enrollments_namespace ON worker_enrollments (namespace, status);
+                CREATE INDEX IF NOT EXISTS idx_worker_enrollments_user ON worker_enrollments (user_id, enrolled_at DESC);
 
                 CREATE TABLE IF NOT EXISTS worker_enrollment_tokens (
                     token_hash CHAR(64) PRIMARY KEY,

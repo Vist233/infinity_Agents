@@ -1,25 +1,18 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { act, fireEvent, render, screen, cleanup, within } from "@testing-library/react";
 import { LanguageProvider } from "@/lib/i18n";
 import ImageJudgePage from "../page";
 
-// useRouter is not under test here.
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
-const WINDOWS_DOWNLOAD_URL =
-  "https://github.com/Vist233/infinity_Agents/releases/latest/download/ImageJudge-windows-x64.zip";
-const LINUX_DOWNLOAD_URL =
-  "https://github.com/Vist233/infinity_Agents/releases/latest/download/ImageJudge-linux-amd64.deb";
+vi.mock("@/lib/api/auth", () => ({
+  getCurrentUser: vi.fn().mockResolvedValue({ id: "user-1", email: "tester@example.com", name: "Tester" }),
+  logout: vi.fn(),
+}));
 
-function renderPage(userAgent?: string) {
-  if (userAgent) {
-    Object.defineProperty(window.navigator, "userAgent", {
-      value: userAgent,
-      configurable: true,
-    });
-  }
+function renderPage() {
   return render(
     <LanguageProvider>
       <ImageJudgePage />
@@ -27,81 +20,47 @@ function renderPage(userAgent?: string) {
   );
 }
 
-describe("ImageJudge download page", () => {
-  const originalUserAgent = window.navigator.userAgent;
+describe("ImageJudge file-analysis workspace", () => {
+  afterEach(() => cleanup());
 
-  afterEach(() => {
-    cleanup();
-    Object.defineProperty(window.navigator, "userAgent", {
-      value: originalUserAgent,
-      configurable: true,
-    });
+  it("replaces the Analysis list with clickable examples and shows the run instance", async () => {
+    await act(async () => { renderPage(); });
+
+    expect(screen.getByTestId("image-example-list")).toBeDefined();
+    expect(screen.getByTestId("image-example-leaf-spots")).toBeDefined();
+    expect(screen.getByTestId("image-example-sequence")).toBeDefined();
+    expect(screen.getByTestId("reference-images-section")).toBeDefined();
+    expect(screen.getByTestId("uploaded-images-section")).toBeDefined();
+    expect(screen.getByAltText("参考叶片")).toBeDefined();
+    expect(screen.getByAltText("上传叶片一")).toBeDefined();
+    expect(screen.getByText("PASS")).toBeDefined();
+    expect(screen.getByText("REVIEW")).toBeDefined();
   });
 
-  it("offers one-click direct downloads for both platforms", () => {
-    renderPage(
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-    );
+  it("switches the right-side run instance when an example tab is selected", async () => {
+    await act(async () => { renderPage(); });
 
-    const winLink = screen.getByRole("link", { name: "Windows 下载" });
-    const linuxLink = screen.getByRole("link", { name: "Linux 下载" });
+    await act(async () => { fireEvent.click(screen.getByTestId("image-example-sequence")); });
 
-    // Direct download links: point at the release asset itself (no GitHub UI page).
-    expect(winLink.getAttribute("href")).toBe(WINDOWS_DOWNLOAD_URL);
-    expect(linuxLink.getAttribute("href")).toBe(LINUX_DOWNLOAD_URL);
-    // No target=_blank: clicking starts the download instead of navigating away.
-    expect(winLink.getAttribute("target")).toBeNull();
-    expect(linuxLink.getAttribute("target")).toBeNull();
+    expect(screen.getByRole("heading", { name: "图像序列检查示例" })).toBeDefined();
+    expect(screen.getByAltText("序列参考图")).toBeDefined();
+    expect(screen.getByAltText("上传序列一")).toBeDefined();
   });
 
-  it("shows install hints under each download card", () => {
-    renderPage(
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-    );
+  it("does not render the removed release-download controls", async () => {
+    await act(async () => { renderPage(); });
 
-    expect(
-      screen.getByText(/双击 ImageJudge\.exe 即可运行/),
-    ).toBeDefined();
-    expect(
-      screen.getByText(/sudo dpkg -i ImageJudge-linux-amd64\.deb/),
-    ).toBeDefined();
+    expect(screen.queryByRole("link", { name: /下载/ })).toBeNull();
+    expect(screen.queryByText(/下载最新版本|发行说明|导出 PDF/)).toBeNull();
   });
 
-  it("marks the Windows card as recommended on Windows", () => {
-    renderPage(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    );
+  it("opens the same example list from the mobile workspace menu", async () => {
+    await act(async () => { renderPage(); });
 
-    expect(screen.getByText("推荐")).toBeDefined();
-    // The recommended badge belongs to the Windows card.
-    const winLink = screen.getByRole("link", { name: "Windows 下载" });
-    expect(winLink.closest("div")?.textContent).toContain("推荐");
-  });
+    await act(async () => { fireEvent.click(screen.getByTestId("mobile-workspace-menu")); });
 
-  it("marks the Linux card as recommended and leads with it on Linux", () => {
-    renderPage("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36");
-
-    expect(screen.getByText("推荐")).toBeDefined();
-    const linuxLink = screen.getByRole("link", { name: "Linux 下载" });
-    expect(linuxLink.closest("div")?.textContent).toContain("推荐");
-
-    // Linux card should be rendered first for Linux visitors.
-    const links = screen.getAllByRole("link").map((el) => el.getAttribute("href"));
-    expect(links.indexOf(LINUX_DOWNLOAD_URL)).toBeLessThan(
-      links.indexOf(WINDOWS_DOWNLOAD_URL),
-    );
-  });
-
-  it("keeps the release notes link pointing at the GitHub release page", () => {
-    renderPage(
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-    );
-
-    const releaseLinks = screen.getAllByRole("link", { name: "查看发行说明" });
-    for (const link of releaseLinks) {
-      expect(link.getAttribute("href")).toBe(
-        "https://github.com/Vist233/infinity_Agents/releases/latest",
-      );
-    }
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByTestId("image-example-list")).toBeDefined();
+    expect(within(dialog).getByTestId("image-example-sequence")).toBeDefined();
   });
 });

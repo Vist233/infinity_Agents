@@ -818,7 +818,7 @@ _CORS_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
         "CORS_ALLOWED_ORIGINS",
-        "https://infinity.zhangyvjing.com,http://localhost:3000",
+        "https://infinity.zhangyvjing.com,http://localhost:3000,http://127.0.0.1:3000,http://127.0.0.1:3010",
     ).split(",")
     if origin.strip()
 ]
@@ -1996,7 +1996,7 @@ class ProviderProfileResponse(BaseModel):
 
 
 class WorkerEnrollmentRequest(BaseModel):
-    worker_id: str
+    worker_id: Optional[str] = None
     namespace: str
     ttl_seconds: int = Field(default=600, ge=30, le=3600)
 
@@ -2015,10 +2015,7 @@ def get_redis_client() -> Optional[RedisClient]:
 
 
 def _worker_enrollment_admin_allowed(user: Principal) -> bool:
-    """Allow worker enrollment only to local operators or explicit admins."""
-    environment = os.getenv("APP_ENV", "development").lower()
-    if environment in {"development", "test", "acceptance"}:
-        return True
+    """Allow cross-user legacy Worker administration only to explicit admins."""
     configured = {
         value.strip()
         for value in os.getenv("WORKER_ENROLLMENT_ADMIN_USER_IDS", "").split(",")
@@ -2027,32 +2024,86 @@ def _worker_enrollment_admin_allowed(user: Principal) -> bool:
     return user.user_id in configured
 
 
+def _legacy_worker_issue_allowed(user: Principal) -> bool:
+    """Keep the local one-time endpoint usable in explicit test environments."""
+    environment = os.getenv("APP_ENV", "development").lower()
+    return environment in {"development", "test", "acceptance"} or _worker_enrollment_admin_allowed(user)
+
+
+def _configured_superuser_ids() -> set[str]:
+    return {
+        value.strip()
+        for value in os.getenv("WORKER_SUPERUSER_USER_IDS", "").split(",")
+        if value.strip()
+    }
+
+
+def _worker_trust_level(user: Principal) -> str:
+    role = str(user.role or "").strip().lower().replace(" ", "_")
+    if role in {"superuser", "super_admin", "superadmin"} or user.user_id in _configured_superuser_ids():
+        return "owner_trusted"
+    return "institution_trusted"
+
+
 @app.post("/api/worker-enrollments")
 async def issue_worker_enrollment_endpoint(
     request: WorkerEnrollmentRequest,
     user: Principal = Depends(require_user),
 ):
-    """Issue a one-time Worker join token; the raw token is returned once."""
-    if not _worker_enrollment_admin_allowed(user):
-        raise HTTPException(status_code=403, detail="Worker enrollment requires operator permission")
-    from backend.worker_enrollment import issue_enrollment_token
+    """Create a persistent Worker registration, or serve the legacy token path."""
+    if request.worker_id:
+        if not _legacy_worker_issue_allowed(user):
+            raise HTTPException(status_code=403, detail="Legacy Worker enrollment requires operator permission")
+        from backend.worker_enrollment import issue_enrollment_token
+
+        try:
+            token = await issue_enrollment_token(
+                app.state.db_pool,
+                request.worker_id,
+                request.namespace,
+                ttl_seconds=request.ttl_seconds,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Worker enrollment request is invalid") from exc
+        return {
+            "worker_id": token.worker_id,
+            "namespace": token.namespace,
+            "enrollment_token": token.token,
+            "expires_at": token.expires_at,
+            "one_time": True,
+        }
+
+    from backend.worker_enrollment import issue_persistent_worker
 
     try:
-        token = await issue_enrollment_token(
+        registration = await issue_persistent_worker(
             app.state.db_pool,
-            request.worker_id,
-            request.namespace,
-            ttl_seconds=request.ttl_seconds,
+            user_id=user.user_id,
+            namespace=request.namespace,
+            trust_level=_worker_trust_level(user),
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail="Worker enrollment request is invalid") from exc
+        raise HTTPException(status_code=400, detail="Worker registration request is invalid") from exc
     return {
-        "worker_id": token.worker_id,
-        "namespace": token.namespace,
-        "enrollment_token": token.token,
-        "expires_at": token.expires_at,
-        "one_time": True,
+        "worker_id": registration.worker_id,
+        "namespace": registration.namespace,
+        "trust_level": registration.trust_level,
+        "worker_credential": registration.worker_credential,
+        "credential_expires_at": registration.credential_expires_at,
+        "control_base_url": os.getenv("APP_BASE_URL", "http://localhost:8008").rstrip("/"),
+        "persistent": True,
+        "one_time": False,
     }
+
+
+@app.get("/api/worker-enrollments")
+async def list_worker_enrollments_endpoint(user: Principal = Depends(require_user)):
+    """List persistent Workers without exposing credentials or other users."""
+    from backend.worker_enrollment import list_persistent_workers
+
+    workers = await list_persistent_workers(app.state.db_pool, user_id=user.user_id)
+    current_trust = _worker_trust_level(user)
+    return {"workers": [{**worker, "trust_level": current_trust} for worker in workers]}
 
 
 @app.post("/api/worker-enrollments/{worker_id}/revoke")
@@ -2061,11 +2112,16 @@ async def revoke_worker_enrollment_endpoint(
     namespace: str,
     user: Principal = Depends(require_user),
 ):
-    if not _worker_enrollment_admin_allowed(user):
-        raise HTTPException(status_code=403, detail="Worker enrollment requires operator permission")
+    can_revoke_other_users = _worker_enrollment_admin_allowed(user) or _worker_trust_level(user) == "owner_trusted"
     from backend.worker_enrollment import revoke_worker
 
-    revoked = await revoke_worker(app.state.db_pool, worker_id, namespace)
+    revoked = await revoke_worker(
+        app.state.db_pool,
+        worker_id,
+        namespace,
+        user_id=user.user_id,
+        allow_other_users=can_revoke_other_users,
+    )
     if not revoked:
         raise HTTPException(status_code=404, detail="Active Worker enrollment not found")
     return {"worker_id": worker_id, "namespace": namespace, "status": "revoked"}
@@ -2728,6 +2784,7 @@ async def create_dataset_endpoint(
     }
 
 
+@app.post("/api/tasks/direct", response_model=Dict[str, Any])
 @app.post("/api/tasks", response_model=Dict[str, Any])
 async def create_task_endpoint(
     request: CreateTaskRequest,

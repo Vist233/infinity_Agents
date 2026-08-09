@@ -13,6 +13,13 @@ export interface AuthSessionRow {
   revoked_at: number | null;
 }
 
+export interface UserSettingsRow {
+  user_id: string;
+  locale: "zh" | "en";
+  created_at: number;
+  updated_at: number;
+}
+
 export interface ChatSessionRow {
   id: string;
   user_id: string;
@@ -93,6 +100,45 @@ export async function updateAuthSessionTokens(
 
 export async function revokeAuthSession(env: Env, sid: string): Promise<void> {
   await env.DB.prepare("UPDATE auth_sessions SET revoked_at = ?2 WHERE sid = ?1").bind(sid, nowSeconds()).run();
+}
+
+// Worker control requests authenticate with a machine credential, so keep a
+// product-side projection of the last verified Zhang Auth role for the
+// registration owner. Missing rows are intentionally treated as ordinary
+// trust by the control plane until a browser session refreshes this record.
+export async function upsertUserAccessRole(env: Env, userId: string, role: string): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO user_access_roles (user_id, role, updated_at)
+     VALUES (?1, ?2, ?3)
+     ON CONFLICT(user_id) DO UPDATE SET role = excluded.role, updated_at = excluded.updated_at`,
+  ).bind(userId, role || "user", nowSeconds()).run();
+}
+
+export async function getUserAccessRole(env: Env, userId: string): Promise<string | null> {
+  const row = await env.DB.prepare("SELECT role FROM user_access_roles WHERE user_id = ?1")
+    .bind(userId)
+    .first<{ role: string }>();
+  return row?.role ?? null;
+}
+
+// --- Infinity Agents product settings ---
+
+export async function getUserSettings(env: Env, userId: string): Promise<UserSettingsRow | null> {
+  return env.DB.prepare(
+    "SELECT user_id, locale, created_at, updated_at FROM user_settings WHERE user_id = ?1",
+  ).bind(userId).first<UserSettingsRow>();
+}
+
+export async function ensureUserSettings(env: Env, userId: string, locale: "zh" | "en"): Promise<UserSettingsRow> {
+  const now = nowSeconds();
+  await env.DB.prepare(
+    `INSERT INTO user_settings (user_id, locale, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?3)
+     ON CONFLICT(user_id) DO NOTHING`,
+  ).bind(userId, locale, now).run();
+  const settings = await getUserSettings(env, userId);
+  if (!settings) throw new Error("Failed to initialize Infinity Agents user settings");
+  return settings;
 }
 
 // --- chat sessions ---

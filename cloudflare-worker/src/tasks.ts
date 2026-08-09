@@ -8,6 +8,7 @@ const MAX_TITLE_LENGTH = 200;
 const MAX_FILENAME_LENGTH = 240;
 const DEFAULT_UPLOAD_LIMIT = 25 * 1024 * 1024;
 const METHOD_EXTENSIONS = new Set([".html", ".htm", ".pdf", ".md", ".txt", ".doc", ".docx"]);
+export const WORKER_ONLINE_WINDOW_SECONDS = 90;
 
 interface ProjectRow {
   project_id: string;
@@ -298,7 +299,7 @@ async function loadTask(taskIdValue: string, env: Env, user: AuthedUser): Promis
   ).bind(taskIdValue, user.userId).first<TaskRow>();
 }
 
-async function handleCreateTask(request: Request, env: Env, user: AuthedUser): Promise<Response> {
+async function handleCreateTask(request: Request, env: Env, user: AuthedUser, directSubmission = false): Promise<Response> {
   const body = await jsonBody(request);
   const projectId = String(body?.project_id ?? "");
   const specId = String(body?.task_spec_id ?? "");
@@ -309,12 +310,22 @@ async function handleCreateTask(request: Request, env: Env, user: AuthedUser): P
   const chatConfirmationId = typeof body?.chat_confirmation_id === "string"
     ? body.chat_confirmation_id.trim() || null
     : null;
-  const submissionSource = String(body?.submission_source ?? "").trim();
-  const taskCenterSubmission = submissionSource === "task_center"
-    || body?.agent_confirmation === false
-    || body?.chat_confirmation_id === false;
+  const taskCenterSubmission = directSubmission;
+  const sourceError = taskSubmissionSourceError(body, taskCenterSubmission);
+  if (sourceError === "TASK_SOURCE_REQUIRED") {
+    return errorJson(
+      body?.submission_source === "task_center"
+        ? "Task Center submissions must use the direct task route"
+        : "Direct task submission must come from the Task Center",
+      400,
+      sourceError,
+    );
+  }
+  if (sourceError === "TASK_CONFIRMATION_CONFLICT") {
+    return errorJson("Task Center submissions cannot use an Agent confirmation", 400, sourceError);
+  }
   if (!chatConfirmationId && !taskCenterSubmission) {
-    return errorJson("Tasks must be submitted from an inline Agent confirmation", 400, "TASK_CONFIRMATION_REQUIRED");
+    return errorJson("Tasks must be submitted from an inline Agent confirmation or the Task Center", 400, "TASK_CONFIRMATION_REQUIRED");
   }
   if (!projectId || !specId || !snapshotId || !title || title.length > MAX_TITLE_LENGTH || !idempotencyKey || idempotencyKey.length > 255 || (chatConfirmationId && chatConfirmationId.length > 255)) {
     return errorJson("Invalid task submission", 400, "INVALID_TASK");
@@ -333,7 +344,15 @@ async function handleCreateTask(request: Request, env: Env, user: AuthedUser): P
     if (!method) return errorJson("Method source not found", 404, "METHOD_SOURCE_NOT_FOUND");
   }
 
-  const fingerprint = await sha256(JSON.stringify({ projectId, specId, snapshotId, methodId, title, chatConfirmationId, submissionSource }));
+  const fingerprint = await sha256(JSON.stringify({
+    projectId,
+    specId,
+    snapshotId,
+    methodId,
+    title,
+    chatConfirmationId,
+    submissionSource: taskCenterSubmission ? "task_center" : "agent",
+  }));
   const existing = await env.DB.prepare(
     "SELECT task_id, request_hash FROM task_idempotency WHERE user_id = ?1 AND idempotency_key = ?2"
   ).bind(user.userId, idempotencyKey).first<{ task_id: string; request_hash: string }>();
@@ -515,7 +534,7 @@ async function handleArtifact(artifactId: string, env: Env, user: AuthedUser): P
   return new Response(object.body, { headers });
 }
 
-type WorkerTrustLevel = "owner_trusted" | "institution_trusted" | "student_untrusted";
+export type WorkerTrustLevel = "owner_trusted" | "institution_trusted" | "student_untrusted";
 
 const SUPERUSER_ROLES = new Set([
   "superuser",
@@ -527,9 +546,28 @@ const SUPERUSER_ROLES = new Set([
 ]);
 
 /** Trust is assigned from the verified auth role, never from the browser. */
-export function workerTrustLevel(user: AuthedUser): WorkerTrustLevel {
-  const role = String(user.role ?? "user").trim().toLowerCase().replace(/\s+/g, "_");
+export function workerTrustLevelFromRole(roleValue?: string | null): WorkerTrustLevel {
+  const role = String(roleValue ?? "user").trim().toLowerCase().replace(/\s+/g, "_");
   return SUPERUSER_ROLES.has(role) ? "owner_trusted" : "institution_trusted";
+}
+
+export function workerTrustLevel(user: AuthedUser): WorkerTrustLevel {
+  return workerTrustLevelFromRole(user.role);
+}
+
+export function taskSubmissionSourceError(
+  body: Record<string, unknown> | null,
+  directSubmission: boolean,
+): "TASK_SOURCE_REQUIRED" | "TASK_CONFIRMATION_CONFLICT" | null {
+  const submissionSource = String(body?.submission_source ?? "").trim();
+  const requestedDirectSubmission = body?.agent_confirmation === false
+    || body?.chat_confirmation_id === false;
+  if (submissionSource === "task_center" && !directSubmission) return "TASK_SOURCE_REQUIRED";
+  if (requestedDirectSubmission && !directSubmission) return "TASK_SOURCE_REQUIRED";
+  if (directSubmission && typeof body?.chat_confirmation_id === "string" && body.chat_confirmation_id.trim()) {
+    return "TASK_CONFIRMATION_CONFLICT";
+  }
+  return null;
 }
 
 function operatorAllowed(env: Env, user: AuthedUser): boolean {
@@ -583,12 +621,25 @@ type WorkerRegistrationRow = {
   revoked_at: number | null;
 };
 
-function publicWorkerRegistration(row: WorkerRegistrationRow): Record<string, unknown> {
+export type WorkerPresence = "online" | "offline" | "never_seen";
+
+export function workerPresence(
+  status: string,
+  lastSeenAt: number | null,
+  now = nowSeconds(),
+): WorkerPresence {
+  if (status !== "active") return "offline";
+  if (lastSeenAt == null) return "never_seen";
+  return lastSeenAt >= now - WORKER_ONLINE_WINDOW_SECONDS ? "online" : "offline";
+}
+
+function publicWorkerRegistration(row: WorkerRegistrationRow, now = nowSeconds()): Record<string, unknown> {
   return {
     worker_id: row.worker_id,
     namespace: row.namespace,
     trust_level: row.trust_level,
     status: row.status,
+    presence: workerPresence(row.status, row.last_seen_at, now),
     credential_expires_at: iso(row.credential_expires_at),
     last_seen_at: iso(row.last_seen_at),
     created_at: iso(row.created_at),
@@ -597,6 +648,7 @@ function publicWorkerRegistration(row: WorkerRegistrationRow): Record<string, un
 }
 
 async function handleListWorkerEnrollments(env: Env, user: AuthedUser): Promise<Response> {
+  const now = nowSeconds();
   const persistent = await env.DB.prepare(
     `SELECT worker_id, namespace, trust_level, status, credential_expires_at,
             last_seen_at, created_at, revoked_at
@@ -607,8 +659,19 @@ async function handleListWorkerEnrollments(env: Env, user: AuthedUser): Promise<
             last_seen_at, created_at, revoked_at
      FROM worker_enrollments WHERE user_id = ?1`
   ).bind(user.userId).all<WorkerRegistrationRow>();
-  const workers = [...(persistent.results ?? []), ...(legacy.results ?? [])]
-    .map(publicWorkerRegistration)
+  const persistentWorkers = (persistent.results ?? []).map((worker) => ({
+    ...worker,
+    trust_level: workerTrustLevel(user),
+  }));
+  const legacyWorkers = (legacy.results ?? []).map((worker) => ({
+    ...worker,
+    // Legacy rows predate verified role-derived trust. The current user role
+    // is authoritative for the browser projection until the normalization
+    // migration has completed on the remote D1 database.
+    trust_level: workerTrustLevel(user),
+  }));
+  const workers = [...persistentWorkers, ...legacyWorkers]
+    .map((worker) => publicWorkerRegistration(worker, now))
     .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
   return json({ workers });
 }
@@ -652,6 +715,7 @@ export async function handleTaskApi(request: Request, env: Env, user: AuthedUser
     return method === "POST" ? handleFreezeTaskSpec(decodeURIComponent(freezeMatch[1]), env, user) : errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED");
   }
   if (method === "POST" && pathname === "/api/dataset-snapshots") return handleDatasetSnapshot(request, env, user);
+  if (method === "POST" && pathname === "/api/tasks/direct") return handleCreateTask(request, env, user, true);
   if (method === "POST" && pathname === "/api/tasks") return handleCreateTask(request, env, user);
   if (method === "GET" && pathname === "/api/tasks") return handleListTasks(request, env, user);
 

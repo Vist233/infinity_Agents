@@ -17,6 +17,18 @@ function trustLabelKey(value: WorkerRegistration["trust_level"] | WorkerEnrollme
   return "tasks.enrollmentTrustInstitution";
 }
 
+function presenceLabelKey(value: WorkerRegistration["presence"]): string {
+  if (value === "online") return "tasks.enrollmentPresenceOnline";
+  if (value === "never_seen") return "tasks.enrollmentPresenceNeverSeen";
+  return "tasks.enrollmentPresenceOffline";
+}
+
+function registrationStatusLabelKey(value: WorkerRegistration["status"]): string {
+  if (value === "revoked") return "tasks.enrollmentStatusRevoked";
+  if (value === "draining") return "tasks.enrollmentStatusDraining";
+  return "tasks.enrollmentStatusActive";
+}
+
 export function WorkerEnrollmentPanel() {
   const { t } = useLanguage();
   const [expanded, setExpanded] = useState(false);
@@ -66,6 +78,7 @@ export function WorkerEnrollmentPanel() {
     try {
       await navigator.clipboard.writeText(result.worker_credential);
       setCopied(true);
+      setResult({ ...result, worker_credential: "" });
     } catch {
       setCopied(false);
     }
@@ -123,8 +136,8 @@ export function WorkerEnrollmentPanel() {
                 <div><span className="font-medium">{t("tasks.enrollmentTrustLevel")}:</span> {t(trustLabelKey(result.trust_level) as never)}</div>
               </div>
               <div className="flex gap-2">
-                <input readOnly value={result.worker_credential} aria-label={t("tasks.enrollmentTokenLabel")} className="min-w-0 flex-1 rounded-md border border-emerald-200 bg-white px-3 py-2 font-mono text-xs" />
-                <Button type="button" variant="outline" size="sm" onClick={() => { void copyCredential(); }}>
+                <input readOnly value="••••••••••••••••" aria-label={t("tasks.enrollmentTokenLabel")} className="min-w-0 flex-1 rounded-md border border-emerald-200 bg-white px-3 py-2 font-mono text-xs" />
+                <Button type="button" variant="outline" size="sm" disabled={copied} onClick={() => { void copyCredential(); }}>
                   <Copy size={14} />{copied ? t("tasks.enrollmentCopied") : t("tasks.enrollmentCopy")}
                 </Button>
               </div>
@@ -143,8 +156,16 @@ export function WorkerEnrollmentPanel() {
               <div className="space-y-1">
                 {workers.map((worker) => (
                   <div key={`${worker.worker_id}:${worker.namespace}`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200/80 bg-white/70 px-3 py-2 text-xs">
-                    <span className="min-w-0 truncate font-mono text-zinc-700">{worker.worker_id}</span>
-                    <span className="text-amber-900/80">{worker.namespace} · {t(trustLabelKey(worker.trust_level) as never)} · {worker.status}</span>
+                    <div className="min-w-0">
+                      <span className="block truncate font-mono text-zinc-700">{worker.worker_id}</span>
+                      <span className="mt-1 block truncate text-amber-900/70">{worker.namespace} · {t(trustLabelKey(worker.trust_level) as never)}</span>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                      <span className={`rounded-full px-2 py-0.5 font-medium ${worker.presence === "online" ? "bg-emerald-100 text-emerald-700" : worker.presence === "never_seen" ? "bg-zinc-100 text-zinc-600" : "bg-amber-100 text-amber-700"}`}>
+                        {t(presenceLabelKey(worker.presence) as never)}
+                      </span>
+                      <span className="text-amber-900/70">{t(registrationStatusLabelKey(worker.status) as never)}</span>
+                    </div>
                   </div>
                 ))}
               </div>

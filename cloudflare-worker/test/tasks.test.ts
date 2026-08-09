@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { workerTrustLevel } from "../src/tasks";
+import { WORKER_ONLINE_WINDOW_SECONDS, taskSubmissionSourceError, workerPresence, workerTrustLevel } from "../src/tasks";
 import type { AuthedUser } from "../src/auth";
 
 const user: AuthedUser = { userId: "user-1", email: null, sid: "sid-1" };
@@ -14,5 +14,34 @@ describe("Worker trust assignment", () => {
     expect(workerTrustLevel({ ...user, role: "user" })).toBe("institution_trusted");
     expect(workerTrustLevel({ ...user, role: "student" })).toBe("institution_trusted");
     expect(workerTrustLevel(user)).toBe("institution_trusted");
+  });
+});
+
+describe("persistent Worker presence", () => {
+  const now = 1_800_000_000;
+
+  it("keeps a recently heartbeating active registration online", () => {
+    expect(workerPresence("active", now - WORKER_ONLINE_WINDOW_SECONDS, now)).toBe("online");
+  });
+
+  it("shows an active registration as offline after the heartbeat window", () => {
+    expect(workerPresence("active", now - WORKER_ONLINE_WINDOW_SECONDS - 1, now)).toBe("offline");
+  });
+
+  it("distinguishes a saved Worker that has never connected", () => {
+    expect(workerPresence("active", null, now)).toBe("never_seen");
+    expect(workerPresence("revoked", now, now)).toBe("offline");
+  });
+});
+
+describe("task submission source contract", () => {
+  it("rejects a caller-supplied Task Center flag on the generic route", () => {
+    expect(taskSubmissionSourceError({ submission_source: "task_center" }, false)).toBe("TASK_SOURCE_REQUIRED");
+    expect(taskSubmissionSourceError({ chat_confirmation_id: false }, false)).toBe("TASK_SOURCE_REQUIRED");
+  });
+
+  it("allows direct submission only through the dedicated route", () => {
+    expect(taskSubmissionSourceError({ chat_confirmation_id: false, submission_source: "task_center" }, true)).toBeNull();
+    expect(taskSubmissionSourceError({ chat_confirmation_id: "confirmation-1" }, true)).toBe("TASK_CONFIRMATION_CONFLICT");
   });
 });

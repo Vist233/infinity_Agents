@@ -9,7 +9,9 @@ import { MessagePane } from "@/components/chat/MessagePane";
 import { Composer } from "@/components/chat/Composer";
 import { useChatController } from "@/hooks/use-chat-controller";
 import { redirectToLogin } from "@/lib/runtime-config";
-import { LanguageToggle, useLanguage } from "@/lib/i18n";
+import { useLanguage } from "@/lib/i18n";
+import { UserFooter } from "@/components/workspace/UserFooter";
+import { MobileWorkspaceDrawer } from "@/components/workspace/MobileWorkspaceDrawer";
 
 /**
  * Analysis is the canonical home page. Task creation cards are rendered by
@@ -55,24 +57,40 @@ export default function ChatPage() {
           }}
         />
         <div className="flex-1" />
+        <UserFooter />
         <div className="p-2 text-xs text-zinc-400 text-center tracking-tighter">v1.0.0 @ 2026</div>
       </aside>
 
       <main className="flex-1 flex flex-col relative min-w-0">
         <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between sticky top-0 bg-[var(--surface-1)] backdrop-blur-xl z-10 print:hidden">
-          <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("nav.analysis")}</div>
           <div className="flex items-center gap-2">
-            <LanguageToggle />
+            <MobileWorkspaceDrawer active="analysis" onNavigate={(path) => router.push(path)}>
+              <SessionList
+                sessions={controller.state.sessions}
+                currentSessionId={controller.state.sessionId}
+                editingSessionId={controller.state.editingSessionId}
+                editingTitle={controller.state.editingTitle}
+                deletingSessionId={controller.state.deletingSessionId}
+                sessionRunMap={controller.state.sessionRunMap}
+                onSwitchSession={controller.handleSwitchSession}
+                onEditSessionTitle={controller.handleEditSessionTitle}
+                onEditingTitleChange={controller.setEditingTitle}
+                onSaveSessionTitle={(sessionId) => { void controller.saveInlineSessionTitle(sessionId); }}
+                onCancelEditing={controller.cancelInlineSessionTitle}
+                onRequestDelete={controller.requestDeleteSession}
+                onCancelDelete={controller.cancelDeleteSession}
+                onConfirmDelete={(session) => { void controller.confirmDeleteSession(session); }}
+              />
+            </MobileWorkspaceDrawer>
+            <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("nav.analysis")}</div>
+          </div>
+          <div className="flex items-center gap-2">
             {controller.authStatus === "unauthenticated" ? (
               <Button size="sm" className="gap-2" onClick={redirectToLogin}>
                 <LogIn size={15} />
                 {t("home.signInRegister")}
               </Button>
-            ) : (
-              <Button variant="outline" size="sm" className="text-zinc-600 hover:text-zinc-900" onClick={controller.handleExportPdf}>
-                {t("home.exportPdf")}
-              </Button>
-            )}
+            ) : null}
           </div>
         </header>
 
@@ -87,8 +105,8 @@ export default function ChatPage() {
               scrollRef={controller.scrollRef}
               authStatus={controller.authStatus}
               onLogin={redirectToLogin}
-              onTaskCreated={(confirmationId, taskId, title) => {
-                void controller.handleTaskConfirmationCreated(confirmationId, taskId, title);
+              onTaskCreated={(confirmationId, taskId) => {
+                void controller.handleTaskConfirmationCreated(confirmationId, taskId);
               }}
             />
           </div>

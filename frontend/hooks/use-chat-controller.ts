@@ -65,6 +65,7 @@ export function useChatController() {
   const sessionMessagesMapRef = useRef<Record<string, Message[]>>({});
   const sessionLoadPromiseRef = useRef<Map<string, Promise<Message[]>>>(new Map());
   const sessionsRef = useRef<SessionItem[]>([]);
+  const initialSessionsLoadRef = useRef(false);
   const [uploadedPapersMap, setUploadedPapersMap] = useState<Record<string, UploadedPaperItem[]>>({});
   const [uploadingPdf, setUploadingPdf] = useState(false);
   const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated">("checking");
@@ -146,6 +147,8 @@ export function useChatController() {
   }, [apiBase, t]);
 
   useEffect(() => {
+    if (initialSessionsLoadRef.current) return;
+    initialSessionsLoadRef.current = true;
     void loadSessions();
   }, [loadSessions]);
 
@@ -613,7 +616,7 @@ export function useChatController() {
   );
 
   const handleTaskConfirmationCreated = useCallback(
-    async (confirmationId: string, taskId: string, _title: string) => {
+    async (confirmationId: string, taskId: string) => {
       const targetSessionId = state.sessionId;
       if (!targetSessionId) return;
       if (runningRequestBySessionRef.current.has(targetSessionId)) {
@@ -861,11 +864,6 @@ export function useChatController() {
     }
   }, [apiBase, createSessionIfNeeded, state.sessionId, t]);
 
-  const handleExportPdf = useCallback(() => {
-    if (typeof window === "undefined") return;
-    window.print();
-  }, []);
-
   const statusText = useMemo(() => {
     const seconds = Math.max(0, Math.floor(currentRunState.elapsedMs / 1000));
     const attemptText = currentRunState.maxAttempts > 1 ? ` · ${currentRunState.attempt}/${currentRunState.maxAttempts}` : "";
@@ -916,7 +914,6 @@ export function useChatController() {
     handleTaskConfirmationCreated,
     handleStopGeneration,
     handleUploadPdf,
-    handleExportPdf,
     uploadedPapers,
     uploadingPdf,
     authStatus,

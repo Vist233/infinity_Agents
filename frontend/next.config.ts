@@ -16,7 +16,10 @@ const nextConfig: NextConfig = {
   async rewrites() {
     if (process.env.NODE_ENV !== "development") return [];
     const backend = process.env.API_PROXY_TARGET || "http://localhost:8000";
-    return [{ source: "/api/:path*", destination: `${backend}/api/:path*` }];
+    return [
+      { source: "/api/:path*", destination: `${backend}/api/:path*` },
+      { source: "/auth/:path*", destination: `${backend}/auth/:path*` },
+    ];
   },
 };
 

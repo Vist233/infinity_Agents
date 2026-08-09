@@ -27,8 +27,9 @@ Analysis/Coding task control uses the same authenticated browser session:
 - `POST /api/dataset-snapshots/upload`
 - `POST /api/task-specs` and `POST /api/task-specs/:id/freeze`
 - `POST /api/dataset-snapshots`
-- `POST/GET /api/tasks`, `GET /api/tasks/:id` (Task `POST` accepts either the
-  Agent confirmation path or the authenticated Task Center direct path)
+- `POST/GET /api/tasks`, `POST /api/tasks/direct`, `GET /api/tasks/:id` (the
+  generic `POST /api/tasks` requires an Agent confirmation; the authenticated
+  Task Center uses the dedicated direct route)
 - `GET/POST /api/worker-enrollments` and `POST /api/worker-enrollments/:id/revoke`
 - `POST /api/tasks/:id/cancel`
 - `GET /api/tasks/:id/events` and `/events/stream`
@@ -40,9 +41,10 @@ Task API:
 1. The Analysis conversation can call `request_task_creation`; its inline card
    keeps the Agent confirmation ID and resumes the conversation after submit.
 2. The Task Center has a direct creation card. It sends the same uploads and
-   TaskSpec/Task function path with `agent_confirmation=false`, a fresh
-   idempotency key, and no chat confirmation row. It does not call the Agent
-   again.
+   TaskSpec/Task function path to `/api/tasks/direct` with
+   `agent_confirmation=false`, a fresh idempotency key, and no chat
+   confirmation row. It does not call the Agent again. The generic task route
+   does not accept a caller-supplied Task Center source flag.
 
 ## Worker Control API
 

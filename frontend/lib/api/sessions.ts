@@ -106,6 +106,9 @@ export async function uploadSessionPaper(
   _sessionId: string,
   _file: File,
 ): Promise<UploadedPaperItem> {
+  void _apiBase;
+  void _sessionId;
+  void _file;
   throw createApiError("PDF upload is not available in this version.", 400, "upload_unsupported");
 }
 
@@ -113,5 +116,7 @@ export async function listSessionUploadedPapers(
   _apiBase: string,
   _sessionId: string,
 ): Promise<UploadedPaperItem[]> {
+  void _apiBase;
+  void _sessionId;
   return [];
 }

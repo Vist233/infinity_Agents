@@ -13,6 +13,7 @@ import { currentDailyUsage } from "./quota";
 import { handleImageJudge } from "./image-judge";
 import { handleTaskApi } from "./tasks";
 import { handleWorkerControlApi } from "./worker-control";
+import { handleUserSettings } from "./settings";
 
 export { ImageJudgeUserConcurrencyLock } from "./image-judge";
 
@@ -31,7 +32,7 @@ function withCookies(response: Response, setCookies?: string[]): Response {
 async function handleMe(env: Env, user: AuthedUser): Promise<Response> {
   const usage = await currentDailyUsage(env, user.userId);
   return json({
-    user: { id: user.userId, email: user.email },
+    user: { id: user.userId, email: user.email, name: user.name ?? null },
     quota: { used: usage.count, limit: usage.limit },
   });
 }
@@ -102,6 +103,10 @@ export default {
 
       if (method === "GET" && pathname === "/api/me") {
         return withCookies(await handleMe(env, user), setCookies);
+      }
+
+      if (method === "GET" && pathname === "/api/settings") {
+        return withCookies(await handleUserSettings(request, env, user), setCookies);
       }
 
       const taskResponse = await handleTaskApi(request, env, user);

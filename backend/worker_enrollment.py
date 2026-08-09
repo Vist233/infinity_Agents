@@ -31,6 +31,15 @@ class EnrollmentToken:
     expires_at: str
 
 
+@dataclass(frozen=True)
+class PersistentWorkerRegistration:
+    worker_id: str
+    namespace: str
+    trust_level: str
+    worker_credential: str
+    credential_expires_at: str | None = None
+
+
 def credential_digest(value: str) -> str:
     """Hash a high-entropy enrollment/Worker credential for storage."""
 
@@ -49,6 +58,91 @@ def _safe_namespace(value: str) -> str:
     if not namespace or len(namespace) > 128 or any(ch.isspace() for ch in namespace):
         raise WorkerEnrollmentError("invalid worker namespace")
     return namespace
+
+
+async def issue_persistent_worker(
+    pool,
+    *,
+    user_id: str,
+    namespace: str,
+    trust_level: str = "institution_trusted",
+    worker_id: str | None = None,
+) -> PersistentWorkerRegistration:
+    """Create a durable, user-owned Worker registration for local parity."""
+
+    namespace = _safe_namespace(namespace)
+    user_id = str(user_id or "").strip()
+    if not user_id or len(user_id) > 128:
+        raise WorkerEnrollmentError("invalid Worker owner")
+    trust_level = str(trust_level or "institution_trusted").strip()
+    if trust_level not in {"owner_trusted", "institution_trusted", "student_untrusted"}:
+        trust_level = "institution_trusted"
+    worker_id = _safe_worker_id(worker_id or f"worker-{secrets.token_urlsafe(9)}")
+    credential = secrets.token_urlsafe(32)
+
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                """
+                INSERT INTO worker_enrollments
+                    (worker_id, credential_hash, namespace, user_id, trust_level,
+                     status, revoked_at, last_seen_at, credential_expires_at)
+                VALUES ($1, $2, $3, $4, $5, 'active', NULL, NULL, NULL)
+                """,
+                worker_id,
+                credential_digest(credential),
+                namespace,
+                user_id,
+                trust_level,
+            )
+        except Exception as exc:
+            raise DuplicateWorkerError("worker ID already exists") from exc
+    return PersistentWorkerRegistration(worker_id, namespace, trust_level, credential, None)
+
+
+async def list_persistent_workers(pool, *, user_id: str, online_window_seconds: int = 90) -> list[dict[str, object]]:
+    """List only registrations owned by the authenticated local user."""
+
+    from datetime import datetime
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT worker_id, namespace, trust_level, status,
+                   credential_expires_at, last_seen_at, enrolled_at, revoked_at
+            FROM worker_enrollments
+            WHERE user_id = $1
+            ORDER BY enrolled_at DESC
+            """,
+            user_id,
+        )
+
+    now = datetime.now(timezone.utc)
+    workers: list[dict[str, object]] = []
+    for row in rows:
+        last_seen = row["last_seen_at"]
+        if last_seen is None:
+            presence = "never_seen"
+        else:
+            if last_seen.tzinfo is None:
+                last_seen = last_seen.replace(tzinfo=timezone.utc)
+            presence = "online" if (now - last_seen).total_seconds() <= online_window_seconds else "offline"
+
+        def iso(value: object) -> str | None:
+            return value.isoformat() if hasattr(value, "isoformat") else (str(value) if value is not None else None)
+
+        workers.append({
+            "worker_id": row["worker_id"],
+            "namespace": row["namespace"],
+            "trust_level": row["trust_level"],
+            "status": row["status"],
+            "presence": presence,
+            "credential_expires_at": iso(row["credential_expires_at"]),
+            "last_seen_at": iso(row["last_seen_at"]),
+            "created_at": iso(row["enrolled_at"]),
+            "revoked_at": iso(row["revoked_at"]),
+        })
+    return workers
 
 
 async def issue_enrollment_token(pool, worker_id: str, namespace: str, *, ttl_seconds: int = 600) -> EnrollmentToken:
@@ -141,7 +235,14 @@ async def authenticate_worker(pool, worker_id: str, namespace: str, credential: 
     return True
 
 
-async def revoke_worker(pool, worker_id: str, namespace: str) -> bool:
+async def revoke_worker(
+    pool,
+    worker_id: str,
+    namespace: str,
+    *,
+    user_id: str | None = None,
+    allow_other_users: bool = False,
+) -> bool:
     worker_id = _safe_worker_id(worker_id)
     namespace = _safe_namespace(namespace)
     async with pool.acquire() as conn:
@@ -150,7 +251,8 @@ async def revoke_worker(pool, worker_id: str, namespace: str) -> bool:
             UPDATE worker_enrollments
             SET status = 'revoked', revoked_at = NOW()
             WHERE worker_id = $1 AND namespace = $2 AND status = 'active'
+              AND ($4::boolean OR ($3::text IS NOT NULL AND user_id = $3))
             """,
-            worker_id, namespace,
-        )
+        worker_id, namespace, user_id, allow_other_users,
+    )
     return result.endswith(" 1")

@@ -6,8 +6,6 @@ export type Language = "zh" | "en";
 
 const messages = {
   zh: {
-    "language.switchToEnglish": "English",
-    "language.switchToChinese": "中文",
     "nav.agents": "智能体",
     "nav.workspace": "工作区",
     "nav.analysis": "Analysis",
@@ -16,14 +14,17 @@ const messages = {
     "nav.paper": "Analysis",
     "nav.code": "CodeAgent",
     "nav.imageJudge": "ImageJudge",
+    "workspace.openMenu": "打开工作区菜单",
+    "workspace.closeMenu": "关闭工作区菜单",
     "home.newChat": "新对话",
     "home.recentActivities": "最近对话",
     "home.paperAgent": "Analysis",
     "home.signInRegister": "登录 / 注册",
-    "home.exportPdf": "导出 PDF",
     "auth.signInTitle": "登录后使用 Analysis",
     "auth.signInDescription": "登录后即可保存对话，并使用论文检索和阅读工具。",
     "auth.signIn": "登录 / 注册",
+    "auth.logout": "退出登录",
+    "auth.loggingOut": "退出中…",
     "home.emptyTitle": "今天想让我帮你做什么？",
     "role.you": "你",
     "role.assistant": "助手",
@@ -74,37 +75,25 @@ const messages = {
     "error.pageDescription": "应用遇到错误，请重试或刷新页面。",
     "error.retry": "重试",
     "error.reload": "刷新",
-    "image.description": "ImageJudge 是一款基于参考图的桌面图像分类工具。提供一张参考图，即可按你定义的类别对目标文件夹中的图片进行分类。",
-    "image.badge": "桌面图像分类工具",
-    "image.download": "下载最新版本",
-    "image.releaseNotes": "查看发行说明",
-    "image.platforms": "Windows：包含 ImageJudge.exe 的 ZIP · Linux：amd64 DEB 安装包",
-    "image.downloadTitle": "下载 ImageJudge",
-    "image.downloadWindows": "Windows 下载",
-    "image.downloadLinux": "Linux 下载",
-    "image.recommended": "推荐",
-    "image.installWindowsHint": "下载后解压 ZIP，双击 ImageJudge.exe 即可运行。",
-    "image.installLinuxHint": "下载后执行安装命令：sudo dpkg -i ImageJudge-linux-amd64.deb",
-    "image.forTitle": "适用场景",
-    "image.forDescription": "适用于性状识别及其他视觉分类任务：用自然语言描述规则，并提供一张有代表性的参考图。",
-    "image.getTitle": "你将获得",
-    "image.resultOrder": "参考图优先的图片顺序",
-    "image.resultRows": "结构化 PASS / REVIEW / FAILED 结果",
-    "image.localData": "本地 SQLite 与 CSV 数据",
-    "image.quickStart": "快速开始",
-    "image.quickStartDescription": "默认流程只展示必要选项，把进阶设置收起。",
-    "image.usage": "使用方法",
-    "image.install": "安装",
-    "image.installDescription": "下载适合你操作系统的最新安装包并启动 ImageJudge。",
-    "image.choose": "选择图片",
-    "image.chooseDescription": "选择一张参考图和一个目标文件夹，文件夹默认递归扫描。",
-    "image.rule": "设置规则",
-    "image.ruleDescription": "用自然语言描述视觉类别或比较规则。",
-    "image.review": "查看结果",
-    "image.reviewDescription": "检查 PASS、REVIEW 和 FAILED 行，并导出结构化 CSV 或 SQLite 数据。",
+    "image.examplesTitle": "文件分析示例",
+    "image.examplesBadge": "文件分析示例",
+    "image.compatibilityMode": "兼容分类模式",
+    "image.referenceImages": "参考图片",
+    "image.referenceImagesHint": "先查看用于定义规则的参考图。",
+    "image.uploadedImages": "上传图片",
+    "image.uploadedImagesHint": "下面展示本示例中的待分析图片。",
+    "image.analysisDescription": "图片介绍",
+    "image.analysisRule": "判定规则",
+    "image.judgmentCategories": "判定类别",
+    "image.reviewHint": "结果只展示有图像依据的判断；不确定内容进入人工复核。",
+    "image.resultPass": "通过",
+    "image.resultReview": "待人工复核",
+    "image.resultFailed": "未通过",
     "tasks.title": "任务",
     "tasks.subtitle": "管理并追踪分析任务",
     "tasks.newTask": "新建任务",
+    "tasks.noTasksYet": "暂时无任务",
+    "tasks.discardDraft": "当前任务还没有保存，确定要放弃吗？",
     "tasks.empty": "暂无任务",
     "tasks.emptyDescription": "创建 TaskSpec 并提交任务后，它们将显示在这里。",
     "tasks.id": "ID",
@@ -151,7 +140,7 @@ const messages = {
     "tasks.methodDocHint": "描述分析流程的网页 / PDF / Markdown 等",
     "tasks.dataset": "数据集",
     "tasks.datasetHint": "待分析的数据文件（.zip）",
-    "tasks.taskTitlePlaceholder": "任务标题（可选，默认使用数据集文件名）",
+    "tasks.taskTitlePlaceholder": "任务标题（默认使用执行文档名称）",
     "tasks.create": "创建任务",
     "tasks.creating": "创建中…",
     "tasks.requireBoth": "请先选择执行文档和数据集。",
@@ -183,10 +172,14 @@ const messages = {
     "tasks.enrollmentFailed": "签发失败",
     "tasks.enrollmentExisting": "已保存的 Workers",
     "tasks.enrollmentNoExisting": "当前还没有已保存的 Worker。",
+    "tasks.enrollmentPresenceOnline": "在线",
+    "tasks.enrollmentPresenceOffline": "离线（登记保留）",
+    "tasks.enrollmentPresenceNeverSeen": "尚未连接",
+    "tasks.enrollmentStatusActive": "已登记",
+    "tasks.enrollmentStatusDraining": "停止接收新任务",
+    "tasks.enrollmentStatusRevoked": "已撤销",
   },
   en: {
-    "language.switchToEnglish": "English",
-    "language.switchToChinese": "中文",
     "nav.agents": "Agents",
     "nav.workspace": "Workspace",
     "nav.analysis": "Analysis",
@@ -195,14 +188,17 @@ const messages = {
     "nav.paper": "Analysis",
     "nav.code": "CodeAgent",
     "nav.imageJudge": "ImageJudge",
+    "workspace.openMenu": "Open workspace menu",
+    "workspace.closeMenu": "Close workspace menu",
     "home.newChat": "New chat",
     "home.recentActivities": "Recent conversations",
     "home.paperAgent": "Analysis",
     "home.signInRegister": "Sign in / Register",
-    "home.exportPdf": "Export PDF",
     "auth.signInTitle": "Sign in to use Analysis",
     "auth.signInDescription": "Sign in to save conversations and use paper search and reading tools.",
     "auth.signIn": "Sign in / Register",
+    "auth.logout": "Log out",
+    "auth.loggingOut": "Logging out…",
     "home.emptyTitle": "How can I help you today?",
     "role.you": "You",
     "role.assistant": "Assistant",
@@ -253,37 +249,25 @@ const messages = {
     "error.pageDescription": "The application encountered an error. Try again or refresh the page.",
     "error.retry": "Retry",
     "error.reload": "Reload",
-    "image.badge": "Desktop visual classification",
-    "image.description": "ImageJudge is a focused desktop tool for reference-guided image classification. Provide one reference image and classify a target folder into the categories you define.",
-    "image.download": "Download latest release",
-    "image.releaseNotes": "View release notes",
-    "image.platforms": "Windows: ZIP with ImageJudge.exe · Linux: amd64 DEB package",
-    "image.downloadTitle": "Download ImageJudge",
-    "image.downloadWindows": "Download for Windows",
-    "image.downloadLinux": "Download for Linux",
-    "image.recommended": "Recommended",
-    "image.installWindowsHint": "Unzip the archive, then double-click ImageJudge.exe to launch.",
-    "image.installLinuxHint": "Install with: sudo dpkg -i ImageJudge-linux-amd64.deb",
-    "image.forTitle": "What it is for",
-    "image.forDescription": "ImageJudge is designed for trait recognition and other visual category tasks where a human can describe the rule and provide a representative reference image.",
-    "image.getTitle": "What you get",
-    "image.resultOrder": "Reference-first image order",
-    "image.resultRows": "Structured PASS / REVIEW / FAILED results",
-    "image.localData": "Local SQLite and CSV projections",
-    "image.quickStart": "Quick start",
-    "image.quickStartDescription": "The default workflow keeps the important choices visible and the advanced controls out of the way.",
-    "image.usage": "Usage",
-    "image.install": "Install",
-    "image.installDescription": "Download the latest package for your operating system and launch ImageJudge.",
-    "image.choose": "Choose images",
-    "image.chooseDescription": "Select one reference image and a target folder. Folder scanning is recursive by default.",
-    "image.rule": "Set the rule",
-    "image.ruleDescription": "Describe the visual categories or comparison rule in plain language.",
-    "image.review": "Review results",
-    "image.reviewDescription": "Inspect PASS, REVIEW, and FAILED rows, then export the structured CSV or SQLite data.",
+    "image.examplesTitle": "File analysis examples",
+    "image.examplesBadge": "File analysis example",
+    "image.compatibilityMode": "Compatibility classification mode",
+    "image.referenceImages": "Reference images",
+    "image.referenceImagesHint": "Start with the reference image that defines the rule.",
+    "image.uploadedImages": "Uploaded images",
+    "image.uploadedImagesHint": "The target images for this example appear below.",
+    "image.analysisDescription": "Image description",
+    "image.analysisRule": "Judgment rule",
+    "image.judgmentCategories": "Judgment categories",
+    "image.reviewHint": "Only image-supported judgments are shown; uncertain cases go to human review.",
+    "image.resultPass": "PASS",
+    "image.resultReview": "REVIEW",
+    "image.resultFailed": "FAILED",
     "tasks.title": "Tasks",
     "tasks.subtitle": "Manage and track analysis tasks",
     "tasks.newTask": "New task",
+    "tasks.noTasksYet": "No tasks yet",
+    "tasks.discardDraft": "Discard the current unsaved task draft?",
     "tasks.empty": "No tasks yet",
     "tasks.emptyDescription": "Create a TaskSpec and submit a task to see it here.",
     "tasks.id": "ID",
@@ -330,7 +314,7 @@ const messages = {
     "tasks.methodDocHint": "A saved web page / PDF / Markdown describing the workflow",
     "tasks.dataset": "Dataset",
     "tasks.datasetHint": "Data to analyze (.zip)",
-    "tasks.taskTitlePlaceholder": "Task title (optional, defaults to the dataset file name)",
+    "tasks.taskTitlePlaceholder": "Task title (defaults to the execution document name)",
     "tasks.create": "Create Task",
     "tasks.creating": "Creating…",
     "tasks.requireBoth": "Please select both an execution document and a dataset.",
@@ -362,6 +346,12 @@ const messages = {
     "tasks.enrollmentFailed": "Issue failed",
     "tasks.enrollmentExisting": "Saved Workers",
     "tasks.enrollmentNoExisting": "No saved Workers yet.",
+    "tasks.enrollmentPresenceOnline": "Online",
+    "tasks.enrollmentPresenceOffline": "Offline (registration kept)",
+    "tasks.enrollmentPresenceNeverSeen": "Not connected yet",
+    "tasks.enrollmentStatusActive": "Registered",
+    "tasks.enrollmentStatusDraining": "Draining",
+    "tasks.enrollmentStatusRevoked": "Revoked",
   },
 } as const;
 
@@ -385,20 +375,72 @@ interface LanguageContextValue {
 }
 
 const LanguageContext = createContext<LanguageContextValue | null>(null);
-const STORAGE_KEY = "infinity-agents-language";
+const LOCALE_CACHE_KEY = "infinity-agents-locale-cache";
+
+function isLanguage(value: string | null): value is Language {
+  return value === "zh" || value === "en";
+}
+
+function detectSystemLanguage(): Language {
+  if (typeof navigator === "undefined") return "zh";
+  const languages = navigator.languages?.length ? navigator.languages : [navigator.language];
+  return languages.some((value) => /^zh(?:[-_,]|$)/i.test(value)) ? "zh" : "en";
+}
+
+function initialLanguage(): Language {
+  // Keep the first render identical on the server and in the browser. The
+  // client preference is applied after hydration so a locale change cannot
+  // duplicate the page tree or cause a full-page flash.
+  return "zh";
+}
+
+function preferredClientLanguage(): Language {
+  if (typeof window === "undefined") return "zh";
+  const cached = window.localStorage.getItem(LOCALE_CACHE_KEY);
+  if (isLanguage(cached)) return cached;
+  const cookie = document.cookie.match(/(?:^|; )ia_locale=([^;]*)/);
+  const cookieLocale = cookie ? decodeURIComponent(cookie[1]) : null;
+  if (isLanguage(cookieLocale)) return cookieLocale;
+  return detectSystemLanguage();
+}
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [language, setLanguage] = useState<Language>("zh");
+  const [language, setLanguage] = useState<Language>(initialLanguage);
+  const [languageReady, setLanguageReady] = useState(false);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (stored !== "zh" && stored !== "en") return;
-    const timer = window.setTimeout(() => setLanguage(stored), 0);
-    return () => window.clearTimeout(timer);
+    let mounted = true;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 3000);
+    void fetch("/api/settings", { credentials: "include", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return await response.json() as { settings?: { locale?: string } };
+      })
+      .then((payload) => {
+        const locale = payload?.settings?.locale;
+        if (!mounted) return;
+        if (locale === "zh" || locale === "en") {
+          setLanguage(locale);
+          window.localStorage.setItem(LOCALE_CACHE_KEY, locale);
+          return;
+        }
+        setLanguage(preferredClientLanguage());
+    })
+    .catch(() => {
+      if (mounted) setLanguage(preferredClientLanguage());
+    })
+    .finally(() => {
+      if (mounted) setLanguageReady(true);
+    });
+    return () => {
+      mounted = false;
+      controller.abort();
+      window.clearTimeout(timeoutId);
+    };
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, language);
     document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
   }, [language]);
 
@@ -407,27 +449,17 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     [language],
   );
 
-  return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
+  return (
+    <LanguageContext.Provider value={value}>
+      <div style={{ visibility: languageReady ? "visible" : "hidden" }} aria-busy={!languageReady}>
+        {children}
+      </div>
+    </LanguageContext.Provider>
+  );
 }
 
 export function useLanguage(): LanguageContextValue {
   const context = useContext(LanguageContext);
   if (!context) throw new Error("useLanguage must be used inside LanguageProvider");
   return context;
-}
-
-export function LanguageToggle() {
-  const { language, setLanguage, t } = useLanguage();
-  const nextLanguage: Language = language === "zh" ? "en" : "zh";
-  return (
-    <button
-      type="button"
-      data-testid="language-toggle"
-      className="rounded-lg border border-[var(--hairline)] bg-white/70 px-2.5 py-1.5 text-xs font-medium text-zinc-600 transition-colors hover:bg-white hover:text-zinc-900"
-      onClick={() => setLanguage(nextLanguage)}
-      aria-label={language === "zh" ? t("language.switchToEnglish") : t("language.switchToChinese")}
-    >
-      {language === "zh" ? "English" : "中文"}
-    </button>
-  );
 }
