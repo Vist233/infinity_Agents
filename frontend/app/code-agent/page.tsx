@@ -6,6 +6,7 @@ import { LanguageToggle, useLanguage } from "@/lib/i18n";
 import { AgentNav } from "@/components/chat/AgentNav";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { WorkerEnrollmentPanel } from "@/components/tasks/WorkerEnrollmentPanel";
 import { ListTodo, RefreshCw } from "lucide-react";
 import { listTasks, type TaskItem, type TaskStatus } from "@/lib/api/tasks";
 
@@ -88,6 +89,8 @@ export default function CodeAgentPage() {
               <div className="text-sm font-semibold text-blue-900">{t("tasks.confirmationOnlyTitle")}</div>
               <p className="text-xs text-blue-800/80 mt-1">{t("tasks.confirmationOnlyDescription")}</p>
             </section>
+
+            <WorkerEnrollmentPanel />
 
             <section className="space-y-3">
               <div className="flex items-center justify-between">

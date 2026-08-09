@@ -50,6 +50,15 @@ export interface DatasetUploadInfo {
   original_filename?: string;
 }
 
+export interface WorkerEnrollmentResponse {
+  worker_id: string;
+  namespace: string;
+  trust_level: "owner_trusted" | "institution_trusted" | "student_untrusted";
+  enrollment_token: string;
+  expires_at: string;
+  one_time: boolean;
+}
+
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -163,6 +172,20 @@ export async function listTasks(limit = 50): Promise<TaskItem[]> {
 
 export async function cancelTask(taskId: string): Promise<{ status: string }> {
   return requestJson(`${getApiBase()}/api/tasks/${taskId}/cancel`, { method: "POST" });
+}
+
+/** Issue a short-lived, one-time token for an HTTPS Worker bootstrap. */
+export async function createWorkerEnrollment(input: {
+  worker_id: string;
+  namespace: string;
+  trust_level?: WorkerEnrollmentResponse["trust_level"];
+  ttl_seconds?: number;
+}): Promise<WorkerEnrollmentResponse> {
+  return requestJson(`${getApiBase()}/api/worker-enrollments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
 
 export function artifactDownloadUrl(artifactId: string): string {
