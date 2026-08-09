@@ -1,7 +1,8 @@
 # Infinity Agents Edge
 
-Cloudflare Worker edge for the PaperAgent web application and the isolated
-ImageJudge API. It is an OIDC relying party for `https://auth.zhangyvjing.com`,
+Cloudflare Worker edge for the Infinity Agents Analysis/Coding web application
+and the isolated ImageJudge API. It is an OIDC relying party for
+`https://auth.zhangyvjing.com`,
 keeps browser sessions in the Infinity D1 database, and proxies model/tool
 calls without exposing upstream API keys to clients.
 
@@ -100,7 +101,65 @@ ImageJudge uses the same Worker under an isolated `/image-judge/*` namespace:
 - `POST /image-judge/desktop/logout`
 - `POST /image-judge/api/v1/evaluate`
 
-The deployed Worker needs these PaperAgent secrets:
+## Deployment
+
+Run these commands from the `cloudflare-deploy` branch. The frontend build is
+required first because Wrangler uploads `../frontend/out` as the Worker asset
+directory. `--remote` is intentional: production D1 migrations must be
+applied to the configured Cloudflare databases, never to a local preview.
+
+```sh
+cd frontend
+npm ci
+npm run build
+
+cd ../cloudflare-worker
+npm ci
+npm run check
+npm test
+npx wrangler d1 migrations apply infinity-agents-db --remote
+npx wrangler d1 migrations apply image-judge-db --remote
+npx wrangler deploy
+```
+
+Before the first production deploy, configure secrets interactively. Do not
+put their values in `wrangler.jsonc`, `.env` files, the frontend bundle, or
+the Git repository:
+
+```sh
+npx wrangler secret put STEPFUN_API_KEY
+npx wrangler secret put ZHANG_AUTH_CLIENT_SECRET
+npx wrangler secret put WORKER_ENROLLMENT_ADMIN_USER_IDS
+npx wrangler secret put IMAGE_JUDGE_ZHANG_AUTH_CLIENT_SECRET
+npx wrangler secret put IMAGE_JUDGE_TOKEN_SIGNING_SECRET
+npx wrangler secret put IMAGE_JUDGE_DASHSCOPE_API_KEY
+```
+
+`WORKER_VERIFIER_TOKEN` must remain unset until an independent verifier service
+exists. Worker finalize therefore remains `verification_pending` and cannot
+self-publish a user-visible artifact. Redis on `zhangbot` is intentionally
+not a Worker binding: the deployed Worker uses D1/R2 only, while a future
+Task Relay may reach Redis solely through an outbound Tunnel.
+
+After deploy, run the read-only smoke checks below and record the version ID
+shown by Wrangler:
+
+```sh
+curl -fsS https://infinity.zhangyvjing.com/health
+curl -fsS https://infinity.zhangyvjing.com/image-judge/healthz
+curl -fsSI https://infinity.zhangyvjing.com/
+curl -fsSI https://infinity.zhangyvjing.com/code-agent/
+curl -fsSI https://infinity.zhangyvjing.com/code-agent/tasks/
+curl -fsSI https://infinity.zhangyvjing.com/image-judge/
+```
+
+The macOS/Windows client joins only after an operator has issued a one-time
+token through the authenticated enrollment endpoint. Do not commit the
+returned credential or token. Test invalid-token rejection before using a
+real token, then verify enrollment, `health`, `poll`, token replay rejection,
+and revoke behavior from the operator account.
+
+The deployed Worker needs these Analysis/Coding secrets:
 
 - `STEPFUN_API_KEY`: StepFun Coding Plan key.
 - `ZHANG_AUTH_CLIENT_SECRET`: confidential secret for client `infinity-agents`.

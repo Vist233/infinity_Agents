@@ -1,6 +1,6 @@
 {
-  // Infinity Agents edge Worker: static PaperAgent frontend, PaperAgent API,
-  // and the isolated ImageJudge API namespace.
+  // Infinity Agents edge Worker: static Analysis/Coding frontend and API,
+  // plus the isolated ImageJudge API namespace.
   "name": "infinity-agents-edge",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-24",
