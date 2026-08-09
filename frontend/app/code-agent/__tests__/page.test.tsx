@@ -45,7 +45,7 @@ const MOCK_TASKS = [
   },
 ];
 
-describe("Task center (history-only surface)", () => {
+describe("Task center", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (listTasks as ReturnType<typeof vi.fn>).mockResolvedValue(MOCK_TASKS);
@@ -56,13 +56,15 @@ describe("Task center (history-only surface)", () => {
     vi.useRealTimers();
   });
 
-  it("renders the confirmation-only notice and the task list", async () => {
+  it("renders the direct creation card, collapsed Worker card, and task list", async () => {
     await act(async () => {
       renderPage();
     });
 
-    expect(screen.getByText("任务只能从 Analysis 确认卡提交")).toBeDefined();
-    expect(document.querySelectorAll('input[type="file"]').length).toBe(0);
+    expect(screen.getByTestId("task-creation-card")).toBeDefined();
+    expect(screen.getByTestId("worker-enrollment-panel")).toBeDefined();
+    expect(document.querySelectorAll('input[type="file"]').length).toBe(2);
+    expect(screen.queryByTestId("worker-enrollment-namespace")).toBeNull();
 
     // Task list loaded from the API
     await waitFor(() => {
@@ -71,11 +73,11 @@ describe("Task center (history-only surface)", () => {
     expect(screen.getByText("成功")).toBeDefined();
   });
 
-  it("does not expose a second direct task creation entry point", async () => {
+  it("does not submit a task before the user fills the direct card", async () => {
     await act(async () => {
       renderPage();
     });
-    expect(screen.queryByRole("button", { name: /创建任务/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /创建任务/ })).toBeDefined();
     expect(screen.queryByRole("button", { name: /确认并提交/ })).toBeNull();
     expect(createTask).not.toHaveBeenCalled();
   });

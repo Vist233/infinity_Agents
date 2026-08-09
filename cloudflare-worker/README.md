@@ -27,42 +27,43 @@ Analysis/Coding task control uses the same authenticated browser session:
 - `POST /api/dataset-snapshots/upload`
 - `POST /api/task-specs` and `POST /api/task-specs/:id/freeze`
 - `POST /api/dataset-snapshots`
-- `POST/GET /api/tasks`, `GET /api/tasks/:id` (Task `POST` requires the
-  server-bound `chat_confirmation_id`; the task center is status/history only)
+- `POST/GET /api/tasks`, `GET /api/tasks/:id` (Task `POST` accepts either the
+  Agent confirmation path or the authenticated Task Center direct path)
+- `GET/POST /api/worker-enrollments` and `POST /api/worker-enrollments/:id/revoke`
 - `POST /api/tasks/:id/cancel`
 - `GET /api/tasks/:id/events` and `/events/stream`
 - `GET /api/tasks/:id/artifacts` and `GET /api/artifacts/:id`
 
-Task creation is an in-conversation handshake, not a permanent page form:
+Task creation has two equivalent entry points that use the same TaskSpec and
+Task API:
 
-1. Analysis calls `request_task_creation` when the user asks for a background
-   task.
-2. The Worker stores a short-lived pending confirmation and emits a
-   `task_confirmation` SSE event; the frontend renders the card directly under
-   that Agent message and closes the stream.
-3. After the user supplies the execution document and ZIP dataset, the card
-   creates one idempotent queued Task and resumes `POST /api/chat` with the
-   confirmation ID and verified task ID.
-4. The Worker supplies the queued task as the tool result, and Analysis sends
-   the follow-up response. The card remains in the message flow; the Task
-   Center is history/status only.
+1. The Analysis conversation can call `request_task_creation`; its inline card
+   keeps the Agent confirmation ID and resumes the conversation after submit.
+2. The Task Center has a direct creation card. It sends the same uploads and
+   TaskSpec/Task function path with `agent_confirmation=false`, a fresh
+   idempotency key, and no chat confirmation row. It does not call the Agent
+   again.
 
 ## Worker Control API
 
-An operator first issues a short-lived one-time enrollment token through the
-authenticated `POST /api/worker-enrollments` endpoint. The operator ID must be
-listed in the private `WORKER_ENROLLMENT_ADMIN_USER_IDS` variable. The Worker
-then exchanges that token once:
+The Task Center's collapsed “Add Worker” card creates a persistent machine
+registration through the authenticated `POST /api/worker-enrollments` endpoint.
+Only `namespace` is supplied by the browser. Namespace is reusable, so one
+user can create multiple Worker IDs in the same scope. The server assigns the
+trust level from the verified Zhang Auth role: only a superuser receives
+`owner_trusted`; ordinary users and students receive `institution_trusted`.
+The server returns a non-expiring opaque credential once for local setup:
 
 ```text
-POST /api/worker/v1/enroll
-{ "enrollment_token": "...", "public_key": "...", "version": "...", "capabilities": [...] }
-→ { "worker_id": "...", "worker_credential": "...", "credential_expires_at": "..." }
+POST /api/worker-enrollments
+{ "namespace": "infinity" }
+→ { "worker_id": "...", "namespace": "infinity", "worker_credential": "...",
+    "credential_expires_at": null, "persistent": true, "one_time": false }
 ```
 
-The returned credential is an opaque bearer credential; it is stored only as a
-hash in D1 and can be revoked by the operator. It must not be committed or
-placed in a browser bundle. Subsequent Worker requests use
+The raw credential is never stored in D1 or returned by the list endpoint;
+`worker_registrations` stores only its SHA-256 digest. It must not be committed
+or placed in a browser bundle. Subsequent Worker requests use
 `Authorization: Bearer <worker_credential>` and the control flow is:
 
 ```text
@@ -89,22 +90,25 @@ keys to the Worker.
 ### macOS / Windows bootstrap client
 
 `worker-client.mjs` is a dependency-free Node 18+ HTTPS client for both macOS
-and Windows. It keeps the one-time token out of the saved file and stores the
-resulting credential under a user-only config path:
+and Windows. Configure a persistent registration without putting the raw
+credential in shell history:
 
 ```sh
-export WORKER_ENROLLMENT_TOKEN='one-time-token-from-the-operator'
-node worker-client.mjs enroll \
-  --control-url https://infinity.zhangyvjing.com
+export INFINITY_WORKER_CREDENTIAL='credential-from-task-center'
+node worker-client.mjs configure \
+  --control-url https://infinity.zhangyvjing.com \
+  --worker-id worker-from-task-center \
+  --namespace infinity
 node worker-client.mjs health
 node worker-client.mjs poll
 ```
 
-On Windows, set `WORKER_ENROLLMENT_TOKEN` in the Worker service environment and
+On Windows, set `INFINITY_WORKER_CREDENTIAL` in the Worker service environment and
 apply a Windows ACL granting only that service account access to the config
-file. The enrollment endpoint is HTTPS-only and the client never needs a
-Cloudflare account, D1, Redis, R2, Tunnel, Queue, or provider key. An invalid
-token smoke test must not be mistaken for a joined Worker.
+file. The control endpoint is HTTPS-only and the client never needs a
+Cloudflare account, D1, Redis, R2, Tunnel, Queue, or provider key. The older
+`enroll` command and `/api/worker/v1/enroll` endpoint remain only as a legacy
+one-time bootstrap path while pre-existing clients are migrated.
 
 ImageJudge uses the same Worker under an isolated `/image-judge/*` namespace:
 
@@ -168,11 +172,10 @@ curl -fsSI https://infinity.zhangyvjing.com/code-agent/tasks/
 curl -fsSI https://infinity.zhangyvjing.com/image-judge/
 ```
 
-The macOS/Windows client joins only after an operator has issued a one-time
-token through the authenticated enrollment endpoint. Do not commit the
-returned credential or token. Test invalid-token rejection before using a
-real token, then verify enrollment, `health`, `poll`, token replay rejection,
-and revoke behavior from the operator account.
+The macOS/Windows client joins after the authenticated Task Center has created
+the persistent registration. Do not commit the returned credential. Verify
+the registration, `health`, `poll`, and revoke behavior; multiple Worker IDs
+may share one Namespace.
 
 The deployed Worker needs these Analysis/Coding secrets:
 

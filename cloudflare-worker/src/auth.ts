@@ -21,6 +21,8 @@ export interface AuthedUser {
   userId: string;
   email: string | null;
   sid: string;
+  /** Zhang Auth role used for server-side Worker trust assignment. */
+  role?: string;
 }
 
 function randomToken(bytes = 32): string {
@@ -247,7 +249,7 @@ export async function resolveUser(
     const setCookies = [sessionCookie(sid)];
     if (!cookies[CSRF_COOKIE]) setCookies.push(csrfCookie(randomToken(32)));
     return {
-      user: { userId: payload.sub, email: payload.email ?? current.email, sid },
+      user: { userId: payload.sub, email: payload.email ?? current.email, sid, role: payload.role ?? "user" },
       setCookies,
     };
   } catch {

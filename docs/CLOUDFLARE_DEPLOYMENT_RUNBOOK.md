@@ -13,9 +13,13 @@
   独立的 `/image-judge/*` 命名空间、D1、KV 和 Durable Object。
 - D1 是任务事实源，R2 保存资源和隔离中的 Artifact；Redis 不作为 Cloudflare
   binding，也不接受浏览器或学生 Worker 的连接。
-- 创建任务不是固定页面表单：Analysis 的 `request_task_creation` 工具发出
-  短期 confirmation，前端把卡片挂在对应消息下；用户提交后再以同一
-  confirmation 的幂等键创建 queued Task，并恢复 Agent 的后续回复。
+- 任务中心提供直接创建任务卡，使用与 Agent confirmation 卡相同的
+  TaskSpec/Task 上传与幂等路径，并将 `agent_confirmation=false`；Analysis
+  对话中的 confirmation 卡仍保留为聊天入口。
+- Worker 注册卡默认折叠，只填写 Namespace。Namespace 可以被同一用户的多台
+  Worker 复用；每台 Worker ID 和长期凭证由服务端生成并写入 D1（只存凭证摘要）。
+  只有 superuser 映射到 `owner_trusted`，普通用户和学生映射到
+  `institution_trusted`。
 
 ## 每次发布
 
@@ -78,20 +82,23 @@ curl -fsSI https://infinity.zhangyvjing.com/image-judge/
    401；Worker 认证响应带 `WWW-Authenticate: Bearer`。
 3. 首页可见 `Analysis`、`任务执行中心`、`性状提取`，不再出现旧的
    `PaperAgent` 标签或旧的“发送给 PaperAgent”文案。
-4. 错误 enrollment token 不落盘；真实 enrollment 只允许一次，之后用
-   `health`、`poll`、revoke 和 replay rejection 验证完整生命周期。
+4. 新 Worker 注册只提交 Namespace；持久 credential 原文不落盘到 D1，之后用
+   `health`、`poll` 和 revoke 验证生命周期。同一 Namespace 下应能创建第二个
+   不同 Worker ID；旧版一次性 enrollment 仅做兼容回归。
 5. `ss -ltn` 在 `zhangbot` 上只允许 Redis loopback 监听；Cloudflare Worker
    源码和构建产物不得出现 Redis/Docker/6379 直连能力。
 
 ## macOS / Windows Worker 加入
 
-由管理员在已登录的浏览器中创建短期一次性 enrollment token，然后在目标
-机器运行：
+由已登录用户在任务中心的“添加 Worker”卡创建持久注册，然后在目标机器运行：
 
 ```sh
 cd cloudflare-worker
-export WORKER_ENROLLMENT_TOKEN='一次性凭证'
-node worker-client.mjs enroll --control-url https://infinity.zhangyvjing.com
+export INFINITY_WORKER_CREDENTIAL='任务中心返回的持久凭证'
+node worker-client.mjs configure \
+  --control-url https://infinity.zhangyvjing.com \
+  --worker-id '<任务中心返回的 Worker ID>' \
+  --namespace '<任务中心填写的 Namespace>'
 node worker-client.mjs health
 node worker-client.mjs poll
 ```
@@ -99,7 +106,7 @@ node worker-client.mjs poll
 Windows 使用同一 Node 18+ 客户端和 HTTPS 控制面，把配置文件 ACL 限定给
 Worker 服务账号；不安装 Wrangler，不配置 Cloudflare account/API token，
 也不配置 D1、R2、Redis、Queue 或 Provider secret。客户端只保存可撤销的
-opaque Worker credential 和本机私钥。
+opaque Worker credential。
 
 ## Redis 与后续 Relay
 

@@ -5,9 +5,11 @@ import { errorJson, json, nowSeconds } from "./http";
  * Cloudflare-native Worker control plane.
  *
  * The browser/API user never shares a D1 or Redis credential with a Worker.
- * An operator-issued enrollment token is consumed once and exchanged for an
- * opaque, revocable Worker credential. Every attempt is fenced by a lease
- * epoch; stale heartbeats, uploads, and finalizers are rejected by D1 checks.
+ * New user-created Worker registrations receive an opaque, revocable,
+ * non-expiring credential whose digest is stored in D1. The older one-time
+ * enrollment-token path remains only for compatibility while existing clients
+ * are migrated. Every attempt is fenced by a lease epoch; stale heartbeats,
+ * uploads, and finalizers are rejected by D1 checks.
  *
  * This is deliberately a small control/data-plane contract. It does not give
  * a Worker a queue, D1, R2 parent credential, or provider secret.
@@ -123,7 +125,25 @@ async function authenticateWorker(request: Request, env: Env): Promise<WorkerCon
   const token = bearerToken(request);
   if (!token) return null;
   const hash = await sha256(token);
-  const row = await env.DB.prepare(
+  const persistent = await env.DB.prepare(
+    `SELECT worker_id, namespace, user_id, trust_level, status, credential_expires_at
+     FROM worker_registrations
+     WHERE credential_hash = ?1
+       AND status = 'active'
+       AND revoked_at IS NULL
+       AND (credential_expires_at IS NULL OR credential_expires_at > ?2)`
+  ).bind(hash, nowSeconds()).first<EnrollmentRow>();
+  if (persistent) {
+    return {
+      workerId: persistent.worker_id,
+      namespace: persistent.namespace,
+      userId: persistent.user_id,
+      trustLevel: persistent.trust_level,
+      status: persistent.status,
+    };
+  }
+
+  const legacy = await env.DB.prepare(
     `SELECT worker_id, namespace, user_id, trust_level, status, credential_expires_at
      FROM worker_enrollments
      WHERE credential_hash = ?1
@@ -131,13 +151,13 @@ async function authenticateWorker(request: Request, env: Env): Promise<WorkerCon
        AND revoked_at IS NULL
        AND (credential_expires_at IS NULL OR credential_expires_at > ?2)`
   ).bind(hash, nowSeconds()).first<EnrollmentRow>();
-  if (!row) return null;
+  if (!legacy) return null;
   return {
-    workerId: row.worker_id,
-    namespace: row.namespace,
-    userId: row.user_id,
-    trustLevel: row.trust_level,
-    status: row.status,
+    workerId: legacy.worker_id,
+    namespace: legacy.namespace,
+    userId: legacy.user_id,
+    trustLevel: legacy.trust_level,
+    status: legacy.status,
   };
 }
 
@@ -745,9 +765,16 @@ async function workerHealth(env: Env, context: WorkerContext): Promise<Response>
     `SELECT attempt_id, task_id, fencing_epoch, lease_expires_at, status
      FROM worker_attempts WHERE worker_id = ?1 AND namespace = ?2 AND status IN ('claimed', 'running') ORDER BY created_at DESC LIMIT 4`
   ).bind(context.workerId, context.namespace).all<Record<string, unknown>>();
-  await env.DB.prepare(
-    `UPDATE worker_enrollments SET last_seen_at = ?3 WHERE worker_id = ?1 AND namespace = ?2 AND status = 'active'`
-  ).bind(context.workerId, context.namespace, now).run();
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE worker_registrations SET last_seen_at = ?3
+       WHERE worker_id = ?1 AND namespace = ?2 AND status = 'active'`
+    ).bind(context.workerId, context.namespace, now),
+    env.DB.prepare(
+      `UPDATE worker_enrollments SET last_seen_at = ?3
+       WHERE worker_id = ?1 AND namespace = ?2 AND status = 'active'`
+    ).bind(context.workerId, context.namespace, now),
+  ]);
   return json({ worker_id: context.workerId, namespace: context.namespace, trust_level: context.trustLevel, status: "active", attempts: attempts.results ?? [] });
 }
 

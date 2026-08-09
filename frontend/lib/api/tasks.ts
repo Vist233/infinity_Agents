@@ -54,9 +54,22 @@ export interface WorkerEnrollmentResponse {
   worker_id: string;
   namespace: string;
   trust_level: "owner_trusted" | "institution_trusted" | "student_untrusted";
-  enrollment_token: string;
-  expires_at: string;
+  worker_credential: string;
+  credential_expires_at: string | null;
+  control_base_url: string;
+  persistent: boolean;
   one_time: boolean;
+}
+
+export interface WorkerRegistration {
+  worker_id: string;
+  namespace: string;
+  trust_level: "owner_trusted" | "institution_trusted" | "student_untrusted";
+  status: "active" | "revoked" | "draining" | string;
+  credential_expires_at: string | null;
+  last_seen_at: string | null;
+  created_at: string | null;
+  revoked_at: string | null;
 }
 
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
@@ -156,7 +169,9 @@ export async function createTask(input: {
   title: string;
   method_source_id?: string;
   idempotency_key?: string;
-  chat_confirmation_id?: string;
+  chat_confirmation_id?: string | false;
+  submission_source?: "task_center";
+  agent_confirmation?: boolean;
 }): Promise<{ task_id: string; status: string; duplicate?: boolean }> {
   return requestJson(`${getApiBase()}/api/tasks`, {
     method: "POST",
@@ -181,18 +196,18 @@ export async function cancelTask(taskId: string): Promise<{ status: string }> {
   return requestJson(`${getApiBase()}/api/tasks/${taskId}/cancel`, { method: "POST" });
 }
 
-/** Issue a short-lived, one-time token for an HTTPS Worker bootstrap. */
-export async function createWorkerEnrollment(input: {
-  worker_id: string;
-  namespace: string;
-  trust_level?: WorkerEnrollmentResponse["trust_level"];
-  ttl_seconds?: number;
-}): Promise<WorkerEnrollmentResponse> {
+/** Create a persistent Worker registration for the current user. */
+export async function createWorkerEnrollment(input: { namespace: string }): Promise<WorkerEnrollmentResponse> {
   return requestJson(`${getApiBase()}/api/worker-enrollments`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
+}
+
+export async function listWorkerEnrollments(): Promise<WorkerRegistration[]> {
+  const data = await requestJson<{ workers: WorkerRegistration[] }>(`${getApiBase()}/api/worker-enrollments`);
+  return data.workers || [];
 }
 
 export function artifactDownloadUrl(artifactId: string): string {

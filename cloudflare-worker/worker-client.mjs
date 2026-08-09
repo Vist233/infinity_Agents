@@ -21,12 +21,14 @@ function usage() {
 
 Commands:
   enroll --control-url URL [--config PATH]
+  configure --control-url URL --worker-id ID --namespace NS [--config PATH]
   health [--config PATH]
   poll [--config PATH]
   accept OFFER_ID [--config PATH]
 
-Enrollment reads WORKER_ENROLLMENT_TOKEN. The token is
-consumed once; the returned credential is written to a user-only config file.
+configure reads INFINITY_WORKER_CREDENTIAL and writes a user-only config
+file for a persistent registration returned by the Task Center. enroll
+remains only as a legacy one-time bootstrap path.
 `);
 }
 
@@ -153,10 +155,37 @@ async function enroll(args) {
   }, null, 2));
 }
 
+async function configure(args) {
+  const controlUrl = httpsControlUrl(required(option(args, "--control-url"), "--control-url"));
+  const workerId = required(option(args, "--worker-id"), "--worker-id");
+  const namespace = required(option(args, "--namespace"), "--namespace");
+  const credential = required(process.env.INFINITY_WORKER_CREDENTIAL, "INFINITY_WORKER_CREDENTIAL");
+  if (/\s/.test(workerId) || workerId.length > 120) throw new Error("Invalid --worker-id");
+  if (/\s/.test(namespace) || namespace.length > 120) throw new Error("Invalid --namespace");
+  if (credential.length > 256) throw new Error("Invalid INFINITY_WORKER_CREDENTIAL");
+  const configFile = configPath(args);
+  saveConfig(configFile, {
+    control_base_url: controlUrl,
+    worker_id: workerId,
+    namespace,
+    trust_level: "server_assigned",
+    worker_credential: credential,
+    credential_expires_at: null,
+    registration_mode: "persistent",
+  });
+  console.log(JSON.stringify({
+    worker_id: workerId,
+    namespace,
+    config_file: configFile,
+    registration_mode: "persistent",
+  }, null, 2));
+}
+
 async function main() {
   const [, , command, ...args] = process.argv;
   if (!command) { usage(); process.exitCode = 2; return; }
   if (command === "enroll") { await enroll(args); return; }
+  if (command === "configure") { await configure(args); return; }
   const file = configPath(args);
   const config = loadConfig(file);
   const client = new WorkerControlClient(config);

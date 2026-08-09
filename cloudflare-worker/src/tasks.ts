@@ -306,8 +306,14 @@ async function handleCreateTask(request: Request, env: Env, user: AuthedUser): P
   const title = String(body?.title ?? "").trim();
   const methodId = body?.method_source_id ? String(body.method_source_id) : null;
   const idempotencyKey = String(body?.idempotency_key ?? "");
-  const chatConfirmationId = body?.chat_confirmation_id ? String(body.chat_confirmation_id).trim() : null;
-  if (!chatConfirmationId) {
+  const chatConfirmationId = typeof body?.chat_confirmation_id === "string"
+    ? body.chat_confirmation_id.trim() || null
+    : null;
+  const submissionSource = String(body?.submission_source ?? "").trim();
+  const taskCenterSubmission = submissionSource === "task_center"
+    || body?.agent_confirmation === false
+    || body?.chat_confirmation_id === false;
+  if (!chatConfirmationId && !taskCenterSubmission) {
     return errorJson("Tasks must be submitted from an inline Agent confirmation", 400, "TASK_CONFIRMATION_REQUIRED");
   }
   if (!projectId || !specId || !snapshotId || !title || title.length > MAX_TITLE_LENGTH || !idempotencyKey || idempotencyKey.length > 255 || (chatConfirmationId && chatConfirmationId.length > 255)) {
@@ -327,7 +333,7 @@ async function handleCreateTask(request: Request, env: Env, user: AuthedUser): P
     if (!method) return errorJson("Method source not found", 404, "METHOD_SOURCE_NOT_FOUND");
   }
 
-  const fingerprint = await sha256(JSON.stringify({ projectId, specId, snapshotId, methodId, title, chatConfirmationId }));
+  const fingerprint = await sha256(JSON.stringify({ projectId, specId, snapshotId, methodId, title, chatConfirmationId, submissionSource }));
   const existing = await env.DB.prepare(
     "SELECT task_id, request_hash FROM task_idempotency WHERE user_id = ?1 AND idempotency_key = ?2"
   ).bind(user.userId, idempotencyKey).first<{ task_id: string; request_hash: string }>();
@@ -509,48 +515,125 @@ async function handleArtifact(artifactId: string, env: Env, user: AuthedUser): P
   return new Response(object.body, { headers });
 }
 
-function adminAllowed(env: Env, user: AuthedUser): boolean {
+type WorkerTrustLevel = "owner_trusted" | "institution_trusted" | "student_untrusted";
+
+const SUPERUSER_ROLES = new Set([
+  "superuser",
+  "super_user",
+  "super-user",
+  "super-admin",
+  "super_admin",
+  "root",
+]);
+
+/** Trust is assigned from the verified auth role, never from the browser. */
+export function workerTrustLevel(user: AuthedUser): WorkerTrustLevel {
+  const role = String(user.role ?? "user").trim().toLowerCase().replace(/\s+/g, "_");
+  return SUPERUSER_ROLES.has(role) ? "owner_trusted" : "institution_trusted";
+}
+
+function operatorAllowed(env: Env, user: AuthedUser): boolean {
   const allowed = (env.WORKER_ENROLLMENT_ADMIN_USER_IDS || "").split(",").map((value) => value.trim()).filter(Boolean);
   return allowed.includes(user.userId);
 }
 
 async function handleWorkerEnrollment(request: Request, env: Env, user: AuthedUser): Promise<Response> {
-  if (!adminAllowed(env, user)) return errorJson("Worker enrollment requires operator permission", 403, "FORBIDDEN");
   const body = await jsonBody(request);
-  const workerId = String(body?.worker_id ?? "").trim();
   const namespace = String(body?.namespace ?? "").trim();
-  const requestedTrust = String(body?.trust_level ?? "owner_trusted").trim();
-  const trustLevels = new Set(["owner_trusted", "institution_trusted", "student_untrusted"]);
-  if (!trustLevels.has(requestedTrust)) return errorJson("Invalid Worker trust level", 400, "INVALID_TRUST_LEVEL");
-  const trustLevel = requestedTrust as "owner_trusted" | "institution_trusted" | "student_untrusted";
-  const requestedTtl = Number(body?.ttl_seconds || 600);
-  const ttl = Number.isFinite(requestedTtl) ? Math.min(3600, Math.max(30, requestedTtl)) : 600;
-  if (!workerId || workerId.length > 120 || !namespace || namespace.length > 120) return errorJson("Invalid worker enrollment request", 400, "INVALID_ENROLLMENT");
-  const rawToken = `${taskId()}${taskId().replaceAll("-", "")}`;
-  const tokenHash = await sha256(rawToken);
-  const expires = nowSeconds() + ttl;
-  await env.DB.prepare(
-    `INSERT INTO worker_enrollments
-      (worker_id, namespace, user_id, token_hash, expires_at, created_at, trust_level, status)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending')
-     ON CONFLICT(worker_id, namespace) DO UPDATE SET
-       user_id = excluded.user_id, token_hash = excluded.token_hash,
-       expires_at = excluded.expires_at, used_at = NULL, revoked_at = NULL,
-       credential_hash = NULL, credential_expires_at = NULL, public_key = NULL,
-       trust_level = excluded.trust_level, status = 'pending', version = NULL,
-       capabilities_json = '[]', last_seen_at = NULL`
-  ).bind(workerId, namespace, user.userId, tokenHash, expires, nowSeconds(), trustLevel).run();
-  return json({ worker_id: workerId, namespace, trust_level: trustLevel, enrollment_token: rawToken, expires_at: iso(expires), one_time: true }, 201);
+  if (!namespace || namespace.length > 120 || /\s/.test(namespace)) {
+    return errorJson("Invalid worker namespace", 400, "INVALID_ENROLLMENT");
+  }
+
+  // Namespace is a reusable execution scope. Each issuance represents another
+  // machine in that scope and receives its own server-generated identity.
+  const workerId = `worker-${taskId()}`;
+  const credential = `wc_${taskId().replaceAll("-", "")}${taskId().replaceAll("-", "")}`;
+  const credentialHash = await sha256(credential);
+  const trustLevel = workerTrustLevel(user);
+  try {
+    await env.DB.prepare(
+      `INSERT INTO worker_registrations
+        (worker_id, namespace, user_id, credential_hash, credential_expires_at,
+         trust_level, status, capabilities_json, created_at)
+       VALUES (?1, ?2, ?3, ?4, NULL, ?5, 'active', '[]', ?6)`
+    ).bind(workerId, namespace, user.userId, credentialHash, trustLevel, nowSeconds()).run();
+  } catch {
+    return errorJson("Worker registration could not be saved", 503, "WORKER_REGISTRATION_UNAVAILABLE");
+  }
+  return json({
+    worker_id: workerId,
+    namespace,
+    trust_level: trustLevel,
+    worker_credential: credential,
+    credential_expires_at: null,
+    control_base_url: new URL(request.url).origin,
+    persistent: true,
+    one_time: false,
+  }, 201);
+}
+
+type WorkerRegistrationRow = {
+  worker_id: string;
+  namespace: string;
+  trust_level: string;
+  status: string;
+  credential_expires_at: number | null;
+  last_seen_at: number | null;
+  created_at: number;
+  revoked_at: number | null;
+};
+
+function publicWorkerRegistration(row: WorkerRegistrationRow): Record<string, unknown> {
+  return {
+    worker_id: row.worker_id,
+    namespace: row.namespace,
+    trust_level: row.trust_level,
+    status: row.status,
+    credential_expires_at: iso(row.credential_expires_at),
+    last_seen_at: iso(row.last_seen_at),
+    created_at: iso(row.created_at),
+    revoked_at: iso(row.revoked_at),
+  };
+}
+
+async function handleListWorkerEnrollments(env: Env, user: AuthedUser): Promise<Response> {
+  const persistent = await env.DB.prepare(
+    `SELECT worker_id, namespace, trust_level, status, credential_expires_at,
+            last_seen_at, created_at, revoked_at
+     FROM worker_registrations WHERE user_id = ?1`
+  ).bind(user.userId).all<WorkerRegistrationRow>();
+  const legacy = await env.DB.prepare(
+    `SELECT worker_id, namespace, trust_level, status, credential_expires_at,
+            last_seen_at, created_at, revoked_at
+     FROM worker_enrollments WHERE user_id = ?1`
+  ).bind(user.userId).all<WorkerRegistrationRow>();
+  const workers = [...(persistent.results ?? []), ...(legacy.results ?? [])]
+    .map(publicWorkerRegistration)
+    .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
+  return json({ workers });
 }
 
 async function handleRevokeEnrollment(workerId: string, request: Request, env: Env, user: AuthedUser): Promise<Response> {
-  if (!adminAllowed(env, user)) return errorJson("Worker enrollment requires operator permission", 403, "FORBIDDEN");
   const namespace = new URL(request.url).searchParams.get("namespace") || "";
   if (!namespace) return errorJson("namespace is required", 400, "INVALID_ENROLLMENT");
-  const result = await env.DB.prepare(
-    "UPDATE worker_enrollments SET revoked_at = ?3, status = 'revoked', credential_hash = NULL, credential_expires_at = NULL WHERE worker_id = ?1 AND namespace = ?2 AND user_id = ?4 AND revoked_at IS NULL"
-  ).bind(workerId, namespace, nowSeconds(), user.userId).run();
-  if ((result.meta?.changes ?? 0) !== 1) return errorJson("Active Worker enrollment not found", 404, "ENROLLMENT_NOT_FOUND");
+  const now = nowSeconds();
+  const canRevokeOtherUsers = operatorAllowed(env, user);
+  const persistent = await env.DB.prepare(
+    `UPDATE worker_registrations
+     SET revoked_at = ?3, status = 'revoked'
+     WHERE worker_id = ?1 AND namespace = ?2
+       AND (?4 = 1 OR user_id = ?5) AND revoked_at IS NULL`
+  ).bind(workerId, namespace, now, canRevokeOtherUsers ? 1 : 0, user.userId).run();
+  if ((persistent.meta?.changes ?? 0) === 1) return json({ worker_id: workerId, namespace, status: "revoked" });
+
+  const legacy = await env.DB.prepare(
+    `UPDATE worker_enrollments
+     SET revoked_at = ?3, status = 'revoked', credential_hash = NULL,
+         credential_expires_at = NULL
+     WHERE worker_id = ?1 AND namespace = ?2
+       AND (?4 = 1 OR user_id = ?5) AND revoked_at IS NULL`
+  ).bind(workerId, namespace, now, canRevokeOtherUsers ? 1 : 0, user.userId).run();
+  if ((legacy.meta?.changes ?? 0) !== 1) return errorJson("Active Worker enrollment not found", 404, "ENROLLMENT_NOT_FOUND");
   return json({ worker_id: workerId, namespace, status: "revoked" });
 }
 
@@ -597,6 +680,7 @@ export async function handleTaskApi(request: Request, env: Env, user: AuthedUser
 
   const artifactMatch = pathname.match(/^\/api\/artifacts\/([^/]+)$/);
   if (artifactMatch && method === "GET") return handleArtifact(decodeURIComponent(artifactMatch[1]), env, user);
+  if (method === "GET" && pathname === "/api/worker-enrollments") return handleListWorkerEnrollments(env, user);
   if (method === "POST" && pathname === "/api/worker-enrollments") return handleWorkerEnrollment(request, env, user);
   const revokeMatch = pathname.match(/^\/api\/worker-enrollments\/([^/]+)\/revoke$/);
   if (revokeMatch && method === "POST") return handleRevokeEnrollment(decodeURIComponent(revokeMatch[1]), request, env, user);
