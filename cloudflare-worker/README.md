@@ -70,6 +70,26 @@ can self-promote an arbitrary result to `succeeded`. The current Cloudflare
 control plane does not expose D1, Redis, R2 parent credentials, or provider
 keys to the Worker.
 
+### macOS / Windows bootstrap client
+
+`worker-client.mjs` is a dependency-free Node 18+ HTTPS client for both macOS
+and Windows. It keeps the one-time token out of the saved file and stores the
+resulting credential under a user-only config path:
+
+```sh
+export WORKER_ENROLLMENT_TOKEN='one-time-token-from-the-operator'
+node worker-client.mjs enroll \
+  --control-url https://infinity.zhangyvjing.com
+node worker-client.mjs health
+node worker-client.mjs poll
+```
+
+On Windows, set `WORKER_ENROLLMENT_TOKEN` in the Worker service environment and
+apply a Windows ACL granting only that service account access to the config
+file. The enrollment endpoint is HTTPS-only and the client never needs a
+Cloudflare account, D1, Redis, R2, Tunnel, Queue, or provider key. An invalid
+token smoke test must not be mistaken for a joined Worker.
+
 ImageJudge uses the same Worker under an isolated `/image-judge/*` namespace:
 
 - `GET /image-judge/healthz`
