@@ -19,6 +19,52 @@ calls without exposing upstream API keys to clients.
 - `DELETE /api/sessions/:id` (authenticated)
 - `POST /api/chat` (authenticated SSE stream)
 
+Analysis/Coding task control uses the same authenticated browser session:
+
+- `GET /api/projects/default`
+- `POST /api/method-sources/upload`
+- `POST /api/dataset-snapshots/upload`
+- `POST /api/task-specs` and `POST /api/task-specs/:id/freeze`
+- `POST /api/dataset-snapshots`
+- `POST/GET /api/tasks`, `GET /api/tasks/:id`
+- `POST /api/tasks/:id/cancel`
+- `GET /api/tasks/:id/events` and `/events/stream`
+- `GET /api/tasks/:id/artifacts` and `GET /api/artifacts/:id`
+
+## Worker Control API
+
+An operator first issues a short-lived one-time enrollment token through the
+authenticated `POST /api/worker-enrollments` endpoint. The operator ID must be
+listed in the private `WORKER_ENROLLMENT_ADMIN_USER_IDS` variable. The Worker
+then exchanges that token once:
+
+```text
+POST /api/worker/v1/enroll
+{ "enrollment_token": "...", "public_key": "...", "version": "...", "capabilities": [...] }
+→ { "worker_id": "...", "worker_credential": "...", "credential_expires_at": "..." }
+```
+
+The returned credential is an opaque bearer credential; it is stored only as a
+hash in D1 and can be revoked by the operator. It must not be committed or
+placed in a browser bundle. Subsequent Worker requests use
+`Authorization: Bearer <worker_credential>` and the control flow is:
+
+```text
+POST /api/worker/v1/poll
+POST /api/worker/v1/offers/:offer_id/accept
+POST /api/worker/v1/attempts/:attempt_id/heartbeat
+GET  /api/worker/v1/attempts/:attempt_id/resources/:resource_id
+POST /api/worker/v1/attempts/:attempt_id/artifacts
+POST /api/worker/v1/attempts/:attempt_id/finalize
+```
+
+Every Attempt is bound to `worker_id + task_id + fencing_epoch`; expired or
+revoked Workers cannot renew a lease or finalize an Artifact. Inputs are read
+through exact Attempt-scoped URLs, and uploaded results remain in R2
+quarantine until the fenced finalize transition. The current Cloudflare
+control plane does not expose D1, Redis, R2 parent credentials, or provider
+keys to the Worker.
+
 ImageJudge uses the same Worker under an isolated `/image-judge/*` namespace:
 
 - `GET /image-judge/healthz`
