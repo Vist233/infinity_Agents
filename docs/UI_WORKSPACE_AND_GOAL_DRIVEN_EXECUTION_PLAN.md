@@ -1,6 +1,6 @@
 # Infinity Agents — 工作区、图像示例与统一交互改造执行文档
 
-> 状态：VERIFIED，准备进入 Cloudflare 发布（G1–G8 发布前门槛已通过；尚未执行远程部署）
+> 状态：DEPLOYED，Cloudflare 发布与只读 smoke 已通过
 > 日期：2026-08-10
 > 适用分支：`cloudflare-deploy`；本地 `main` 的现有修改不在本轮规划中被覆盖。
 
@@ -8,9 +8,8 @@
 
 ## 0. 本轮边界
 
-本轮按本文件执行，界面、账户设置、持久 Worker、本地真实链路和三方验收均已完成；当前仅剩：
+本轮按本文件执行，界面、账户设置、持久 Worker、本地真实链路、三方验收和 Cloudflare 发布均已完成；以下事项明确不在本轮：
 
-- Cloudflare 部署；
 - Redis、PostgreSQL 或 Cloudflare 线上数据的清理；
 - 把图像示例误认为已经完成的通用性状提取能力。
 
@@ -268,13 +267,21 @@ Worker 是当前登录用户集群中的机器身份，绑定关系必须由服�
 
 ### G8 — Cloudflare 发布
 
-**结果：** 仅发布已经通过 G7 的版本。
+**结果：** 已发布通过 G7 的版本，线上只读 smoke 全部通过。
 
 - 先确认 Cloudflare 分支包含 G1–G7 的最终代码和文档；
 - D1 迁移只新增/变更明确版本，不删除现有用户数据；
 - Redis 继续作为中心通知/唤醒组件，部署在既定远程服务器；
 - Cloudflare 部署后再次只读检查 Worker、D1、认证和 Worker Control API；
 - 不把部署成功当成产品验收成功。
+
+本轮实际发布记录：
+
+- Git commit：`0dfad90`；Worker：`infinity-agents-edge`；
+- 版本：`edd2e6ee-bafa-4865-b46d-feb6daa4109d`；
+- 远程 D1：`0008_user_settings.sql`、`0009_normalize_legacy_worker_trust.sql`、`0010_user_access_roles.sql` 已应用；
+- `/health`、`/image-judge/healthz` 返回正常，三个工作区静态入口返回 200；未登录受保护 API 返回 401；
+- Wrangler dry-run 只包含预期 D1、R2、Assets、ImageJudge KV/DO 和限流绑定，没有 Redis、Docker 或 Provider Secret 绑定。
 
 ## 5. 每个阶段的执行卡格式
 
