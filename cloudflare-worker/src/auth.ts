@@ -1,12 +1,13 @@
 import type { Env } from "./env";
-import { SESSION_COOKIE, OAUTH_STATE_COOKIE, AUTH_CALLBACK_PATH } from "./env";
-import { clearCookie, errorJson, json, nowSeconds, parseCookies, serializeCookie } from "./http";
+import { SESSION_COOKIE, CSRF_COOKIE, OAUTH_STATE_COOKIE, AUTH_CALLBACK_PATH } from "./env";
+import { clearCookie, errorJson, json, nowSeconds, parseCookies, sameOrigin, serializeCookie } from "./http";
 import { getAuthSession, insertAuthSession, revokeAuthSession, updateAuthSessionTokens } from "./db";
 import { verifyAccessToken } from "./jwt";
 import { verifyIdToken } from "./jwt";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30d, matches refresh token TTL
 const STATE_TTL_SECONDS = 60 * 10;
+const CSRF_TTL_SECONDS = SESSION_TTL_SECONDS;
 
 interface OidcTransaction {
   state: string;
@@ -45,6 +46,27 @@ function callbackUrl(env: Env): string {
 
 function sessionCookie(sid: string): string {
   return serializeCookie(SESSION_COOKIE, sid, { maxAge: SESSION_TTL_SECONDS, sameSite: "Lax" });
+}
+
+function csrfCookie(token: string): string {
+  return serializeCookie(CSRF_COOKIE, token, {
+    maxAge: CSRF_TTL_SECONDS,
+    sameSite: "Lax",
+    httpOnly: false,
+  });
+}
+
+export function validateBrowserMutation(request: Request, env: Env): Response | null {
+  if (!sameOrigin(request, env.APP_BASE_URL)) {
+    return errorJson("Cross-origin mutation rejected", 403, "CSRF_ORIGIN_MISMATCH");
+  }
+  const cookies = parseCookies(request);
+  const cookieToken = cookies[CSRF_COOKIE];
+  const headerToken = request.headers.get("x-csrf-token");
+  if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+    return errorJson("CSRF token missing or invalid", 403, "CSRF_INVALID");
+  }
+  return null;
 }
 
 /** GET /auth/login — start the authorization-code flow. */
@@ -157,7 +179,8 @@ export async function handleCallback(request: Request, env: Env): Promise<Respon
   let payload: Awaited<ReturnType<typeof verifyAccessToken>>;
   try {
     payload = await verifyAccessToken(tokenPayload.access_token, env);
-    await verifyIdToken(tokenPayload.id_token, env, transaction.nonce);
+    const idPayload = await verifyIdToken(tokenPayload.id_token, env, transaction.nonce);
+    if (idPayload.sub !== payload.sub) throw new Error("Token subjects do not match");
   } catch {
     return errorJson("Authentication token validation failed", 401, "TOKEN_VALIDATION_FAILED");
   }
@@ -181,6 +204,7 @@ export async function handleCallback(request: Request, env: Env): Promise<Respon
     "set-cookie",
     sessionCookie(sid)
   );
+  headers.append("set-cookie", csrfCookie(randomToken(32)));
   headers.append("set-cookie", clearCookie(OAUTH_STATE_COOKIE));
   return new Response(null, { status: 302, headers });
 }
@@ -195,7 +219,7 @@ export async function handleCallback(request: Request, env: Env): Promise<Respon
 export async function resolveUser(
   request: Request,
   env: Env
-): Promise<{ user: AuthedUser; setCookie?: string } | null> {
+): Promise<{ user: AuthedUser; setCookies?: string[] } | null> {
   const cookies = parseCookies(request);
   const sid = cookies[SESSION_COOKIE];
   if (!sid) return null;
@@ -217,9 +241,14 @@ export async function resolveUser(
 
   try {
     const payload = await verifyAccessToken(current.access_token, env);
+    if (payload.sub !== current.user_id) {
+      throw new Error("Access token subject does not match the site session");
+    }
+    const setCookies = [sessionCookie(sid)];
+    if (!cookies[CSRF_COOKIE]) setCookies.push(csrfCookie(randomToken(32)));
     return {
       user: { userId: payload.sub, email: payload.email ?? current.email, sid },
-      setCookie: sessionCookie(sid)
+      setCookies,
     };
   } catch {
     await revokeAuthSession(env, sid);
@@ -266,5 +295,8 @@ export async function handleLogout(request: Request, env: Env): Promise<Response
       await revokeAuthSession(env, sid);
     }
   }
-  return json({ loggedOut: true }, 200, { "set-cookie": clearCookie(SESSION_COOKIE) });
+  const headers = new Headers();
+  headers.append("set-cookie", clearCookie(SESSION_COOKIE));
+  headers.append("set-cookie", clearCookie(CSRF_COOKIE));
+  return json({ loggedOut: true }, 200, headers);
 }

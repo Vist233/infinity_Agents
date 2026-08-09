@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import worker from "../src/index";
+import { validateBrowserMutation } from "../src/auth";
 import { makeEnv } from "./fake-d1";
 
 function testEnv() {
@@ -15,6 +16,35 @@ describe("Infinity Edge route composition", () => {
     const response = await worker.fetch(new Request("https://app.test/health"), testEnv());
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok", service: "infinity-agents-edge" });
+  });
+
+  it("requires same-origin double-submit CSRF protection for browser mutations", async () => {
+    const { env } = makeEnv();
+    const missing = validateBrowserMutation(
+      new Request("https://app.test/api/sessions", { method: "POST", headers: { origin: "https://app.test" } }),
+      env,
+    );
+    expect(missing?.status).toBe(403);
+    expect(await missing?.json()).toMatchObject({ error: { code: "CSRF_INVALID" } });
+
+    const crossOrigin = validateBrowserMutation(
+      new Request("https://app.test/api/sessions", {
+        method: "POST",
+        headers: { origin: "https://evil.test", cookie: "infinity_csrf=csrf-1", "x-csrf-token": "csrf-1" },
+      }),
+      env,
+    );
+    expect(crossOrigin?.status).toBe(403);
+    expect(await crossOrigin?.json()).toMatchObject({ error: { code: "CSRF_ORIGIN_MISMATCH" } });
+
+    const accepted = validateBrowserMutation(
+      new Request("https://app.test/api/sessions", {
+        method: "POST",
+        headers: { origin: "https://app.test", cookie: "infinity_csrf=csrf-1", "x-csrf-token": "csrf-1" },
+      }),
+      env,
+    );
+    expect(accepted).toBeNull();
   });
 
   it("starts the PaperAgent OIDC flow with PKCE", async () => {

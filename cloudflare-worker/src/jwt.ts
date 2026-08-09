@@ -51,7 +51,7 @@ async function loadJwks(env: Env): Promise<JsonWebKey[]> {
 
 /**
  * Verify an ES256 access token's signature against the JWKS and validate its
- * standard claims (type, exp, aud). Returns the payload or throws.
+ * standard claims (issuer, type, exp, aud). Returns the payload or throws.
  */
 export async function verifyAccessToken(token: string, env: Env): Promise<AccessTokenPayload> {
   const parts = token.split(".");
@@ -92,6 +92,12 @@ export async function verifyAccessToken(token: string, env: Env): Promise<Access
   if (payload.type !== "access") {
     throw new Error("Invalid token type");
   }
+  if (payload.iss !== env.ZHANG_AUTH_BASE_URL.replace(/\/$/, "")) {
+    throw new Error("Invalid token issuer");
+  }
+  if (!payload.sub || typeof payload.sub !== "string") {
+    throw new Error("Invalid token subject");
+  }
   if (payload.exp <= Math.floor(Date.now() / 1000)) {
     throw new Error("Access token expired");
   }
@@ -103,7 +109,7 @@ export async function verifyAccessToken(token: string, env: Env): Promise<Access
 }
 
 /** Verify an OIDC ID token and bind it to the login transaction nonce. */
-export async function verifyIdToken(token: string, env: Env, expectedNonce: string): Promise<void> {
+export async function verifyIdToken(token: string, env: Env, expectedNonce: string): Promise<{ sub: string }> {
   const parts = token.split(".");
   if (parts.length !== 3) throw new Error("Invalid ID token format");
   const [encodedHeader, encodedPayload, encodedSignature] = parts;
@@ -155,6 +161,7 @@ export async function verifyIdToken(token: string, env: Env, expectedNonce: stri
   ) {
     throw new Error("Invalid ID token claims");
   }
+  return { sub: payload.sub };
 }
 
 /** Decode payload without verifying (used to read exp before deciding to refresh). */

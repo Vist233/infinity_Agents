@@ -16,6 +16,16 @@ export function errorJson(message: string, status = 400, code?: string): Respons
   return json({ error: { message, code: code ?? null } }, status);
 }
 
+export function sameOrigin(request: Request, expectedBaseUrl: string): boolean {
+  const origin = request.headers.get("origin");
+  if (!origin) return false;
+  try {
+    return origin === new URL(expectedBaseUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
 export function parseCookies(request: Request): Record<string, string> {
   const header = request.headers.get("cookie") ?? "";
   const out: Record<string, string> = {};

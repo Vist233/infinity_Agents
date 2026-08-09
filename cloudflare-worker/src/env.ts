@@ -51,6 +51,7 @@ export interface Env {
 }
 
 export const SESSION_COOKIE = "ia_session";
+export const CSRF_COOKIE = "infinity_csrf";
 export const OAUTH_STATE_COOKIE = "ia_oauth_state";
 export const AUTH_CALLBACK_PATH = "/auth/callback";
 export const MAX_CONTEXT_MESSAGES = 20;

@@ -1,6 +1,6 @@
 import type { Env } from "./env";
 import { errorJson, json } from "./http";
-import { handleLogin, handleCallback, handleLogout, resolveUser, type AuthedUser } from "./auth";
+import { handleLogin, handleCallback, handleLogout, resolveUser, validateBrowserMutation, type AuthedUser } from "./auth";
 import {
   createSession,
   getSessions,
@@ -20,10 +20,10 @@ export { ImageJudgeUserConcurrencyLock } from "./image-judge";
  * Apply a Set-Cookie header produced by a token refresh to an existing
  * response without consuming or rebuilding its body.
  */
-function withCookie(response: Response, setCookie?: string): Response {
-  if (!setCookie) return response;
+function withCookies(response: Response, setCookies?: string[]): Response {
+  if (!setCookies?.length) return response;
   const headers = new Headers(response.headers);
-  headers.append("set-cookie", setCookie);
+  for (const setCookie of setCookies) headers.append("set-cookie", setCookie);
   return new Response(response.body, { status: response.status, headers });
 }
 
@@ -75,6 +75,8 @@ export default {
       return handleCallback(request, env);
     }
     if (method === "POST" && pathname === "/auth/logout") {
+      const csrfError = validateBrowserMutation(request, env);
+      if (csrfError) return csrfError;
       return handleLogout(request, env);
     }
 
@@ -91,19 +93,24 @@ export default {
       if (!resolved) {
         return errorJson("Authentication required", 401, "UNAUTHENTICATED");
       }
-      const { user, setCookie } = resolved;
+      const { user, setCookies } = resolved;
+
+      if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+        const csrfError = validateBrowserMutation(request, env);
+        if (csrfError) return withCookies(csrfError, setCookies);
+      }
 
       if (method === "GET" && pathname === "/api/me") {
-        return withCookie(await handleMe(env, user), setCookie);
+        return withCookies(await handleMe(env, user), setCookies);
       }
 
       const taskResponse = await handleTaskApi(request, env, user);
-      if (taskResponse) return withCookie(taskResponse, setCookie);
+      if (taskResponse) return withCookies(taskResponse, setCookies);
 
       if (pathname === "/api/sessions") {
-        if (method === "POST") return withCookie(await createSession(env, user), setCookie);
-        if (method === "GET") return withCookie(await getSessions(env, user), setCookie);
-        return withCookie(errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED"), setCookie);
+        if (method === "POST") return withCookies(await createSession(env, user), setCookies);
+        if (method === "GET") return withCookies(await getSessions(env, user), setCookies);
+        return withCookies(errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED"), setCookies);
       }
 
       const sessionMatch = pathname.match(/^\/api\/sessions\/([^/]+)(\/messages|\/title)?$/);
@@ -111,22 +118,22 @@ export default {
         const sessionId = decodeURIComponent(sessionMatch[1]);
         const sub = sessionMatch[2];
         if (sub === "/messages" && method === "GET") {
-          return withCookie(await getSessionMessages(env, user, sessionId), setCookie);
+          return withCookies(await getSessionMessages(env, user, sessionId), setCookies);
         }
         if (sub === "/title" && method === "PATCH") {
-          return withCookie(await updateSessionTitle(env, user, sessionId, request), setCookie);
+          return withCookies(await updateSessionTitle(env, user, sessionId, request), setCookies);
         }
         if (!sub && method === "DELETE") {
-          return withCookie(await removeSession(env, user, sessionId), setCookie);
+          return withCookies(await removeSession(env, user, sessionId), setCookies);
         }
-        return withCookie(errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED"), setCookie);
+        return withCookies(errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED"), setCookies);
       }
 
       if (pathname === "/api/chat" && method === "POST") {
-        return withCookie(await handleChat(request, env, user), setCookie);
+        return withCookies(await handleChat(request, env, user), setCookies);
       }
 
-      return withCookie(errorJson("Not found", 404, "NOT_FOUND"), setCookie);
+      return withCookies(errorJson("Not found", 404, "NOT_FOUND"), setCookies);
     }
 
     if (method === "GET" || method === "HEAD") {
