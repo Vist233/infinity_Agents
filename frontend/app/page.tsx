@@ -10,12 +10,11 @@ import { Composer } from "@/components/chat/Composer";
 import { useChatController } from "@/hooks/use-chat-controller";
 import { redirectToLogin } from "@/lib/runtime-config";
 import { LanguageToggle, useLanguage } from "@/lib/i18n";
-import { TaskConfirmationCard } from "@/components/analysis/TaskConfirmationCard";
 
 /**
- * PaperAgent is the canonical home page.  Keep the product navigation and the
- * session-backed Agent UI here; the lightweight OIDC chat was only a temporary
- * deployment probe and did not speak the PaperAgent session API.
+ * Analysis is the canonical home page. Task creation cards are rendered by
+ * the conversation when Analysis calls request_task_creation; they are not a
+ * permanent page-level form.
  */
 export default function ChatPage() {
   const router = useRouter();
@@ -79,7 +78,6 @@ export default function ChatPage() {
 
         <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="max-w-5xl mx-auto w-full p-4 md:p-6 space-y-4">
-            <TaskConfirmationCard onCreated={() => { void controller.retryLoadSessions(); }} />
             <MessagePane
               messages={controller.messages}
               sessionId={controller.state.sessionId}
@@ -89,6 +87,9 @@ export default function ChatPage() {
               scrollRef={controller.scrollRef}
               authStatus={controller.authStatus}
               onLogin={redirectToLogin}
+              onTaskCreated={(confirmationId, taskId, title) => {
+                void controller.handleTaskConfirmationCreated(confirmationId, taskId, title);
+              }}
             />
           </div>
         </div>

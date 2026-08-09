@@ -124,6 +124,19 @@ function makeRequest(sessionId: string, content: string): Request {
   });
 }
 
+function makeConfirmationRequest(sessionId: string, confirmationId: string, taskId: string): Request {
+  return new Request("https://app.test/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
+      task_confirmation_id: confirmationId,
+      task_id: taskId,
+      messages: [],
+    }),
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -188,5 +201,44 @@ describe("handleChat", () => {
     expect(second.status).toBe(429);
     // The over-limit request never reaches StepFun.
     expect(stepfunCalls()).toBe(callsAfterFirst);
+  });
+
+  it("pauses task creation for an inline confirmation and resumes with the queued task result", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("s1", "user-1");
+    let stepfunCall = 0;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).includes("stepfun.test")) return textResponse("");
+      stepfunCall += 1;
+      if (stepfunCall === 1) {
+        return sseResponse([
+          JSON.stringify({ choices: [{ delta: { content: "我先准备任务确认卡。" }, finish_reason: null }] }),
+          JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "task_call_1", function: { name: "request_task_creation", arguments: JSON.stringify({ title: "Trait extraction", analysis_type: "trait_extraction" }) } }] }, finish_reason: "tool_calls" }] }),
+        ]);
+      }
+      const requestBody = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ role: string; content: string | null }> };
+      expect(requestBody.messages?.some((message) => message.role === "tool" && String(message.content).includes("task-1"))).toBe(true);
+      return sseResponse([
+        JSON.stringify({ choices: [{ delta: { content: "任务已排队，将在后台异步执行。" }, finish_reason: "stop" }] }),
+      ]);
+    }) as unknown as typeof fetch;
+
+    const first = await handleChat(makeRequest("s1", "创建一个性状提取任务"), env, USER);
+    const firstEvents = await readSse(first);
+    expect(firstEvents.map((event) => event.type)).toContain("task_confirmation");
+    expect(firstEvents.map((event) => event.type)).not.toContain("done");
+    const confirmation = [...db.chatTaskConfirmations.values()][0];
+    expect(confirmation?.status).toBe("pending");
+    expect([...db.dailyUsage.values()][0]).toBe(1);
+
+    db.seedTask("task-1", "user-1", "Trait extraction", "queued");
+    const second = await handleChat(makeConfirmationRequest("s1", confirmation.confirmation_id, "task-1"), env, USER);
+    const secondEvents = await readSse(second);
+    expect(secondEvents.map((event) => event.type)).toContain("done");
+    expect(secondEvents.filter((event) => event.type === "chunk").map((event) => event.content).join(""))
+      .toBe("任务已排队，将在后台异步执行。");
+    expect(confirmation.status).toBe("completed");
+    expect(stepfunCall).toBe(2);
+    expect([...db.dailyUsage.values()][0]).toBe(1);
   });
 });

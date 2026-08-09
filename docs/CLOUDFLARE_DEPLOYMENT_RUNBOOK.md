@@ -13,6 +13,9 @@
   独立的 `/image-judge/*` 命名空间、D1、KV 和 Durable Object。
 - D1 是任务事实源，R2 保存资源和隔离中的 Artifact；Redis 不作为 Cloudflare
   binding，也不接受浏览器或学生 Worker 的连接。
+- 创建任务不是固定页面表单：Analysis 的 `request_task_creation` 工具发出
+  短期 confirmation，前端把卡片挂在对应消息下；用户提交后再以同一
+  confirmation 的幂等键创建 queued Task，并恢复 Agent 的后续回复。
 
 ## 每次发布
 
@@ -105,4 +108,3 @@ ACL、AOF、内存上限和 `noeviction`。当前 Cloudflare Worker 不直连 Re
 只有在 Task Relay 和 Cloudflare Tunnel、Access service-auth、D1 outbox
 重放/幂等验收都完成后，才允许接入 Redis hint；Relay 不能提供 raw Redis
 command、任务事实、用户身份或 Provider secret。
-

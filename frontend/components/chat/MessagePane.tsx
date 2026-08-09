@@ -4,6 +4,7 @@ import MarkdownRenderer from "@/components/markdown-renderer";
 import { Bot, LogIn, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Message, SessionRunState } from "@/lib/chat-state";
+import { TaskConfirmationCard } from "@/components/analysis/TaskConfirmationCard";
 import { RunStatus } from "@/components/chat/RunStatus";
 import type { RefObject } from "react";
 import { useLanguage } from "@/lib/i18n";
@@ -17,6 +18,7 @@ interface MessagePaneProps {
   scrollRef: RefObject<HTMLDivElement | null>;
   authStatus: "checking" | "authenticated" | "unauthenticated";
   onLogin: () => void;
+  onTaskCreated: (confirmationId: string, taskId: string, title: string) => void;
 }
 
 export function MessagePane({
@@ -28,6 +30,7 @@ export function MessagePane({
   scrollRef,
   authStatus,
   onLogin,
+  onTaskCreated,
 }: MessagePaneProps) {
   const { t } = useLanguage();
   return (
@@ -83,6 +86,12 @@ export function MessagePane({
                           )
                         ) : (
                           message.content
+                        )}
+                        {message.taskConfirmation && (
+                          <TaskConfirmationCard
+                            confirmation={message.taskConfirmation}
+                            onCreated={onTaskCreated}
+                          />
                         )}
                         {isLoading && isLast && <RunStatus isLoading={isLoading} statusText={statusText} runState={runState} />}
                         {runState.terminal === "success" && isLast && runState.tokenInfo && process.env.NODE_ENV !== "production" && (

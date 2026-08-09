@@ -1,4 +1,4 @@
-import type { RunPhase, TokenInfo } from "@/lib/chat-state";
+import type { RunPhase, TaskConfirmation, TokenInfo } from "@/lib/chat-state";
 import { translate, type Language } from "@/lib/i18n";
 import { redirectToLogin, withCsrfHeader } from "@/lib/runtime-config";
 
@@ -7,6 +7,8 @@ export interface ChatRequestPayload {
   messages: Array<{ role: "user" | "assistant"; content: string }>;
   retry_attempt: number;
   client_request_id: string;
+  task_confirmation_id?: string;
+  task_id?: string;
 }
 
 export interface ChatStatusEvent {
@@ -29,6 +31,10 @@ export interface ChatToolCallEvent {
   tool_name: string;
 }
 
+export interface ChatTaskConfirmationEvent extends Omit<TaskConfirmation, "status" | "task_id" | "error"> {
+  type: "task_confirmation";
+}
+
 export interface ChatDoneEvent {
   type: "done";
   token_info?: Partial<TokenInfo>;
@@ -39,7 +45,7 @@ export interface ChatErrorEvent {
   message: string;
 }
 
-export type ChatEvent = ChatStatusEvent | ChatChunkEvent | ChatToolCallEvent | ChatDoneEvent | ChatErrorEvent;
+export type ChatEvent = ChatStatusEvent | ChatChunkEvent | ChatToolCallEvent | ChatTaskConfirmationEvent | ChatDoneEvent | ChatErrorEvent;
 
 export interface StartChatStreamOptions {
   apiBase: string;
@@ -58,7 +64,7 @@ export interface ChatStreamHandle {
 const OPEN = 1;
 const CLOSED = 3;
 
-const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "done", "error"]);
+const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "task_confirmation", "done", "error"]);
 
 export function toFriendlyChatError(message: string, language: Language = "en"): string {
   if (message.includes("paper_not_authorized_for_session")) {
@@ -92,6 +98,19 @@ export function normalizeChatEvent(rawData: unknown): ChatEvent | null {
     if (payload.type === "tool_call") {
       if (typeof payload.tool_name !== "string") return null;
       return { type: "tool_call", tool_name: payload.tool_name };
+    }
+    if (payload.type === "task_confirmation") {
+      if (typeof payload.confirmation_id !== "string" || typeof payload.tool_name !== "string") return null;
+      return {
+        type: "task_confirmation",
+        confirmation_id: payload.confirmation_id,
+        tool_name: payload.tool_name,
+        title: typeof payload.title === "string" ? payload.title : "Analysis background task",
+        analysis_type: typeof payload.analysis_type === "string" ? payload.analysis_type : "generic",
+        research_question: typeof payload.research_question === "string" ? payload.research_question : "",
+        method_document_name: typeof payload.method_document_name === "string" ? payload.method_document_name : "",
+        dataset_name: typeof payload.dataset_name === "string" ? payload.dataset_name : "",
+      };
     }
     if (payload.type === "done") {
       return { type: "done", token_info: (payload.token_info as Partial<TokenInfo> | undefined) ?? undefined };

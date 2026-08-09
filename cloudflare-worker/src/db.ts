@@ -29,6 +29,27 @@ export interface ChatMessageRow {
   created_at: number;
 }
 
+export interface ChatTaskConfirmationRow {
+  confirmation_id: string;
+  session_id: string;
+  user_id: string;
+  tool_name: string;
+  tool_call_id: string;
+  tool_args_json: string;
+  status: "pending" | "processing" | "completed" | "expired";
+  task_id: string | null;
+  created_at: number;
+  expires_at: number;
+  consumed_at: number | null;
+}
+
+export interface OwnedTaskRow {
+  task_id: string;
+  title: string;
+  status: string;
+  created_by: string;
+}
+
 // --- auth sessions ---
 
 export async function insertAuthSession(env: Env, row: Omit<AuthSessionRow, "revoked_at">): Promise<void> {
@@ -128,6 +149,95 @@ export async function insertMessage(env: Env, sessionId: string, role: string, c
   )
     .bind(sessionId, role, content, nowSeconds())
     .run();
+}
+
+// --- chat tool confirmations ---
+
+export async function createChatTaskConfirmation(
+  env: Env,
+  row: Omit<ChatTaskConfirmationRow, "status" | "task_id" | "consumed_at">,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO chat_task_confirmations
+       (confirmation_id, session_id, user_id, tool_name, tool_call_id, tool_args_json,
+        status, task_id, created_at, expires_at, consumed_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', NULL, ?7, ?8, NULL)`,
+  )
+    .bind(
+      row.confirmation_id,
+      row.session_id,
+      row.user_id,
+      row.tool_name,
+      row.tool_call_id,
+      row.tool_args_json,
+      row.created_at,
+      row.expires_at,
+    )
+    .run();
+}
+
+export async function getChatTaskConfirmation(
+  env: Env,
+  confirmationId: string,
+  sessionId: string,
+  userId: string,
+): Promise<ChatTaskConfirmationRow | null> {
+  return env.DB.prepare(
+    `SELECT confirmation_id, session_id, user_id, tool_name, tool_call_id, tool_args_json,
+            status, task_id, created_at, expires_at, consumed_at
+     FROM chat_task_confirmations
+     WHERE confirmation_id = ?1 AND session_id = ?2 AND user_id = ?3`,
+  )
+    .bind(confirmationId, sessionId, userId)
+    .first<ChatTaskConfirmationRow>();
+}
+
+export async function claimChatTaskConfirmation(
+  env: Env,
+  confirmationId: string,
+  now: number,
+): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `UPDATE chat_task_confirmations
+     SET status = 'processing'
+     WHERE confirmation_id = ?1 AND status = 'pending' AND expires_at > ?2`,
+  )
+    .bind(confirmationId, now)
+    .run();
+  return (result.meta?.changes ?? 0) === 1;
+}
+
+export async function completeChatTaskConfirmation(
+  env: Env,
+  confirmationId: string,
+  taskId: string,
+  consumedAt: number,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE chat_task_confirmations
+     SET status = 'completed', task_id = ?2, consumed_at = ?3
+     WHERE confirmation_id = ?1 AND status = 'processing'`,
+  )
+    .bind(confirmationId, taskId, consumedAt)
+    .run();
+}
+
+export async function reopenChatTaskConfirmation(env: Env, confirmationId: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE chat_task_confirmations SET status = 'pending'
+     WHERE confirmation_id = ?1 AND status = 'processing'`,
+  )
+    .bind(confirmationId)
+    .run();
+}
+
+export async function getOwnedTask(env: Env, taskId: string, userId: string): Promise<OwnedTaskRow | null> {
+  return env.DB.prepare(
+    `SELECT task_id, title, status, created_by
+     FROM tasks WHERE task_id = ?1 AND created_by = ?2`,
+  )
+    .bind(taskId, userId)
+    .first<OwnedTaskRow>();
 }
 
 // --- paper authorizations ---

@@ -38,6 +38,37 @@ describe("chatReducer", () => {
     expect(getMessagesForSession(state2, "s1")[1].role).toBe("assistant");
   });
 
+  it("keeps a task confirmation attached to the assistant message", () => {
+    const state1 = chatReducer(INITIAL_CHAT_STATE, {
+      type: "set_session_messages",
+      sessionId: "s1",
+      messages: [{ role: "user", content: "create an analysis task" }, { role: "assistant", content: "I can prepare that." }],
+    });
+    const state2 = chatReducer(state1, {
+      type: "attach_task_confirmation",
+      sessionId: "s1",
+      confirmation: {
+        confirmation_id: "c1",
+        tool_name: "request_task_creation",
+        title: "Trait extraction",
+        analysis_type: "trait_extraction",
+        research_question: "",
+        method_document_name: "",
+        dataset_name: "",
+        status: "pending",
+      },
+    });
+    const state3 = chatReducer(state2, {
+      type: "update_task_confirmation",
+      sessionId: "s1",
+      confirmationId: "c1",
+      patch: { status: "submitted", task_id: "t1" },
+    });
+    expect(state3.sessionMessagesMap.s1[1]?.taskConfirmation?.status).toBe("submitted");
+    expect(state3.sessionMessagesMap.s1[1]?.taskConfirmation?.task_id).toBe("t1");
+    expect(state3.sessionMessagesMap.s1).toHaveLength(2);
+  });
+
   it("patches run state with defaults", () => {
     const state = chatReducer(INITIAL_CHAT_STATE, {
       type: "patch_session_run_state",

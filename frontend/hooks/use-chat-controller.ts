@@ -11,6 +11,7 @@ import {
   INITIAL_CHAT_STATE,
   isDefaultSessionTitle,
   type Message,
+  type TaskConfirmation,
   type SessionItem,
   type SessionRunState,
   type TerminalState,
@@ -26,7 +27,7 @@ import {
   type UploadedPaperItem,
 } from "@/lib/api/sessions";
 import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
-import { startChatStream, toFriendlyChatError, type ChatDoneEvent, type ChatEvent, type ChatStreamHandle } from "@/lib/ws/chat-stream";
+import { startChatStream, toFriendlyChatError, type ChatDoneEvent, type ChatEvent, type ChatStreamHandle, type ChatTaskConfirmationEvent } from "@/lib/ws/chat-stream";
 import { useLanguage } from "@/lib/i18n";
 
 const isSocketOpen = (socket?: ChatStreamHandle | null) => {
@@ -38,6 +39,17 @@ const toTokenInfo = (payload?: ChatDoneEvent["token_info"]) => ({
   prompt: Number(payload?.prompt) || 0,
   response: Number(payload?.response) || 0,
   total: Number(payload?.total) || 0,
+});
+
+const toTaskConfirmation = (payload: ChatTaskConfirmationEvent): TaskConfirmation => ({
+  confirmation_id: payload.confirmation_id,
+  tool_name: payload.tool_name,
+  title: payload.title,
+  analysis_type: payload.analysis_type,
+  research_question: payload.research_question,
+  method_document_name: payload.method_document_name,
+  dataset_name: payload.dataset_name,
+  status: "pending",
 });
 
 export function useChatController() {
@@ -522,6 +534,13 @@ export function useChatController() {
           }));
           return;
         }
+        if (eventPayload.type === "task_confirmation") {
+          const confirmation = toTaskConfirmation(eventPayload);
+          dispatch({ type: "attach_task_confirmation", sessionId: targetSessionId!, confirmation });
+          finalize("success");
+          wsByRequestRef.current.get(clientRequestId)?.close(1000, "awaiting_task_confirmation");
+          return;
+        }
         if (eventPayload.type === "done") {
           finalize("success", toTokenInfo(eventPayload.token_info));
           void refreshSessions();
@@ -591,6 +610,149 @@ export function useChatController() {
       language,
       t,
     ],
+  );
+
+  const handleTaskConfirmationCreated = useCallback(
+    async (confirmationId: string, taskId: string, _title: string) => {
+      const targetSessionId = state.sessionId;
+      if (!targetSessionId) return;
+      if (runningRequestBySessionRef.current.has(targetSessionId)) {
+        toast.info(t("error.runningWait"));
+        return;
+      }
+
+      const baseMessages = sessionMessagesMapRef.current[targetSessionId] || [];
+      dispatch({
+        type: "update_task_confirmation",
+        sessionId: targetSessionId,
+        confirmationId,
+        patch: { status: "submitted", task_id: taskId, error: undefined },
+      });
+      // Keep the card attached to the previous assistant message and place the
+      // resumed Agent answer after it in the same conversation flow.
+      dispatch({ type: "append_assistant_message", sessionId: targetSessionId, content: "" });
+
+      const clientRequestId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      runningRequestBySessionRef.current.set(targetSessionId, clientRequestId);
+      setSessionRunState(targetSessionId, {
+        running: true,
+        phase: "thinking",
+        toolName: null,
+        unreadDone: false,
+        terminal: null,
+        requestId: clientRequestId,
+        elapsedMs: 0,
+        attempt: 1,
+        maxAttempts: 1,
+        reason: null,
+        hasReceivedChunk: false,
+        hasReceivedToolCall: false,
+        activeTools: [],
+        tokenInfo: null,
+      });
+
+      let accumulatedResponse = "";
+      let completed = false;
+      const isCurrentRequest = () => runningRequestBySessionRef.current.get(targetSessionId) === clientRequestId;
+      const finalize = (terminal: TerminalState) => {
+        if (completed) return;
+        completed = true;
+        if (isCurrentRequest()) runningRequestBySessionRef.current.delete(targetSessionId);
+        wsByRequestRef.current.delete(clientRequestId);
+        setSessionRunState(targetSessionId, (prev) => ({
+          ...prev,
+          running: false,
+          phase: null,
+          toolName: null,
+          unreadDone: true,
+          terminal,
+          requestId: null,
+          activeTools: [],
+        }));
+      };
+
+      const onEvent = (eventPayload: ChatEvent) => {
+        if (!isCurrentRequest()) return;
+        if (eventPayload.type === "status") {
+          setSessionRunState(targetSessionId, (prev) => ({
+            ...prev,
+            phase: eventPayload.phase,
+            elapsedMs: Number.isFinite(eventPayload.elapsed_ms) && eventPayload.elapsed_ms >= 0 ? eventPayload.elapsed_ms : prev.elapsedMs,
+            toolName: eventPayload.tool_name ?? prev.toolName,
+            reason: eventPayload.reason ?? prev.reason,
+          }));
+          return;
+        }
+        if (eventPayload.type === "chunk") {
+          accumulatedResponse += eventPayload.content;
+          setAssistantContent(targetSessionId, accumulatedResponse);
+          setSessionRunState(targetSessionId, { hasReceivedChunk: true });
+          return;
+        }
+        if (eventPayload.type === "tool_call") {
+          setSessionRunState(targetSessionId, (prev) => ({
+            ...prev,
+            hasReceivedToolCall: true,
+            toolName: eventPayload.tool_name,
+            activeTools: prev.activeTools.includes(eventPayload.tool_name) ? prev.activeTools : [...prev.activeTools, eventPayload.tool_name],
+          }));
+          return;
+        }
+        if (eventPayload.type === "task_confirmation") {
+          dispatch({ type: "attach_task_confirmation", sessionId: targetSessionId, confirmation: toTaskConfirmation(eventPayload) });
+          finalize("success");
+          wsByRequestRef.current.get(clientRequestId)?.close(1000, "awaiting_task_confirmation");
+          return;
+        }
+        if (eventPayload.type === "done") {
+          finalize("success");
+          void refreshSessions();
+          wsByRequestRef.current.get(clientRequestId)?.close(1000, "completed");
+          return;
+        }
+        if (eventPayload.type === "error") {
+          const friendly = toFriendlyChatError(eventPayload.message || t("error.connection"), language);
+          appendAssistantContent(targetSessionId, accumulatedResponse ? `\n\n[Error] ${friendly}` : `[Error] ${friendly}`);
+          finalize("error");
+          wsByRequestRef.current.get(clientRequestId)?.close(1000, "error");
+        }
+      };
+
+      try {
+        const stream = startChatStream({
+          apiBase,
+          payload: {
+            session_id: targetSessionId,
+            messages: baseMessages.map(({ role, content }) => ({ role, content })),
+            retry_attempt: 0,
+            client_request_id: clientRequestId,
+            task_confirmation_id: confirmationId,
+            task_id: taskId,
+          },
+          onEvent,
+          onSocketError: () => {
+            if (!isCurrentRequest()) return;
+            const message = t("error.network");
+            appendAssistantContent(targetSessionId, accumulatedResponse ? `\n\n[Error] ${message}` : `[Error] ${message}`);
+            finalize("error");
+            toast.error(t("error.networkToast"));
+          },
+          onClose: () => {
+            if (!isCurrentRequest() || completed) return;
+            finalize("error");
+          },
+        });
+        wsByRequestRef.current.set(clientRequestId, stream);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : t("error.connection");
+        appendAssistantContent(targetSessionId, `[Error] ${message}`);
+        finalize("error");
+      }
+    },
+    [apiBase, appendAssistantContent, language, refreshSessions, setAssistantContent, setSessionRunState, state.sessionId, t],
   );
 
   const handleStopGeneration = useCallback(() => {
@@ -727,6 +889,7 @@ export function useChatController() {
     cancelDeleteSession,
     confirmDeleteSession,
     handleSubmit,
+    handleTaskConfirmationCreated,
     handleStopGeneration,
     handleUploadPdf,
     handleExportPdf,

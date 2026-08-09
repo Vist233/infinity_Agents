@@ -40,7 +40,7 @@ async function handleMe(env: Env, user: AuthedUser): Promise<Response> {
  * Infinity Edge routes both products from one Worker:
  *
  * - `/image-judge/*` is the isolated ImageJudge API namespace.
- * - `/auth/*` and `/api/*` are the PaperAgent session/auth API.
+ * - `/auth/*` and `/api/*` are the Analysis session/auth API.
  * - all other GET/HEAD requests are static Next export assets.
  */
 export default {
@@ -55,7 +55,7 @@ export default {
 
     // ImageJudge has independent bindings and credentials. Keep this check
     // before the generic auth/API routes so its callback cannot be confused
-    // with PaperAgent's callback.
+    // with Analysis' callback.
     const isImageJudgeRoute =
       pathname === "/image-judge/healthz" ||
       pathname.startsWith("/image-judge/desktop/") ||
@@ -65,7 +65,7 @@ export default {
       return handleImageJudge(request, env);
     }
 
-    // PaperAgent authentication is cookie-backed and server-side. Tokens are
+    // Analysis authentication is cookie-backed and server-side. Tokens are
     // kept in the Infinity D1 session table; the browser only receives the
     // opaque `ia_session` cookie.
     if (method === "GET" && pathname === "/auth/login") {

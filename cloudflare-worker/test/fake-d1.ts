@@ -21,12 +21,35 @@ export interface ChatMessageRow {
   created_at: number;
 }
 
+export interface ChatTaskConfirmationRow {
+  confirmation_id: string;
+  session_id: string;
+  user_id: string;
+  tool_name: string;
+  tool_call_id: string;
+  tool_args_json: string;
+  status: "pending" | "processing" | "completed" | "expired";
+  task_id: string | null;
+  created_at: number;
+  expires_at: number;
+  consumed_at: number | null;
+}
+
+export interface TaskRow {
+  task_id: string;
+  title: string;
+  status: string;
+  created_by: string;
+}
+
 export class FakeD1 {
   dailyUsage = new Map<string, number>();
   paperAuth = new Set<string>();
   cache = new Map<string, { data: string; expires_at: number }>();
   chatSessions = new Map<string, ChatSessionRow>();
   chatMessages: ChatMessageRow[] = [];
+  chatTaskConfirmations = new Map<string, ChatTaskConfirmationRow>();
+  tasks = new Map<string, TaskRow>();
   private messageSeq = 0;
 
   seedChatSession(id: string, userId: string, title = "Test session"): void {
@@ -43,6 +66,10 @@ export class FakeD1 {
       content,
       created_at: Math.floor(Date.now() / 1000)
     });
+  }
+
+  seedTask(taskId: string, userId: string, title = "Test task", status = "queued"): void {
+    this.tasks.set(taskId, { task_id: taskId, title, status, created_by: userId });
   }
 
   prepare(sql: string) {
@@ -91,6 +118,16 @@ class FakeStatement {
       const row = this.db.chatSessions.get(id);
       return row && row.user_id === userId ? (row as T) : null;
     }
+    if (sql.includes("FROM chat_task_confirmations")) {
+      const [confirmationId, sessionId, userId] = this.args as [string, string, string];
+      const row = this.db.chatTaskConfirmations.get(confirmationId);
+      return row && row.session_id === sessionId && row.user_id === userId ? (row as T) : null;
+    }
+    if (sql.includes("FROM tasks WHERE task_id")) {
+      const [taskId, userId] = this.args as [string, string];
+      const row = this.db.tasks.get(taskId);
+      return row && row.created_by === userId ? (row as T) : null;
+    }
     if (sql.includes("FROM paper_cache")) {
       const [key] = this.args as [string];
       const row = this.db.cache.get(key);
@@ -115,6 +152,41 @@ class FakeStatement {
     if (sql.includes("INSERT INTO chat_messages")) {
       const [sessionId, role, content] = this.args as [string, string, string];
       this.db.addMessage(sessionId, role, content);
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT INTO chat_task_confirmations")) {
+      const [confirmationId, sessionId, userId, toolName, toolCallId, toolArgsJson, createdAt, expiresAt] = this.args as [
+        string, string, string, string, string, string, number, number
+      ];
+      this.db.chatTaskConfirmations.set(confirmationId, {
+        confirmation_id: confirmationId,
+        session_id: sessionId,
+        user_id: userId,
+        tool_name: toolName,
+        tool_call_id: toolCallId,
+        tool_args_json: toolArgsJson,
+        status: "pending",
+        task_id: null,
+        created_at: createdAt,
+        expires_at: expiresAt,
+        consumed_at: null,
+      });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE chat_task_confirmations") && sql.includes("SET status = 'processing'")) {
+      const [confirmationId, now] = this.args as [string, number];
+      const row = this.db.chatTaskConfirmations.get(confirmationId);
+      if (!row || row.status !== "pending" || row.expires_at <= now) return { meta: { changes: 0 } };
+      row.status = "processing";
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE chat_task_confirmations") && sql.includes("SET status = 'completed'")) {
+      const [confirmationId, taskId, consumedAt] = this.args as [string, string, number];
+      const row = this.db.chatTaskConfirmations.get(confirmationId);
+      if (!row || row.status !== "processing") return { meta: { changes: 0 } };
+      row.status = "completed";
+      row.task_id = taskId;
+      row.consumed_at = consumedAt;
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE chat_sessions SET updated_at")) {

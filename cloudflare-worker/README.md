@@ -32,6 +32,20 @@ Analysis/Coding task control uses the same authenticated browser session:
 - `GET /api/tasks/:id/events` and `/events/stream`
 - `GET /api/tasks/:id/artifacts` and `GET /api/artifacts/:id`
 
+Task creation is an in-conversation handshake, not a permanent page form:
+
+1. Analysis calls `request_task_creation` when the user asks for a background
+   task.
+2. The Worker stores a short-lived pending confirmation and emits a
+   `task_confirmation` SSE event; the frontend renders the card directly under
+   that Agent message and closes the stream.
+3. After the user supplies the execution document and ZIP dataset, the card
+   creates one idempotent queued Task and resumes `POST /api/chat` with the
+   confirmation ID and verified task ID.
+4. The Worker supplies the queued task as the tool result, and Analysis sends
+   the follow-up response. The card remains in the message flow; the Task
+   Center is history/status only.
+
 ## Worker Control API
 
 An operator first issues a short-lived one-time enrollment token through the

@@ -1,8 +1,18 @@
 import type { Env } from "./env";
 import { MAX_CONTEXT_MESSAGES } from "./env";
 import type { AuthedUser } from "./auth";
-import { errorJson } from "./http";
-import { getChatSession, insertMessage, listMessages, touchChatSession } from "./db";
+import { errorJson, nowSeconds } from "./http";
+import {
+  claimChatTaskConfirmation,
+  completeChatTaskConfirmation,
+  createChatTaskConfirmation,
+  getChatSession,
+  getChatTaskConfirmation,
+  getOwnedTask,
+  insertMessage,
+  listMessages,
+  touchChatSession,
+} from "./db";
 import { checkRateLimit, consumeDailyQuota, decrementDailyUsageSafe } from "./quota";
 import { runTool, TOOL_DEFINITIONS } from "./tools";
 import { PAPER_AGENT_SYSTEM_PROMPT } from "./prompt";
@@ -13,6 +23,8 @@ interface ChatRequestBody {
   session_id?: string;
   messages?: Array<{ role: string; content: string }>;
   client_request_id?: string;
+  task_confirmation_id?: string;
+  task_id?: string;
 }
 
 interface ChatMessage {
@@ -26,6 +38,19 @@ interface ToolCall {
   id: string;
   type: "function";
   function: { name: string; arguments: string };
+}
+
+interface TaskConfirmationArgs {
+  title: string;
+  analysis_type: string;
+  research_question: string;
+  method_document_name: string;
+  dataset_name: string;
+}
+
+interface ChatLoopResult {
+  status: "completed" | "confirmation_required";
+  assistantText: string;
 }
 
 function sseEncode(event: Record<string, unknown>): Uint8Array {
@@ -45,6 +70,10 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
 
   const owned = await getChatSession(env, sessionId, user.userId);
   if (!owned) return errorJson("Session not found", 404, "NOT_FOUND");
+
+  if (body.task_confirmation_id) {
+    return handleTaskConfirmation(env, user, sessionId, body);
+  }
 
   const incoming = Array.isArray(body.messages) ? body.messages : [];
   const lastUser = [...incoming].reverse().find((m) => m.role === "user");
@@ -84,6 +113,104 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
     { role: "user", content: userContent }
   ];
 
+  return streamModelLoop(env, user, sessionId, modelMessages, true);
+}
+
+/**
+ * Resume a paused request_task_creation tool call after the inline card has
+ * created a queued Task. The task itself is verified server-side; the client
+ * cannot inject another user's task_id into the model context.
+ */
+async function handleTaskConfirmation(
+  env: Env,
+  user: AuthedUser,
+  sessionId: string,
+  body: ChatRequestBody,
+): Promise<Response> {
+  const confirmationId = String(body.task_confirmation_id ?? "").trim();
+  const taskId = String(body.task_id ?? "").trim();
+  if (!confirmationId || !taskId) {
+    return errorJson("task_confirmation_id and task_id are required", 400, "INVALID_TASK_CONFIRMATION");
+  }
+
+  const confirmation = await getChatTaskConfirmation(env, confirmationId, sessionId, user.userId);
+  if (!confirmation) return errorJson("Task confirmation not found", 404, "TASK_CONFIRMATION_NOT_FOUND");
+  const now = nowSeconds();
+  if (confirmation.expires_at <= now) return errorJson("Task confirmation expired", 410, "TASK_CONFIRMATION_EXPIRED");
+  if (confirmation.status !== "pending") {
+    return errorJson("Task confirmation has already been used", 409, "TASK_CONFIRMATION_USED");
+  }
+
+  const task = await getOwnedTask(env, taskId, user.userId);
+  if (!task || task.status !== "queued") {
+    return errorJson("Queued task not found", 404, "TASK_NOT_FOUND");
+  }
+
+  if (!(await claimChatTaskConfirmation(env, confirmationId, now))) {
+    return errorJson("Task confirmation has already been used", 409, "TASK_CONFIRMATION_USED");
+  }
+  await completeChatTaskConfirmation(env, confirmationId, taskId, now);
+
+  let args: TaskConfirmationArgs = {
+    title: task.title,
+    analysis_type: "generic",
+    research_question: "",
+    method_document_name: "",
+    dataset_name: "",
+  };
+  try {
+    const parsed = JSON.parse(confirmation.tool_args_json) as Partial<TaskConfirmationArgs>;
+    args = {
+      title: String(parsed.title ?? task.title),
+      analysis_type: String(parsed.analysis_type ?? "generic"),
+      research_question: String(parsed.research_question ?? ""),
+      method_document_name: String(parsed.method_document_name ?? ""),
+      dataset_name: String(parsed.dataset_name ?? ""),
+    };
+  } catch {
+    // The task was already created from the card. Use safe defaults for the
+    // model continuation instead of failing the user's queued task.
+  }
+
+  const history = await listMessages(env, sessionId);
+  const contextHistory = history.slice(-MAX_CONTEXT_MESSAGES).map((m) => ({
+    role: m.role === "assistant" ? "assistant" : "user",
+    content: m.content,
+  })) as ChatMessage[];
+  const modelMessages: ChatMessage[] = [
+    { role: "system", content: PAPER_AGENT_SYSTEM_PROMPT },
+    ...contextHistory,
+    {
+      role: "assistant",
+      content: null,
+      tool_calls: [{
+        id: confirmation.tool_call_id,
+        type: "function",
+        function: { name: confirmation.tool_name, arguments: JSON.stringify(args) },
+      }],
+    },
+    {
+      role: "tool",
+      tool_call_id: confirmation.tool_call_id,
+      content: JSON.stringify({
+        status: "queued",
+        task_id: task.task_id,
+        title: task.title,
+        message: "The user completed the confirmation card. The task is queued for asynchronous background execution.",
+      }),
+    },
+  ];
+
+  return streamModelLoop(env, user, sessionId, modelMessages, false);
+}
+
+function streamModelLoop(
+  env: Env,
+  user: AuthedUser,
+  sessionId: string,
+  modelMessages: ChatMessage[],
+  refundQuotaOnError: boolean,
+): Response {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const startedAt = Date.now();
@@ -91,27 +218,21 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
       const emitStatus = (phase: string, extra: Record<string, unknown> = {}) =>
         emit({ type: "status", phase, elapsed_ms: Date.now() - startedAt, attempt: 1, max_attempts: 1, ...extra });
 
-      let assistantText = "";
-      let quotaRefunded = false;
       try {
         emitStatus("thinking");
-        assistantText = await runToolLoop(env, sessionId, modelMessages, emit, emitStatus);
-        if (assistantText.trim()) {
-          await insertMessage(env, sessionId, "assistant", assistantText);
+        const result = await runToolLoop(env, sessionId, user.userId, modelMessages, emit, emitStatus);
+        if (result.assistantText.trim()) {
+          await insertMessage(env, sessionId, "assistant", result.assistantText);
           await touchChatSession(env, sessionId);
         }
-        emit({ type: "done" });
+        if (result.status === "completed") emit({ type: "done" });
       } catch (error) {
-        // Refund the quota unit on hard failure so users aren't charged for errors.
-        if (!quotaRefunded) {
-          await decrementDailyUsageSafe(env, user.userId);
-          quotaRefunded = true;
-        }
+        if (refundQuotaOnError) await decrementDailyUsageSafe(env, user.userId);
         emit({ type: "error", message: error instanceof Error ? error.message : "Chat failed" });
       } finally {
         controller.close();
       }
-    }
+    },
   });
 
   return new Response(stream, {
@@ -119,8 +240,8 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
     headers: {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-store",
-      connection: "keep-alive"
-    }
+      connection: "keep-alive",
+    },
   });
 }
 
@@ -131,10 +252,11 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
 async function runToolLoop(
   env: Env,
   sessionId: string,
+  userId: string,
   messages: ChatMessage[],
   emit: (event: Record<string, unknown>) => void,
   emitStatus: (phase: string, extra?: Record<string, unknown>) => void
-): Promise<string> {
+): Promise<ChatLoopResult> {
   let finalText = "";
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
@@ -152,6 +274,33 @@ async function runToolLoop(
         } catch {
           args = {};
         }
+        if (call.function.name === "request_task_creation") {
+          const confirmation = normalizeTaskConfirmationArgs(args);
+          const confirmationId = crypto.randomUUID();
+          const createdAt = nowSeconds();
+          await createChatTaskConfirmation(env, {
+            confirmation_id: confirmationId,
+            session_id: sessionId,
+            user_id: userId,
+            tool_name: call.function.name,
+            tool_call_id: call.id,
+            tool_args_json: JSON.stringify(confirmation),
+            created_at: createdAt,
+            expires_at: createdAt + 30 * 60,
+          });
+          const handoffText = content.trim()
+            ? content
+            : "我已理解你的需求，请在下面的确认卡中补充材料；提交后我会把任务放到后台执行。";
+          if (!content.trim()) emit({ type: "chunk", content: handoffText });
+          emit({
+            type: "task_confirmation",
+            confirmation_id: confirmationId,
+            tool_name: call.function.name,
+            ...confirmation,
+          });
+          return { status: "confirmation_required", assistantText: handoffText };
+        }
+
         const result = await runTool(env, sessionId, call.function.name, args);
         messages.push({ role: "tool", tool_call_id: call.id, content: result });
       }
@@ -165,7 +314,21 @@ async function runToolLoop(
     }
   }
 
-  return finalText;
+  return { status: "completed", assistantText: finalText };
+}
+
+function normalizeTaskConfirmationArgs(args: Record<string, unknown>): TaskConfirmationArgs {
+  const bounded = (value: unknown, fallback: string, max: number) => {
+    const text = String(value ?? fallback).trim();
+    return (text || fallback).slice(0, max);
+  };
+  return {
+    title: bounded(args.title, "Analysis background task", 255),
+    analysis_type: bounded(args.analysis_type, "generic", 80),
+    research_question: bounded(args.research_question, "", 2000),
+    method_document_name: bounded(args.method_document_name, "", 255),
+    dataset_name: bounded(args.dataset_name, "", 255),
+  };
 }
 
 /**

@@ -2,7 +2,7 @@ import type { Env } from "./env";
 import { PAPER_CACHE_TTL_SECONDS } from "./env";
 import { authorizePapers, cacheGet, cacheSet, isPaperAuthorized } from "./db";
 
-// Pure-HTTP reimplementation of PaperAgent's search_paper / read_paper tools.
+// Pure-HTTP implementation of Analysis' search_paper / read_paper tools.
 // Sources: arXiv Atom API + PubMed E-utilities. No PDF parsing (v1 reads
 // abstract/metadata/web text only). Access control: a paper may only be read in
 // a session if it was surfaced by search (or a prior read) in that same session.
@@ -275,6 +275,25 @@ export const TOOL_DEFINITIONS = [
   {
     type: "function",
     function: {
+      name: "request_task_creation",
+      description:
+        "Request an inline confirmation card when the user wants to create a background Analysis/Coding task. This does not create the task; wait for the user to submit the requested files before claiming it is queued.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Suggested task title." },
+          analysis_type: { type: "string", description: "Suggested analysis type, for example generic or trait_extraction." },
+          research_question: { type: "string", description: "The question or goal the task should answer." },
+          method_document_name: { type: "string", description: "Optional expected execution-document filename." },
+          dataset_name: { type: "string", description: "Optional expected dataset filename." }
+        },
+        required: ["title"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "search_paper",
       description:
         "Search academic papers on arXiv and PubMed. Returns normalized metadata including a `ref` field to pass to read_paper.",
@@ -311,6 +330,12 @@ export async function runTool(
   name: string,
   args: Record<string, unknown>
 ): Promise<string> {
+  if (name === "request_task_creation") {
+    return JSON.stringify({
+      status: "confirmation_required",
+      message: "The inline task confirmation card must be completed before this task can be created."
+    });
+  }
   if (name === "search_paper") {
     return searchPaper(env, sessionId, String(args.query ?? ""), Number(args.num_results ?? 10));
   }

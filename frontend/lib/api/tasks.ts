@@ -69,9 +69,14 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let detail = `HTTP ${response.status}`;
     try {
-      const payload = await response.json();
+      const payload = await response.json() as {
+        detail?: string;
+        error?: { message?: string };
+      };
       if (payload && typeof payload.detail === "string") {
         detail = payload.detail;
+      } else if (payload?.error && typeof payload.error.message === "string") {
+        detail = payload.error.message;
       }
     } catch {
       // keep default detail

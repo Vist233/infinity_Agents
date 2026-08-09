@@ -9,7 +9,7 @@ export interface Env {
   ASSETS: Fetcher;
   CHAT_RATE_LIMITER: RateLimitBinding;
 
-  // ImageJudge uses separate D1/KV/DO bindings and never reads PaperAgent's
+  // ImageJudge uses separate D1/KV/DO bindings and never reads Analysis'
   // session tables or authentication secrets.
   IMAGE_JUDGE_DB: D1Database;
   IMAGE_JUDGE_KV: KVNamespace;
