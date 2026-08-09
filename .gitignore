@@ -52,6 +52,7 @@ agent/tools/arxiv_pdfs/
 .mypy_cache/
 .ruff_cache/
 .coverage
+cloudflare-worker/node_modules/
 coverage.xml
 htmlcov/
 

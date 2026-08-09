@@ -11,6 +11,7 @@ import {
 import { handleChat } from "./chat";
 import { currentDailyUsage } from "./quota";
 import { handleImageJudge } from "./image-judge";
+import { handleTaskApi } from "./tasks";
 
 export { ImageJudgeUserConcurrencyLock } from "./image-judge";
 
@@ -86,6 +87,9 @@ export default {
       if (method === "GET" && pathname === "/api/me") {
         return withCookie(await handleMe(env, user), setCookie);
       }
+
+      const taskResponse = await handleTaskApi(request, env, user);
+      if (taskResponse) return withCookie(taskResponse, setCookie);
 
       if (pathname === "/api/sessions") {
         if (method === "POST") return withCookie(await createSession(env, user), setCookie);

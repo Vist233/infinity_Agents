@@ -219,15 +219,6 @@ export async function handleDesktopRefresh(req: Request, env: Env): Promise<Resp
   if (!payload || payload.type !== "refresh") {
     return errorResponse(401, "AUTH_EXPIRED", "The refresh token is invalid or expired", false);
   }
-  const row = await env.DB.prepare(
-    `SELECT revoked, expires_at FROM sessions WHERE jti = ?1`
-  )
-    .bind(payload.jti)
-    .first<{ revoked: number; expires_at: number }>();
-  if (!row || row.revoked || row.expires_at * 1000 < Date.now()) {
-    return errorResponse(401, "AUTH_EXPIRED", "The session has been revoked or expired", false);
-  }
-
   // 轮换：撤销旧 refresh token（文档 §9.4）
   const user = await env.DB.prepare(`SELECT email, name FROM users WHERE sub = ?1`)
     .bind(payload.sub)
@@ -238,15 +229,22 @@ export async function handleDesktopRefresh(req: Request, env: Env): Promise<Resp
   const accessTtl = parseInt(env.ACCESS_TOKEN_TTL_SECONDS || "900", 10);
   const newJti = newId("sess");
 
-  await env.DB.batch([
-    env.DB.prepare(`UPDATE sessions SET revoked = 1, replaced_by = ?2 WHERE jti = ?1`).bind(
-      payload.jti,
-      newJti
-    ),
-    env.DB.prepare(
+  // The conditional update is the single-use gate. Two concurrent refreshes
+  // can both read the old row, but only one can change revoked=0 to revoked=1.
+  const consumed = await env.DB.prepare(
+    `UPDATE sessions SET revoked = 1, replaced_by = ?2
+     WHERE jti = ?1 AND revoked = 0 AND expires_at >= ?3`
+  ).bind(payload.jti, newJti, now).run();
+  if ((consumed.meta?.changes ?? 0) !== 1) {
+    return errorResponse(401, "AUTH_EXPIRED", "The session has been revoked or expired", false);
+  }
+  try {
+    await env.DB.prepare(
       `INSERT INTO sessions (jti, user_sub, issued_at, expires_at, revoked) VALUES (?1, ?2, ?3, ?4, 0)`
-    ).bind(newJti, payload.sub, now, now + refreshTtl),
-  ]);
+    ).bind(newJti, payload.sub, now, now + refreshTtl).run();
+  } catch {
+    return errorResponse(503, "SESSION_ROTATION_FAILED", "The session could not be rotated; try again", true);
+  }
 
   const accessToken = await signToken(
     {

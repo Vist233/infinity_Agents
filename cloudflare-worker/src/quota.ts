@@ -20,8 +20,10 @@ export async function checkRateLimit(env: Env, userId: string): Promise<boolean>
     const { success } = await env.CHAT_RATE_LIMITER.limit({ key: userId });
     return success;
   } catch {
-    // Fail open if the binding is unavailable in local/dev.
-    return true;
+    // A missing rate-limit binding must not silently disable production
+    // protection. Local tests provide a real fake binding, so fail closed is
+    // safe for both deployment and development.
+    return false;
   }
 }
 

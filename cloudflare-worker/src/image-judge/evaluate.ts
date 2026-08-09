@@ -318,6 +318,76 @@ class RateLimitedError extends Error {
 
 class ModelError extends Error {}
 
+function boundedString(value: unknown, maxLength: number, minLength = 0): value is string {
+  return typeof value === "string" && value.length >= minLength && value.length <= maxLength;
+}
+
+function stringList(value: unknown, maxItems: number): value is string[] {
+  return Array.isArray(value) && value.length <= maxItems && value.every((item) => typeof item === "string");
+}
+
+/** Parse and validate the model result before it can be cached or returned. */
+function parseEvaluationResult(text: string): Record<string, unknown> | null {
+  const candidates = [
+    text.trim(),
+    text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim(),
+  ];
+  let value: unknown;
+  for (const candidate of candidates) {
+    try {
+      value = JSON.parse(candidate);
+      break;
+    } catch {
+      // Try the fenced/plain alternate representation.
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const result = value as Record<string, unknown>;
+  const required = [
+    "schema_version", "task_type", "predicted_category", "status", "spotting_features",
+    "candidate_categories", "image_quality", "reasoning_summary", "review",
+  ];
+  const allowed = new Set(required);
+  if (Object.keys(result).some((key) => !allowed.has(key)) || required.some((key) => !(key in result))) return null;
+  if (result.schema_version !== "2.0" || result.task_type !== "CLASSIFICATION") return null;
+  if (!boundedString(result.predicted_category, 100, 1) || !["CLASSIFIED", "UNKNOWN", "REVIEW"].includes(String(result.status))) return null;
+  if (!boundedString(result.reasoning_summary, 500)) return null;
+
+  if (!Array.isArray(result.spotting_features) || result.spotting_features.length > 50) return null;
+  for (const item of result.spotting_features) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const feature = item as Record<string, unknown>;
+    const keys = ["feature_id", "state", "evidence", "supports", "contradicts"];
+    if (Object.keys(feature).some((key) => !keys.includes(key)) || keys.some((key) => !(key in feature))) return null;
+    if (!boundedString(feature.feature_id, 100, 1) || !["PRESENT", "ABSENT", "UNCLEAR"].includes(String(feature.state))) return null;
+    if (!boundedString(feature.evidence, 500) || !stringList(feature.supports, 20) || !stringList(feature.contradicts, 20)) return null;
+  }
+
+  if (!Array.isArray(result.candidate_categories) || result.candidate_categories.length > 20) return null;
+  for (const item of result.candidate_categories) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const category = item as Record<string, unknown>;
+    const keys = ["category_id", "rank", "match_strength", "evidence"];
+    if (Object.keys(category).some((key) => !keys.includes(key)) || keys.some((key) => !(key in category))) return null;
+    if (!boundedString(category.category_id, 100, 1) || !Number.isInteger(category.rank) || Number(category.rank) < 1 || Number(category.rank) > 20) return null;
+    if (!["STRONG", "MODERATE", "WEAK"].includes(String(category.match_strength)) || !stringList(category.evidence, 10)) return null;
+  }
+
+  const quality = result.image_quality;
+  if (!quality || typeof quality !== "object" || Array.isArray(quality)) return null;
+  const qualityRecord = quality as Record<string, unknown>;
+  if (!Object.keys(qualityRecord).every((key) => key === "reference" || key === "target") ||
+      !["GOOD", "LIMITED", "UNUSABLE"].includes(String(qualityRecord.reference)) ||
+      !["GOOD", "LIMITED", "UNUSABLE"].includes(String(qualityRecord.target))) return null;
+
+  const review = result.review;
+  if (!review || typeof review !== "object" || Array.isArray(review)) return null;
+  const reviewRecord = review as Record<string, unknown>;
+  if (!Object.keys(reviewRecord).every((key) => key === "required" || key === "reasons") ||
+      typeof reviewRecord.required !== "boolean" || !stringList(reviewRecord.reasons, 20)) return null;
+  return result;
+}
+
 export async function handleEvaluate(request: Request, env: Env): Promise<Response> {
   const serverRequestId = newId("srv");
 
@@ -390,13 +460,17 @@ export async function handleEvaluate(request: Request, env: Env): Promise<Respon
 
     // 7. 调百炼（内部失败重试 1 次，属同一逻辑请求不额外扣额度）
     const modelResult = await callDashScope(env, data);
+    const validatedResult = parseEvaluationResult(modelResult.text);
+    if (!validatedResult) {
+      return errorResponse(502, "MODEL_INVALID_OUTPUT", "The model returned an invalid evaluation result", true, serverRequestId, rateHeaders);
+    }
 
     // 8. 幂等缓存
     const responseBody = {
       server_request_id: serverRequestId,
       client_request_id: data.clientRequestId,
       model: data.model,
-      result: modelResult.text,
+      result: JSON.stringify(validatedResult),
       usage: modelResult.usage,
       request_id: modelResult.requestId,
     };

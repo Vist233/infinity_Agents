@@ -125,7 +125,7 @@ export default function CodeAgentPage() {
                         <td className="px-4 py-3"><span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[task.status] || "bg-zinc-200 text-zinc-600"}`}>{t(STATUS_LABEL[task.status] as never)}</span></td>
                         <td className="px-4 py-3 text-xs text-zinc-600">{task.attempt_count}/{task.max_attempts}</td>
                         <td className="px-4 py-3 text-xs text-zinc-500 whitespace-nowrap">{formatDate(task.created_at)}</td>
-                        <td className="px-4 py-3"><Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => router.push(`/code-agent/tasks/${task.task_id}`)}>{t("tasks.view")}</Button></td>
+                        <td className="px-4 py-3"><Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => router.push(`/code-agent/tasks/?task_id=${encodeURIComponent(task.task_id)}`)}>{t("tasks.view")}</Button></td>
                       </tr>
                     ))}</tbody>
                   </table>

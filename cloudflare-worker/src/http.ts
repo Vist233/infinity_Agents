@@ -24,7 +24,13 @@ export function parseCookies(request: Request): Record<string, string> {
     if (idx === -1) continue;
     const key = part.slice(0, idx).trim();
     const value = part.slice(idx + 1).trim();
-    if (key) out[key] = decodeURIComponent(value);
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(value);
+    } catch {
+      // Ignore a malformed cookie value instead of turning the whole request
+      // into an uncaught Worker exception.
+    }
   }
   return out;
 }

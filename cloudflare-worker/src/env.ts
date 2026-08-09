@@ -34,6 +34,11 @@ export interface Env {
   IMAGE_JUDGE_REFRESH_TOKEN_TTL_SECONDS: string;
   IMAGE_JUDGE_MAX_IMAGE_BYTES: string;
 
+  // Cloudflare-native Analysis/Coding task inputs and enrollment controls.
+  RESOURCE_BUCKET?: R2Bucket;
+  TASK_UPLOAD_MAX_BYTES?: string;
+  WORKER_ENROLLMENT_ADMIN_USER_IDS?: string;
+
   // Secrets
   STEPFUN_API_KEY: string;
   ZHANG_AUTH_CLIENT_SECRET: string;

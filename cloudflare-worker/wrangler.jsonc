@@ -24,6 +24,13 @@
     "run_worker_first": true
   },
 
+  "r2_buckets": [
+    {
+      "binding": "RESOURCE_BUCKET",
+      "bucket_name": "infinity-agents-resources"
+    }
+  ],
+
   "vars": {
     "STEPFUN_BASE_URL": "https://api.stepfun.com/step_plan/v1",
     "STEPFUN_MODEL": "step-3.5-flash",
@@ -42,7 +49,8 @@
     "IMAGE_JUDGE_DAILY_QUOTA": "30",
     "IMAGE_JUDGE_ACCESS_TOKEN_TTL_SECONDS": "900",
     "IMAGE_JUDGE_REFRESH_TOKEN_TTL_SECONDS": "2592000",
-    "IMAGE_JUDGE_MAX_IMAGE_BYTES": "10485760"
+    "IMAGE_JUDGE_MAX_IMAGE_BYTES": "10485760",
+    "TASK_UPLOAD_MAX_BYTES": "26214400"
   },
 
   "d1_databases": [

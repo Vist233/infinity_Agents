@@ -62,37 +62,35 @@ export class UserConcurrencyLock {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    let result: { ok: boolean; retryAfter?: number } | null = null;
     await this.state.blockConcurrencyWhile(async () => {
       const stored = await this.state.storage.get<number>("lease_until");
       this.leaseUntil = stored ?? 0;
+      if (url.pathname === "/acquire") {
+        const now = Date.now();
+        if (this.leaseUntil > now) {
+          result = { ok: false, retryAfter: Math.max(1, Math.ceil((this.leaseUntil - now) / 1000)) };
+          return;
+        }
+        const requested = Number(url.searchParams.get("ttl") || LEASE_MAX_MS);
+        const duration = Math.min(LEASE_MAX_MS, Math.max(1, Number.isFinite(requested) ? requested : LEASE_MAX_MS));
+        this.leaseUntil = now + duration;
+        await this.state.storage.put("lease_until", this.leaseUntil);
+        result = { ok: true };
+        return;
+      }
+      if (url.pathname === "/release") {
+        this.leaseUntil = 0;
+        await this.state.storage.put("lease_until", 0);
+        result = { ok: true };
+      }
     });
 
-    if (url.pathname === "/acquire") {
-      const now = Date.now();
-      if (this.leaseUntil > now) {
-        const retryAfter = Math.max(1, Math.ceil((this.leaseUntil - now) / 1000));
-        return new Response(JSON.stringify({ ok: false, retry_after: retryAfter }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      const duration = Math.min(LEASE_MAX_MS, Number(url.searchParams.get("ttl") || LEASE_MAX_MS));
-      this.leaseUntil = now + duration;
-      await this.state.storage.put("lease_until", this.leaseUntil);
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    if (url.pathname === "/release") {
-      this.leaseUntil = 0;
-      await this.state.storage.put("lease_until", 0);
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    return new Response("not found", { status: 404 });
+    const response = result as { ok: boolean; retryAfter?: number } | null;
+    if (response === null) return new Response("not found", { status: 404 });
+    return new Response(JSON.stringify({ ok: response.ok, ...(response.retryAfter ? { retry_after: response.retryAfter } : {}) }), {
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }
 

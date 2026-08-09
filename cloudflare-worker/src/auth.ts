@@ -120,20 +120,8 @@ export async function handleCallback(request: Request, env: Env): Promise<Respon
   }
 
   const basic = btoa(`${env.ZHANG_AUTH_CLIENT_ID}:${env.ZHANG_AUTH_CLIENT_SECRET}`);
-  const tokenRes = await fetch(`${env.ZHANG_AUTH_BASE_URL.replace(/\/$/, "")}/token`, {
-    method: "POST",
-    headers: {
-      authorization: `Basic ${basic}`,
-      "content-type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({
-      grant_type: "authorization_code",
-      code,
-      redirect_uri: callbackUrl(env),
-      code_verifier: transaction.verifier,
-    }).toString(),
-  });
-  const tokenPayload = (await tokenRes.json()) as {
+  let tokenRes: Response;
+  let tokenPayload: {
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
@@ -141,6 +129,24 @@ export async function handleCallback(request: Request, env: Env): Promise<Respon
     error?: string;
     error_description?: string;
   };
+  try {
+    tokenRes = await fetch(`${env.ZHANG_AUTH_BASE_URL.replace(/\/$/, "")}/token`, {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${basic}`,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: callbackUrl(env),
+        code_verifier: transaction.verifier,
+      }).toString(),
+    });
+    tokenPayload = await tokenRes.json() as typeof tokenPayload;
+  } catch {
+    return errorJson("Authentication provider is unavailable", 502, "AUTH_PROVIDER_UNAVAILABLE");
+  }
   if (!tokenRes.ok || !tokenPayload.access_token || !tokenPayload.refresh_token || !tokenPayload.id_token) {
     return errorJson(tokenPayload.error_description ?? tokenPayload.error ?? "Token exchange failed", 401, "TOKEN_EXCHANGE_FAILED");
   }
@@ -148,8 +154,13 @@ export async function handleCallback(request: Request, env: Env): Promise<Respon
   // Verify both token types before creating the site session. The access token
   // is used for API calls; the ID token binds the response to this login's
   // client and nonce.
-  const payload = await verifyAccessToken(tokenPayload.access_token, env);
-  await verifyIdToken(tokenPayload.id_token, env, transaction.nonce);
+  let payload: Awaited<ReturnType<typeof verifyAccessToken>>;
+  try {
+    payload = await verifyAccessToken(tokenPayload.access_token, env);
+    await verifyIdToken(tokenPayload.id_token, env, transaction.nonce);
+  } catch {
+    return errorJson("Authentication token validation failed", 401, "TOKEN_VALIDATION_FAILED");
+  }
 
   const sid = randomToken(32);
   const ts = nowSeconds();
