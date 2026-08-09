@@ -110,6 +110,7 @@
   // from the ImageJudge secrets.
   // wrangler secret put STEPFUN_API_KEY
   // wrangler secret put ZHANG_AUTH_CLIENT_SECRET
+  // wrangler secret put WORKER_VERIFIER_TOKEN
   // wrangler secret put IMAGE_JUDGE_ZHANG_AUTH_CLIENT_SECRET
   // wrangler secret put IMAGE_JUDGE_TOKEN_SIGNING_SECRET
   // wrangler secret put IMAGE_JUDGE_DASHSCOPE_API_KEY

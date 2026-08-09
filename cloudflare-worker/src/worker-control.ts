@@ -187,12 +187,14 @@ async function loadAttempt(
 ): Promise<AttemptRow | null> {
   const activeClause = activeOnly
     ? `AND a.status IN ('claimed', 'running')
-       AND a.lease_expires_at > ?4
+       AND a.namespace = ?3
+       AND a.fencing_epoch = ?4
+       AND a.lease_expires_at > ?5
        AND t.status IN ('claimed', 'running')`
     : "";
   const args = activeOnly
-    ? [attemptId, context.workerId, epoch, nowSeconds()]
-    : [attemptId, context.workerId, epoch];
+    ? [attemptId, context.workerId, context.namespace, epoch, nowSeconds()]
+    : [attemptId, context.workerId, context.namespace, epoch];
   return env.DB.prepare(
     `SELECT a.attempt_id, a.task_id, a.worker_id, a.namespace,
             a.fencing_epoch, a.lease_expires_at, a.status AS attempt_status,
@@ -209,7 +211,8 @@ async function loadAttempt(
      LEFT JOIN dataset_snapshots ds ON ds.dataset_snapshot_id = t.dataset_snapshot_id
      WHERE a.attempt_id = ?1
        AND a.worker_id = ?2
-       AND a.fencing_epoch = ?3
+       AND a.namespace = ?3
+       AND a.fencing_epoch = ?4
        ${activeClause}`
   ).bind(...args).first<AttemptRow>();
 }
@@ -282,7 +285,7 @@ async function reapExpired(env: Env): Promise<void> {
     env.DB.prepare(
       `UPDATE tasks
        SET status = CASE WHEN attempt_count < max_attempts THEN 'queued' ELSE 'timeout' END,
-           lease_worker_id = NULL, lease_expires_at = NULL, lease_claim_id = NULL,
+           lease_worker_id = NULL, lease_namespace = NULL, lease_expires_at = NULL, lease_claim_id = NULL,
            updated_at = ?1, finished_at = CASE WHEN attempt_count < max_attempts THEN NULL ELSE ?1 END
        WHERE status IN ('claimed', 'running') AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?1`
     ).bind(now),
@@ -391,10 +394,10 @@ async function handleAcceptOffer(
     env.DB.prepare(
       `UPDATE tasks
        SET status = 'claimed', attempt_count = attempt_count + 1,
-           lease_worker_id = ?2, lease_epoch = ?3, lease_expires_at = ?4,
-           lease_claim_id = ?5, updated_at = ?6
-       WHERE task_id = ?1 AND status = 'queued' AND task_class = ?7`
-    ).bind(offer.task_id, context.workerId, epoch, leaseExpiresAt, claimId, now, offer.task_class),
+           lease_worker_id = ?2, lease_namespace = ?3, lease_epoch = ?4,
+           lease_expires_at = ?5, lease_claim_id = ?6, updated_at = ?7
+       WHERE task_id = ?1 AND status = 'queued' AND task_class = ?8`
+    ).bind(offer.task_id, context.workerId, context.namespace, epoch, leaseExpiresAt, claimId, now, offer.task_class),
     env.DB.prepare(
       `INSERT INTO worker_attempts
         (attempt_id, task_id, worker_id, namespace, fencing_epoch,
@@ -431,22 +434,22 @@ async function handleHeartbeat(
   const progress = safeText(body?.progress, 240);
   const results = await env.DB.batch([
     env.DB.prepare(
-      `UPDATE tasks SET status = 'running', lease_expires_at = ?4, updated_at = ?4
-       WHERE task_id = ?1 AND lease_worker_id = ?2 AND lease_epoch = ?3
-         AND status IN ('claimed', 'running') AND lease_expires_at > ?5
+      `UPDATE tasks SET status = 'running', lease_expires_at = ?5, updated_at = ?5
+       WHERE task_id = ?1 AND lease_worker_id = ?2 AND lease_namespace = ?3 AND lease_epoch = ?4
+         AND status IN ('claimed', 'running') AND lease_expires_at > ?6
          AND EXISTS (
            SELECT 1 FROM worker_attempts a
-           WHERE a.attempt_id = ?6 AND a.task_id = tasks.task_id
-             AND a.worker_id = ?2 AND a.fencing_epoch = ?3
-             AND a.status IN ('claimed', 'running') AND a.lease_expires_at > ?5
+           WHERE a.attempt_id = ?7 AND a.task_id = tasks.task_id
+             AND a.worker_id = ?2 AND a.namespace = ?3 AND a.fencing_epoch = ?4
+             AND a.status IN ('claimed', 'running') AND a.lease_expires_at > ?6
          )`
-    ).bind(attempt.task_id, context.workerId, epoch, leaseExpiresAt, now, attemptId),
+    ).bind(attempt.task_id, context.workerId, context.namespace, epoch, leaseExpiresAt, now, attemptId),
     env.DB.prepare(
-      `UPDATE worker_attempts SET status = 'running', lease_expires_at = ?4, updated_at = ?4
-       WHERE attempt_id = ?1 AND worker_id = ?2 AND fencing_epoch = ?3
-         AND status IN ('claimed', 'running') AND lease_expires_at > ?5
-         AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?6 AND status = 'running' AND lease_worker_id = ?2 AND lease_epoch = ?3)`
-    ).bind(attemptId, context.workerId, epoch, leaseExpiresAt, now, attempt.task_id),
+      `UPDATE worker_attempts SET status = 'running', lease_expires_at = ?5, updated_at = ?5
+       WHERE attempt_id = ?1 AND worker_id = ?2 AND namespace = ?3 AND fencing_epoch = ?4
+         AND status IN ('claimed', 'running') AND lease_expires_at > ?6
+         AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?7 AND status = 'running' AND lease_worker_id = ?2 AND lease_namespace = ?3 AND lease_epoch = ?4)`
+    ).bind(attemptId, context.workerId, context.namespace, epoch, leaseExpiresAt, now, attempt.task_id),
   ]);
   const changed = (results[0] as { meta?: { changes?: number } })?.meta?.changes ?? 0;
   if (changed !== 1) return errorJson("Attempt lease is expired or fenced", 409, "LEASE_FENCED");
@@ -479,28 +482,29 @@ async function handleFailure(
     env.DB.prepare(
       `UPDATE tasks SET status = ?2, error_message = ?3,
            finished_at = CASE WHEN ?2 = 'queued' THEN NULL ELSE ?4 END,
-           lease_worker_id = NULL, lease_expires_at = NULL, lease_claim_id = NULL, updated_at = ?4
-       WHERE task_id = ?1 AND lease_worker_id = ?5 AND lease_epoch = ?6
+           lease_worker_id = NULL, lease_namespace = NULL, lease_expires_at = NULL, lease_claim_id = NULL, updated_at = ?4
+       WHERE task_id = ?1 AND lease_worker_id = ?5 AND lease_namespace = ?6 AND lease_epoch = ?7
          AND status IN ('claimed', 'running')
          AND EXISTS (
            SELECT 1 FROM worker_attempts a
-           WHERE a.attempt_id = ?7 AND a.worker_id = ?5 AND a.fencing_epoch = ?6
+           WHERE a.attempt_id = ?8 AND a.worker_id = ?5 AND a.namespace = ?6 AND a.fencing_epoch = ?7
              AND a.status IN ('claimed', 'running') AND a.lease_expires_at > ?4
          )`
-    ).bind(attempt.task_id, nextStatus, errorMessage, now, context.workerId, epoch, attemptId),
+    ).bind(attempt.task_id, nextStatus, errorMessage, now, context.workerId, context.namespace, epoch, attemptId),
     env.DB.prepare(
       `UPDATE worker_attempts
-       SET status = 'failed', error_code = ?4, error_message = ?5,
-           updated_at = ?6, finished_at = ?6
-       WHERE attempt_id = ?1 AND worker_id = ?2 AND fencing_epoch = ?3
-         AND status IN ('claimed', 'running') AND lease_expires_at > ?6
-         AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?7 AND status = ?8 AND result_artifact_id IS NULL)`
-    ).bind(attemptId, context.workerId, epoch, errorCode, errorMessage, now, attempt.task_id, nextStatus),
+       SET status = 'failed', error_code = ?5, error_message = ?6,
+           updated_at = ?7, finished_at = ?7
+       WHERE attempt_id = ?1 AND worker_id = ?2 AND namespace = ?3 AND fencing_epoch = ?4
+         AND status IN ('claimed', 'running') AND lease_expires_at > ?7
+         AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?8 AND status = ?9 AND result_artifact_id IS NULL AND lease_worker_id IS NULL)`
+    ).bind(attemptId, context.workerId, context.namespace, epoch, errorCode, errorMessage, now, attempt.task_id, nextStatus),
     env.DB.prepare(
       `INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
        SELECT ?1, task_id, ?3, ?4, ?5 FROM tasks
-       WHERE task_id = ?2 AND status = ?6 AND result_artifact_id IS NULL`
-    ).bind(taskEventId, attempt.task_id, retryable ? "task_requeued" : "task_failed", JSON.stringify({ error_code: errorCode, attempt_id: attemptId }), now, nextStatus),
+       WHERE task_id = ?2 AND status = ?6 AND result_artifact_id IS NULL
+         AND EXISTS (SELECT 1 FROM worker_attempts WHERE attempt_id = ?7 AND status = 'failed')`
+    ).bind(taskEventId, attempt.task_id, retryable ? "task_requeued" : "task_failed", JSON.stringify({ error_code: errorCode, attempt_id: attemptId }), now, nextStatus, attemptId),
   ]);
   const taskChanged = (results[0] as { meta?: { changes?: number } })?.meta?.changes ?? 0;
   if (taskChanged !== 1) return errorJson("Attempt lease is expired or fenced", 409, "LEASE_FENCED");
@@ -633,39 +637,110 @@ async function handleFinalize(
   const now = nowSeconds();
   const eventId = id();
   const results = await env.DB.batch([
+    // A Worker can only move its Attempt into verification_pending. It cannot
+    // publish a user-visible result merely by self-reporting success.
+    env.DB.prepare(
+      `UPDATE tasks SET status = 'running', result_artifact_id = NULL,
+           finished_at = NULL, updated_at = ?3,
+           lease_worker_id = NULL, lease_namespace = NULL, lease_expires_at = NULL, lease_claim_id = NULL
+       WHERE task_id = ?1 AND lease_worker_id = ?4 AND lease_namespace = ?5 AND lease_epoch = ?6
+         AND status IN ('claimed', 'running') AND lease_expires_at > ?3`
+    ).bind(attempt.task_id, artifactId, now, context.workerId, context.namespace, epoch),
+    env.DB.prepare(
+      `UPDATE worker_attempts SET status = 'succeeded', updated_at = ?4, finished_at = ?4
+       WHERE attempt_id = ?1 AND worker_id = ?2 AND namespace = ?3 AND fencing_epoch = ?5
+         AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?6 AND status = 'running' AND result_artifact_id IS NULL AND lease_worker_id IS NULL)`
+    ).bind(attemptId, context.workerId, context.namespace, now, epoch, attempt.task_id),
+    env.DB.prepare(
+      `UPDATE artifacts SET manifest_json = ?4
+       WHERE artifact_id = ?1 AND task_id = ?2 AND attempt_id = ?3 AND status = 'quarantine'`
+    ).bind(artifactId, attempt.task_id, attemptId, manifestText),
+    env.DB.prepare(
+      `INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
+       SELECT ?1, ?2, 'artifact_quarantined', ?3, ?4 FROM tasks
+       WHERE task_id = ?2 AND status = 'running' AND result_artifact_id IS NULL
+         AND EXISTS (SELECT 1 FROM worker_attempts WHERE attempt_id = ?5 AND status = 'succeeded')`
+    ).bind(eventId, attempt.task_id, JSON.stringify({ attempt_id: attemptId, artifact_id: artifactId, status: "verification_pending" }), now, attemptId),
+  ]);
+  const taskChanged = (results[0] as { meta?: { changes?: number } })?.meta?.changes ?? 0;
+  if (taskChanged !== 1) return errorJson("Attempt lease is expired or fenced", 409, "LEASE_FENCED");
+  return json({ task_id: attempt.task_id, attempt_id: attemptId, artifact_id: artifactId, status: "verification_pending", verifier_required: true }, 202);
+}
+
+async function verifierAuthorized(request: Request, env: Env): Promise<boolean> {
+  const configured = env.WORKER_VERIFIER_TOKEN?.trim();
+  const supplied = request.headers.get("x-worker-verifier-token")?.trim();
+  if (!configured || !supplied || supplied.length > 512) return false;
+  return (await sha256(configured)) === (await sha256(supplied));
+}
+
+async function handleVerifiedPublish(request: Request, env: Env, attemptId: string): Promise<Response> {
+  if (!env.WORKER_VERIFIER_TOKEN) return errorJson("Trusted verifier is not configured", 503, "VERIFIER_NOT_CONFIGURED");
+  if (!(await verifierAuthorized(request, env))) return errorJson("Trusted verifier authentication required", 401, "VERIFIER_UNAUTHENTICATED");
+  const body = await bodyJson(request);
+  const artifactId = safeText(body?.artifact_id, 120);
+  if (!artifactId || body?.passed !== true) return errorJson("A passing verifier result is required", 400, "VERIFICATION_REQUIRED");
+  const row = await env.DB.prepare(
+    `SELECT a.artifact_id, a.task_id, a.attempt_id, a.checksum_sha256, a.manifest_json,
+            t.status AS task_status, wa.fencing_epoch, wa.status AS attempt_status
+     FROM artifacts a
+     JOIN tasks t ON t.task_id = a.task_id
+     JOIN worker_attempts wa ON wa.attempt_id = a.attempt_id AND wa.task_id = a.task_id
+     WHERE a.artifact_id = ?1 AND a.attempt_id = ?2 AND a.status = 'quarantine'
+       AND t.status = 'running' AND wa.status = 'succeeded'`
+  ).bind(artifactId, attemptId).first<{
+    artifact_id: string;
+    task_id: string;
+    attempt_id: string;
+    checksum_sha256: string;
+    manifest_json: string | null;
+    task_status: string;
+    fencing_epoch: number;
+    attempt_status: string;
+  }>();
+  if (!row || !row.manifest_json) return errorJson("Quarantine artifact is not ready for verification", 409, "VERIFICATION_NOT_READY");
+  let manifest: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(row.manifest_json);
+    if (!parsed || typeof parsed !== "object") throw new Error("manifest");
+    manifest = parsed as Record<string, unknown>;
+  } catch {
+    return errorJson("Quarantine manifest is invalid", 422, "MANIFEST_INVALID");
+  }
+  if (safeText(manifest.task_id, 120) !== row.task_id || safeText(manifest.attempt_id, 120) !== attemptId || Number(manifest.fencing_epoch) !== row.fencing_epoch) {
+    return errorJson("Quarantine manifest is not bound to the Attempt", 422, "MANIFEST_MISMATCH");
+  }
+  if (safeText(manifest.checksum_sha256, 128) !== row.checksum_sha256) return errorJson("Quarantine checksum is invalid", 422, "CHECKSUM_MISMATCH");
+  const now = nowSeconds();
+  const eventId = id();
+  const results = await env.DB.batch([
     env.DB.prepare(
       `UPDATE tasks SET status = 'succeeded', result_artifact_id = ?2,
-           finished_at = ?3, updated_at = ?3,
-           lease_worker_id = NULL, lease_expires_at = NULL, lease_claim_id = NULL
-       WHERE task_id = ?1 AND lease_worker_id = ?4 AND lease_epoch = ?5
-         AND status IN ('claimed', 'running') AND lease_expires_at > ?3`
-    ).bind(attempt.task_id, artifactId, now, context.workerId, epoch),
-    env.DB.prepare(
-      `UPDATE worker_attempts SET status = 'succeeded', updated_at = ?3, finished_at = ?3
-       WHERE attempt_id = ?1 AND worker_id = ?2 AND fencing_epoch = ?4
-         AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?5 AND status = 'succeeded' AND result_artifact_id = ?6)`
-    ).bind(attemptId, context.workerId, now, epoch, attempt.task_id, artifactId),
+           finished_at = ?3, updated_at = ?3
+       WHERE task_id = ?1 AND status = 'running' AND result_artifact_id IS NULL`
+    ).bind(row.task_id, artifactId, now),
     env.DB.prepare(
       `UPDATE artifacts SET kind = 'result', status = 'published'
-       WHERE artifact_id = ?1 AND task_id = ?2 AND attempt_id = ?3 AND status = 'quarantine'`
-    ).bind(artifactId, attempt.task_id, attemptId),
+       WHERE artifact_id = ?1 AND task_id = ?2 AND attempt_id = ?3 AND status = 'quarantine'
+         AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND status = 'succeeded' AND result_artifact_id = ?1)`
+    ).bind(artifactId, row.task_id, attemptId),
     env.DB.prepare(
       `INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
        SELECT ?1, ?2, 'task_succeeded', ?3, ?4 FROM tasks
        WHERE task_id = ?2 AND status = 'succeeded' AND result_artifact_id = ?5`
-    ).bind(eventId, attempt.task_id, JSON.stringify({ attempt_id: attemptId, artifact_id: artifactId }), now, artifactId),
+    ).bind(eventId, row.task_id, JSON.stringify({ attempt_id: attemptId, artifact_id: artifactId, verified: true }), now, artifactId),
   ]);
-  const taskChanged = (results[0] as { meta?: { changes?: number } })?.meta?.changes ?? 0;
-  if (taskChanged !== 1) return errorJson("Attempt lease is expired or fenced", 409, "LEASE_FENCED");
-  return json({ task_id: attempt.task_id, attempt_id: attemptId, artifact_id: artifactId, status: "succeeded" });
+  const changed = (results[0] as { meta?: { changes?: number } })?.meta?.changes ?? 0;
+  if (changed !== 1) return errorJson("Task is no longer awaiting verification", 409, "VERIFICATION_REPLAY");
+  return json({ task_id: row.task_id, attempt_id: attemptId, artifact_id: artifactId, status: "succeeded", verified: true });
 }
 
 async function workerHealth(env: Env, context: WorkerContext): Promise<Response> {
   const now = nowSeconds();
   const attempts = await env.DB.prepare(
     `SELECT attempt_id, task_id, fencing_epoch, lease_expires_at, status
-     FROM worker_attempts WHERE worker_id = ?1 AND status IN ('claimed', 'running') ORDER BY created_at DESC LIMIT 4`
-  ).bind(context.workerId).all<Record<string, unknown>>();
+     FROM worker_attempts WHERE worker_id = ?1 AND namespace = ?2 AND status IN ('claimed', 'running') ORDER BY created_at DESC LIMIT 4`
+  ).bind(context.workerId, context.namespace).all<Record<string, unknown>>();
   await env.DB.prepare(
     `UPDATE worker_enrollments SET last_seen_at = ?3 WHERE worker_id = ?1 AND namespace = ?2 AND status = 'active'`
   ).bind(context.workerId, context.namespace, now).run();
@@ -676,6 +751,9 @@ export async function handleWorkerControlApi(request: Request, env: Env): Promis
   const url = new URL(request.url);
   const { pathname } = url;
   if (request.method === "POST" && pathname === "/api/worker/v1/enroll") return handleEnroll(request, env);
+
+  const verifierMatch = pathname.match(/^\/api\/worker\/v1\/verifier\/attempts\/([^/]+)\/publish$/);
+  if (verifierMatch && request.method === "POST") return handleVerifiedPublish(request, env, decodeURIComponent(verifierMatch[1]));
 
   const context = await authenticateWorker(request, env);
   if (!context) return unauthorized();

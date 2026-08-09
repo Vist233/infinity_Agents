@@ -38,6 +38,9 @@ export interface Env {
   RESOURCE_BUCKET?: R2Bucket;
   TASK_UPLOAD_MAX_BYTES?: string;
   WORKER_ENROLLMENT_ADMIN_USER_IDS?: string;
+  // Kept out of the Worker source. A trusted verifier service uses this
+  // capability to publish a quarantined result after independent checks.
+  WORKER_VERIFIER_TOKEN?: string;
 
   // Secrets
   STEPFUN_API_KEY: string;

@@ -76,6 +76,19 @@ describe("Infinity Edge route composition", () => {
     expect(await response.json()).toMatchObject({ error: { code: "INVALID_ENROLLMENT" } });
   });
 
+  it("does not let an unconfigured verifier publish a result", async () => {
+    const response = await worker.fetch(
+      new Request("https://app.test/api/worker/v1/verifier/attempts/attempt-1/publish", {
+        method: "POST",
+        body: JSON.stringify({ artifact_id: "artifact-1", passed: true }),
+        headers: { "content-type": "application/json" },
+      }),
+      testEnv(),
+    );
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: { code: "VERIFIER_NOT_CONFIGURED" } });
+  });
+
   it("falls back to the Next static export for product pages", async () => {
     const response = await worker.fetch(new Request("https://app.test/"), testEnv());
     expect(response.status).toBe(200);

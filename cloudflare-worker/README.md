@@ -56,12 +56,17 @@ POST /api/worker/v1/attempts/:attempt_id/heartbeat
 GET  /api/worker/v1/attempts/:attempt_id/resources/:resource_id
 POST /api/worker/v1/attempts/:attempt_id/artifacts
 POST /api/worker/v1/attempts/:attempt_id/finalize
+POST /api/worker/v1/verifier/attempts/:attempt_id/publish  (trusted verifier only)
 ```
 
 Every Attempt is bound to `worker_id + task_id + fencing_epoch`; expired or
 revoked Workers cannot renew a lease or finalize an Artifact. Inputs are read
 through exact Attempt-scoped URLs, and uploaded results remain in R2
-quarantine until the fenced finalize transition. The current Cloudflare
+quarantine after Worker finalize. Worker finalize returns
+`verification_pending`; only a separately authenticated verifier holding the
+private `WORKER_VERIFIER_TOKEN` can independently validate and publish a
+user-visible Artifact. If that verifier secret is not configured, no Worker
+can self-promote an arbitrary result to `succeeded`. The current Cloudflare
 control plane does not expose D1, Redis, R2 parent credentials, or provider
 keys to the Worker.
 
