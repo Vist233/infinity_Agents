@@ -40,6 +40,18 @@ export interface TaskRow {
   title: string;
   status: string;
   created_by: string;
+  chat_confirmation_id: string | null;
+}
+
+export interface ChatRequestIdempotencyRow {
+  user_id: string;
+  session_id: string;
+  client_request_id: string;
+  status: "processing" | "confirmation" | "completed";
+  confirmation_id: string | null;
+  response_text: string;
+  created_at: number;
+  updated_at: number;
 }
 
 export class FakeD1 {
@@ -49,6 +61,7 @@ export class FakeD1 {
   chatSessions = new Map<string, ChatSessionRow>();
   chatMessages: ChatMessageRow[] = [];
   chatTaskConfirmations = new Map<string, ChatTaskConfirmationRow>();
+  chatRequestIdempotency = new Map<string, ChatRequestIdempotencyRow>();
   tasks = new Map<string, TaskRow>();
   private messageSeq = 0;
 
@@ -68,8 +81,12 @@ export class FakeD1 {
     });
   }
 
-  seedTask(taskId: string, userId: string, title = "Test task", status = "queued"): void {
-    this.tasks.set(taskId, { task_id: taskId, title, status, created_by: userId });
+  seedTask(taskId: string, userId: string, title = "Test task", status = "queued", chatConfirmationId: string | null = null): void {
+    this.tasks.set(taskId, { task_id: taskId, title, status, created_by: userId, chat_confirmation_id: chatConfirmationId });
+    if (chatConfirmationId) {
+      const confirmation = this.chatTaskConfirmations.get(chatConfirmationId);
+      if (confirmation) confirmation.task_id = taskId;
+    }
   }
 
   prepare(sql: string) {
@@ -119,9 +136,17 @@ class FakeStatement {
       return row && row.user_id === userId ? (row as T) : null;
     }
     if (sql.includes("FROM chat_task_confirmations")) {
-      const [confirmationId, sessionId, userId] = this.args as [string, string, string];
+      const [confirmationId, sessionOrUserId, userId] = this.args as [string, string, string?];
       const row = this.db.chatTaskConfirmations.get(confirmationId);
-      return row && row.session_id === sessionId && row.user_id === userId ? (row as T) : null;
+      if (sql.includes("session_id = ?2")) {
+        return row && row.session_id === sessionOrUserId && row.user_id === userId ? (row as T) : null;
+      }
+      return row && row.user_id === sessionOrUserId ? (row as T) : null;
+    }
+    if (sql.includes("FROM chat_request_idempotency")) {
+      const [userId, clientRequestId] = this.args as [string, string];
+      const row = this.db.chatRequestIdempotency.get(`${userId}|${clientRequestId}`);
+      return (row as T) ?? null;
     }
     if (sql.includes("FROM tasks WHERE task_id")) {
       const [taskId, userId] = this.args as [string, string];
@@ -173,10 +198,33 @@ class FakeStatement {
       });
       return { meta: { changes: 1 } };
     }
-    if (sql.includes("UPDATE chat_task_confirmations") && sql.includes("SET status = 'processing'")) {
-      const [confirmationId, now] = this.args as [string, number];
+    if (sql.includes("INSERT INTO chat_request_idempotency")) {
+      const [userId, sessionId, clientRequestId, now] = this.args as [string, string, string, number];
+      const key = `${userId}|${clientRequestId}`;
+      if (this.db.chatRequestIdempotency.has(key)) return { meta: { changes: 0 } };
+      this.db.chatRequestIdempotency.set(key, {
+        user_id: userId,
+        session_id: sessionId,
+        client_request_id: clientRequestId,
+        status: "processing",
+        confirmation_id: null,
+        response_text: "",
+        created_at: now,
+        updated_at: now,
+      });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE chat_task_confirmations") && sql.includes("SET task_id = ?3")) {
+      const [confirmationId, userId, taskId, now] = this.args as [string, string, string, number];
       const row = this.db.chatTaskConfirmations.get(confirmationId);
-      if (!row || row.status !== "pending" || row.expires_at <= now) return { meta: { changes: 0 } };
+      if (!row || row.user_id !== userId || row.status !== "pending" || row.task_id || row.expires_at <= now) return { meta: { changes: 0 } };
+      row.task_id = taskId;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE chat_task_confirmations") && sql.includes("SET status = 'processing'")) {
+      const [confirmationId, taskId] = this.args as [string, string];
+      const row = this.db.chatTaskConfirmations.get(confirmationId);
+      if (!row || row.status !== "pending" || row.task_id !== taskId) return { meta: { changes: 0 } };
       row.status = "processing";
       return { meta: { changes: 1 } };
     }
@@ -187,6 +235,31 @@ class FakeStatement {
       row.status = "completed";
       row.task_id = taskId;
       row.consumed_at = consumedAt;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE chat_task_confirmations SET status = 'pending'")) {
+      const [confirmationId] = this.args as [string];
+      const row = this.db.chatTaskConfirmations.get(confirmationId);
+      if (!row || row.status !== "processing") return { meta: { changes: 0 } };
+      row.status = "pending";
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE chat_request_idempotency")) {
+      const [userId, clientRequestId, status, confirmationId, responseText, now] = this.args as [string, string, "confirmation" | "completed", string | null, string, number];
+      const row = this.db.chatRequestIdempotency.get(`${userId}|${clientRequestId}`);
+      if (!row) return { meta: { changes: 0 } };
+      row.status = status;
+      row.confirmation_id = confirmationId;
+      row.response_text = responseText;
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("DELETE FROM chat_request_idempotency")) {
+      const [userId, clientRequestId] = this.args as [string, string];
+      const key = `${userId}|${clientRequestId}`;
+      const row = this.db.chatRequestIdempotency.get(key);
+      if (!row || row.status !== "processing") return { meta: { changes: 0 } };
+      this.db.chatRequestIdempotency.delete(key);
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE chat_sessions SET updated_at")) {

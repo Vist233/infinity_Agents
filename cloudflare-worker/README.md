@@ -27,7 +27,8 @@ Analysis/Coding task control uses the same authenticated browser session:
 - `POST /api/dataset-snapshots/upload`
 - `POST /api/task-specs` and `POST /api/task-specs/:id/freeze`
 - `POST /api/dataset-snapshots`
-- `POST/GET /api/tasks`, `GET /api/tasks/:id`
+- `POST/GET /api/tasks`, `GET /api/tasks/:id` (Task `POST` requires the
+  server-bound `chat_confirmation_id`; the task center is status/history only)
 - `POST /api/tasks/:id/cancel`
 - `GET /api/tasks/:id/events` and `/events/stream`
 - `GET /api/tasks/:id/artifacts` and `GET /api/artifacts/:id`

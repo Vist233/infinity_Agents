@@ -116,11 +116,15 @@ async function readSse(response: Response): Promise<Array<Record<string, unknown
 
 const USER: AuthedUser = { userId: "user-1", email: "demo@example.com", sid: "sid-1" };
 
-function makeRequest(sessionId: string, content: string): Request {
+function makeRequest(sessionId: string, content: string, clientRequestId?: string): Request {
   return new Request("https://app.test/api/chat", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId, messages: [{ role: "user", content }] })
+    body: JSON.stringify({
+      session_id: sessionId,
+      messages: [{ role: "user", content }],
+      ...(clientRequestId ? { client_request_id: clientRequestId } : {}),
+    })
   });
 }
 
@@ -225,13 +229,20 @@ describe("handleChat", () => {
 
     const first = await handleChat(makeRequest("s1", "创建一个性状提取任务"), env, USER);
     const firstEvents = await readSse(first);
-    expect(firstEvents.map((event) => event.type)).toContain("task_confirmation");
+    expect(firstEvents.map((event) => event.type)).toEqual([
+      "status",
+      "status",
+      "chunk",
+      "tool_call",
+      "status",
+      "task_confirmation",
+    ]);
     expect(firstEvents.map((event) => event.type)).not.toContain("done");
     const confirmation = [...db.chatTaskConfirmations.values()][0];
     expect(confirmation?.status).toBe("pending");
     expect([...db.dailyUsage.values()][0]).toBe(1);
 
-    db.seedTask("task-1", "user-1", "Trait extraction", "queued");
+    db.seedTask("task-1", "user-1", "Trait extraction", "queued", confirmation.confirmation_id);
     const second = await handleChat(makeConfirmationRequest("s1", confirmation.confirmation_id, "task-1"), env, USER);
     const secondEvents = await readSse(second);
     expect(secondEvents.map((event) => event.type)).toContain("done");
@@ -257,6 +268,60 @@ describe("handleChat", () => {
     const response = await handleChat(makeRequest("s1", "我要创建一个异步分析任务"), env, USER);
     const events = await readSse(response);
     expect(events.find((event) => event.type === "tool_call")?.tool_name).toBe("request_task_creation");
+    expect(events.map((event) => event.type)).toContain("task_confirmation");
+    expect([...db.chatTaskConfirmations.values()][0]?.status).toBe("pending");
+  });
+
+  it("replays an existing confirmation instead of spending quota on a retried client request", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("s1", "user-1");
+    let stepfunCall = 0;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (!String(input).includes("stepfun.test")) return textResponse("");
+      stepfunCall += 1;
+      return sseResponse([
+        JSON.stringify({ choices: [{ delta: { content: "请在下面确认任务信息。" }, finish_reason: "stop" }] }),
+      ]);
+    }) as unknown as typeof fetch;
+
+    const first = await handleChat(makeRequest("s1", "我要创建一个异步分析任务", "request-1"), env, USER);
+    const firstEvents = await readSse(first);
+    const confirmation = [...db.chatTaskConfirmations.values()][0];
+    expect(firstEvents.map((event) => event.type)).toContain("task_confirmation");
+    expect(confirmation).toBeTruthy();
+
+    const retry = await handleChat(makeRequest("s1", "我要创建一个异步分析任务", "request-1"), env, USER);
+    const retryEvents = await readSse(retry);
+    expect(retryEvents.map((event) => event.type)).toEqual(["task_confirmation"]);
+    expect(stepfunCall).toBe(1);
+    expect([...db.dailyUsage.values()][0]).toBe(1);
+  });
+
+  it("retries without tool_choice when a provider rejects the optional hint", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("s1", "user-1");
+    const requestBodies: Array<Record<string, unknown>> = [];
+    let stepfunCall = 0;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).includes("stepfun.test")) return textResponse("");
+      stepfunCall += 1;
+      requestBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      if (stepfunCall === 1) {
+        return {
+          ok: false,
+          status: 400,
+          text: async () => "tool_choice is unsupported",
+        } as unknown as Response;
+      }
+      return sseResponse([
+        JSON.stringify({ choices: [{ delta: { content: "我已准备好任务确认卡。" }, finish_reason: "stop" }] }),
+      ]);
+    }) as unknown as typeof fetch;
+
+    const response = await handleChat(makeRequest("s1", "我要创建一个异步分析任务"), env, USER);
+    const events = await readSse(response);
+    expect(requestBodies[0]?.tool_choice).toEqual({ type: "function", function: { name: "request_task_creation" } });
+    expect(requestBodies[1]?.tool_choice).toBeUndefined();
     expect(events.map((event) => event.type)).toContain("task_confirmation");
     expect([...db.chatTaskConfirmations.values()][0]?.status).toBe("pending");
   });

@@ -43,11 +43,23 @@ export interface ChatTaskConfirmationRow {
   consumed_at: number | null;
 }
 
+export interface ChatRequestIdempotencyRow {
+  user_id: string;
+  session_id: string;
+  client_request_id: string;
+  status: "processing" | "confirmation" | "completed";
+  confirmation_id: string | null;
+  response_text: string;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface OwnedTaskRow {
   task_id: string;
   title: string;
   status: string;
   created_by: string;
+  chat_confirmation_id: string | null;
 }
 
 // --- auth sessions ---
@@ -192,34 +204,20 @@ export async function getChatTaskConfirmation(
     .first<ChatTaskConfirmationRow>();
 }
 
-export async function claimChatTaskConfirmation(
-  env: Env,
-  confirmationId: string,
-  now: number,
-): Promise<boolean> {
-  const result = await env.DB.prepare(
-    `UPDATE chat_task_confirmations
-     SET status = 'processing'
-     WHERE confirmation_id = ?1 AND status = 'pending' AND expires_at > ?2`,
-  )
-    .bind(confirmationId, now)
-    .run();
-  return (result.meta?.changes ?? 0) === 1;
-}
-
 export async function completeChatTaskConfirmation(
   env: Env,
   confirmationId: string,
   taskId: string,
   consumedAt: number,
-): Promise<void> {
-  await env.DB.prepare(
+): Promise<boolean> {
+  const result = await env.DB.prepare(
     `UPDATE chat_task_confirmations
      SET status = 'completed', task_id = ?2, consumed_at = ?3
      WHERE confirmation_id = ?1 AND status = 'processing'`,
   )
     .bind(confirmationId, taskId, consumedAt)
     .run();
+  return (result.meta?.changes ?? 0) === 1;
 }
 
 export async function reopenChatTaskConfirmation(env: Env, confirmationId: string): Promise<void> {
@@ -233,11 +231,126 @@ export async function reopenChatTaskConfirmation(env: Env, confirmationId: strin
 
 export async function getOwnedTask(env: Env, taskId: string, userId: string): Promise<OwnedTaskRow | null> {
   return env.DB.prepare(
-    `SELECT task_id, title, status, created_by
+    `SELECT task_id, title, status, created_by, chat_confirmation_id
      FROM tasks WHERE task_id = ?1 AND created_by = ?2`,
   )
     .bind(taskId, userId)
     .first<OwnedTaskRow>();
+}
+
+export async function getChatTaskConfirmationForUser(
+  env: Env,
+  confirmationId: string,
+  userId: string,
+): Promise<ChatTaskConfirmationRow | null> {
+  return env.DB.prepare(
+    `SELECT confirmation_id, session_id, user_id, tool_name, tool_call_id, tool_args_json,
+            status, task_id, created_at, expires_at, consumed_at
+     FROM chat_task_confirmations
+     WHERE confirmation_id = ?1 AND user_id = ?2`,
+  )
+    .bind(confirmationId, userId)
+    .first<ChatTaskConfirmationRow>();
+}
+
+export async function bindChatTaskConfirmation(
+  env: Env,
+  confirmationId: string,
+  userId: string,
+  taskId: string,
+  now: number,
+): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `UPDATE chat_task_confirmations
+     SET task_id = ?3
+     WHERE confirmation_id = ?1 AND user_id = ?2 AND status = 'pending'
+       AND task_id IS NULL AND expires_at > ?4`,
+  )
+    .bind(confirmationId, userId, taskId, now)
+    .run();
+  return (result.meta?.changes ?? 0) === 1;
+}
+
+export async function claimChatTaskConfirmation(
+  env: Env,
+  confirmationId: string,
+  taskId: string,
+): Promise<boolean> {
+  // A non-null task_id is written only by the expiry-checked task submission
+  // path, so a bound task may finish its model continuation after the card's
+  // 30-minute input window has elapsed.
+  const result = await env.DB.prepare(
+    `UPDATE chat_task_confirmations
+     SET status = 'processing'
+     WHERE confirmation_id = ?1 AND status = 'pending' AND task_id = ?2`,
+  )
+    .bind(confirmationId, taskId)
+    .run();
+  return (result.meta?.changes ?? 0) === 1;
+}
+
+export async function getChatRequestIdempotency(
+  env: Env,
+  userId: string,
+  clientRequestId: string,
+): Promise<ChatRequestIdempotencyRow | null> {
+  return env.DB.prepare(
+    `SELECT user_id, session_id, client_request_id, status, confirmation_id,
+            response_text, created_at, updated_at
+     FROM chat_request_idempotency
+     WHERE user_id = ?1 AND client_request_id = ?2`,
+  )
+    .bind(userId, clientRequestId)
+    .first<ChatRequestIdempotencyRow>();
+}
+
+export async function reserveChatRequestIdempotency(
+  env: Env,
+  userId: string,
+  sessionId: string,
+  clientRequestId: string,
+  now: number,
+): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `INSERT INTO chat_request_idempotency
+       (user_id, session_id, client_request_id, status, confirmation_id, response_text, created_at, updated_at)
+     VALUES (?1, ?2, ?3, 'processing', NULL, '', ?4, ?4)
+     ON CONFLICT(user_id, client_request_id) DO NOTHING`,
+  )
+    .bind(userId, sessionId, clientRequestId, now)
+    .run();
+  return (result.meta?.changes ?? 0) === 1;
+}
+
+export async function completeChatRequestIdempotency(
+  env: Env,
+  userId: string,
+  clientRequestId: string,
+  status: "confirmation" | "completed",
+  confirmationId: string | null,
+  responseText: string,
+  now: number,
+): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `UPDATE chat_request_idempotency
+     SET status = ?3, confirmation_id = ?4, response_text = ?5, updated_at = ?6
+     WHERE user_id = ?1 AND client_request_id = ?2`,
+  )
+    .bind(userId, clientRequestId, status, confirmationId, responseText, now)
+    .run();
+  return (result.meta?.changes ?? 0) === 1;
+}
+
+export async function releaseChatRequestIdempotency(
+  env: Env,
+  userId: string,
+  clientRequestId: string,
+): Promise<void> {
+  await env.DB.prepare(
+    "DELETE FROM chat_request_idempotency WHERE user_id = ?1 AND client_request_id = ?2 AND status = 'processing'",
+  )
+    .bind(userId, clientRequestId)
+    .run();
 }
 
 // --- paper authorizations ---

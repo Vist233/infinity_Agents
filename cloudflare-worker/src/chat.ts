@@ -3,14 +3,21 @@ import { MAX_CONTEXT_MESSAGES } from "./env";
 import type { AuthedUser } from "./auth";
 import { errorJson, nowSeconds } from "./http";
 import {
+  bindChatTaskConfirmation,
   claimChatTaskConfirmation,
+  completeChatRequestIdempotency,
   completeChatTaskConfirmation,
   createChatTaskConfirmation,
+  getChatRequestIdempotency,
   getChatSession,
   getChatTaskConfirmation,
+  getChatTaskConfirmationForUser,
   getOwnedTask,
   insertMessage,
   listMessages,
+  releaseChatRequestIdempotency,
+  reopenChatTaskConfirmation,
+  reserveChatRequestIdempotency,
   touchChatSession,
 } from "./db";
 import { checkRateLimit, consumeDailyQuota, decrementDailyUsageSafe } from "./quota";
@@ -51,10 +58,56 @@ interface TaskConfirmationArgs {
 interface ChatLoopResult {
   status: "completed" | "confirmation_required";
   assistantText: string;
+  confirmationId?: string;
+}
+
+interface StreamLifecycle {
+  onResult?: (result: ChatLoopResult) => Promise<void>;
+  onError?: () => Promise<void>;
 }
 
 function sseEncode(event: Record<string, unknown>): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
+}
+
+function sseResponse(events: Array<Record<string, unknown>>): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const event of events) controller.enqueue(sseEncode(event));
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-store",
+      connection: "keep-alive",
+    },
+  });
+}
+
+function confirmationEvent(confirmation: Awaited<ReturnType<typeof getChatTaskConfirmation>>): Record<string, unknown> | null {
+  if (!confirmation) return null;
+  let args: Record<string, unknown> = {};
+  try {
+    args = JSON.parse(confirmation.tool_args_json) as Record<string, unknown>;
+  } catch {
+    // Use the same normalization path as a fresh tool call below.
+  }
+  return {
+    type: "task_confirmation",
+    confirmation_id: confirmation.confirmation_id,
+    tool_name: confirmation.tool_name,
+    ...normalizeTaskConfirmationArgs(args),
+  };
+}
+
+function replayCompletedChat(responseText: string): Response {
+  const events: Array<Record<string, unknown>> = [];
+  if (responseText) events.push({ type: "chunk", content: responseText });
+  events.push({ type: "done" });
+  return sseResponse(events);
 }
 
 export async function handleChat(request: Request, env: Env, user: AuthedUser): Promise<Response> {
@@ -80,9 +133,44 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
   const userContent = (lastUser?.content ?? "").trim();
   if (!userContent) return errorJson("A user message is required", 400, "EMPTY_MESSAGE");
 
+  const clientRequestId = String(body.client_request_id ?? "").trim();
+  if (clientRequestId.length > 255) {
+    return errorJson("client_request_id is too long", 400, "INVALID_CLIENT_REQUEST_ID");
+  }
+  if (clientRequestId) {
+    const reserved = await reserveChatRequestIdempotency(
+      env,
+      user.userId,
+      sessionId,
+      clientRequestId,
+      nowSeconds(),
+    );
+    if (!reserved) {
+      const previous = await getChatRequestIdempotency(env, user.userId, clientRequestId);
+      if (!previous || previous.session_id !== sessionId) {
+        return errorJson("client_request_id was already used for another session", 409, "CLIENT_REQUEST_CONFLICT");
+      }
+      if (previous.status === "processing") {
+        return errorJson("The same chat request is already processing", 409, "CHAT_REQUEST_IN_PROGRESS");
+      }
+      if (previous.status === "completed") {
+        return replayCompletedChat(previous.response_text);
+      }
+      const confirmation = previous.confirmation_id
+        ? await getChatTaskConfirmation(env, previous.confirmation_id, sessionId, user.userId)
+        : null;
+      const event = confirmation && confirmation.status === "pending" && confirmation.expires_at > nowSeconds()
+        ? confirmationEvent(confirmation)
+        : null;
+      if (event) return sseResponse([event]);
+      return errorJson("The previous task confirmation is no longer available", 410, "TASK_CONFIRMATION_EXPIRED");
+    }
+  }
+
   // Rate limit (does not consume daily quota).
   const withinRate = await checkRateLimit(env, user.userId);
   if (!withinRate) {
+    if (clientRequestId) await releaseChatRequestIdempotency(env, user.userId, clientRequestId);
     return errorJson("Too many requests, please slow down.", 429, "rate_limited");
   }
 
@@ -90,6 +178,7 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
   // before StepFun is ever called.
   const quota = await consumeDailyQuota(env, user.userId);
   if (!quota.allowed) {
+    if (clientRequestId) await releaseChatRequestIdempotency(env, user.userId, clientRequestId);
     return errorJson(
       `Daily conversation limit reached (${quota.limit}/day).`,
       429,
@@ -98,9 +187,16 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
   }
 
   // Load prior history (authoritative from D1), then persist the new user turn.
-  const history = await listMessages(env, sessionId);
-  await insertMessage(env, sessionId, "user", userContent);
-  await touchChatSession(env, sessionId);
+  let history: Awaited<ReturnType<typeof listMessages>>;
+  try {
+    history = await listMessages(env, sessionId);
+    await insertMessage(env, sessionId, "user", userContent);
+    await touchChatSession(env, sessionId);
+  } catch (error) {
+    if (clientRequestId) await releaseChatRequestIdempotency(env, user.userId, clientRequestId);
+    await decrementDailyUsageSafe(env, user.userId);
+    throw error;
+  }
 
   const contextHistory = history.slice(-MAX_CONTEXT_MESSAGES).map((m) => ({
     role: m.role === "assistant" ? "assistant" : "user",
@@ -113,7 +209,32 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
     { role: "user", content: userContent }
   ];
 
-  return streamModelLoop(env, user, sessionId, modelMessages, true, shouldRequestTaskConfirmation(userContent));
+  return streamModelLoop(
+    env,
+    user,
+    sessionId,
+    modelMessages,
+    true,
+    shouldRequestTaskConfirmation(userContent),
+    clientRequestId
+      ? {
+          onResult: async (result) => {
+            await completeChatRequestIdempotency(
+              env,
+              user.userId,
+              clientRequestId,
+              result.status === "confirmation_required" ? "confirmation" : "completed",
+              result.confirmationId ?? null,
+              result.assistantText,
+              nowSeconds(),
+            );
+          },
+          onError: async () => {
+            await releaseChatRequestIdempotency(env, user.userId, clientRequestId);
+          },
+        }
+      : undefined,
+  );
 }
 
 /**
@@ -136,9 +257,11 @@ async function handleTaskConfirmation(
   const confirmation = await getChatTaskConfirmation(env, confirmationId, sessionId, user.userId);
   if (!confirmation) return errorJson("Task confirmation not found", 404, "TASK_CONFIRMATION_NOT_FOUND");
   const now = nowSeconds();
-  if (confirmation.expires_at <= now) return errorJson("Task confirmation expired", 410, "TASK_CONFIRMATION_EXPIRED");
   if (confirmation.status !== "pending") {
     return errorJson("Task confirmation has already been used", 409, "TASK_CONFIRMATION_USED");
+  }
+  if (confirmation.expires_at <= now && !confirmation.task_id) {
+    return errorJson("Task confirmation expired", 410, "TASK_CONFIRMATION_EXPIRED");
   }
 
   const task = await getOwnedTask(env, taskId, user.userId);
@@ -146,10 +269,13 @@ async function handleTaskConfirmation(
     return errorJson("Queued task not found", 404, "TASK_NOT_FOUND");
   }
 
-  if (!(await claimChatTaskConfirmation(env, confirmationId, now))) {
+  if (confirmation.task_id !== taskId || task.chat_confirmation_id !== confirmationId) {
+    return errorJson("Task is not bound to this confirmation", 409, "TASK_CONFIRMATION_MISMATCH");
+  }
+
+  if (!(await claimChatTaskConfirmation(env, confirmationId, taskId))) {
     return errorJson("Task confirmation has already been used", 409, "TASK_CONFIRMATION_USED");
   }
-  await completeChatTaskConfirmation(env, confirmationId, taskId, now);
 
   let args: TaskConfirmationArgs = {
     title: task.title,
@@ -201,7 +327,15 @@ async function handleTaskConfirmation(
     },
   ];
 
-  return streamModelLoop(env, user, sessionId, modelMessages, false);
+  return streamModelLoop(env, user, sessionId, modelMessages, false, false, {
+    onResult: async () => {
+      const completed = await completeChatTaskConfirmation(env, confirmationId, taskId, nowSeconds());
+      if (!completed) throw new Error("Task confirmation could not be completed");
+    },
+    onError: async () => {
+      await reopenChatTaskConfirmation(env, confirmationId);
+    },
+  });
 }
 
 function streamModelLoop(
@@ -211,6 +345,7 @@ function streamModelLoop(
   modelMessages: ChatMessage[],
   refundQuotaOnError: boolean,
   forceTaskConfirmation = false,
+  lifecycle?: StreamLifecycle,
 ): Response {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -234,8 +369,18 @@ function streamModelLoop(
           await insertMessage(env, sessionId, "assistant", result.assistantText);
           await touchChatSession(env, sessionId);
         }
+        if (lifecycle?.onResult) {
+          await lifecycle.onResult(result);
+        }
         if (result.status === "completed") emit({ type: "done" });
       } catch (error) {
+        if (lifecycle?.onError) {
+          try {
+            await lifecycle.onError();
+          } catch {
+            // Preserve the original model error for the client.
+          }
+        }
         if (refundQuotaOnError) await decrementDailyUsageSafe(env, user.userId);
         emit({ type: "error", message: error instanceof Error ? error.message : "Chat failed" });
       } finally {
@@ -289,7 +434,7 @@ async function runToolLoop(
         sessionId,
         userId,
         crypto.randomUUID(),
-        {},
+        inferTaskConfirmationArgs(messages),
         content,
         emit,
       );
@@ -352,23 +497,42 @@ async function streamCompletion(
   emitStatus: (phase: string, extra?: Record<string, unknown>) => void,
   forceTaskConfirmation = false,
 ): Promise<{ content: string; toolCalls: ToolCall[]; finishReason: string }> {
-  const upstream = await fetch(`${env.STEPFUN_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${env.STEPFUN_API_KEY}`,
-      "content-type": "application/json",
-      accept: "text/event-stream"
+  const requestCompletion = (withToolChoice: boolean) => fetch(
+    `${env.STEPFUN_BASE_URL.replace(/\/$/, "")}/chat/completions`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.STEPFUN_API_KEY}`,
+        "content-type": "application/json",
+        accept: "text/event-stream"
+      },
+      body: JSON.stringify({
+        model: env.STEPFUN_MODEL,
+        messages,
+        tools: TOOL_DEFINITIONS,
+        ...(withToolChoice
+          ? { tool_choice: { type: "function", function: { name: "request_task_creation" } } }
+          : {}),
+        stream: true
+      })
     },
-    body: JSON.stringify({
-      model: env.STEPFUN_MODEL,
-      messages,
-      tools: TOOL_DEFINITIONS,
-      ...(forceTaskConfirmation
-        ? { tool_choice: { type: "function", function: { name: "request_task_creation" } } }
-        : {}),
-      stream: true
-    })
-  });
+  );
+
+  let upstream: Response;
+  try {
+    upstream = await requestCompletion(forceTaskConfirmation);
+  } catch (error) {
+    if (!forceTaskConfirmation) throw error;
+    // Some OpenAI-compatible providers reject tool_choice even though they
+    // accept tools. Retry without the optional hint; runToolLoop still
+    // synthesizes the safe confirmation card if the model asks questions.
+    upstream = await requestCompletion(false);
+  }
+
+  if ((!upstream.ok || !upstream.body) && forceTaskConfirmation) {
+    await upstream.text().catch(() => "");
+    upstream = await requestCompletion(false);
+  }
 
   if (!upstream.ok || !upstream.body) {
     const detail = await upstream.text().catch(() => "");
@@ -474,11 +638,24 @@ async function pauseForTaskConfirmation(
     tool_name: "request_task_creation",
     ...confirmation,
   });
-  return { status: "confirmation_required", assistantText: handoffText };
+  return { status: "confirmation_required", assistantText: handoffText, confirmationId };
+}
+
+function inferTaskConfirmationArgs(messages: ChatMessage[]): Record<string, unknown> {
+  const lastUser = [...messages].reverse().find((message) => message.role === "user");
+  const request = String(lastUser?.content ?? "").replace(/\s+/g, " ").trim();
+  const title = request ? request.slice(0, 255) : "Analysis background task";
+  return {
+    title,
+    analysis_type: /性状|trait/i.test(request) ? "trait_extraction" : "generic",
+    research_question: request,
+  };
 }
 
 function shouldRequestTaskConfirmation(userContent: string): boolean {
   const text = userContent.replace(/\s+/g, " ").trim();
   if (!text) return false;
+  if (/(?:不要|无需|不用|不想|别|禁止).{0,12}(?:创建|新建|提交|执行|运行|开始|安排|建立)/i.test(text)) return false;
+  if (/(?:怎么|如何|什么|哪里|查看|进入|介绍|说明).{0,12}(?:任务|分析|作业)|(?:任务|分析|作业).{0,12}(?:怎么|如何|是什么|中心)/i.test(text)) return false;
   return /(?:创建|新建|提交|执行|运行|开始|安排|建立).{0,24}(?:任务|分析|作业|数据集)|(?:任务|分析|作业).{0,24}(?:后台|异步|创建|提交|执行)|\b(?:create|submit|run|start|background|async)\b.{0,32}\b(?:task|job|analysis)\b/i.test(text);
 }

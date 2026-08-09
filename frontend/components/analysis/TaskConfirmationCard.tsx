@@ -73,6 +73,7 @@ export function TaskConfirmationCard({ confirmation, onCreated }: TaskConfirmati
         // idempotency key; a flaky upload or response must not create a second
         // queued Task for the same card.
         idempotency_key: confirmation.confirmation_id,
+        chat_confirmation_id: confirmation.confirmation_id,
       });
       onCreated?.(confirmation.confirmation_id, task.task_id, taskTitle);
     } catch (err) {

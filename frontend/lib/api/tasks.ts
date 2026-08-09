@@ -147,6 +147,7 @@ export async function createTask(input: {
   title: string;
   method_source_id?: string;
   idempotency_key?: string;
+  chat_confirmation_id?: string;
 }): Promise<{ task_id: string; status: string; duplicate?: boolean }> {
   return requestJson(`${getApiBase()}/api/tasks`, {
     method: "POST",

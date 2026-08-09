@@ -715,6 +715,12 @@ export function useChatController() {
         }
         if (eventPayload.type === "error") {
           const friendly = toFriendlyChatError(eventPayload.message || t("error.connection"), language);
+          dispatch({
+            type: "update_task_confirmation",
+            sessionId: targetSessionId,
+            confirmationId,
+            patch: { status: "pending", error: friendly },
+          });
           appendAssistantContent(targetSessionId, accumulatedResponse ? `\n\n[Error] ${friendly}` : `[Error] ${friendly}`);
           finalize("error");
           wsByRequestRef.current.get(clientRequestId)?.close(1000, "error");
@@ -736,18 +742,36 @@ export function useChatController() {
           onSocketError: () => {
             if (!isCurrentRequest()) return;
             const message = t("error.network");
+            dispatch({
+              type: "update_task_confirmation",
+              sessionId: targetSessionId,
+              confirmationId,
+              patch: { status: "pending", error: message },
+            });
             appendAssistantContent(targetSessionId, accumulatedResponse ? `\n\n[Error] ${message}` : `[Error] ${message}`);
             finalize("error");
             toast.error(t("error.networkToast"));
           },
           onClose: () => {
             if (!isCurrentRequest() || completed) return;
+            dispatch({
+              type: "update_task_confirmation",
+              sessionId: targetSessionId,
+              confirmationId,
+              patch: { status: "pending", error: t("error.connection") },
+            });
             finalize("error");
           },
         });
         wsByRequestRef.current.set(clientRequestId, stream);
       } catch (error) {
         const message = error instanceof Error ? error.message : t("error.connection");
+        dispatch({
+          type: "update_task_confirmation",
+          sessionId: targetSessionId,
+          confirmationId,
+          patch: { status: "pending", error: message },
+        });
         appendAssistantContent(targetSessionId, `[Error] ${message}`);
         finalize("error");
       }

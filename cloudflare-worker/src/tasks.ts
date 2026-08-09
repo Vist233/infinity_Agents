@@ -1,6 +1,7 @@
 import type { AuthedUser } from "./auth";
 import type { Env } from "./env";
 import { errorJson, json, nowSeconds } from "./http";
+import { bindChatTaskConfirmation, getChatTaskConfirmationForUser } from "./db";
 
 const DEFAULT_PROJECT_NAME = "Default Project";
 const MAX_TITLE_LENGTH = 200;
@@ -40,6 +41,7 @@ interface TaskRow {
   created_at: number;
   updated_at: number;
   finished_at: number | null;
+  chat_confirmation_id: string | null;
 }
 
 function iso(value: number | null | undefined): string | null {
@@ -290,7 +292,8 @@ async function loadTask(taskIdValue: string, env: Env, user: AuthedUser): Promis
   return env.DB.prepare(
     `SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
             title, status, attempt_count, max_attempts, result_artifact_id,
-            error_message, created_by, created_at, updated_at, finished_at
+            error_message, created_by, created_at, updated_at, finished_at,
+            chat_confirmation_id
      FROM tasks WHERE task_id = ?1 AND created_by = ?2`
   ).bind(taskIdValue, user.userId).first<TaskRow>();
 }
@@ -303,7 +306,11 @@ async function handleCreateTask(request: Request, env: Env, user: AuthedUser): P
   const title = String(body?.title ?? "").trim();
   const methodId = body?.method_source_id ? String(body.method_source_id) : null;
   const idempotencyKey = String(body?.idempotency_key ?? "");
-  if (!projectId || !specId || !snapshotId || !title || title.length > MAX_TITLE_LENGTH || !idempotencyKey || idempotencyKey.length > 255) {
+  const chatConfirmationId = body?.chat_confirmation_id ? String(body.chat_confirmation_id).trim() : null;
+  if (!chatConfirmationId) {
+    return errorJson("Tasks must be submitted from an inline Agent confirmation", 400, "TASK_CONFIRMATION_REQUIRED");
+  }
+  if (!projectId || !specId || !snapshotId || !title || title.length > MAX_TITLE_LENGTH || !idempotencyKey || idempotencyKey.length > 255 || (chatConfirmationId && chatConfirmationId.length > 255)) {
     return errorJson("Invalid task submission", 400, "INVALID_TASK");
   }
   const spec = await env.DB.prepare(
@@ -320,26 +327,62 @@ async function handleCreateTask(request: Request, env: Env, user: AuthedUser): P
     if (!method) return errorJson("Method source not found", 404, "METHOD_SOURCE_NOT_FOUND");
   }
 
-  const fingerprint = await sha256(JSON.stringify({ projectId, specId, snapshotId, methodId, title }));
+  const fingerprint = await sha256(JSON.stringify({ projectId, specId, snapshotId, methodId, title, chatConfirmationId }));
   const existing = await env.DB.prepare(
     "SELECT task_id, request_hash FROM task_idempotency WHERE user_id = ?1 AND idempotency_key = ?2"
   ).bind(user.userId, idempotencyKey).first<{ task_id: string; request_hash: string }>();
   if (existing) {
     if (existing.request_hash !== fingerprint) return errorJson("Idempotency key was reused with different input", 409, "IDEMPOTENCY_CONFLICT");
     const duplicate = await loadTask(existing.task_id, env, user);
+    if (chatConfirmationId && duplicate?.chat_confirmation_id !== chatConfirmationId) {
+      return errorJson("Idempotency key is not bound to this confirmation", 409, "IDEMPOTENCY_CONFLICT");
+    }
     return duplicate ? json({ task_id: duplicate.task_id, status: duplicate.status, duplicate: true }) : errorJson("Task not found", 404, "TASK_NOT_FOUND");
   }
 
-  const id = taskId();
+  let id: string | null = null;
+  if (chatConfirmationId) {
+    const confirmation = await getChatTaskConfirmationForUser(env, chatConfirmationId, user.userId);
+    if (!confirmation) return errorJson("Task confirmation not found", 404, "TASK_CONFIRMATION_NOT_FOUND");
+    const now = nowSeconds();
+    if (confirmation.expires_at <= now) return errorJson("Task confirmation expired", 410, "TASK_CONFIRMATION_EXPIRED");
+    if (confirmation.status !== "pending") return errorJson("Task confirmation has already been used", 409, "TASK_CONFIRMATION_USED");
+
+    id = confirmation.task_id || taskId();
+    if (!confirmation.task_id) {
+      const bound = await bindChatTaskConfirmation(env, chatConfirmationId, user.userId, id, now);
+      if (!bound) {
+        const raced = await getChatTaskConfirmationForUser(env, chatConfirmationId, user.userId);
+        if (!raced || raced.expires_at <= now) return errorJson("Task confirmation expired", 410, "TASK_CONFIRMATION_EXPIRED");
+        if (raced.status !== "pending" || !raced.task_id) return errorJson("Task confirmation has already been used", 409, "TASK_CONFIRMATION_USED");
+        id = raced.task_id;
+      }
+    }
+  } else {
+    id = taskId();
+  }
   const now = nowSeconds();
+  if (chatConfirmationId) {
+    const current = await getChatTaskConfirmationForUser(env, chatConfirmationId, user.userId);
+    if (!current || current.status !== "pending" || current.task_id !== id) {
+      return errorJson("Task confirmation has already been used", 409, "TASK_CONFIRMATION_USED");
+    }
+    if (current.expires_at <= now) return errorJson("Task confirmation expired", 410, "TASK_CONFIRMATION_EXPIRED");
+  }
   try {
     await env.DB.batch([
       env.DB.prepare(
         `INSERT INTO tasks
           (task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
-           title, status, attempt_count, max_attempts, created_by, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'queued', 0, 3, ?7, ?8, ?8)`
-      ).bind(id, specId, snapshotId, projectId, methodId, title, user.userId, now),
+           title, status, attempt_count, max_attempts, created_by, created_at, updated_at,
+           chat_confirmation_id)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, 'queued', 0, 3, ?7, ?8, ?8, ?9
+         WHERE ?9 IS NULL OR EXISTS (
+           SELECT 1 FROM chat_task_confirmations
+           WHERE confirmation_id = ?9 AND user_id = ?7 AND status = 'pending'
+             AND task_id = ?1 AND expires_at > ?10
+         )`
+      ).bind(id, specId, snapshotId, projectId, methodId, title, user.userId, now, chatConfirmationId, now),
       env.DB.prepare(
         "INSERT INTO task_idempotency (user_id, idempotency_key, task_id, request_hash, created_at) VALUES (?1, ?2, ?3, ?4, ?5)"
       ).bind(user.userId, idempotencyKey, id, fingerprint, now),
@@ -355,6 +398,12 @@ async function handleCreateTask(request: Request, env: Env, user: AuthedUser): P
       const duplicate = await loadTask(raced.task_id, env, user);
       if (duplicate) return json({ task_id: duplicate.task_id, status: duplicate.status, duplicate: true });
     }
+    if (chatConfirmationId && id) {
+      const boundTask = await loadTask(id, env, user);
+      if (boundTask?.chat_confirmation_id === chatConfirmationId) {
+        return json({ task_id: boundTask.task_id, status: boundTask.status, duplicate: true });
+      }
+    }
     return errorJson("Task could not be queued", 503, "TASK_QUEUE_UNAVAILABLE");
   }
   return json({ task_id: id, status: "queued", attempt_count: 0, duplicate: false }, 201);
@@ -365,7 +414,8 @@ async function handleListTasks(request: Request, env: Env, user: AuthedUser): Pr
   const result = await env.DB.prepare(
     `SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
             title, status, attempt_count, max_attempts, result_artifact_id,
-            error_message, created_by, created_at, updated_at, finished_at
+            error_message, created_by, created_at, updated_at, finished_at,
+            chat_confirmation_id
      FROM tasks WHERE created_by = ?1 ORDER BY created_at DESC LIMIT ?2`
   ).bind(user.userId, limit).all<TaskRow>();
   return json({ tasks: (result.results ?? []).map(publicTask) });
