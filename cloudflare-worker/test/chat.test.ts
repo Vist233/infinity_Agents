@@ -241,4 +241,23 @@ describe("handleChat", () => {
     expect(stepfunCall).toBe(2);
     expect([...db.dailyUsage.values()][0]).toBe(1);
   });
+
+  it("forces a confirmation card for explicit task intent when the model only asks questions", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("s1", "user-1");
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).includes("stepfun.test")) return textResponse("");
+      const body = JSON.parse(String(init?.body ?? "{}")) as { tool_choice?: unknown };
+      expect(body.tool_choice).toEqual({ type: "function", function: { name: "request_task_creation" } });
+      return sseResponse([
+        JSON.stringify({ choices: [{ delta: { content: "请先告诉我更多细节。" }, finish_reason: "stop" }] }),
+      ]);
+    }) as unknown as typeof fetch;
+
+    const response = await handleChat(makeRequest("s1", "我要创建一个异步分析任务"), env, USER);
+    const events = await readSse(response);
+    expect(events.find((event) => event.type === "tool_call")?.tool_name).toBe("request_task_creation");
+    expect(events.map((event) => event.type)).toContain("task_confirmation");
+    expect([...db.chatTaskConfirmations.values()][0]?.status).toBe("pending");
+  });
 });

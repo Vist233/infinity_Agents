@@ -113,7 +113,7 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
     { role: "user", content: userContent }
   ];
 
-  return streamModelLoop(env, user, sessionId, modelMessages, true);
+  return streamModelLoop(env, user, sessionId, modelMessages, true, shouldRequestTaskConfirmation(userContent));
 }
 
 /**
@@ -210,6 +210,7 @@ function streamModelLoop(
   sessionId: string,
   modelMessages: ChatMessage[],
   refundQuotaOnError: boolean,
+  forceTaskConfirmation = false,
 ): Response {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -220,7 +221,15 @@ function streamModelLoop(
 
       try {
         emitStatus("thinking");
-        const result = await runToolLoop(env, sessionId, user.userId, modelMessages, emit, emitStatus);
+        const result = await runToolLoop(
+          env,
+          sessionId,
+          user.userId,
+          modelMessages,
+          emit,
+          emitStatus,
+          forceTaskConfirmation,
+        );
         if (result.assistantText.trim()) {
           await insertMessage(env, sessionId, "assistant", result.assistantText);
           await touchChatSession(env, sessionId);
@@ -255,12 +264,36 @@ async function runToolLoop(
   userId: string,
   messages: ChatMessage[],
   emit: (event: Record<string, unknown>) => void,
-  emitStatus: (phase: string, extra?: Record<string, unknown>) => void
+  emitStatus: (phase: string, extra?: Record<string, unknown>) => void,
+  forceTaskConfirmation = false,
 ): Promise<ChatLoopResult> {
   let finalText = "";
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
-    const { content, toolCalls, finishReason } = await streamCompletion(env, messages, emit, emitStatus);
+    const { content, toolCalls, finishReason } = await streamCompletion(
+      env,
+      messages,
+      emit,
+      emitStatus,
+      forceTaskConfirmation && iteration === 0,
+    );
+
+    // A clear task intent must not get stuck in a clarification-only answer.
+    // If the provider ignores tool_choice, synthesize the same safe pending
+    // confirmation instead of creating a task or asking the user to restart.
+    if (forceTaskConfirmation && iteration === 0 && !toolCalls.some((call) => call.function.name === "request_task_creation")) {
+      emit({ type: "tool_call", tool_name: "request_task_creation" });
+      emitStatus("tool_running", { tool_name: "request_task_creation" });
+      return await pauseForTaskConfirmation(
+        env,
+        sessionId,
+        userId,
+        crypto.randomUUID(),
+        {},
+        content,
+        emit,
+      );
+    }
 
     if (toolCalls.length > 0) {
       // Record the assistant's tool-call turn, then execute each tool.
@@ -275,30 +308,7 @@ async function runToolLoop(
           args = {};
         }
         if (call.function.name === "request_task_creation") {
-          const confirmation = normalizeTaskConfirmationArgs(args);
-          const confirmationId = crypto.randomUUID();
-          const createdAt = nowSeconds();
-          await createChatTaskConfirmation(env, {
-            confirmation_id: confirmationId,
-            session_id: sessionId,
-            user_id: userId,
-            tool_name: call.function.name,
-            tool_call_id: call.id,
-            tool_args_json: JSON.stringify(confirmation),
-            created_at: createdAt,
-            expires_at: createdAt + 30 * 60,
-          });
-          const handoffText = content.trim()
-            ? content
-            : "我已理解你的需求，请在下面的确认卡中补充材料；提交后我会把任务放到后台执行。";
-          if (!content.trim()) emit({ type: "chunk", content: handoffText });
-          emit({
-            type: "task_confirmation",
-            confirmation_id: confirmationId,
-            tool_name: call.function.name,
-            ...confirmation,
-          });
-          return { status: "confirmation_required", assistantText: handoffText };
+          return await pauseForTaskConfirmation(env, sessionId, userId, call.id, args, content, emit);
         }
 
         const result = await runTool(env, sessionId, call.function.name, args);
@@ -339,7 +349,8 @@ async function streamCompletion(
   env: Env,
   messages: ChatMessage[],
   emit: (event: Record<string, unknown>) => void,
-  emitStatus: (phase: string, extra?: Record<string, unknown>) => void
+  emitStatus: (phase: string, extra?: Record<string, unknown>) => void,
+  forceTaskConfirmation = false,
 ): Promise<{ content: string; toolCalls: ToolCall[]; finishReason: string }> {
   const upstream = await fetch(`${env.STEPFUN_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
@@ -352,6 +363,9 @@ async function streamCompletion(
       model: env.STEPFUN_MODEL,
       messages,
       tools: TOOL_DEFINITIONS,
+      ...(forceTaskConfirmation
+        ? { tool_choice: { type: "function", function: { name: "request_task_creation" } } }
+        : {}),
       stream: true
     })
   });
@@ -426,4 +440,45 @@ async function streamCompletion(
     }));
 
   return { content, toolCalls, finishReason: finishReason || (toolCalls.length > 0 ? "tool_calls" : "stop") };
+}
+
+async function pauseForTaskConfirmation(
+  env: Env,
+  sessionId: string,
+  userId: string,
+  toolCallId: string,
+  args: Record<string, unknown>,
+  content: string,
+  emit: (event: Record<string, unknown>) => void,
+): Promise<ChatLoopResult> {
+  const confirmation = normalizeTaskConfirmationArgs(args);
+  const confirmationId = crypto.randomUUID();
+  const createdAt = nowSeconds();
+  await createChatTaskConfirmation(env, {
+    confirmation_id: confirmationId,
+    session_id: sessionId,
+    user_id: userId,
+    tool_name: "request_task_creation",
+    tool_call_id: toolCallId,
+    tool_args_json: JSON.stringify(confirmation),
+    created_at: createdAt,
+    expires_at: createdAt + 30 * 60,
+  });
+  const handoffText = content.trim()
+    ? content
+    : "我已理解你的需求，请在下面的确认卡中补充材料；提交后我会把任务放到后台执行。";
+  if (!content.trim()) emit({ type: "chunk", content: handoffText });
+  emit({
+    type: "task_confirmation",
+    confirmation_id: confirmationId,
+    tool_name: "request_task_creation",
+    ...confirmation,
+  });
+  return { status: "confirmation_required", assistantText: handoffText };
+}
+
+function shouldRequestTaskConfirmation(userContent: string): boolean {
+  const text = userContent.replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  return /(?:创建|新建|提交|执行|运行|开始|安排|建立).{0,24}(?:任务|分析|作业|数据集)|(?:任务|分析|作业).{0,24}(?:后台|异步|创建|提交|执行)|\b(?:create|submit|run|start|background|async)\b.{0,32}\b(?:task|job|analysis)\b/i.test(text);
 }
