@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import re
+import tempfile
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -75,7 +76,16 @@ class RunLogger:
         self._logger.setLevel(logging.DEBUG)
         self._logger.propagate = False
         if not self._logger.handlers:
-            handler = logging.FileHandler(path, encoding="utf-8")
+            try:
+                handler = logging.FileHandler(path, encoding="utf-8")
+            except (OSError, PermissionError):
+                # A locked-down desktop/test account may not be able to create
+                # the platform default Application Support directory.  Keep
+                # run logging alive in a private temp directory instead of
+                # failing the whole task engine.
+                fallback = Path(tempfile.gettempdir()) / "imagejudge" / "logs" / "runs" / f"{run_id}.log"
+                fallback.parent.mkdir(parents=True, exist_ok=True)
+                handler = logging.FileHandler(fallback, encoding="utf-8")
             handler.setFormatter(_RedactFormatter(_FORMAT))
             self._logger.addHandler(handler)
 

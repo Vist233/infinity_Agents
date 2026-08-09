@@ -16,6 +16,8 @@ import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
 
+from backend.security import ArtifactCollector, SecurityBoundaryError, ensure_within
+
 logger = logging.getLogger(__name__)
 
 
@@ -119,17 +121,21 @@ async def execute_task(
         failure_code = "execution_error"
         success = False
 
-    # Complete the attempt
     from backend.code_agent.task_service import complete_task_attempt
-    await complete_task_attempt(
-        db_pool,
-        attempt_id=attempt_id,
-        status="succeeded" if success else "failed",
-        exit_code=0 if success else 1,
-        error_message=error_message,
-        executor_image_digest=image_digest,
-        failure_code=None if success else failure_code,
-    )
+
+    # Execution success is not Task success.  Keep the Attempt open until the
+    # external Verifier and artifact publication gates have completed so a
+    # missing deliverable cannot leave a misleading succeeded Attempt.
+    if not success:
+        await complete_task_attempt(
+            db_pool,
+            attempt_id=attempt_id,
+            status="cancelled" if cancelled else "failed",
+            exit_code=1,
+            error_message=error_message,
+            executor_image_digest=image_digest,
+            failure_code=failure_code,
+        )
 
     if cancelled:
         return {"success": False, "cancelled": True, "error": error_message}
@@ -145,6 +151,15 @@ async def execute_task(
 
     verification = await _verify_outputs(task_output_dir, task_spec)
     if not verification["passed"]:
+        await complete_task_attempt(
+            db_pool,
+            attempt_id=attempt_id,
+            status="failed",
+            exit_code=0,
+            error_message=f"Verification failed: {', '.join(f['message'] for f in verification['failures'])}",
+            executor_image_digest=image_digest,
+            failure_code="verification_failed",
+        )
         return {
             "success": False,
             "error": f"Verification failed: {', '.join(f['message'] for f in verification['failures'])}",
@@ -159,12 +174,33 @@ async def execute_task(
         "worker_id": worker_id,
     })
 
-    artifact_id = await _create_artifacts(
-        task_id=task_id,
+    try:
+        artifact_id = await _create_artifacts(
+            task_id=task_id,
+            attempt_id=attempt_id,
+            output_dir=task_output_dir,
+            output_files=output_files,
+            db_pool=db_pool,
+            lease_token=lease_token,
+        )
+    except Exception as exc:
+        await complete_task_attempt(
+            db_pool,
+            attempt_id=attempt_id,
+            status="failed",
+            exit_code=0,
+            error_message=str(exc),
+            executor_image_digest=image_digest,
+            failure_code="artifact_publish_failed",
+        )
+        raise
+
+    await complete_task_attempt(
+        db_pool,
         attempt_id=attempt_id,
-        output_dir=task_output_dir,
-        output_files=output_files,
-        db_pool=db_pool,
+        status="succeeded",
+        exit_code=0,
+        executor_image_digest=image_digest,
     )
 
     return {"success": True, "artifact_id": artifact_id, "output_files": output_files}
@@ -217,6 +253,12 @@ async def _run_docker_execution(
 
     input_dir = None
 
+    if os.getenv("CODE_AGENT_EXECUTOR_MODE", "docker").strip().lower() == "fixture":
+        from backend.code_agent.worker.fixture_executor import run_fixture_executor
+        async for event in run_fixture_executor(task_spec, output_dir):
+            yield event
+        return
+
     # Preferred path: assemble the task input directory from the uploaded
     # method source document + dataset snapshot (design doc §8.5).
     if (dataset and dataset.get("stored_path")) or (
@@ -263,6 +305,7 @@ def _inside_upload_roots(path: Path) -> bool:
     allowed_roots = [
         Path(os.getenv("DATASET_UPLOAD_ROOT", "/tmp/uploaded-datasets")).resolve(),
         Path(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", "/tmp/uploaded-method-sources")).resolve(),
+        Path(os.getenv("RESOURCE_STORAGE_ROOT", "/workspace/resources")).resolve(),
     ]
     try:
         resolved = path.resolve()
@@ -314,13 +357,17 @@ async def _get_image_digest(docker_image: str) -> Optional[str]:
 
 
 async def _collect_outputs(output_dir: Path) -> list:
-    """Collect list of output files."""
-    files = []
-    if output_dir.exists():
-        for f in output_dir.rglob("*"):
-            if f.is_file():
-                files.append(str(f.relative_to(output_dir)))
-    return files
+    """Collect only ordinary files under output root.
+
+    The collector intentionally performs the lstat/path/secret checks before
+    verifier or ZIP code can read a byte.
+    """
+    collector = ArtifactCollector(
+        max_files=int(os.getenv("ARTIFACT_MAX_FILES", "5000")),
+        max_file_bytes=int(os.getenv("ARTIFACT_MAX_FILE_BYTES", str(512 * 1024 * 1024))),
+        max_total_bytes=int(os.getenv("ARTIFACT_MAX_TOTAL_BYTES", str(2 * 1024 * 1024 * 1024))),
+    )
+    return [relative for _path, relative in collector._iter_files(output_dir)]
 
 
 async def _verify_outputs(output_dir: Path, task_spec: Dict[str, Any]) -> Dict[str, Any]:
@@ -362,34 +409,23 @@ async def _create_artifacts(
     output_dir: Path,
     output_files: list,
     db_pool,
+    lease_token: Optional[str] = None,
 ) -> str:
     """Create artifact records and manifest."""
-    from backend.code_agent.task_service import create_artifact
-    import zipfile
-
+    from backend.code_agent.task_service import create_artifact, create_artifact_if_current_lease
     artifact_id = f"artifact-{uuid.uuid4()}"
-
-    # Create manifest
-    manifest = {
-        "task_id": task_id,
-        "attempt_id": attempt_id,
-        "generated_at": __import__("datetime").datetime.now().isoformat(),
-        "files": [],
-    }
-
-    # Create ZIP archive
     zip_path = output_dir.parent / f"result-{task_id[:8]}.zip"
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for rel_path in output_files:
-            file_path = output_dir / rel_path
-            if file_path.exists():
-                zf.write(file_path, rel_path)
-                file_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
-                manifest["files"].append({
-                    "path": rel_path,
-                    "size": file_path.stat().st_size,
-                    "sha256": file_hash,
-                })
+    collector = ArtifactCollector(
+        max_files=int(os.getenv("ARTIFACT_MAX_FILES", "5000")),
+        max_file_bytes=int(os.getenv("ARTIFACT_MAX_FILE_BYTES", str(512 * 1024 * 1024))),
+        max_total_bytes=int(os.getenv("ARTIFACT_MAX_TOTAL_BYTES", str(2 * 1024 * 1024 * 1024))),
+    )
+    collected = collector.collect(
+        output_dir,
+        zip_path,
+        metadata={"task_id": task_id, "attempt_id": attempt_id},
+    )
+    manifest = collected.manifest
 
     # Register artifact
     from backend.code_agent.models import Artifact
@@ -401,14 +437,19 @@ async def _create_artifacts(
         kind="result_archive",
         storage_backend="local",
         storage_path=str(zip_path),
-        file_size_bytes=zip_path.stat().st_size if zip_path.exists() else 0,
-        checksum_sha256=hashlib.sha256(zip_path.read_bytes()).hexdigest() if zip_path.exists() else "",
+        file_size_bytes=collected.archive_path.stat().st_size,
+        checksum_sha256=collected.checksum_sha256,
         content_type="application/zip",
-        metadata={"file_count": len(output_files), "manifest": manifest},
+        metadata={"file_count": collected.file_count, "byte_count": collected.byte_count, "manifest": manifest},
     )
-    artifact = await create_artifact(db_pool, artifact_obj)
+    if lease_token:
+        artifact = await create_artifact_if_current_lease(db_pool, artifact_obj, lease_token)
+        if artifact is None:
+            raise RuntimeError("task lease was lost before artifact publication")
+    else:
+        artifact = await create_artifact(db_pool, artifact_obj)
 
-    logger.info("Created artifact %s for task %s with %d files", artifact_id, task_id, len(output_files))
+    logger.info("Created artifact %s for task %s with %d files", artifact_id, task_id, collected.file_count)
     return artifact_id
 
 

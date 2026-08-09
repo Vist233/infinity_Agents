@@ -17,6 +17,16 @@ import backend.app as backend_app_module
 from backend.code_agent.worker.executor import execute_task
 
 
+def _fixture_case(case_number: str) -> Path:
+    root_value = os.getenv("GOAL_DRIVEN_FIXTURE_ROOT", "").strip()
+    if not root_value:
+        pytest.skip("GOAL_DRIVEN_FIXTURE_ROOT is not configured")
+    case_dir = Path(root_value).expanduser() / case_number
+    if not case_dir.is_dir():
+        pytest.fail(f"Fixture case directory does not exist: {case_dir}")
+    return case_dir
+
+
 class _FakeConn:
     def __init__(self, rows):
         self._rows = rows
@@ -250,7 +260,7 @@ class TestIntegrationRealDocker:
         if not await check_docker_available():
             pytest.skip("Docker is not available")
 
-        case_dir = "/Users/zhangyvjing/Library/Mobile Documents/com~apple~CloudDocs/Code/CodeExcuteGoalDriven/GoalDrivenAttempt/test/case/1"
+        case_dir = str(_fixture_case("1"))
         out_dir = tmp_path / "output"
         out_dir.mkdir(parents=True)
 
@@ -266,9 +276,8 @@ class TestIntegrationRealDocker:
             events.append(event)
 
         types = [e["type"] for e in events]
-        assert "done" in types or "error" in types
-        if "done" in types:
-            assert (out_dir / "results.csv").exists() or (out_dir / "report.md").exists()
+        assert "done" in types
+        assert (out_dir / "results.csv").exists() or (out_dir / "report.md").exists()
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -278,7 +287,7 @@ class TestIntegrationRealDocker:
         if not await check_docker_available():
             pytest.skip("Docker is not available")
 
-        case_dir = "/Users/zhangyvjing/Library/Mobile Documents/com~apple~CloudDocs/Code/CodeExcuteGoalDriven/GoalDrivenAttempt/test/case/2"
+        case_dir = str(_fixture_case("2"))
         out_dir = tmp_path / "output"
         out_dir.mkdir(parents=True)
 
@@ -294,9 +303,8 @@ class TestIntegrationRealDocker:
             events.append(event)
 
         types = [e["type"] for e in events]
-        assert "done" in types or "error" in types
-        if "done" in types:
-            assert (out_dir / "gc_content.txt").exists() or (out_dir / "report.md").exists()
+        assert "done" in types
+        assert (out_dir / "gc_content.txt").exists() or (out_dir / "report.md").exists()
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -306,7 +314,7 @@ class TestIntegrationRealDocker:
         if not await check_docker_available():
             pytest.skip("Docker is not available")
 
-        case_dir = "/Users/zhangyvjing/Library/Mobile Documents/com~apple~CloudDocs/Code/CodeExcuteGoalDriven/GoalDrivenAttempt/test/case/3"
+        case_dir = str(_fixture_case("3"))
         out_dir = tmp_path / "output"
         out_dir.mkdir(parents=True)
 
@@ -322,6 +330,5 @@ class TestIntegrationRealDocker:
             events.append(event)
 
         types = [e["type"] for e in events]
-        assert "done" in types or "error" in types
-        if "done" in types:
-            assert (out_dir / "qc_metrics.csv").exists() or (out_dir / "report.md").exists()
+        assert "done" in types
+        assert (out_dir / "qc_metrics.csv").exists() or (out_dir / "report.md").exists()

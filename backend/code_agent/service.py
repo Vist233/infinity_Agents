@@ -8,15 +8,13 @@ from typing import AsyncIterator, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-_CASE_BASE = Path(
-    os.getenv(
-        "CODE_AGENT_CASE_DIR",
-        "/Users/zhangyvjing/Library/Mobile Documents/com~apple~CloudDocs/Code/CodeExcuteGoalDriven/GoalDrivenAttempt/test/case",
-    )
-)
+_CASE_BASE_VALUE = os.getenv("GOAL_DRIVEN_FIXTURE_ROOT", "").strip()
+_CASE_BASE = Path(_CASE_BASE_VALUE).expanduser() if _CASE_BASE_VALUE else None
 
 
 def _detect_case_dir(user_input: str) -> Optional[Path]:
+    if _CASE_BASE is None:
+        return None
     normalized = (user_input or "").lower()
     if "case1" in normalized or "rna" in normalized or "deseq" in normalized:
         return _CASE_BASE / "1"

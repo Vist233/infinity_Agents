@@ -10,6 +10,7 @@ import { Composer } from "@/components/chat/Composer";
 import { useChatController } from "@/hooks/use-chat-controller";
 import { redirectToLogin } from "@/lib/runtime-config";
 import { LanguageToggle, useLanguage } from "@/lib/i18n";
+import { TaskConfirmationCard } from "@/components/analysis/TaskConfirmationCard";
 
 /**
  * PaperAgent is the canonical home page.  Keep the product navigation and the
@@ -24,7 +25,7 @@ export default function ChatPage() {
   return (
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
       <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
-        <AgentNav active="paper" onNavigate={(path) => router.push(path)} />
+        <AgentNav active="analysis" onNavigate={(path) => router.push(path)} />
         <Button
           variant="outline"
           className="justify-start gap-2 bg-white/90 border-[var(--hairline)] shadow-sm hover:bg-white mt-3 rounded-xl"
@@ -60,7 +61,7 @@ export default function ChatPage() {
 
       <main className="flex-1 flex flex-col relative min-w-0">
         <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between sticky top-0 bg-[var(--surface-1)] backdrop-blur-xl z-10 print:hidden">
-          <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("home.paperAgent")}</div>
+          <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("nav.analysis")}</div>
           <div className="flex items-center gap-2">
             <LanguageToggle />
             {controller.authStatus === "unauthenticated" ? (
@@ -76,16 +77,21 @@ export default function ChatPage() {
           </div>
         </header>
 
-        <MessagePane
-          messages={controller.messages}
-          sessionId={controller.state.sessionId}
-          isLoading={controller.isLoading}
-          runState={controller.currentRunState}
-          statusText={controller.statusText}
-          scrollRef={controller.scrollRef}
-          authStatus={controller.authStatus}
-          onLogin={redirectToLogin}
-        />
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <div className="max-w-5xl mx-auto w-full p-4 md:p-6 space-y-4">
+            <TaskConfirmationCard onCreated={() => { void controller.retryLoadSessions(); }} />
+            <MessagePane
+              messages={controller.messages}
+              sessionId={controller.state.sessionId}
+              isLoading={controller.isLoading}
+              runState={controller.currentRunState}
+              statusText={controller.statusText}
+              scrollRef={controller.scrollRef}
+              authStatus={controller.authStatus}
+              onLogin={redirectToLogin}
+            />
+          </div>
+        </div>
 
         <Composer
           input={controller.state.input}

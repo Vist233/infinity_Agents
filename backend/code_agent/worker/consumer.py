@@ -10,6 +10,8 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
+from backend.code_agent.redis_client import CONSUMER_GROUP, STREAM_TASKS_EXECUTE
+
 logger = logging.getLogger(__name__)
 
 # Maximum length for error messages stored in DB
@@ -44,20 +46,27 @@ async def run_worker(
     poll_interval: float = 1.0,
     lease_seconds: int = 60,
     heartbeat_interval: int = 15,
+    worker_namespace: Optional[str] = None,
+    worker_credential: Optional[str] = None,
 ) -> None:
     """Run a single worker instance."""
-    await redis_client.ensure_consumer_group("stream:tasks:execute", "task-workers-v1")
+    stop_event = asyncio.Event()
+    if worker_credential:
+        from backend.worker_enrollment import authenticate_worker
+        if not worker_namespace or not await authenticate_worker(db_pool, worker_id, worker_namespace, worker_credential):
+            raise PermissionError("Worker enrollment is invalid or revoked")
+    await redis_client.ensure_consumer_group(STREAM_TASKS_EXECUTE, CONSUMER_GROUP)
     logger.info("Worker %s started, waiting for tasks...", worker_id)
 
     heartbeat_task = asyncio.create_task(
-        _heartbeat_loop(worker_id, redis_client, heartbeat_interval)
+        _heartbeat_loop(worker_id, redis_client, heartbeat_interval, db_pool, worker_namespace, worker_credential, stop_event)
     )
     lease_task = asyncio.create_task(
         _lease_reaper_loop(worker_id, db_pool, lease_seconds)
     )
 
     try:
-        while True:
+        while not stop_event.is_set():
             try:
                 await _process_next_task(
                     worker_id, db_pool, redis_client, docker_image, lease_seconds
@@ -85,8 +94,7 @@ async def _lease_reaper_loop(worker_id: str, db_pool, lease_seconds: int) -> Non
     """Renew own leases and reap expired leases from other workers."""
     from datetime import timedelta, timezone
     from datetime import datetime as dt
-    from backend.code_agent.retry_policy import calculate_retry_delay
-    from backend.code_agent.task_service import create_outbox_event
+    from backend.code_agent.task_service import reap_expired_lease
 
     while True:
         try:
@@ -119,7 +127,7 @@ async def _lease_reaper_loop(worker_id: str, db_pool, lease_seconds: int) -> Non
             async with db_pool.acquire() as conn:
                 expired = await conn.fetch(
                     """
-                    SELECT task_id, attempt_count
+                    SELECT task_id, lease_token
                     FROM tasks
                     WHERE status IN ('claimed', 'running')
                       AND lease_expires_at < NOW()
@@ -127,47 +135,38 @@ async def _lease_reaper_loop(worker_id: str, db_pool, lease_seconds: int) -> Non
                     FOR UPDATE SKIP LOCKED
                     """
                 )
+                # The SELECT transaction only prevents this reaper from
+                # competing with another reaper.  The helper re-checks the
+                # lease and performs the actual state transition atomically.
                 for row in expired:
-                    if row["attempt_count"] < 3:
-                        delay = calculate_retry_delay(row["attempt_count"])
-                        next_attempt = now + delay
-                        await conn.execute(
-                            """
-                            UPDATE tasks
-                            SET status = 'queued', lease_owner = NULL, lease_token = NULL,
-                                lease_expires_at = NULL, next_attempt_at = $2, updated_at = NOW()
-                            WHERE task_id = $1::uuid
-                            """,
-                            str(row["task_id"]), next_attempt,
+                    recovered = await reap_expired_lease(
+                        db_pool,
+                        str(row["task_id"]),
+                        row["lease_token"],
+                        now=now,
+                    )
+                    if recovered:
+                        logger.info(
+                            "Reaper reclaimed task %s → %s",
+                            row["task_id"],
+                            recovered["status"],
                         )
-                        await create_outbox_event(
-                            db_pool,
-                            aggregate_type="task",
-                            aggregate_id=str(row["task_id"]),
-                            event_type="task_queued",
-                            payload={"task_id": str(row["task_id"]), "status": "queued"},
-                        )
-                        logger.info("Reaper reclaimed task %s → queued (next_attempt_at=%s)", row["task_id"], next_attempt)
-                    else:
-                        await conn.execute(
-                            """
-                            UPDATE tasks
-                            SET status = 'failed', lease_owner = NULL, lease_token = NULL,
-                                lease_expires_at = NULL, updated_at = NOW()
-                            WHERE task_id = $1::uuid
-                            """,
-                            str(row["task_id"]),
-                        )
-                        logger.info("Reaper reclaimed task %s → failed", row["task_id"])
         except Exception as exc:
             logger.warning("Lease reaper error: %s", exc)
         await asyncio.sleep(10)
 
 
-async def _heartbeat_loop(worker_id: str, redis_client, interval: int) -> None:
+async def _heartbeat_loop(worker_id: str, redis_client, interval: int, db_pool=None, namespace: Optional[str] = None, credential: Optional[str] = None, stop_event: Optional[asyncio.Event] = None) -> None:
     """Periodically update worker heartbeat."""
     while True:
         try:
+            if credential:
+                from backend.worker_enrollment import authenticate_worker
+                if not namespace or not await authenticate_worker(db_pool, worker_id, namespace, credential):
+                    logger.error("Worker %s enrollment was revoked; stopping heartbeat", worker_id)
+                    if stop_event:
+                        stop_event.set()
+                    return
             await redis_client.set_worker_heartbeat(worker_id, ttl=interval + 10)
         except Exception:
             pass
@@ -276,22 +275,28 @@ async def _process_next_task(
         )
 
         if result.get("cancelled"):
-            await update_task_status(
+            updated = await update_task_status(
                 db_pool, task_id,
                 TaskStatus.CANCELLED,
                 lease_token=claimed["lease_token"],
                 error_message=result.get("error", "Task cancelled by user"),
             )
-            logger.info("Worker %s cancelled task %s", worker_id, task_id)
+            if updated:
+                logger.info("Worker %s cancelled task %s", worker_id, task_id)
+            else:
+                logger.warning("Worker %s lost lease before cancelling task %s", worker_id, task_id)
         elif result.get("success"):
             from backend.code_agent.models import TaskStatus
-            await update_task_status(
+            updated = await update_task_status(
                 db_pool, task_id,
                 TaskStatus.SUCCEEDED,
                 lease_token=claimed["lease_token"],
                 result_artifact_id=result.get("artifact_id"),
             )
-            logger.info("Worker %s succeeded task %s", worker_id, task_id)
+            if updated:
+                logger.info("Worker %s succeeded task %s", worker_id, task_id)
+            else:
+                logger.warning("Worker %s lost lease before publishing success for task %s", worker_id, task_id)
         else:
             await _fail_or_requeue(
                 db_pool, worker_id, task_id, claimed,
@@ -335,6 +340,7 @@ async def _main(worker_id: str) -> None:
         raise SystemExit("DATABASE_URL is required")
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     docker_image = os.getenv("CODE_AGENT_DOCKER_IMAGE", "claude-code-env:v2")
+    namespace = os.getenv("REDIS_NAMESPACE", "default")
 
     pool = await asyncpg.create_pool(database_url, min_size=1, max_size=5)
     redis_client = RedisClient(redis_url)
@@ -343,7 +349,19 @@ async def _main(worker_id: str) -> None:
         logger.warning("Redis unavailable; worker will rely on DB polling fallback")
 
     try:
-        await run_worker(worker_id, pool, redis_client, docker_image=docker_image)
+        credential = os.getenv("WORKER_CREDENTIAL")
+        if os.getenv("WORKER_ENROLLMENT_REQUIRED", "0").lower() in {"1", "true", "yes"}:
+            from backend.worker_enrollment import complete_enrollment
+            token = os.getenv("WORKER_ENROLLMENT_TOKEN")
+            if token:
+                credential = await complete_enrollment(pool, worker_id, namespace, token)
+            if not credential:
+                raise SystemExit("WORKER_CREDENTIAL or one-time WORKER_ENROLLMENT_TOKEN is required")
+        await run_worker(
+            worker_id, pool, redis_client, docker_image=docker_image,
+            worker_namespace=namespace if credential else None,
+            worker_credential=credential,
+        )
     finally:
         await redis_client.disconnect()
         await pool.close()

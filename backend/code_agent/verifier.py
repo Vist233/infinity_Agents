@@ -351,9 +351,22 @@ class FiveLevelVerifier:
                         reader = csv.DictReader(f)
                         headers = [h.strip().lower() for h in (reader.fieldnames or [])]
 
-                    expected_headers = {"sequence_id", "length", "gc_content", "description"}
-                    if not expected_headers.issubset(headers):
-                        missing = expected_headers - set(headers)
+                    header_set = set(headers)
+                    # Accept the stable aliases used by the versioned orchid
+                    # fixture (Record_ID/Length_bp/GC_percent) as well as the
+                    # normalized names emitted by other Biopython runners.
+                    sequence_aliases = {
+                        "sequence_id": {"sequence_id", "record_id"},
+                        "length": {"length", "length_bp"},
+                        "gc_content": {"gc_content", "gc_percent"},
+                        "description": {"description"},
+                    }
+                    is_summary_table = {"metric", "value"}.issubset(header_set)
+                    missing = {
+                        name for name, aliases in sequence_aliases.items()
+                        if not aliases.intersection(header_set)
+                    } if not is_summary_table else set()
+                    if missing:
                         self.failures.append(VerificationFailure(
                             "domain",
                             f"Biopython CSV missing columns {missing}: {path_str}",

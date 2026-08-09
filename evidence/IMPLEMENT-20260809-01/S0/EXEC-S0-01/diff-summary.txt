@@ -1,0 +1,7 @@
+Changed only:
+
+- frontend/test/setup.ts: deterministic localStorage test double
+- frontend/app/code-agent/tasks/[task_id]/page.tsx: typed task-status translation map
+- frontend/app/image-judge/page.tsx: SSR-safe platform detection without effect-driven state
+
+No database, Docker, Redis, provider, or user data was changed.

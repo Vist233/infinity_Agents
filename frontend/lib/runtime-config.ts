@@ -15,6 +15,20 @@ export function getApiBase(): string {
   return DEFAULT_API_BASE;
 }
 
+/** Return the readable nonce paired with the HttpOnly session cookie. */
+export function getCsrfToken(): string | undefined {
+  if (typeof document === "undefined") return undefined;
+  const match = document.cookie.match(/(?:^|; )infinity_csrf=([^;]*)/);
+  return match ? decodeURIComponent(match[1]) : undefined;
+}
+
+export function withCsrfHeader(headers?: HeadersInit): Headers {
+  const result = new Headers(headers);
+  const token = getCsrfToken();
+  if (token) result.set("X-CSRF-Token", token);
+  return result;
+}
+
 /** Redirect the browser to the login flow, preserving the current location. */
 export function redirectToLogin(): void {
   if (typeof window === "undefined") return;

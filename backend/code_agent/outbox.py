@@ -10,6 +10,8 @@ import asyncio
 import logging
 from typing import Optional
 
+from backend.code_agent.redis_client import CONSUMER_GROUP, STREAM_TASKS_EXECUTE
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,7 +38,7 @@ class OutboxPublisher:
             return
         self._running = True
         await self._redis.connect()
-        await self._redis.ensure_consumer_group("stream:tasks:execute", "task-workers-v1")
+        await self._redis.ensure_consumer_group(STREAM_TASKS_EXECUTE, CONSUMER_GROUP)
         self._task = asyncio.create_task(self._publish_loop())
         logger.info("Outbox Publisher started")
 
@@ -65,7 +67,12 @@ class OutboxPublisher:
 
     async def _publish_batch(self) -> int:
         """Publish a batch of pending events. Returns count published."""
-        from backend.code_agent.task_service import get_pending_outbox_events, mark_outbox_published, mark_outbox_failed
+        from backend.code_agent.task_service import (
+            get_pending_outbox_events,
+            mark_outbox_published,
+            mark_outbox_failed,
+            release_outbox_event,
+        )
 
         events = await get_pending_outbox_events(self._pool, self._batch_size)
         published = 0
@@ -86,6 +93,7 @@ class OutboxPublisher:
                     else:
                         # Redis unavailable, skip for now
                         logger.warning("Redis unavailable, skipping outbox event %d", event["outbox_event_id"])
+                        await release_outbox_event(self._pool, event["outbox_event_id"], "Redis unavailable")
                 else:
                     # Publish to event stream for SSE.
                     task_id = event["payload"].get("task_id")
@@ -99,6 +107,7 @@ class OutboxPublisher:
                         # Redis unavailable — keep pending so the next pass
                         # retries (mirrors the task-stream branch).
                         logger.warning("Redis unavailable, skipping SSE outbox event %d", event["outbox_event_id"])
+                        await release_outbox_event(self._pool, event["outbox_event_id"], "Redis unavailable")
                         continue
                     await mark_outbox_published(self._pool, event["outbox_event_id"])
                     published += 1

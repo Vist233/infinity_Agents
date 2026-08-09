@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLanguage } from "@/lib/i18n";
+import { useLanguage, type TranslationKey } from "@/lib/i18n";
 import { AgentNav } from "@/components/chat/AgentNav";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
@@ -44,7 +44,6 @@ interface Artifact {
   artifact_id: string;
   name: string;
   kind: string;
-  storage_path: string;
   file_size_bytes: number | null;
   checksum_sha256: string | null;
   created_at: string;
@@ -70,6 +69,17 @@ const STATUS_COLORS: Record<TaskStatus, string> = {
   failed: "bg-red-100 text-red-700",
   cancelled: "bg-zinc-200 text-zinc-500",
   timeout: "bg-orange-100 text-orange-700",
+};
+
+const STATUS_LABELS: Record<TaskStatus, TranslationKey> = {
+  draft: "tasks.statusDraft",
+  queued: "tasks.statusQueued",
+  claimed: "tasks.statusClaimed",
+  running: "tasks.statusRunning",
+  succeeded: "tasks.statusSucceeded",
+  failed: "tasks.statusFailed",
+  cancelled: "tasks.statusCancelled",
+  timeout: "tasks.statusTimeout",
 };
 
 function formatDate(iso: string | null) {
@@ -194,7 +204,7 @@ export default function TaskDetailPage() {
   return (
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
       <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
-        <AgentNav active="code" onNavigate={(path) => router.push(path)} />
+        <AgentNav active="tasks" onNavigate={(path) => router.push(path)} />
       </aside>
       <main className="flex-1 flex flex-col relative min-w-0">
         <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between sticky top-0 bg-[var(--surface-1)] backdrop-blur-xl z-10 print:hidden">
@@ -244,7 +254,7 @@ export default function TaskDetailPage() {
                     <div className="text-xs text-zinc-400">{t("tasks.detailStatus")}</div>
                     <div className="mt-0.5">
                       <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[task.status]}`}>
-                        {t(`tasks.status${task.status.charAt(0).toUpperCase() + task.status.slice(1)}` as any)}
+                        {t(STATUS_LABELS[task.status])}
                       </span>
                     </div>
                   </div>

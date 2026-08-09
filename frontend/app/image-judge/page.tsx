@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDownToLine, Check, ExternalLink, FileImage, Microscope } from "lucide-react";
 import { AgentNav } from "@/components/chat/AgentNav";
@@ -15,6 +15,16 @@ const LINUX_DOWNLOAD_URL =
 
 type Platform = "windows" | "linux" | "other";
 
+function detectPlatform(): Platform {
+  if (typeof navigator === "undefined") return "other";
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes("win")) return "windows";
+  if (ua.includes("linux") || ua.includes("x11")) return "linux";
+  return "other";
+}
+
+const subscribeToPlatform = () => () => {};
+
 const steps: Array<[string, TranslationKey, TranslationKey]> = [
   ["1", "image.install", "image.installDescription"],
   ["2", "image.choose", "image.chooseDescription"],
@@ -27,15 +37,8 @@ const resultKeys: TranslationKey[] = ["image.resultOrder", "image.resultRows", "
 export default function ImageJudgePage() {
   const router = useRouter();
   const { t } = useLanguage();
-  const [platform, setPlatform] = useState<Platform>("other");
-
-  // Detect the visitor's platform so the matching download card leads.
-  useEffect(() => {
-    const ua = navigator.userAgent.toLowerCase();
-    if (ua.includes("win")) setPlatform("windows");
-    else if (ua.includes("linux") || ua.includes("x11")) setPlatform("linux");
-    else setPlatform("other");
-  }, []);
+  // Detect the visitor's platform without an effect-driven state update.
+  const platform = useSyncExternalStore(subscribeToPlatform, detectPlatform, () => "other");
 
   const downloadCards = [
     {
@@ -56,7 +59,7 @@ export default function ImageJudgePage() {
   return (
     <div className="flex min-h-screen bg-transparent text-zinc-900 font-sans">
       <aside className="w-[260px] shrink-0 bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl">
-        <AgentNav active="image-judge" onNavigate={(path) => router.push(path)} />
+        <AgentNav active="traits" onNavigate={(path) => router.push(path)} />
       </aside>
 
       <main className="flex-1 min-w-0 overflow-y-auto">

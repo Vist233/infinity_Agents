@@ -8,9 +8,8 @@ import os
 import re
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from anthropic import AsyncAnthropic
-
 from backend.code_agent.models import TaskSpec
+from backend.provider import ProviderProfile
 
 logger = logging.getLogger(__name__)
 
@@ -274,8 +273,9 @@ def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
 
 
 async def _call_llm_for_analysis(user_input: str, messages: Optional[List[Dict[str, Any]]] = None) -> AsyncIterator[Dict[str, Any]]:
-    """Call the real LLM (StepFun/Anthropic) to generate a TaskSpec."""
-    api_key = os.getenv("STEPFUN_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+    """Call the single configured OpenAI-compatible model."""
+    profile = ProviderProfile.from_environment()
+    api_key = profile.api_key
     if not api_key:
         logger.warning("No API key found, falling back to deterministic mock")
         yield {"type": "status", "phase": "thinking", "elapsed_ms": 0, "attempt": 1, "max_attempts": 1, "tool_name": "analysis_agent"}
@@ -284,7 +284,9 @@ async def _call_llm_for_analysis(user_input: str, messages: Optional[List[Dict[s
             yield event
         return
 
-    client = AsyncAnthropic(api_key=api_key)
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=api_key, base_url=profile.base_url)
 
     # Build conversation history
     system_prompt = _ANALYSIS_AGENT_SYSTEM_PROMPT
@@ -301,20 +303,21 @@ async def _call_llm_for_analysis(user_input: str, messages: Optional[List[Dict[s
     user_messages.append({"role": "user", "content": user_input})
 
     try:
-        stream = client.messages.stream(
-            model=os.getenv("ANTHROPIC_MODEL", "step-3.7-flash"),
-            system=system_prompt,
-            messages=user_messages,
+        stream = await client.chat.completions.create(
+            model=profile.model_id,
+            messages=[{"role": "system", "content": system_prompt}, *user_messages],
             max_tokens=4096,
+            stream=True,
         )
 
         full_response = ""
-        async with stream as s:
-            async for event in s:
-                if hasattr(event, 'delta') and hasattr(event.delta, 'text'):
-                    chunk = event.delta.text
-                    full_response += chunk
-                    yield {"type": "chunk", "content": chunk}
+        async for event in stream:
+            choices = getattr(event, "choices", None) or []
+            delta = getattr(choices[0], "delta", None) if choices else None
+            chunk = getattr(delta, "content", None) if delta is not None else None
+            if chunk:
+                full_response += chunk
+                yield {"type": "chunk", "content": chunk}
 
         # After streaming, check if we got a valid TaskSpec
         task_spec = _extract_json_from_text(full_response)
@@ -396,10 +399,13 @@ async def run_analysis_stream(
 ) -> AsyncIterator[Dict[str, Any]]:
     """Generate a TaskSpec draft from a user conversation.
 
-    If STEPFUN_API_KEY or ANTHROPIC_API_KEY is available, uses the real LLM.
-    Otherwise falls back to deterministic mock for testing.
+    If the single analysis provider profile has a key, use it. Otherwise use
+    the deterministic local fallback for development and acceptance tests.
     """
-    api_key = os.getenv("STEPFUN_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+    api_key = (
+        os.getenv("ANALYSIS_PROVIDER_API_KEY")
+        or os.getenv("STEPFUN_API_KEY")
+    )
     if api_key:
         async for event in _call_llm_for_analysis(user_input, messages):
             yield event

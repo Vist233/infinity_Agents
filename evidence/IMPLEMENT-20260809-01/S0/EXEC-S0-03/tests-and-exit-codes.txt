@@ -1,0 +1,4 @@
+  REDIS_NAMESPACE=accept_20260809_153000 python namespace smoke  exit 0 (PASS)
+  pytest -q tests/test_sse_reconnection.py tests/test_rate_limit.py tests/test_retry_and_recovery.py
+                                                               exit 0 (20 passed)
+  git diff --check                                          CLEAN

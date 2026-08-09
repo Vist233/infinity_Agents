@@ -1,4 +1,5 @@
 import type { Message, SessionItem } from "@/lib/chat-state";
+import { withCsrfHeader } from "@/lib/runtime-config";
 
 export interface ApiError extends Error {
   status?: number;
@@ -40,7 +41,7 @@ async function parseErrorResponse(response: Response): Promise<string> {
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(input, { credentials: "include", ...init });
+    response = await fetch(input, { credentials: "include", ...init, headers: withCsrfHeader(init?.headers) });
   } catch (error) {
     throw createApiError(
       `Network request failed: ${error instanceof Error ? error.message : "unknown error"}`,

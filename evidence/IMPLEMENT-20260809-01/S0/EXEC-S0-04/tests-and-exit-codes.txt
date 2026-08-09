@@ -1,0 +1,6 @@
+  docker compose ... config --quiet  exit 0
+  backend pytest -q -m "not integration"  exit 0 (267 passed, 1 skipped, 3 deselected)
+  git diff --check                    exit 0
+
+No acceptance container was started. Existing local Docker containers were only
+read during earlier health checks.

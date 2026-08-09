@@ -206,14 +206,45 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 -- Task Execution System (Infinity Agent)
                 -- ============================================================================
 
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id TEXT PRIMARY KEY,
+                    issuer TEXT NOT NULL DEFAULT 'local',
+                    subject TEXT NOT NULL,
+                    email TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (issuer, subject)
+                );
+
+                CREATE TABLE IF NOT EXISTS auth_sessions (
+                    session_id UUID PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    revoked_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions (user_id, expires_at);
+
+                CREATE TABLE IF NOT EXISTS project_members (
+                    project_id UUID NOT NULL,
+                    user_id TEXT NOT NULL,
+                    role VARCHAR(20) NOT NULL DEFAULT 'member',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (project_id, user_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members (user_id, project_id);
+
                 CREATE TABLE IF NOT EXISTS projects (
                     project_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                     name TEXT NOT NULL,
                     description TEXT,
                     created_by TEXT,
+                    owner_user_id TEXT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
+                ALTER TABLE projects ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
+                CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects (owner_user_id, updated_at DESC);
 
                 CREATE TABLE IF NOT EXISTS task_specs (
                     task_spec_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -335,6 +366,7 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     published_at TIMESTAMPTZ,
                     retry_count INT NOT NULL DEFAULT 0,
                     last_error TEXT,
+                    claim_expires_at TIMESTAMPTZ,
                     next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
@@ -382,8 +414,86 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS failure_code VARCHAR(50);
                 ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS failure_detail TEXT;
                 ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+                ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMPTZ;
+                UPDATE outbox_events
+                SET status = 'pending', claim_expires_at = NULL
+                WHERE status = 'publishing' AND claim_expires_at IS NULL;
                 ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS user_id TEXT;
                 ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS request_hash TEXT;
+
+                CREATE TABLE IF NOT EXISTS project_resources (
+                    resource_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    project_id UUID NOT NULL,
+                    owner_user_id TEXT NOT NULL,
+                    kind VARCHAR(30) NOT NULL,
+                    logical_name TEXT NOT NULL,
+                    storage_key TEXT NOT NULL UNIQUE,
+                    content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+                    file_size_bytes BIGINT NOT NULL DEFAULT 0,
+                    checksum_sha256 CHAR(64),
+                    egress_policy VARCHAR(30) NOT NULL DEFAULT 'local_only',
+                    status VARCHAR(20) NOT NULL DEFAULT 'ready',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    revoked_at TIMESTAMPTZ
+                );
+                CREATE INDEX IF NOT EXISTS idx_project_resources_owner ON project_resources (owner_user_id, project_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS session_resource_links (
+                    session_id UUID NOT NULL,
+                    resource_id UUID NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (session_id, resource_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS provider_profiles (
+                    provider_profile_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    project_id UUID NOT NULL,
+                    owner_user_id TEXT NOT NULL,
+                    purpose VARCHAR(20) NOT NULL,
+                    protocol VARCHAR(40) NOT NULL,
+                    base_url TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    credential_ref TEXT,
+                    capability_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    probe_revision TEXT,
+                    status VARCHAR(20) NOT NULL DEFAULT 'draft',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    revoked_at TIMESTAMPTZ
+                );
+                ALTER TABLE provider_profiles ADD COLUMN IF NOT EXISTS credential_fingerprint CHAR(12);
+                CREATE INDEX IF NOT EXISTS idx_provider_profiles_owner ON provider_profiles (owner_user_id, project_id, purpose);
+
+                CREATE TABLE IF NOT EXISTS provider_secrets (
+                    credential_ref TEXT PRIMARY KEY,
+                    project_id UUID NOT NULL,
+                    owner_user_id TEXT NOT NULL,
+                    ciphertext TEXT NOT NULL,
+                    key_version VARCHAR(20) NOT NULL DEFAULT 'v1',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    revoked_at TIMESTAMPTZ
+                );
+                CREATE INDEX IF NOT EXISTS idx_provider_secrets_project ON provider_secrets (project_id, owner_user_id);
+
+                CREATE TABLE IF NOT EXISTS worker_enrollments (
+                    worker_id TEXT PRIMARY KEY,
+                    credential_hash CHAR(64) NOT NULL,
+                    namespace TEXT NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'active',
+                    enrolled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    revoked_at TIMESTAMPTZ,
+                    last_seen_at TIMESTAMPTZ
+                );
+                CREATE INDEX IF NOT EXISTS idx_worker_enrollments_namespace ON worker_enrollments (namespace, status);
+
+                CREATE TABLE IF NOT EXISTS worker_enrollment_tokens (
+                    token_hash CHAR(64) PRIMARY KEY,
+                    worker_id TEXT NOT NULL,
+                    namespace TEXT NOT NULL,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    used_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_worker_enrollment_tokens_worker
+                    ON worker_enrollment_tokens (worker_id, namespace, expires_at);
             """
         )
 

@@ -1,6 +1,6 @@
 import type { RunPhase, TokenInfo } from "@/lib/chat-state";
 import { translate, type Language } from "@/lib/i18n";
-import { redirectToLogin } from "@/lib/runtime-config";
+import { redirectToLogin, withCsrfHeader } from "@/lib/runtime-config";
 
 export interface ChatRequestPayload {
   session_id: string;
@@ -126,7 +126,7 @@ export function startChatStream(options: StartChatStreamOptions): ChatStreamHand
     try {
       response = await fetch(`${options.apiBase}/api/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        headers: withCsrfHeader({ "Content-Type": "application/json", Accept: "text/event-stream" }),
         credentials: "include",
         body: JSON.stringify(options.payload),
         signal: controller.signal,

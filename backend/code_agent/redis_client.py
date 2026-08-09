@@ -4,18 +4,27 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Redis key/stream constants
-STREAM_TASKS_EXECUTE = "stream:tasks:execute"
-STREAM_TASK_EVENTS = "stream:task-events"
-CONSUMER_GROUP = "task-workers-v1"
+# Redis key/stream constants. A namespace isolates acceptance runs while an
+# empty value preserves the existing local-development key names.
+_REDIS_NAMESPACE = os.getenv("REDIS_NAMESPACE", "").strip().strip(":")
 
-PROGRESS_KEY_PREFIX = "progress:"
-WORKER_HEARTBEAT_PREFIX = "worker:"
-RATE_LIMIT_PREFIX = "rate:user:"
+
+def _scoped_key(key: str) -> str:
+    return f"{_REDIS_NAMESPACE}:{key}" if _REDIS_NAMESPACE else key
+
+
+STREAM_TASKS_EXECUTE = _scoped_key("stream:tasks:execute")
+STREAM_TASK_EVENTS = _scoped_key("stream:task-events")
+CONSUMER_GROUP = _scoped_key("task-workers-v1")
+
+PROGRESS_KEY_PREFIX = _scoped_key("progress:")
+WORKER_HEARTBEAT_PREFIX = _scoped_key("worker:")
+RATE_LIMIT_PREFIX = _scoped_key("rate:user:")
 
 
 class RedisClient:
@@ -33,11 +42,15 @@ class RedisClient:
                 self._url,
                 decode_responses=True,
                 socket_connect_timeout=5,
-                socket_timeout=5,
+                # XREADGROUP may block for block_ms=5000; keep the socket
+                # timeout longer than the blocking window so an idle stream
+                # is not logged as a failed consumer cycle.
+                socket_timeout=max(10, int(os.getenv("REDIS_SOCKET_TIMEOUT", "15"))),
             )
             # Test connection
             await self._client.ping()
-            logger.info("Connected to Redis at %s", self._url)
+            # Never log the URL: acceptance URLs may contain a Redis password.
+            logger.info("Connected to Redis")
         except ImportError:
             logger.warning("redis-py not installed, Redis features disabled")
             self._client = None

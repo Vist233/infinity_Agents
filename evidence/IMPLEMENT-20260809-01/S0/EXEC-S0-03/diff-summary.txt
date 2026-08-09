@@ -1,0 +1,7 @@
+Changed only:
+
+- backend/code_agent/redis_client.py: environment-scoped stream and key constants
+- backend/code_agent/outbox.py: namespaced task stream/group registration
+- backend/code_agent/worker/consumer.py: namespaced task stream/group registration
+
+No database, Docker, Redis data, provider, or user data was changed.
