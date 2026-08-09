@@ -20,12 +20,12 @@ function usage() {
   console.error(`Infinity Agents HTTPS Worker client
 
 Commands:
-  enroll --control-url URL [--token TOKEN] [--config PATH]
+  enroll --control-url URL [--config PATH]
   health [--config PATH]
   poll [--config PATH]
   accept OFFER_ID [--config PATH]
 
-Enrollment reads WORKER_ENROLLMENT_TOKEN when --token is omitted. The token is
+Enrollment reads WORKER_ENROLLMENT_TOKEN. The token is
 consumed once; the returned credential is written to a user-only config file.
 `);
 }
@@ -119,7 +119,7 @@ export class WorkerControlClient {
 
 async function enroll(args) {
   const controlUrl = httpsControlUrl(required(option(args, "--control-url"), "--control-url"));
-  const token = required(option(args, "--token", process.env.WORKER_ENROLLMENT_TOKEN), "WORKER_ENROLLMENT_TOKEN or --token");
+  const token = required(process.env.WORKER_ENROLLMENT_TOKEN, "WORKER_ENROLLMENT_TOKEN");
   const configFile = configPath(args);
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const publicKeyText = `ed25519-spki.${base64url(publicKey.export({ type: "spki", format: "der" }))}`;

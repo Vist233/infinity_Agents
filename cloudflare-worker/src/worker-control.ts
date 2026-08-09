@@ -223,7 +223,11 @@ async function handleEnroll(request: Request, env: Env): Promise<Response> {
   const publicKey = safeText(body?.public_key, 256);
   const version = safeText(body?.version, 120) || "unknown";
   const workerCapabilities = capabilities(body?.capabilities);
-  if (!token || token.length > 512 || publicKey.length < 16 || publicKey.length > 256) {
+  if (
+    !token
+    || token.length > 512
+    || !/^ed25519-spki\.[A-Za-z0-9_-]{20,240}$/.test(publicKey)
+  ) {
     return errorJson("enrollment_token and public_key are required", 400, "INVALID_ENROLLMENT");
   }
 

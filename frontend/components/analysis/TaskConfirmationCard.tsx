@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, FileArchive, FileSearch, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/lib/i18n";
@@ -9,6 +9,7 @@ import {
   createDatasetSnapshot,
   createTask,
   createTaskSpec,
+  findTaskByConfirmation,
   freezeTaskSpec,
   getDefaultProject,
   uploadDataset,
@@ -23,19 +24,51 @@ interface TaskConfirmationCardProps {
 const METHOD_DOC_ACCEPT = ".html,.htm,.pdf,.md,.txt,.doc,.docx";
 const DATASET_ACCEPT = ".zip";
 
+interface PreparedInputs {
+  project_id: string;
+  task_spec_id: string;
+  dataset_snapshot_id: string;
+  method_source_id: string;
+  title: string;
+  methodFile: File;
+  datasetFile: File;
+}
+
 /** An inline form emitted by Analysis' request_task_creation tool. */
 export function TaskConfirmationCard({ confirmation, onCreated }: TaskConfirmationCardProps) {
   const { t } = useLanguage();
+  const onCreatedRef = useRef(onCreated);
   const [title, setTitle] = useState(confirmation.title);
   const [methodFile, setMethodFile] = useState<File | null>(null);
   const [datasetFile, setDatasetFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(confirmation.error || null);
+  const [prepared, setPrepared] = useState<PreparedInputs | null>(null);
 
   useEffect(() => {
     setTitle(confirmation.title);
     setError(confirmation.error || null);
   }, [confirmation.error, confirmation.title]);
+
+  useEffect(() => {
+    onCreatedRef.current = onCreated;
+  }, [onCreated]);
+
+  useEffect(() => {
+    if (confirmation.status !== "pending") return;
+    let active = true;
+    void findTaskByConfirmation(confirmation.confirmation_id)
+      .then((existingTask) => {
+        if (active && existingTask) {
+          onCreatedRef.current?.(confirmation.confirmation_id, existingTask.task_id, existingTask.title);
+        }
+      })
+      .catch(() => {
+        // A transient lookup failure should leave the card usable; submission
+        // will report a concrete API error if the user retries.
+      });
+    return () => { active = false; };
+  }, [confirmation.confirmation_id, confirmation.status]);
 
   const submit = async () => {
     if (!methodFile || !datasetFile) {
@@ -45,37 +78,62 @@ export function TaskConfirmationCard({ confirmation, onCreated }: TaskConfirmati
     setSubmitting(true);
     setError(null);
     try {
-      const project = await getDefaultProject();
+      const existingTask = await findTaskByConfirmation(confirmation.confirmation_id);
+      if (existingTask) {
+        onCreatedRef.current?.(confirmation.confirmation_id, existingTask.task_id, existingTask.title);
+        return;
+      }
       const taskTitle = title.trim() || datasetFile.name.replace(/\.zip$/i, "");
-      const spec = await createTaskSpec({
-        project_id: project.project_id,
-        title: taskTitle,
-        analysis_type: "generic",
-      });
-      await freezeTaskSpec(spec.task_spec_id);
-      const method = await uploadMethodSource(methodFile);
-      const upload = await uploadDataset(datasetFile, project.project_id);
-      const dataset = await createDatasetSnapshot({
-        project_id: project.project_id,
-        task_spec_id: spec.task_spec_id,
-        original_filename: datasetFile.name,
-        resource_id: upload.resource_id,
-        file_hash_sha256: upload.file_hash_sha256,
-        validation_passed: true,
-      });
+      let inputs = prepared;
+      const canReuse = inputs
+        && inputs.title === taskTitle
+        && inputs.methodFile === methodFile
+        && inputs.datasetFile === datasetFile;
+      if (!canReuse) {
+        const project = await getDefaultProject();
+        const spec = await createTaskSpec({
+          project_id: project.project_id,
+          title: taskTitle,
+          analysis_type: "generic",
+        });
+        await freezeTaskSpec(spec.task_spec_id);
+        const method = await uploadMethodSource(methodFile);
+        const upload = await uploadDataset(datasetFile, project.project_id);
+        const dataset = await createDatasetSnapshot({
+          project_id: project.project_id,
+          task_spec_id: spec.task_spec_id,
+          original_filename: datasetFile.name,
+          resource_id: upload.resource_id,
+          file_hash_sha256: upload.file_hash_sha256,
+          validation_passed: true,
+        });
+        inputs = {
+          project_id: project.project_id,
+          task_spec_id: spec.task_spec_id,
+          dataset_snapshot_id: dataset.dataset_snapshot_id,
+          method_source_id: method.method_source_id,
+          title: taskTitle,
+          methodFile,
+          datasetFile,
+        };
+        // Keep the prepared inputs in memory so a dropped createTask response
+        // retries the same IDs instead of uploading orphaned duplicates.
+        setPrepared(inputs);
+      }
+      if (!inputs) throw new Error("Task inputs were not prepared");
       const task = await createTask({
-        project_id: project.project_id,
-        task_spec_id: spec.task_spec_id,
-        dataset_snapshot_id: dataset.dataset_snapshot_id,
-        title: taskTitle,
-        method_source_id: method.method_source_id,
+        project_id: inputs.project_id,
+        task_spec_id: inputs.task_spec_id,
+        dataset_snapshot_id: inputs.dataset_snapshot_id,
+        title: inputs.title,
+        method_source_id: inputs.method_source_id,
         // Keep retries for this inline confirmation on the same server-side
         // idempotency key; a flaky upload or response must not create a second
         // queued Task for the same card.
         idempotency_key: confirmation.confirmation_id,
         chat_confirmation_id: confirmation.confirmation_id,
       });
-      onCreated?.(confirmation.confirmation_id, task.task_id, taskTitle);
+      onCreatedRef.current?.(confirmation.confirmation_id, task.task_id, taskTitle);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

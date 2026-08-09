@@ -177,6 +177,17 @@ export function startChatStream(options: StartChatStreamOptions): ChatStreamHand
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    const dispatchFrame = (frame: string) => {
+      const line = frame
+        .split("\n")
+        .map((l) => l.trim())
+        .find((l) => l.startsWith("data:"));
+      if (!line) return;
+      const data = line.slice(5).trim();
+      if (!data) return;
+      const event = normalizeChatEvent(data);
+      if (event) options.onEvent(event);
+    };
     try {
       while (true) {
         const { done, value } = await reader.read();
@@ -184,18 +195,10 @@ export function startChatStream(options: StartChatStreamOptions): ChatStreamHand
         buffer += decoder.decode(value, { stream: true });
         const frames = buffer.split("\n\n");
         buffer = frames.pop() ?? "";
-        for (const frame of frames) {
-          const line = frame
-            .split("\n")
-            .map((l) => l.trim())
-            .find((l) => l.startsWith("data:"));
-          if (!line) continue;
-          const data = line.slice(5).trim();
-          if (!data) continue;
-          const event = normalizeChatEvent(data);
-          if (event) options.onEvent(event);
-        }
+        for (const frame of frames) dispatchFrame(frame);
       }
+      buffer += decoder.decode();
+      if (buffer.trim()) dispatchFrame(buffer);
     } catch {
       if (!controller.signal.aborted) {
         options.onSocketError?.();

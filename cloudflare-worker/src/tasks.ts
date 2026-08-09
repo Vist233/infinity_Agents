@@ -431,6 +431,17 @@ async function handleListTasks(request: Request, env: Env, user: AuthedUser): Pr
   return json({ tasks: (result.results ?? []).map(publicTask) });
 }
 
+async function handleTaskByConfirmation(confirmationId: string, env: Env, user: AuthedUser): Promise<Response> {
+  const task = await env.DB.prepare(
+    `SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
+            title, status, attempt_count, max_attempts, result_artifact_id,
+            error_message, created_by, created_at, updated_at, finished_at,
+            chat_confirmation_id
+     FROM tasks WHERE chat_confirmation_id = ?1 AND created_by = ?2`
+  ).bind(confirmationId, user.userId).first<TaskRow>();
+  return json({ task: task ? publicTask(task) : null });
+}
+
 async function handleTaskEvents(task: TaskRow, env: Env): Promise<Response> {
   const result = await env.DB.prepare(
     "SELECT task_event_id, event_type, event_data, created_at FROM task_events WHERE task_id = ?1 ORDER BY created_at ASC LIMIT 200"
@@ -509,9 +520,9 @@ async function handleWorkerEnrollment(request: Request, env: Env, user: AuthedUs
   const workerId = String(body?.worker_id ?? "").trim();
   const namespace = String(body?.namespace ?? "").trim();
   const requestedTrust = String(body?.trust_level ?? "owner_trusted").trim();
-  const trustLevel = new Set(["owner_trusted", "institution_trusted", "student_untrusted"]).has(requestedTrust)
-    ? requestedTrust
-    : "owner_trusted";
+  const trustLevels = new Set(["owner_trusted", "institution_trusted", "student_untrusted"]);
+  if (!trustLevels.has(requestedTrust)) return errorJson("Invalid Worker trust level", 400, "INVALID_TRUST_LEVEL");
+  const trustLevel = requestedTrust as "owner_trusted" | "institution_trusted" | "student_untrusted";
   const requestedTtl = Number(body?.ttl_seconds || 600);
   const ttl = Number.isFinite(requestedTtl) ? Math.min(3600, Math.max(30, requestedTtl)) : 600;
   if (!workerId || workerId.length > 120 || !namespace || namespace.length > 120) return errorJson("Invalid worker enrollment request", 400, "INVALID_ENROLLMENT");
@@ -560,6 +571,11 @@ export async function handleTaskApi(request: Request, env: Env, user: AuthedUser
   if (method === "POST" && pathname === "/api/dataset-snapshots") return handleDatasetSnapshot(request, env, user);
   if (method === "POST" && pathname === "/api/tasks") return handleCreateTask(request, env, user);
   if (method === "GET" && pathname === "/api/tasks") return handleListTasks(request, env, user);
+
+  const confirmationTaskMatch = pathname.match(/^\/api\/task-confirmations\/([^/]+)\/task$/);
+  if (confirmationTaskMatch && method === "GET") {
+    return handleTaskByConfirmation(decodeURIComponent(confirmationTaskMatch[1]), env, user);
+  }
 
   const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(cancel|events|events\/stream|artifacts))?$/);
   if (taskMatch) {

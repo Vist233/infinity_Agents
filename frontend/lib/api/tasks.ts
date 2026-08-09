@@ -165,6 +165,13 @@ export async function createTask(input: {
   });
 }
 
+export async function findTaskByConfirmation(confirmationId: string): Promise<TaskItem | null> {
+  const data = await requestJson<{ task: TaskItem | null }>(
+    `${getApiBase()}/api/task-confirmations/${encodeURIComponent(confirmationId)}/task`,
+  );
+  return data.task;
+}
+
 export async function listTasks(limit = 50): Promise<TaskItem[]> {
   const data = await requestJson<{ tasks: TaskItem[] }>(`${getApiBase()}/api/tasks?limit=${limit}`);
   return data.tasks || [];

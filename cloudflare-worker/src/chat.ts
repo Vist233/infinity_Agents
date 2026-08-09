@@ -315,10 +315,12 @@ async function handleTaskConfirmation(
       role: "tool",
       tool_call_id: confirmation.tool_call_id,
       content: JSON.stringify({
-        status: "queued",
+        status: task.status,
         task_id: task.task_id,
         title: task.title,
-        message: "The user completed the confirmation card. The task is queued for asynchronous background execution.",
+        message: task.status === "queued"
+          ? "The user completed the confirmation card. The task is queued for asynchronous background execution."
+          : `The user completed the confirmation card. The task status is ${task.status}. Report that status accurately; do not describe it as queued unless the status is queued.`,
       }),
     },
   ];
@@ -555,6 +557,44 @@ async function streamCompletion(
   const toolAcc = new Map<number, { id: string; name: string; args: string }>();
   let firstContent = false;
 
+  const processEvent = (raw: string) => {
+    const line = raw.trim();
+    if (!line.startsWith("data:")) return;
+    const data = line.slice(5).trim();
+    if (data === "[DONE]") return;
+    let parsed: any;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      return;
+    }
+    const choice = parsed.choices?.[0];
+    if (!choice) return;
+    const delta = choice.delta ?? {};
+
+    if (typeof delta.content === "string" && delta.content.length > 0) {
+      if (!firstContent) {
+        firstContent = true;
+        emitStatus("responding");
+      }
+      content += delta.content;
+      emit({ type: "chunk", content: delta.content });
+    }
+
+    if (Array.isArray(delta.tool_calls)) {
+      for (const tc of delta.tool_calls) {
+        const index = typeof tc.index === "number" ? tc.index : 0;
+        const existing = toolAcc.get(index) ?? { id: "", name: "", args: "" };
+        if (tc.id) existing.id = tc.id;
+        if (tc.function?.name) existing.name = tc.function.name;
+        if (tc.function?.arguments) existing.args += tc.function.arguments;
+        toolAcc.set(index, existing);
+      }
+    }
+
+    if (choice.finish_reason) finishReason = choice.finish_reason;
+  };
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -562,46 +602,11 @@ async function streamCompletion(
 
     const events = buffer.split("\n\n");
     buffer = events.pop() ?? "";
-    for (const raw of events) {
-      const line = raw.trim();
-      if (!line.startsWith("data:")) continue;
-      const data = line.slice(5).trim();
-      if (data === "[DONE]") continue;
-      let parsed: any;
-      try {
-        parsed = JSON.parse(data);
-      } catch {
-        continue;
-      }
-      const choice = parsed.choices?.[0];
-      if (!choice) continue;
-      const delta = choice.delta ?? {};
-
-      if (typeof delta.content === "string" && delta.content.length > 0) {
-        if (!firstContent) {
-          firstContent = true;
-          emitStatus("responding");
-        }
-        content += delta.content;
-        emit({ type: "chunk", content: delta.content });
-      }
-
-      if (Array.isArray(delta.tool_calls)) {
-        for (const tc of delta.tool_calls) {
-          const index = typeof tc.index === "number" ? tc.index : 0;
-          const existing = toolAcc.get(index) ?? { id: "", name: "", args: "" };
-          if (tc.id) existing.id = tc.id;
-          if (tc.function?.name) existing.name = tc.function.name;
-          if (tc.function?.arguments) existing.args += tc.function.arguments;
-          toolAcc.set(index, existing);
-        }
-      }
-
-      if (choice.finish_reason) {
-        finishReason = choice.finish_reason;
-      }
-    }
+    for (const raw of events) processEvent(raw);
   }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) processEvent(buffer);
 
   const toolCalls: ToolCall[] = [...toolAcc.values()]
     .filter((t) => t.name)

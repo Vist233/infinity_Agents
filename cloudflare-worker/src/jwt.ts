@@ -98,6 +98,9 @@ export async function verifyAccessToken(token: string, env: Env): Promise<Access
   if (!payload.sub || typeof payload.sub !== "string") {
     throw new Error("Invalid token subject");
   }
+  if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) {
+    throw new Error("Invalid access token expiry");
+  }
   if (payload.exp <= Math.floor(Date.now() / 1000)) {
     throw new Error("Access token expired");
   }
