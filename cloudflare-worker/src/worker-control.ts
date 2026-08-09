@@ -749,6 +749,9 @@ async function workerHealth(env: Env, context: WorkerContext): Promise<Response>
 
 export async function handleWorkerControlApi(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
+  if (url.protocol !== "https:") {
+    return errorJson("HTTPS is required for Worker control", 400, "HTTPS_REQUIRED");
+  }
   const { pathname } = url;
   if (request.method === "POST" && pathname === "/api/worker/v1/enroll") return handleEnroll(request, env);
 

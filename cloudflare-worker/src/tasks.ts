@@ -332,8 +332,18 @@ async function handleCreateTask(request: Request, env: Env, user: AuthedUser): P
     "SELECT task_id, request_hash FROM task_idempotency WHERE user_id = ?1 AND idempotency_key = ?2"
   ).bind(user.userId, idempotencyKey).first<{ task_id: string; request_hash: string }>();
   if (existing) {
-    if (existing.request_hash !== fingerprint) return errorJson("Idempotency key was reused with different input", 409, "IDEMPOTENCY_CONFLICT");
     const duplicate = await loadTask(existing.task_id, env, user);
+    if (chatConfirmationId && duplicate?.chat_confirmation_id === chatConfirmationId) {
+      const confirmation = await getChatTaskConfirmationForUser(env, chatConfirmationId, user.userId);
+      if (confirmation?.task_id === duplicate.task_id) {
+        // A lost response can leave the card with freshly uploaded input IDs
+        // but the same confirmation id. The confirmation-bound task is the
+        // authoritative idempotent result; never turn the retry into a
+        // conflict just because those transport artifacts changed.
+        return json({ task_id: duplicate.task_id, status: duplicate.status, duplicate: true });
+      }
+    }
+    if (existing.request_hash !== fingerprint) return errorJson("Idempotency key was reused with different input", 409, "IDEMPOTENCY_CONFLICT");
     if (chatConfirmationId && duplicate?.chat_confirmation_id !== chatConfirmationId) {
       return errorJson("Idempotency key is not bound to this confirmation", 409, "IDEMPOTENCY_CONFLICT");
     }

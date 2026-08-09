@@ -25,3 +25,22 @@ test("cross-platform client keeps the enrollment credential out of health output
     globalThis.fetch = originalFetch;
   }
 });
+
+test("rejects plaintext control URLs before sending a credential", async () => {
+  const originalFetch = globalThis.fetch;
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return new Response("unexpected", { status: 200 });
+  };
+  try {
+    const client = new WorkerControlClient({
+      control_base_url: "http://infinity.zhangyvjing.com",
+      worker_credential: "local-only-credential",
+    });
+    await assert.rejects(() => client.health(), /HTTPS control URL is required/);
+    assert.equal(called, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

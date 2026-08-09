@@ -40,6 +40,19 @@ function required(value, label) {
   return value;
 }
 
+function httpsControlUrl(value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("A valid HTTPS control URL is required");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error("HTTPS control URL is required");
+  }
+  return parsed.toString().replace(/\/$/, "");
+}
+
 function base64url(value) {
   return Buffer.from(value).toString("base64url");
 }
@@ -63,11 +76,12 @@ function loadConfig(file) {
 }
 
 async function requestJson(config, path, init = {}) {
+  const controlUrl = httpsControlUrl(config.control_base_url);
   const headers = new Headers(init.headers || {});
   headers.set("accept", "application/json");
   if (init.body !== undefined) headers.set("content-type", "application/json");
   if (config.worker_credential) headers.set("authorization", `Bearer ${config.worker_credential}`);
-  const response = await fetch(new URL(path, config.control_base_url), { ...init, headers });
+  const response = await fetch(new URL(path, `${controlUrl}/`), { ...init, headers });
   const text = await response.text();
   let payload;
   try { payload = text ? JSON.parse(text) : null; } catch { payload = { raw: text.slice(0, 500) }; }
@@ -104,7 +118,7 @@ export class WorkerControlClient {
 }
 
 async function enroll(args) {
-  const controlUrl = required(option(args, "--control-url"), "--control-url").replace(/\/$/, "");
+  const controlUrl = httpsControlUrl(required(option(args, "--control-url"), "--control-url"));
   const token = required(option(args, "--token", process.env.WORKER_ENROLLMENT_TOKEN), "WORKER_ENROLLMENT_TOKEN or --token");
   const configFile = configPath(args);
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");

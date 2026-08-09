@@ -93,6 +93,15 @@ describe("Infinity Edge route composition", () => {
     expect(await response.json()).toMatchObject({ error: { code: "WORKER_UNAUTHENTICATED" } });
   });
 
+  it("rejects plaintext Worker control requests before authentication", async () => {
+    const response = await worker.fetch(
+      new Request("http://app.test/api/worker/v1/health"),
+      testEnv(),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "HTTPS_REQUIRED" } });
+  });
+
   it("validates enrollment before touching the D1 token store", async () => {
     const response = await worker.fetch(
       new Request("https://app.test/api/worker/v1/enroll", {
