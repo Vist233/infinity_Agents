@@ -1,0 +1,5 @@
+Added the local acceptance compose stack, API image definition, env template,
+and non-destructive preflight. The stack uses namespaced acceptance variables
+to avoid unrelated host environment overrides, a password-protected Redis,
+loopback-only host ports, and a host-built Next production bundle. Added the
+acceptance workspace to .gitignore. No Cloudflare files were changed.

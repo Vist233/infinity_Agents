@@ -1,0 +1,462 @@
+"""Infinity Agent — Task executor.
+
+Orchestrates the full task execution flow: Docker execution,
+artifact collection, verification, and result reporting.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+import asyncio
+import shutil
+import uuid
+from pathlib import Path
+from typing import Any, AsyncIterator, Dict, Optional
+
+from backend.security import ArtifactCollector, SecurityBoundaryError, ensure_within
+
+logger = logging.getLogger(__name__)
+
+
+async def execute_task(
+    task_id: str,
+    attempt_id: int,
+    task_spec_id: str,
+    dataset_snapshot_id: str,
+    worker_id: str,
+    lease_token: str,
+    docker_image: str,
+    db_pool,
+    redis_client,
+    *,
+    method_source_id: Optional[str] = None,
+    output_base_dir: Optional[str] = None,
+    cancel_event: Optional[asyncio.Event] = None,
+) -> Dict[str, Any]:
+    """Execute a task end-to-end.
+
+    Flow:
+    1. Set up working directory
+    2. Run Docker container with Claude Code
+    3. Collect outputs
+    4. Verify outputs
+    5. Upload artifacts
+    6. Report results
+    """
+    if output_base_dir is None:
+        # Shared with the API server's ARTIFACT_DOWNLOAD_ROOT so artifacts
+        # written by the worker are downloadable from the host. The compose
+        # stack mounts ./workspace at /workspace for exactly this reason.
+        output_base_dir = os.getenv("ARTIFACT_STORAGE_ROOT", "/workspace/task-outputs")
+    task_work_dir = Path(output_base_dir) / task_id
+    task_output_dir = task_work_dir / "output"
+    task_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load task spec for context
+    task_spec = await _get_task_spec(db_pool, task_spec_id)
+    dataset = await _get_dataset(db_pool, dataset_snapshot_id)
+    method_source = None
+    if method_source_id:
+        from backend.code_agent.task_service import get_method_source
+        method_source = await get_method_source(db_pool, method_source_id)
+
+    # Report running status
+    await _report_status(redis_client, task_id, "running", {
+        "attempt_id": attempt_id,
+        "worker_id": worker_id,
+        "phase": "starting",
+    })
+
+    # Run Docker container
+    success = False
+    error_message = None
+    failure_code = None
+    output_files = []
+    exit_code = None
+    cancelled = False
+    image_digest = await _get_image_digest(docker_image)
+
+    try:
+        async for event in _run_docker_execution(
+            task_id=task_id,
+            task_spec=task_spec,
+            dataset=dataset,
+            method_source=method_source,
+            docker_image=docker_image,
+            work_dir=task_work_dir,
+            output_dir=task_output_dir,
+            redis_client=redis_client,
+            cancel_event=cancel_event,
+        ):
+            if event["type"] == "status":
+                await _report_status(redis_client, task_id, "running", {
+                    "phase": event.get("phase", "running"),
+                    "worker_id": worker_id,
+                })
+            elif event["type"] == "chunk":
+                await _report_status(redis_client, task_id, "running", {
+                    "phase": "executing",
+                    "log_chunk": event.get("content", "")[:500],
+                    "worker_id": worker_id,
+                })
+            elif event["type"] == "done":
+                success = True
+                output_files = await _collect_outputs(task_output_dir)
+            elif event["type"] == "error":
+                error_message = event.get("message", "Unknown error")
+                failure_code = "execution_error"
+                success = False
+            elif event["type"] == "cancelled":
+                cancelled = True
+                error_message = event.get("message", "Task cancelled by user")
+                success = False
+                break
+
+    except Exception as exc:
+        logger.error("Task %s execution failed: %s", task_id, exc)
+        error_message = str(exc)
+        failure_code = "execution_error"
+        success = False
+
+    from backend.code_agent.task_service import complete_task_attempt
+
+    # Execution success is not Task success.  Keep the Attempt open until the
+    # external Verifier and artifact publication gates have completed so a
+    # missing deliverable cannot leave a misleading succeeded Attempt.
+    if not success:
+        await complete_task_attempt(
+            db_pool,
+            attempt_id=attempt_id,
+            status="cancelled" if cancelled else "failed",
+            exit_code=1,
+            error_message=error_message,
+            executor_image_digest=image_digest,
+            failure_code=failure_code,
+        )
+
+    if cancelled:
+        return {"success": False, "cancelled": True, "error": error_message}
+
+    if not success:
+        return {"success": False, "error": error_message, "failure_code": failure_code}
+
+    # Verify outputs
+    await _report_status(redis_client, task_id, "running", {
+        "phase": "verifying",
+        "worker_id": worker_id,
+    })
+
+    verification = await _verify_outputs(task_output_dir, task_spec)
+    if not verification["passed"]:
+        await complete_task_attempt(
+            db_pool,
+            attempt_id=attempt_id,
+            status="failed",
+            exit_code=0,
+            error_message=f"Verification failed: {', '.join(f['message'] for f in verification['failures'])}",
+            executor_image_digest=image_digest,
+            failure_code="verification_failed",
+        )
+        return {
+            "success": False,
+            "error": f"Verification failed: {', '.join(f['message'] for f in verification['failures'])}",
+            # Verification failures are deterministic — retrying won't help
+            # (design doc §35.2).
+            "failure_code": "verification_failed",
+        }
+
+    # Create artifacts
+    await _report_status(redis_client, task_id, "running", {
+        "phase": "packaging",
+        "worker_id": worker_id,
+    })
+
+    try:
+        artifact_id = await _create_artifacts(
+            task_id=task_id,
+            attempt_id=attempt_id,
+            output_dir=task_output_dir,
+            output_files=output_files,
+            db_pool=db_pool,
+            lease_token=lease_token,
+        )
+    except Exception as exc:
+        await complete_task_attempt(
+            db_pool,
+            attempt_id=attempt_id,
+            status="failed",
+            exit_code=0,
+            error_message=str(exc),
+            executor_image_digest=image_digest,
+            failure_code="artifact_publish_failed",
+        )
+        raise
+
+    await complete_task_attempt(
+        db_pool,
+        attempt_id=attempt_id,
+        status="succeeded",
+        exit_code=0,
+        executor_image_digest=image_digest,
+    )
+
+    return {"success": True, "artifact_id": artifact_id, "output_files": output_files}
+
+
+async def _get_task_spec(db_pool, task_spec_id: str) -> Dict[str, Any]:
+    """Get task spec from database."""
+    from backend.code_agent.task_service import get_task_spec
+    spec = await get_task_spec(db_pool, task_spec_id)
+    return spec or {}
+
+
+async def _get_dataset(db_pool, dataset_snapshot_id: str) -> Dict[str, Any]:
+    """Get dataset snapshot from database."""
+    query = """
+        SELECT dataset_snapshot_id, original_filename, stored_path,
+               file_size_bytes, file_hash_sha256, metadata, validation_result
+        FROM dataset_snapshots
+        WHERE dataset_snapshot_id = $1::uuid
+    """
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(query, dataset_snapshot_id)
+    if not row:
+        return {}
+    from backend.code_agent.task_service import _jsonb_to_dict
+    return {
+        "dataset_snapshot_id": str(row["dataset_snapshot_id"]),
+        "original_filename": row["original_filename"],
+        "stored_path": row["stored_path"],
+        "file_size_bytes": row["file_size_bytes"],
+        "file_hash_sha256": row["file_hash_sha256"],
+        "metadata": _jsonb_to_dict(row["metadata"]),
+        "validation_result": _jsonb_to_dict(row["validation_result"]),
+    }
+
+
+async def _run_docker_execution(
+    task_id: str,
+    task_spec: Dict[str, Any],
+    dataset: Dict[str, Any],
+    method_source: Optional[Dict[str, Any]],
+    docker_image: str,
+    work_dir: Path,
+    output_dir: Path,
+    redis_client,
+    cancel_event: Optional[asyncio.Event] = None,
+) -> AsyncIterator[Dict[str, Any]]:
+    """Run the actual Docker execution."""
+    from backend.code_agent.worker.docker_runtime import run_docker_task
+
+    input_dir = None
+
+    if os.getenv("CODE_AGENT_EXECUTOR_MODE", "docker").strip().lower() == "fixture":
+        from backend.code_agent.worker.fixture_executor import run_fixture_executor
+        async for event in run_fixture_executor(task_spec, output_dir):
+            yield event
+        return
+
+    # Preferred path: assemble the task input directory from the uploaded
+    # method source document + dataset snapshot (design doc §8.5).
+    if (dataset and dataset.get("stored_path")) or (
+        method_source and method_source.get("stored_path")
+    ):
+        input_dir = work_dir / "input"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        if dataset and dataset.get("stored_path"):
+            _stage_dataset(Path(dataset["stored_path"]), input_dir / "data")
+        if method_source and method_source.get("stored_path"):
+            src = Path(method_source["stored_path"])
+            # Same upload-root confinement as datasets (defense in depth).
+            if src.exists() and _inside_upload_roots(src):
+                shutil.copy2(src, input_dir / src.name)
+
+    # Fallback: pre-existing case directories from the validation phase.
+    if input_dir is None:
+        analysis_type = task_spec.get("analysis_type", "")
+        case_mapping = {
+            "rnaseq_deseq2": "1",
+            "biopython": "2",
+            "scanpy": "3",
+        }
+        case_num = case_mapping.get(analysis_type, "")
+        case_base = Path(os.getenv("CODE_AGENT_CASE_DIR", "/workspace/case"))
+        if case_num and (case_base / case_num).exists():
+            input_dir = case_base / case_num
+
+    # Run Docker
+    async for event in run_docker_task(
+        task_id=task_id,
+        task_spec_id=task_spec.get("task_spec_id", ""),
+        dataset_snapshot_id=dataset.get("dataset_snapshot_id", "") if dataset else "",
+        docker_image=docker_image,
+        case_dir=str(input_dir) if input_dir else None,
+        output_dir=str(output_dir),
+        cancel_event=cancel_event,
+    ):
+        yield event
+
+
+def _inside_upload_roots(path: Path) -> bool:
+    """True only if the resolved path lives inside a known upload root."""
+    allowed_roots = [
+        Path(os.getenv("DATASET_UPLOAD_ROOT", "/tmp/uploaded-datasets")).resolve(),
+        Path(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", "/tmp/uploaded-method-sources")).resolve(),
+        Path(os.getenv("RESOURCE_STORAGE_ROOT", "/workspace/resources")).resolve(),
+    ]
+    try:
+        resolved = path.resolve()
+        return any(resolved.is_relative_to(root) for root in allowed_roots)
+    except OSError:
+        return False
+
+
+def _stage_dataset(stored_path: Path, dest_dir: Path) -> None:
+    """Copy or safely extract the dataset snapshot into the input dir."""
+    import zipfile
+
+    # Defense in depth: even though the API validates stored_path against the
+    # upload roots, the worker must never mount arbitrary filesystem paths.
+    if not _inside_upload_roots(stored_path):
+        logger.warning("Refusing to stage dataset outside upload roots: %s", stored_path)
+        return
+
+    if not stored_path.exists():
+        logger.warning("Dataset stored_path does not exist: %s", stored_path)
+        return
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    if stored_path.suffix.lower() == ".zip":
+        base = dest_dir.resolve()
+        with zipfile.ZipFile(stored_path, "r") as zf:
+            for info in zf.infolist():
+                # Block path traversal inside the archive. is_relative_to
+                # avoids the classic startswith("...data") vs "...data2"
+                # prefix-match bypass.
+                target = (base / info.filename).resolve()
+                if not target.is_relative_to(base):
+                    logger.warning("Skipping unsafe archive entry: %s", info.filename)
+                    continue
+                zf.extract(info, dest_dir)
+    elif stored_path.is_file():
+        shutil.copy2(stored_path, dest_dir / stored_path.name)
+    elif stored_path.is_dir():
+        shutil.copytree(stored_path, dest_dir / stored_path.name, dirs_exist_ok=True)
+
+
+async def _get_image_digest(docker_image: str) -> Optional[str]:
+    """Resolve the image ID/digest for reproducibility records (design §25)."""
+    from backend.code_agent.worker.docker_runtime import get_image_digest
+    try:
+        return await get_image_digest(docker_image)
+    except Exception:
+        return None
+
+
+async def _collect_outputs(output_dir: Path) -> list:
+    """Collect only ordinary files under output root.
+
+    The collector intentionally performs the lstat/path/secret checks before
+    verifier or ZIP code can read a byte.
+    """
+    collector = ArtifactCollector(
+        max_files=int(os.getenv("ARTIFACT_MAX_FILES", "5000")),
+        max_file_bytes=int(os.getenv("ARTIFACT_MAX_FILE_BYTES", str(512 * 1024 * 1024))),
+        max_total_bytes=int(os.getenv("ARTIFACT_MAX_TOTAL_BYTES", str(2 * 1024 * 1024 * 1024))),
+    )
+    return [relative for _path, relative in collector._iter_files(output_dir)]
+
+
+async def _verify_outputs(output_dir: Path, task_spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Verify that required deliverables exist and are valid.
+
+    Uses the five-level verifier for comprehensive validation.
+    Falls back to basic checks if the verifier is unavailable.
+    """
+    try:
+        from backend.code_agent.verifier import verify_outputs
+        return verify_outputs(output_dir, task_spec)
+    except Exception as exc:
+        logger.warning("Five-level verifier failed, using fallback: %s", exc)
+        # Fallback to basic file existence checks
+        failures = []
+        deliverables = task_spec.get("spec_json", {}).get("deliverables", [])
+
+        for deliverable in deliverables:
+            path = deliverable.get("path", "")
+            required = deliverable.get("required", True)
+            min_bytes = deliverable.get("min_bytes", 0)
+
+            if not path:
+                continue
+
+            file_path = output_dir / path
+            if not file_path.exists():
+                if required:
+                    failures.append(f"Missing required deliverable: {path}")
+            elif min_bytes and file_path.stat().st_size < min_bytes:
+                failures.append(f"Deliverable too small: {path} ({file_path.stat().st_size} < {min_bytes} bytes)")
+
+        return {"passed": len(failures) == 0, "failures": failures}
+
+
+async def _create_artifacts(
+    task_id: str,
+    attempt_id: int,
+    output_dir: Path,
+    output_files: list,
+    db_pool,
+    lease_token: Optional[str] = None,
+) -> str:
+    """Create artifact records and manifest."""
+    from backend.code_agent.task_service import create_artifact, create_artifact_if_current_lease
+    artifact_id = f"artifact-{uuid.uuid4()}"
+    zip_path = output_dir.parent / f"result-{task_id[:8]}.zip"
+    collector = ArtifactCollector(
+        max_files=int(os.getenv("ARTIFACT_MAX_FILES", "5000")),
+        max_file_bytes=int(os.getenv("ARTIFACT_MAX_FILE_BYTES", str(512 * 1024 * 1024))),
+        max_total_bytes=int(os.getenv("ARTIFACT_MAX_TOTAL_BYTES", str(2 * 1024 * 1024 * 1024))),
+    )
+    collected = collector.collect(
+        output_dir,
+        zip_path,
+        metadata={"task_id": task_id, "attempt_id": attempt_id},
+    )
+    manifest = collected.manifest
+
+    # Register artifact
+    from backend.code_agent.models import Artifact
+    artifact_obj = Artifact(
+        artifact_id=artifact_id,
+        task_id=task_id,
+        task_attempt_id=attempt_id,
+        name="result",
+        kind="result_archive",
+        storage_backend="local",
+        storage_path=str(zip_path),
+        file_size_bytes=collected.archive_path.stat().st_size,
+        checksum_sha256=collected.checksum_sha256,
+        content_type="application/zip",
+        metadata={"file_count": collected.file_count, "byte_count": collected.byte_count, "manifest": manifest},
+    )
+    if lease_token:
+        artifact = await create_artifact_if_current_lease(db_pool, artifact_obj, lease_token)
+        if artifact is None:
+            raise RuntimeError("task lease was lost before artifact publication")
+    else:
+        artifact = await create_artifact(db_pool, artifact_obj)
+
+    logger.info("Created artifact %s for task %s with %d files", artifact_id, task_id, collected.file_count)
+    return artifact_id
+
+
+async def _report_status(redis_client, task_id: str, status: str, data: Dict[str, Any]) -> None:
+    """Report task status to Redis for SSE consumption."""
+    await redis_client.publish_task_event(task_id, {
+        "event_type": f"task_{status}",
+        **data,
+    })
+    await redis_client.set_progress(task_id, {"status": status, **data})

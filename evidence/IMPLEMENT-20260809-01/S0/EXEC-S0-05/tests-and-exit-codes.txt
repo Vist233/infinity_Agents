@@ -1,0 +1,3 @@
+  fixture case 1/2/3 directory checks                exit 0
+  relative tree hash calculation for 1/2/3          exit 0
+  manifest source paths/contents review              CLEAN

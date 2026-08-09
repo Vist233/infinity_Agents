@@ -1,0 +1,209 @@
+# Isolated local acceptance stack.
+# Start with:
+#   cp .env.local.example .env.local
+#   docker compose --env-file .env.local -f docker-compose.acceptance.yml up -d --build
+# Stop with:
+#   docker compose --env-file .env.local -f docker-compose.acceptance.yml down
+#
+# This stack has its own PostgreSQL database, Redis password, Redis namespace,
+# and workspace. It must never point at the user's existing local database.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${ACCEPTANCE_POSTGRES_DB}
+      POSTGRES_USER: ${ACCEPTANCE_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${ACCEPTANCE_POSTGRES_PASSWORD}
+    volumes:
+      - ./workspace/${ACCEPTANCE_RUN_ID}/.postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --user
+      - default
+      - off
+      - --user
+      - api
+      - on
+      - ">${ACCEPTANCE_REDIS_PASSWORD}"
+      - "~${ACCEPTANCE_REDIS_NAMESPACE}:*"
+      - +@read
+      - +@write
+      - +@stream
+      - +@connection
+      - --user
+      - worker_a
+      - on
+      - ">${ACCEPTANCE_WORKER_A_REDIS_PASSWORD:-local-worker-a-redis-secret}"
+      - "~${ACCEPTANCE_REDIS_NAMESPACE}:stream:*"
+      - "~${ACCEPTANCE_REDIS_NAMESPACE}:progress:*"
+      - "~${ACCEPTANCE_REDIS_NAMESPACE}:worker:worker-a-${ACCEPTANCE_RUN_ID}"
+      - +@read
+      - +@write
+      - +@stream
+      - +@connection
+      - --user
+      - worker_b
+      - on
+      - ">${ACCEPTANCE_WORKER_B_REDIS_PASSWORD:-local-worker-b-redis-secret}"
+      - "~${ACCEPTANCE_REDIS_NAMESPACE}:stream:*"
+      - "~${ACCEPTANCE_REDIS_NAMESPACE}:progress:*"
+      - "~${ACCEPTANCE_REDIS_NAMESPACE}:worker:worker-b-${ACCEPTANCE_RUN_ID}"
+      - +@read
+      - +@write
+      - +@stream
+      - +@connection
+    environment:
+      REDIS_PASSWORD: ${ACCEPTANCE_REDIS_PASSWORD}
+      REDIS_WORKER_A_PASSWORD: ${ACCEPTANCE_WORKER_A_REDIS_PASSWORD:-local-worker-a-redis-secret}
+      REDIS_WORKER_B_PASSWORD: ${ACCEPTANCE_WORKER_B_REDIS_PASSWORD:-local-worker-b-redis-secret}
+    volumes:
+      - ./workspace/${ACCEPTANCE_RUN_ID}/.redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --user api -a $${REDIS_PASSWORD} ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql://${ACCEPTANCE_POSTGRES_USER}:${ACCEPTANCE_POSTGRES_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      REDIS_URL: redis://api:${ACCEPTANCE_REDIS_PASSWORD}@redis:6379/0
+      REDIS_NAMESPACE: ${ACCEPTANCE_REDIS_NAMESPACE}
+      APP_ENV: acceptance
+      AUTH_REQUIRED_TASK_API: "1"
+      AUTH_DEV_LOGIN_ENABLED: "1"
+      COOKIE_SECURE: "0"
+      SESSION_COOKIE_SECRET: ${ACCEPTANCE_SESSION_COOKIE_SECRET}
+      ARTIFACT_STORAGE_ROOT: ${ARTIFACT_STORAGE_ROOT}
+      ARTIFACT_DOWNLOAD_ROOT: ${ARTIFACT_DOWNLOAD_ROOT}
+      METHOD_SOURCE_UPLOAD_ROOT: ${METHOD_SOURCE_UPLOAD_ROOT}
+      DATASET_UPLOAD_ROOT: ${DATASET_UPLOAD_ROOT}
+      RESOURCE_STORAGE_ROOT: /workspace/resources
+      GOAL_DRIVEN_FIXTURE_ROOT: /fixtures
+      CODE_AGENT_DOCKER_IMAGE: ${CODE_AGENT_DOCKER_IMAGE}
+      CODE_AGENT_JOB_NETWORK: ${CODE_AGENT_JOB_NETWORK}
+    extra_hosts:
+      # Lets the container reach a host-run local Provider spy without
+      # widening production egress rules.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./workspace/${ACCEPTANCE_RUN_ID}:/workspace
+      # Read-only fixture input for explicit local acceptance commands. The
+      # API never executes it; the controlled executor reads it by logical
+      # analysis type only.
+      - ${ACCEPTANCE_FIXTURE_HOST_ROOT}:/fixtures:ro
+    ports:
+      - "127.0.0.1:${ACCEPTANCE_API_PORT}:8008"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    # Local acceptance only: serve the host-built Next bundle so private
+    # registry credentials never enter a container image.
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - ./frontend/node_modules:/app/node_modules
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      API_PROXY_TARGET: http://api:8008
+      NEXT_PUBLIC_API_BASE: ""
+    command: ["npm", "run", "start", "--", "--hostname", "0.0.0.0", "--port", "3000"]
+    ports:
+      - "127.0.0.1:${ACCEPTANCE_FRONTEND_PORT}:3000"
+    depends_on:
+      - api
+
+  outbox:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.fixture-worker
+    environment:
+      DATABASE_URL: postgresql://${ACCEPTANCE_POSTGRES_USER}:${ACCEPTANCE_POSTGRES_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      REDIS_URL: redis://api:${ACCEPTANCE_REDIS_PASSWORD}@redis:6379/0
+      REDIS_NAMESPACE: ${ACCEPTANCE_REDIS_NAMESPACE}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "-m", "backend.code_agent.outbox"]
+
+  worker-a:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.fixture-worker
+    environment:
+      WORKER_ID: worker-a-${ACCEPTANCE_RUN_ID}
+      DATABASE_URL: postgresql://${ACCEPTANCE_POSTGRES_USER}:${ACCEPTANCE_POSTGRES_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      REDIS_URL: redis://worker_a:${ACCEPTANCE_WORKER_A_REDIS_PASSWORD:-local-worker-a-redis-secret}@redis:6379/0
+      REDIS_NAMESPACE: ${ACCEPTANCE_REDIS_NAMESPACE}
+      CODE_AGENT_DOCKER_IMAGE: ${CODE_AGENT_DOCKER_IMAGE}
+      CODE_AGENT_JOB_NETWORK: ${CODE_AGENT_JOB_NETWORK}
+      CODE_AGENT_EXECUTOR_MODE: ${CODE_AGENT_EXECUTOR_MODE}
+      ALLOW_FIXTURE_EXECUTOR: ${ALLOW_FIXTURE_EXECUTOR}
+      ARTIFACT_STORAGE_ROOT: ${ARTIFACT_STORAGE_ROOT}
+      DATASET_UPLOAD_ROOT: ${DATASET_UPLOAD_ROOT}
+      METHOD_SOURCE_UPLOAD_ROOT: ${METHOD_SOURCE_UPLOAD_ROOT}
+      RESOURCE_STORAGE_ROOT: /workspace/resources
+      GOAL_DRIVEN_FIXTURE_ROOT: /fixtures
+      WORKER_ENROLLMENT_REQUIRED: ${ACCEPTANCE_WORKER_ENROLLMENT_REQUIRED:-0}
+    volumes:
+      # Controlled fixture Executor; no host Docker Socket is exposed.
+      - ${ACCEPTANCE_FIXTURE_HOST_ROOT}:/fixtures:ro
+      - ./workspace/${ACCEPTANCE_RUN_ID}:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "-m", "backend.code_agent.worker.consumer", "worker-a-${ACCEPTANCE_RUN_ID}"]
+
+  worker-b:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.fixture-worker
+    environment:
+      WORKER_ID: worker-b-${ACCEPTANCE_RUN_ID}
+      DATABASE_URL: postgresql://${ACCEPTANCE_POSTGRES_USER}:${ACCEPTANCE_POSTGRES_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      REDIS_URL: redis://worker_b:${ACCEPTANCE_WORKER_B_REDIS_PASSWORD:-local-worker-b-redis-secret}@redis:6379/0
+      REDIS_NAMESPACE: ${ACCEPTANCE_REDIS_NAMESPACE}
+      CODE_AGENT_DOCKER_IMAGE: ${CODE_AGENT_DOCKER_IMAGE}
+      CODE_AGENT_JOB_NETWORK: ${CODE_AGENT_JOB_NETWORK}
+      CODE_AGENT_EXECUTOR_MODE: ${CODE_AGENT_EXECUTOR_MODE}
+      ALLOW_FIXTURE_EXECUTOR: ${ALLOW_FIXTURE_EXECUTOR}
+      ARTIFACT_STORAGE_ROOT: ${ARTIFACT_STORAGE_ROOT}
+      DATASET_UPLOAD_ROOT: ${DATASET_UPLOAD_ROOT}
+      METHOD_SOURCE_UPLOAD_ROOT: ${METHOD_SOURCE_UPLOAD_ROOT}
+      RESOURCE_STORAGE_ROOT: /workspace/resources
+      GOAL_DRIVEN_FIXTURE_ROOT: /fixtures
+      WORKER_ENROLLMENT_REQUIRED: ${ACCEPTANCE_WORKER_ENROLLMENT_REQUIRED:-0}
+    volumes:
+      # Controlled fixture Executor; no host Docker Socket is exposed.
+      - ${ACCEPTANCE_FIXTURE_HOST_ROOT}:/fixtures:ro
+      - ./workspace/${ACCEPTANCE_RUN_ID}:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "-m", "backend.code_agent.worker.consumer", "worker-b-${ACCEPTANCE_RUN_ID}"]

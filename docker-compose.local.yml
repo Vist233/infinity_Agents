@@ -1,0 +1,90 @@
+# Infinity Agent — Local development docker-compose configuration.
+#
+# Starts:
+# - Redis (task queue + event streaming)
+# - Worker A / Worker B (Docker-out-of-Docker via /var/run/docker.sock)
+# - Outbox Publisher (delivers queued tasks to the Redis stream)
+#
+# PostgreSQL is NOT part of this stack. Point DATABASE_URL at your own
+# instance. From inside these containers, a database on the host machine
+# must be addressed via host.docker.internal (never "localhost").
+#
+# All connection settings come from worker.env (see worker.env.example):
+#   docker compose -f docker-compose.local.yml --env-file worker.env up -d
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    # Optional password: set REDIS_PASSWORD in worker.env for production.
+    # Unset = open access (local development only).
+    command: sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"; else exec redis-server --appendonly yes; fi'
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli $${REDIS_PASSWORD:+-a $$REDIS_PASSWORD} ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  worker-a:
+    image: infinity-agent-worker:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.worker
+    env_file: ${WORKER_ENV_FILE:-worker.env}
+    environment:
+      - WORKER_ID=worker-a
+      # Default to the compose-local Redis; override in worker.env for remote.
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres@host.docker.internal:5450/infinity_agents}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Artifacts land here inside the container; the host sees them under ./workspace,
+      # where the API server downloads them from (ARTIFACT_DOWNLOAD_ROOT).
+      - ./workspace:/workspace
+      # For live code debugging, temporarily re-add: - ./backend:/app/backend
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: python -m backend.code_agent.worker.consumer worker-a
+
+  worker-b:
+    image: infinity-agent-worker:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.worker
+    env_file: ${WORKER_ENV_FILE:-worker.env}
+    environment:
+      - WORKER_ID=worker-b
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres@host.docker.internal:5450/infinity_agents}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./workspace:/workspace
+      # For live code debugging, temporarily re-add: - ./backend:/app/backend
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: python -m backend.code_agent.worker.consumer worker-b
+
+  outbox-publisher:
+    image: infinity-agent-worker:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.worker
+    env_file: ${WORKER_ENV_FILE:-worker.env}
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres@host.docker.internal:5450/infinity_agents}
+    # Runs from the image's baked-in code; add - ./backend:/app/backend only when debugging.
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: python -m backend.code_agent.outbox
+
+volumes:
+  redis-data:

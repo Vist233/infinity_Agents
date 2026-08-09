@@ -27,6 +27,7 @@ fixedQuantityProg/results.csv # Exclude results from fixed prog
 
 # Environment files
 .env
+.env.local
 *.env
 venv/
 .claude/
@@ -60,6 +61,7 @@ env/
 
 # Runtime paper artifacts (generated locally)
 papers/
+workspace/
 
 # Cloudflare Worker sources are tracked on cloudflare-deploy.
 .wrangler/
@@ -70,3 +72,4 @@ package/
 # Local generated figures
 normal_distribution.png
 cute_turtle.png
+worker.env

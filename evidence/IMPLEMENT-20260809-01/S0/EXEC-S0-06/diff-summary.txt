@@ -1,0 +1,2 @@
+Added only scripts/acceptance_preflight.sh. It performs validation and read-only
+checks; it has no start/stop/cleanup operation.

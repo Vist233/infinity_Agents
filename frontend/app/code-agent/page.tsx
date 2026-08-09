@@ -1,54 +1,139 @@
 "use client";
 
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Copy, ExternalLink } from "lucide-react";
-import { AgentNav } from "@/components/chat/AgentNav";
 import { LanguageToggle, useLanguage } from "@/lib/i18n";
+import { AgentNav } from "@/components/chat/AgentNav";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { ListTodo, RefreshCw } from "lucide-react";
+import { listTasks, type TaskItem, type TaskStatus } from "@/lib/api/tasks";
 
-const guides = [
-  ["code.guideCli", "https://help.openai.com/en/articles/11096431-openai-codex-ci-getting-started"],
-  ["code.guideRepo", "https://github.com/openai/codex"],
-  ["code.guideLogin", "https://help.openai.com/en/articles/11381614-codex-cli-and-sign-in-withgpt"],
-] as const;
+const STATUS_COLORS: Record<TaskStatus, string> = {
+  draft: "bg-zinc-200 text-zinc-600",
+  queued: "bg-blue-100 text-blue-700",
+  claimed: "bg-purple-100 text-purple-700",
+  running: "bg-amber-100 text-amber-700",
+  succeeded: "bg-emerald-100 text-emerald-700",
+  failed: "bg-red-100 text-red-700",
+  cancelled: "bg-zinc-200 text-zinc-500",
+  timeout: "bg-orange-100 text-orange-700",
+};
 
-const commands = ["npm install -g @openai/codex", "brew install --cask codex", "codex --login", "codex"];
+const STATUS_LABEL: Record<TaskStatus, string> = {
+  draft: "tasks.statusDraft",
+  queued: "tasks.statusQueued",
+  claimed: "tasks.statusClaimed",
+  running: "tasks.statusRunning",
+  succeeded: "tasks.statusSucceeded",
+  failed: "tasks.statusFailed",
+  cancelled: "tasks.statusCancelled",
+  timeout: "tasks.statusTimeout",
+};
 
+/** History/status surface only. Formal submission lives in Analysis confirmation. */
 export default function CodeAgentPage() {
   const router = useRouter();
   const { t } = useLanguage();
+  const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
+
+  const loadTasks = useCallback(async () => {
+    try {
+      const items = await listTasks();
+      setTasks(items);
+      setListError(null);
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTasks();
+    const timer = setInterval(() => { void loadTasks(); }, 5000);
+    return () => clearInterval(timer);
+  }, [loadTasks]);
+
+  const formatDate = useMemo(
+    () => (iso: string) => {
+      if (!iso) return "-";
+      try { return new Date(iso).toLocaleString(); } catch { return iso; }
+    },
+    [],
+  );
 
   return (
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
-      <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl">
-        <AgentNav active="code" onNavigate={(path) => router.push(path)} />
+      <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
+        <AgentNav active="tasks" onNavigate={(path: string) => router.push(path)} />
+        <div className="flex-1" />
+        <div className="p-2 text-xs text-zinc-400 text-center tracking-tighter">v1.0.0 @ 2026</div>
       </aside>
-      <main className="flex-1 overflow-y-auto">
-        <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 bg-[var(--surface-1)] backdrop-blur-xl">
-          <div className="text-sm font-semibold tracking-tight text-zinc-700">CodeAgent</div>
+
+      <main className="flex-1 flex flex-col relative min-w-0">
+        <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between sticky top-0 bg-[var(--surface-1)] backdrop-blur-xl z-10 print:hidden">
+          <div className="flex items-center gap-2">
+            <ListTodo size={16} className="text-zinc-500" />
+            <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("tasks.title")}</div>
+          </div>
           <LanguageToggle />
         </header>
-        <div className="max-w-4xl mx-auto px-6 py-10">
-          <div className="rounded-3xl border border-[var(--hairline)] bg-white/90 p-8 shadow-sm backdrop-blur">
-            <h1 className="text-3xl font-semibold tracking-tight">{t("code.title")}</h1>
-            <p className="text-zinc-500 mt-3 leading-7">{t("code.description")}</p>
-            <div className="mt-8 grid gap-3">
-              {guides.map(([title, href]) => (
-                <a key={href} href={href} target="_blank" rel="noreferrer" className="rounded-2xl border border-zinc-200 p-4 hover:bg-zinc-50 transition-colors flex items-center justify-between gap-3">
-                  <span className="text-sm font-medium">{t(title)}</span><ExternalLink className="h-4 w-4 text-zinc-400" />
-                </a>
-              ))}
-            </div>
-            <div className="mt-8 rounded-2xl border border-zinc-200 bg-zinc-50 p-4 space-y-2">
-              <h2 className="text-sm font-semibold">{t("code.quickInstall")}</h2>
-              {commands.map((command) => (
-                <div key={command} className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white p-3">
-                  <code className="text-sm break-all">{command}</code>
-                  <button aria-label={t("code.copy", { command })} onClick={() => void navigator.clipboard.writeText(command)} className="text-zinc-500 hover:text-zinc-900"><Copy className="h-4 w-4" /></button>
+
+        <ScrollArea className="flex-1">
+          <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-6">
+            <section className="rounded-2xl border border-blue-100 bg-blue-50/70 p-5">
+              <div className="text-sm font-semibold text-blue-900">{t("tasks.confirmationOnlyTitle")}</div>
+              <p className="text-xs text-blue-800/80 mt-1">{t("tasks.confirmationOnlyDescription")}</p>
+            </section>
+
+            <section className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold text-zinc-700">{t("tasks.subtitle")}</div>
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setLoading(true); void loadTasks(); }} disabled={loading}>
+                  <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+                  {t("composer.retry")}
+                </Button>
+              </div>
+
+              {listError && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{t("tasks.listFailedToast")}: {listError}</div>}
+              {!loading && tasks.length === 0 && !listError && (
+                <div className="flex flex-col items-center justify-center py-16 text-center rounded-2xl border border-dashed border-zinc-200 bg-white/60">
+                  <ListTodo size={36} className="text-zinc-300 mb-3" />
+                  <p className="text-sm text-zinc-500">{t("tasks.empty")}</p>
+                  <p className="text-xs text-zinc-400 mt-1">{t("tasks.emptyDescription")}</p>
                 </div>
-              ))}
-            </div>
+              )}
+
+              {tasks.length > 0 && (
+                <div className="rounded-2xl border border-[var(--hairline)] bg-white/80 overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead><tr className="border-b border-[var(--hairline)] bg-zinc-50/60 text-left">
+                      <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.id")}</th>
+                      <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.titleColumn")}</th>
+                      <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.status")}</th>
+                      <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.attempts")}</th>
+                      <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.createdAt")}</th>
+                      <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.actions")}</th>
+                    </tr></thead>
+                    <tbody>{tasks.map((task) => (
+                      <tr key={task.task_id} className="border-b border-[var(--hairline)] last:border-b-0 hover:bg-zinc-50/60 transition-colors">
+                        <td className="px-4 py-3 font-mono text-xs text-zinc-500 max-w-[140px] truncate">{task.task_id}</td>
+                        <td className="px-4 py-3 text-sm font-medium">{task.title}</td>
+                        <td className="px-4 py-3"><span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[task.status] || "bg-zinc-200 text-zinc-600"}`}>{t(STATUS_LABEL[task.status] as never)}</span></td>
+                        <td className="px-4 py-3 text-xs text-zinc-600">{task.attempt_count}/{task.max_attempts}</td>
+                        <td className="px-4 py-3 text-xs text-zinc-500 whitespace-nowrap">{formatDate(task.created_at)}</td>
+                        <td className="px-4 py-3"><Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => router.push(`/code-agent/tasks/${task.task_id}`)}>{t("tasks.view")}</Button></td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              )}
+            </section>
           </div>
-        </div>
+        </ScrollArea>
       </main>
     </div>
   );

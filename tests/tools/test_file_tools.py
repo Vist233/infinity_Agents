@@ -15,7 +15,7 @@ def test_read_image_preserves_relative_path_reference(tmp_path):
 
     assert result["image_ref"] == "img://./extracted/2103_03404/images/page1_img1.png"
     assert result["markdown"] == "![page1_img1](img://./extracted/2103_03404/images/page1_img1.png)"
-    assert result["resolved_path"] == str(image_path.resolve())
+    assert "resolved_path" not in result
 
 
 def test_read_image_basename_keeps_backward_compatible_ref(tmp_path):

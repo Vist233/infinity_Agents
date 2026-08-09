@@ -10,8 +10,10 @@ feedparser
 openai>=2.16.0
 python-dotenv>=1.0.1
 PyJWT[crypto]>=2.10.1
+redis>=5.0.0
 requests
 uvicorn>=0.40.0
+sse-starlette>=1.8.0
 
 # Paper ingestion and report generation
 markdown

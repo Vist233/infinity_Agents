@@ -6,6 +6,7 @@ Provides a vision-capable tool to inspect local images inside allowed directorie
 
 import base64
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -33,19 +34,21 @@ class ImageAnalysisTools(Toolkit):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        base_url: str = "https://api.moonshot.cn/v1",
-        model_id: str = "kimi-k2.5",
+        base_url: Optional[str] = None,
+        model_id: Optional[str] = None,
         allowed_dirs: Optional[List[Path]] = None,
+        allow_basename_search: bool = True,
         max_image_mb: int = 20,
         max_output_chars: int = 8000,
         **kwargs: Any,
     ) -> None:
         self.api_key = api_key
-        self.base_url = base_url
-        self.model_id = model_id
+        self.base_url = base_url or os.getenv("ANALYSIS_PROVIDER_BASE_URL", "https://api.stepfun.com/v1")
+        self.model_id = model_id or os.getenv("ANALYSIS_MODEL_ID", "")
         self.max_image_bytes = max_image_mb * 1024 * 1024
         self.max_output_chars = max_output_chars
         self.allowed_dirs = allowed_dirs or [PAPERS_DIR, PLOT_OUTPUTS_DIR, PLOTLY_OUTPUTS_DIR]
+        self.allow_basename_search = allow_basename_search
 
         for d in self.allowed_dirs:
             d.mkdir(parents=True, exist_ok=True)
@@ -54,12 +57,24 @@ class ImageAnalysisTools(Toolkit):
         super().__init__(name="image_analysis_tools", tools=tools, **kwargs)
 
     def _is_path_allowed(self, path: Path) -> bool:
-        resolved = path.resolve()
-        return any(
-            resolved == allowed.resolve()
-            or str(resolved).startswith(str(allowed.resolve()) + "/")
-            for allowed in self.allowed_dirs
-        )
+        candidate = path.absolute()
+        for allowed in self.allowed_dirs:
+            root = allowed.absolute()
+            try:
+                relative = candidate.relative_to(root)
+            except ValueError:
+                continue
+            current = root
+            try:
+                for part in relative.parts:
+                    current = current / part
+                    if current.is_symlink():
+                        return False
+                candidate.resolve().relative_to(root.resolve())
+                return True
+            except (OSError, ValueError):
+                return False
+        return False
 
     def _resolve_path(self, path_str: str) -> Optional[Path]:
         normalized = normalize_image_locator(path_str)
@@ -76,7 +91,7 @@ class ImageAnalysisTools(Toolkit):
             if p.exists() and self._is_path_allowed(p):
                 return p
 
-        if "/" not in normalized:
+        if self.allow_basename_search and "/" not in normalized:
             for allowed in self.allowed_dirs:
                 for p in allowed.rglob(normalized):
                     if p.is_file() and self._is_path_allowed(p):
@@ -110,7 +125,6 @@ class ImageAnalysisTools(Toolkit):
 
         raw = image_path.read_bytes()
         meta = {
-            "file_path": str(image_path),
             "file_name": image_path.name,
             "size_bytes": size_bytes,
             "mime_type": mime_type,
@@ -152,7 +166,7 @@ class ImageAnalysisTools(Toolkit):
                         "![fig](img://./extracted/paper_x/images/fig.png)",
                         "/api/sessions/{session_id}/files/extracted/paper_x/images/fig.png",
                     ],
-                    "allowed_directories": [str(d) for d in self.allowed_dirs],
+                    "allowed_directories": [d.name for d in self.allowed_dirs],
                 },
                 ensure_ascii=False,
             )
@@ -170,6 +184,16 @@ class ImageAnalysisTools(Toolkit):
                 {
                     "error": "vision_api_key_missing",
                     "message": "未配置 API key，无法执行视觉分析。",
+                    "image": image_meta,
+                },
+                ensure_ascii=False,
+            )
+
+        if os.getenv("ANALYSIS_EGRESS_POLICY", "provider_allowed").strip().lower() == "local_only":
+            return json.dumps(
+                {
+                    "error": "egress_policy_denied",
+                    "message": "该资源被标记为 local_only，未向 Analysis Provider 发送图像。",
                     "image": image_meta,
                 },
                 ensure_ascii=False,
@@ -221,7 +245,6 @@ class ImageAnalysisTools(Toolkit):
                     "prompt": prompt,
                     "detail": detail,
                     "image": image_meta,
-                    "resolved_path": str(resolved.resolve()),
                     "image_ref": img_ref,
                     "markdown": f"![{resolved.stem}]({img_ref})",
                     "analysis": analysis_text,
@@ -235,8 +258,7 @@ class ImageAnalysisTools(Toolkit):
                     "error": "vision_analysis_failed",
                     "message": str(e),
                     "hint": (
-                        "请确认模型支持图像输入。可通过 PAPER_AGENT_VISION_MODEL 指定视觉模型；"
-                        "若继续使用 kimi-k2.5，请确认网关已开启多模态。"
+                        "请确认同一个 Analysis Provider 配置的模型支持图像输入。"
                     ),
                     "image": image_meta,
                 },

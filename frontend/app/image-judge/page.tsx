@@ -1,5 +1,6 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDownToLine, Check, ExternalLink, FileImage, Microscope } from "lucide-react";
 import { AgentNav } from "@/components/chat/AgentNav";
@@ -7,6 +8,22 @@ import { Button } from "@/components/ui/button";
 import { LanguageToggle, useLanguage, type TranslationKey } from "@/lib/i18n";
 
 const RELEASE_URL = "https://github.com/Vist233/infinity_Agents/releases/latest";
+const WINDOWS_DOWNLOAD_URL =
+  "https://github.com/Vist233/infinity_Agents/releases/latest/download/ImageJudge-windows-x64.zip";
+const LINUX_DOWNLOAD_URL =
+  "https://github.com/Vist233/infinity_Agents/releases/latest/download/ImageJudge-linux-amd64.deb";
+
+type Platform = "windows" | "linux" | "other";
+
+function detectPlatform(): Platform {
+  if (typeof navigator === "undefined") return "other";
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes("win")) return "windows";
+  if (ua.includes("linux") || ua.includes("x11")) return "linux";
+  return "other";
+}
+
+const subscribeToPlatform = () => () => {};
 
 const steps: Array<[string, TranslationKey, TranslationKey]> = [
   ["1", "image.install", "image.installDescription"],
@@ -20,11 +37,29 @@ const resultKeys: TranslationKey[] = ["image.resultOrder", "image.resultRows", "
 export default function ImageJudgePage() {
   const router = useRouter();
   const { t } = useLanguage();
+  // Detect the visitor's platform without an effect-driven state update.
+  const platform = useSyncExternalStore(subscribeToPlatform, detectPlatform, () => "other");
+
+  const downloadCards = [
+    {
+      key: "windows" as const,
+      label: t("image.downloadWindows"),
+      url: WINDOWS_DOWNLOAD_URL,
+      hint: t("image.installWindowsHint"),
+    },
+    {
+      key: "linux" as const,
+      label: t("image.downloadLinux"),
+      url: LINUX_DOWNLOAD_URL,
+      hint: t("image.installLinuxHint"),
+    },
+  ];
+  if (platform === "linux") downloadCards.reverse();
 
   return (
     <div className="flex min-h-screen bg-transparent text-zinc-900 font-sans">
       <aside className="w-[260px] shrink-0 bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl">
-        <AgentNav active="image-judge" onNavigate={(path) => router.push(path)} />
+        <AgentNav active="traits" onNavigate={(path) => router.push(path)} />
       </aside>
 
       <main className="flex-1 min-w-0 overflow-y-auto">
@@ -36,7 +71,7 @@ export default function ImageJudgePage() {
           <div className="flex items-center gap-2">
             <LanguageToggle />
             <Button asChild size="sm" className="rounded-xl">
-              <a href={RELEASE_URL} target="_blank" rel="noreferrer" aria-label={t("image.download")}>
+              <a href="#download" aria-label={t("image.download")}>
                 <ArrowDownToLine className="h-4 w-4" />
                 {t("image.download")}
               </a>
@@ -55,7 +90,7 @@ export default function ImageJudgePage() {
               <p className="mt-4 text-lg leading-8 text-zinc-600">{t("image.description")}</p>
               <div className="mt-7 flex flex-wrap items-center gap-3">
                 <Button asChild size="lg" className="rounded-xl">
-                  <a href={RELEASE_URL} target="_blank" rel="noreferrer" aria-label={t("image.download")}>
+                  <a href="#download" aria-label={t("image.download")}>
                     <ArrowDownToLine className="h-4 w-4" />
                     {t("image.download")}
                   </a>
@@ -69,6 +104,53 @@ export default function ImageJudgePage() {
               </div>
               <p className="mt-3 text-xs text-zinc-400">{t("image.platforms")}</p>
             </div>
+          </section>
+
+          <section id="download" className="rounded-3xl border border-zinc-200 bg-white/90 p-7 md:p-8 shadow-sm scroll-mt-20">
+            <h2 className="text-2xl font-semibold tracking-tight">{t("image.downloadTitle")}</h2>
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
+              {downloadCards.map((card) => {
+                const recommended = card.key === platform;
+                return (
+                  <div
+                    key={card.key}
+                    className={`rounded-2xl border p-6 ${
+                      recommended ? "border-zinc-900 ring-1 ring-zinc-900 bg-white" : "border-zinc-200 bg-zinc-50/80"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-base font-semibold">{card.label}</h3>
+                      {recommended && (
+                        <span className="rounded-full bg-zinc-900 px-2.5 py-0.5 text-xs font-medium text-white">
+                          {t("image.recommended")}
+                        </span>
+                      )}
+                    </div>
+                    <Button
+                      asChild
+                      size="lg"
+                      variant={recommended ? "default" : "outline"}
+                      className="mt-5 w-full rounded-xl"
+                    >
+                      <a href={card.url} aria-label={card.label}>
+                        <ArrowDownToLine className="h-4 w-4" />
+                        {card.label}
+                      </a>
+                    </Button>
+                    <p className="mt-4 text-sm leading-6 text-zinc-500">{card.hint}</p>
+                  </div>
+                );
+              })}
+            </div>
+            <a
+              href={RELEASE_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-6 inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-800"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              {t("image.releaseNotes")}
+            </a>
           </section>
 
           <section className="grid gap-4 md:grid-cols-2">

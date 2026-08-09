@@ -1,0 +1,14 @@
+  bash -n scripts/acceptance_preflight.sh                    exit 0
+  compose config validation                                   exit 0
+  missing-env preflight negative check                        exit 2 (expected)
+  positive acceptance preflight                               exit 0
+  API unauthenticated Task API smoke                          HTTP 401 (expected)
+  API authenticated default-project smoke                     HTTP 200
+  API authenticated task-list smoke                           HTTP 200
+  API authenticated worker-health smoke                       HTTP 200
+  frontend acceptance HTTP smoke                              HTTP 200
+  npm run lint                                                exit 0 (7 warnings)
+  npm run typecheck                                           exit 0
+  npm run test:unit                                           exit 0 (28 passed)
+  npm run build                                               exit 0
+  backend non-integration suite                               exit 0 (267 passed, 1 skipped, 3 deselected)

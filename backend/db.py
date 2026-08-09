@@ -201,6 +201,299 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     REFERENCES sessions(session_id)
                     ON DELETE CASCADE
                 );
+
+                -- ============================================================================
+                -- Task Execution System (Infinity Agent)
+                -- ============================================================================
+
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id TEXT PRIMARY KEY,
+                    issuer TEXT NOT NULL DEFAULT 'local',
+                    subject TEXT NOT NULL,
+                    email TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (issuer, subject)
+                );
+
+                CREATE TABLE IF NOT EXISTS auth_sessions (
+                    session_id UUID PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    revoked_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions (user_id, expires_at);
+
+                CREATE TABLE IF NOT EXISTS project_members (
+                    project_id UUID NOT NULL,
+                    user_id TEXT NOT NULL,
+                    role VARCHAR(20) NOT NULL DEFAULT 'member',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (project_id, user_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members (user_id, project_id);
+
+                CREATE TABLE IF NOT EXISTS projects (
+                    project_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    created_by TEXT,
+                    owner_user_id TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                ALTER TABLE projects ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
+                CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects (owner_user_id, updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS task_specs (
+                    task_spec_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    project_id UUID NOT NULL,
+                    revision INT NOT NULL DEFAULT 1,
+                    title TEXT NOT NULL,
+                    domain VARCHAR(50) NOT NULL DEFAULT 'bioinformatics',
+                    analysis_type VARCHAR(50) NOT NULL,
+                    research_question TEXT NOT NULL,
+                    spec_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    schema_version VARCHAR(10) NOT NULL DEFAULT '1.0',
+                    status VARCHAR(20) NOT NULL DEFAULT 'draft',
+                    created_by TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    frozen_at TIMESTAMPTZ
+                );
+                CREATE INDEX IF NOT EXISTS idx_task_specs_project ON task_specs (project_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_task_specs_status ON task_specs (status);
+
+                CREATE TABLE IF NOT EXISTS method_sources (
+                    method_source_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    project_id UUID NOT NULL REFERENCES projects(project_id),
+                    task_spec_id UUID REFERENCES task_specs(task_spec_id),
+                    original_filename TEXT NOT NULL,
+                    stored_path TEXT NOT NULL,
+                    content_type TEXT,
+                    file_size_bytes BIGINT,
+                    file_hash_sha256 CHAR(64),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_method_sources_project ON method_sources (project_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS dataset_snapshots (
+                    dataset_snapshot_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    task_spec_id UUID NOT NULL REFERENCES task_specs(task_spec_id),
+                    project_id UUID NOT NULL,
+                    original_filename TEXT NOT NULL,
+                    stored_path TEXT NOT NULL,
+                    file_size_bytes BIGINT,
+                    file_hash_sha256 CHAR(64),
+                    metadata JSONB DEFAULT '{}'::jsonb,
+                    validation_result JSONB DEFAULT '{}'::jsonb,
+                    validation_passed BOOLEAN NOT NULL DEFAULT FALSE,
+                    version INT NOT NULL DEFAULT 1,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_dataset_snapshots_task_spec ON dataset_snapshots (task_spec_id);
+                CREATE INDEX IF NOT EXISTS idx_dataset_snapshots_project ON dataset_snapshots (project_id);
+
+                CREATE TABLE IF NOT EXISTS tasks (
+                    task_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    task_spec_id UUID NOT NULL REFERENCES task_specs(task_spec_id),
+                    dataset_snapshot_id UUID NOT NULL REFERENCES dataset_snapshots(dataset_snapshot_id),
+                    project_id UUID NOT NULL,
+                    title TEXT NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'draft',
+                    phase VARCHAR(20),
+                    priority INT NOT NULL DEFAULT 0,
+                    version INT NOT NULL DEFAULT 1,
+                    lease_owner TEXT,
+                    lease_token CHAR(32),
+                    lease_expires_at TIMESTAMPTZ,
+                    active_attempt_id BIGINT,
+                    attempt_count INT NOT NULL DEFAULT 0,
+                    max_attempts INT NOT NULL DEFAULT 3,
+                    cancel_requested_at TIMESTAMPTZ,
+                    result_artifact_id TEXT,
+                    error_message TEXT,
+                    created_by TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    started_at TIMESTAMPTZ,
+                    finished_at TIMESTAMPTZ,
+                    CONSTRAINT chk_task_status CHECK (status IN (
+                        'draft','queued','claimed','running','succeeded','failed','cancelled','timeout'
+                    ))
+                );
+                CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks (project_id, status);
+                CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_tasks_lease ON tasks (lease_expires_at) WHERE lease_owner IS NOT NULL;
+
+                CREATE TABLE IF NOT EXISTS task_attempts (
+                    task_attempt_id BIGSERIAL PRIMARY KEY,
+                    task_id UUID NOT NULL REFERENCES tasks(task_id),
+                    worker_id TEXT NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'running',
+                    attempt_index INT NOT NULL,
+                    container_id TEXT,
+                    executor_image_digest TEXT,
+                    docker_container_id TEXT,
+                    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    finished_at TIMESTAMPTZ,
+                    exit_code INT,
+                    error_message TEXT,
+                    failure_code VARCHAR(50),
+                    failure_detail TEXT,
+                    token_usage JSONB DEFAULT '{}'::jsonb
+                );
+                CREATE INDEX IF NOT EXISTS idx_task_attempts_task ON task_attempts (task_id, attempt_index DESC);
+
+                CREATE TABLE IF NOT EXISTS task_events (
+                    task_event_id BIGSERIAL PRIMARY KEY,
+                    task_id UUID NOT NULL REFERENCES tasks(task_id),
+                    task_attempt_id BIGINT REFERENCES task_attempts(task_attempt_id),
+                    event_type VARCHAR(50) NOT NULL,
+                    event_data JSONB DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_task_events_task_created ON task_events (task_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS outbox_events (
+                    outbox_event_id BIGSERIAL PRIMARY KEY,
+                    aggregate_type VARCHAR(50) NOT NULL DEFAULT 'task',
+                    aggregate_id UUID NOT NULL,
+                    event_type VARCHAR(50) NOT NULL,
+                    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                    published_at TIMESTAMPTZ,
+                    retry_count INT NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    claim_expires_at TIMESTAMPTZ,
+                    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_outbox_events_status_created ON outbox_events (status, created_at) WHERE status = 'pending';
+                CREATE INDEX IF NOT EXISTS idx_outbox_events_aggregate ON outbox_events (aggregate_type, aggregate_id);
+
+                CREATE TABLE IF NOT EXISTS artifacts (
+                    artifact_id TEXT PRIMARY KEY,
+                    task_id UUID NOT NULL REFERENCES tasks(task_id),
+                    task_attempt_id BIGINT REFERENCES task_attempts(task_attempt_id),
+                    name TEXT NOT NULL,
+                    kind VARCHAR(20) NOT NULL,
+                    storage_backend VARCHAR(20) NOT NULL DEFAULT 'local',
+                    storage_path TEXT NOT NULL,
+                    file_size_bytes BIGINT,
+                    checksum_sha256 CHAR(64),
+                    content_type TEXT,
+                    metadata JSONB DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_artifacts_task ON artifacts (task_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS idempotency_keys (
+                    idempotency_key VARCHAR(255) NOT NULL,
+                    user_id TEXT,
+                    resource_type VARCHAR(50) NOT NULL,
+                    resource_id UUID,
+                    request_hash TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '24 hours',
+                    PRIMARY KEY (idempotency_key, resource_type)
+                );
+                CREATE INDEX IF NOT EXISTS idx_idempotency_keys_expires ON idempotency_keys (expires_at);
+
+                -- Migrations: add columns if they don't exist (for existing databases)
+                ALTER TABLE tasks ADD COLUMN IF NOT EXISTS phase VARCHAR(20);
+                ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority INT NOT NULL DEFAULT 0;
+                ALTER TABLE tasks ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 1;
+                ALTER TABLE tasks ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMPTZ;
+                ALTER TABLE tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+                ALTER TABLE tasks ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
+                ALTER TABLE tasks ADD COLUMN IF NOT EXISTS method_source_id UUID;
+                ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS container_id TEXT;
+                ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS executor_image_digest TEXT;
+                ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS failure_code VARCHAR(50);
+                ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS failure_detail TEXT;
+                ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+                ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMPTZ;
+                UPDATE outbox_events
+                SET status = 'pending', claim_expires_at = NULL
+                WHERE status = 'publishing' AND claim_expires_at IS NULL;
+                ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS user_id TEXT;
+                ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS request_hash TEXT;
+
+                CREATE TABLE IF NOT EXISTS project_resources (
+                    resource_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    project_id UUID NOT NULL,
+                    owner_user_id TEXT NOT NULL,
+                    kind VARCHAR(30) NOT NULL,
+                    logical_name TEXT NOT NULL,
+                    storage_key TEXT NOT NULL UNIQUE,
+                    content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+                    file_size_bytes BIGINT NOT NULL DEFAULT 0,
+                    checksum_sha256 CHAR(64),
+                    egress_policy VARCHAR(30) NOT NULL DEFAULT 'local_only',
+                    status VARCHAR(20) NOT NULL DEFAULT 'ready',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    revoked_at TIMESTAMPTZ
+                );
+                CREATE INDEX IF NOT EXISTS idx_project_resources_owner ON project_resources (owner_user_id, project_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS session_resource_links (
+                    session_id UUID NOT NULL,
+                    resource_id UUID NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (session_id, resource_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS provider_profiles (
+                    provider_profile_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    project_id UUID NOT NULL,
+                    owner_user_id TEXT NOT NULL,
+                    purpose VARCHAR(20) NOT NULL,
+                    protocol VARCHAR(40) NOT NULL,
+                    base_url TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    credential_ref TEXT,
+                    capability_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    probe_revision TEXT,
+                    status VARCHAR(20) NOT NULL DEFAULT 'draft',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    revoked_at TIMESTAMPTZ
+                );
+                ALTER TABLE provider_profiles ADD COLUMN IF NOT EXISTS credential_fingerprint CHAR(12);
+                CREATE INDEX IF NOT EXISTS idx_provider_profiles_owner ON provider_profiles (owner_user_id, project_id, purpose);
+
+                CREATE TABLE IF NOT EXISTS provider_secrets (
+                    credential_ref TEXT PRIMARY KEY,
+                    project_id UUID NOT NULL,
+                    owner_user_id TEXT NOT NULL,
+                    ciphertext TEXT NOT NULL,
+                    key_version VARCHAR(20) NOT NULL DEFAULT 'v1',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    revoked_at TIMESTAMPTZ
+                );
+                CREATE INDEX IF NOT EXISTS idx_provider_secrets_project ON provider_secrets (project_id, owner_user_id);
+
+                CREATE TABLE IF NOT EXISTS worker_enrollments (
+                    worker_id TEXT PRIMARY KEY,
+                    credential_hash CHAR(64) NOT NULL,
+                    namespace TEXT NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'active',
+                    enrolled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    revoked_at TIMESTAMPTZ,
+                    last_seen_at TIMESTAMPTZ
+                );
+                CREATE INDEX IF NOT EXISTS idx_worker_enrollments_namespace ON worker_enrollments (namespace, status);
+
+                CREATE TABLE IF NOT EXISTS worker_enrollment_tokens (
+                    token_hash CHAR(64) PRIMARY KEY,
+                    worker_id TEXT NOT NULL,
+                    namespace TEXT NOT NULL,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    used_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_worker_enrollment_tokens_worker
+                    ON worker_enrollment_tokens (worker_id, namespace, expires_at);
             """
         )
 

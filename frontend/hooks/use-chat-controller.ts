@@ -733,5 +733,12 @@ export function useChatController() {
     uploadedPapers,
     uploadingPdf,
     authStatus,
+    setError,
+    appendAssistantContent,
+    sessionMessagesMapRef,
+    wsByRequestRef,
+    dispatch,
+    setSessionRunState,
+    refreshSessions,
   };
 }

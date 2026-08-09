@@ -1,7 +1,7 @@
 """
 codeAgent - Deep file analysis agent using Claude Agent SDK with Plotly skill.
 
-Uses Moonshot kimi-k2.5 model for code analysis and report generation.
+Uses the project-configured Anthropic Messages-compatible Coding Provider.
 """
 
 import os
@@ -31,6 +31,8 @@ except ImportError:
     raise ImportError(
         "`plotly` not installed. Please install using `pip install plotly kaleido`"
     )
+
+from backend.coding_provider import CodingProviderProfile
 
 
 # Output directory for generated charts
@@ -131,23 +133,27 @@ class CodeAgent:
         self,
         working_dir: Optional[str] = None,
         api_key: Optional[str] = None,
-        base_url: str = "https://api.moonshot.cn/v1",
+        base_url: Optional[str] = None,
+        model_id: Optional[str] = None,
     ):
         """
         Initialize the CodeAgent.
 
         Args:
             working_dir: Directory to analyze. Defaults to current directory.
-            api_key: Moonshot API key. Defaults to MOONSHOT_API_KEY env var.
-            base_url: API base URL. Defaults to Moonshot API.
+            api_key: Coding Provider key, held only by the worker gateway.
+            base_url: Anthropic Messages-compatible base URL.
         """
         self.working_dir = Path(working_dir) if working_dir else Path.cwd()
-        self.api_key = api_key or os.environ.get("MOONSHOT_API_KEY")
+        profile = CodingProviderProfile.from_environment()
+        self.api_key = api_key or profile.api_key
         self.base_url = base_url
+        self.base_url = self.base_url or profile.base_url
+        self.model_id = (model_id or profile.model_id).strip()
 
         if not self.api_key:
             raise ValueError(
-                "API key required. Set MOONSHOT_API_KEY environment variable or pass api_key parameter."
+                "Coding Provider key required or pass an attempt-scoped gateway credential."
             )
 
         # Create MCP server with Plotly tool
@@ -170,7 +176,7 @@ class CodeAgent:
             ],
             mcp_servers={"plotly": self.plotly_server},
             permission_mode="acceptEdits",
-            model="kimi-k2.5",
+            model=self.model_id,
             api_key=self.api_key,
             api_base_url=self.base_url,
         )

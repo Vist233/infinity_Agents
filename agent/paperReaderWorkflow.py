@@ -8,7 +8,7 @@ This workflow:
 1. Takes a PDF URL (arXiv) or local file path as input
 2. Downloads/locates the PDF
 3. Extracts text and images
-4. Analyzes with AI (Kimi 2.5) following bioinformatics best practices
+4. Analyzes with the single configured Analysis Provider model
 5. Generates a structured methodology report in MD and PDF format
 
 Designed to be used as an Agno Toolkit tool.
@@ -39,6 +39,7 @@ from agno.utils.log import log_debug, logger
 # Local imports
 from agent.papers_repo_pg import PapersRepoPG, PaperRecord
 from agent.tools.pdf_extractor import PDFExtractor, ExtractedContent
+from backend.provider import ProviderProfile
 
 
 # Default directories
@@ -119,8 +120,8 @@ class PaperReaderWorkflow(Toolkit):
         session_id: Optional[str] = None,
         storage_mode: Literal["legacy", "sandboxed"] = "legacy",
         api_key: Optional[str] = None,
-        base_url: str = "https://api.moonshot.cn/v1",
-        model_id: str = "kimi-k2-thinking-turbo",
+        base_url: Optional[str] = None,
+        model_id: Optional[str] = None,
         **kwargs,
     ):
         self.session_id = session_id
@@ -136,9 +137,10 @@ class PaperReaderWorkflow(Toolkit):
         self.pdf_extractor = PDFExtractor(output_base_dir=self.extracted_dir)
         
         # AI Model setup
-        self.api_key = api_key or os.getenv("MOONSHOT_API_KEY")
-        self.base_url = base_url
-        self.model_id = model_id
+        profile = ProviderProfile.from_environment()
+        self.api_key = api_key or profile.api_key
+        self.base_url = base_url or profile.base_url
+        self.model_id = model_id or profile.model_id
         
         tools = [self.analyze_paper, self.read_paper]
         super().__init__(name="paper_reader_workflow", tools=tools, **kwargs)
@@ -824,7 +826,7 @@ def create_paper_reader_workflow(
     """Create a PaperReaderWorkflow instance.
     
     Args:
-        api_key: Moonshot API key. Defaults to MOONSHOT_API_KEY env var.
+        api_key: Analysis Provider key.
         papers_dir: Directory for storing papers and reports.
         **kwargs: Additional arguments passed to Toolkit.
         
