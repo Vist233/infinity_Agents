@@ -1,6 +1,6 @@
 # Infinity Agents — 工作区、图像示例与统一交互改造执行文档
 
-> 状态：实施中；Cloudflare 基线已发布并通过只读 smoke。本轮统一工作区 UI 已完成本地质量检查，但真实 Worker/Case 2–3 闸门尚未通过，因此不把本轮改动提前宣称为已发布。
+> 状态：实施中；本轮统一工作区 UI 候选已发布并通过只读 smoke，但真实 Worker/Case 2–3 闸门尚未通过，因此不把本轮宣称为完整执行链路发布。
 > 日期：2026-08-10
 > 适用分支：`cloudflare-deploy`；本地 `main` 的现有修改不在本轮规划中被覆盖。
 
@@ -266,9 +266,9 @@ Worker 是当前登录用户集群中的机器身份，绑定关系必须由服�
 5. 有问题先修复，再重复对应门槛；
 6. 首轮发现本地 Worker GET/POST 兼容、回环来源和权限投影问题；修复后桌面端、手机端和 Review 均重新通过。
 
-### G8 — Cloudflare 发布（基线已完成，本轮候选待发布）
+### G8 — Cloudflare 发布（UI 候选已完成，执行链路候选待发布）
 
-**结果：** 已发布的线上版本是本轮改动的基线；本轮候选必须在真实 Worker 和 Case 2–3 闸门处理完后再发布。
+**结果：** 本轮 UI 候选已发布；完整执行链路仍必须在真实 Worker 和 Case 2–3 闸门处理完后再发布/复验。
 
 - 先确认 Cloudflare 分支包含 G1–G7 的最终代码和文档；
 - D1 迁移只新增/变更明确版本，不删除现有用户数据；
@@ -280,6 +280,7 @@ Worker 是当前登录用户集群中的机器身份，绑定关系必须由服�
 
 - Git commit：`0dfad90`；Worker：`infinity-agents-edge`；
 - 版本：`edd2e6ee-bafa-4865-b46d-feb6daa4109d`；
+- 本轮 UI 候选版本：`5951769d-403d-40ce-b56c-d0d32307248d`（对应 `cloudflare-deploy` 提交 `005998f` 的静态资源）；
 - 远程 D1：`0008_user_settings.sql`、`0009_normalize_legacy_worker_trust.sql`、`0010_user_access_roles.sql` 已应用；
 - `/health`、`/image-judge/healthz` 返回正常，三个工作区静态入口返回 200；未登录受保护 API 返回 401；
 - Wrangler dry-run 只包含预期 D1、R2、Assets、ImageJudge KV/DO 和限流绑定，没有 Redis、Docker 或 Provider Secret 绑定。
@@ -415,7 +416,7 @@ node --test worker-client.test.mjs
 - 本轮线上 Task Center 通过持久注册接口在同一 Namespace `mac-case23-20260810` 下创建了两个数据库注册记录：`worker-e4e9b008-9120-41cc-a729-a116030fd4e6` 和 `worker-a8fa0e84-b1e0-4e91-b9bb-81b30ea38534`。两条记录均为普通用户的一般信任、永久登记、当前尚未连接；没有调用一次性 token 接口。
 - Case 2 和 Case 3 的真实 Docker 检查均未通过：容器返回 `Not logged in · Please run /login`，事件为 `chunk + error`，没有 `done`，因此不能把两个 Case 标记为 Worker 执行成功。当前执行器只允许 Attempt-scoped gateway 能力进入 Job，不应把长期 Provider key 直接注入容器。
 - 线上边界仍需单独处理：Cloudflare Worker 使用 D1/控制面协议，当前旧 Python Docker consumer 需要 PostgreSQL + Redis；`zhangbot` 上检查到 Redis，但没有可用的 PostgreSQL 服务/连接端点。故“本地 Worker + 线上 Redis + 线上数据库”目前不能被写成已连通，需先补齐协议或提供真实在线 PostgreSQL 端点。
-- 因真实 Worker 凭证交接和 Case 2–3 尚未闭环，本轮前端候选暂不视为已重新部署；不得以既有线上版本的 smoke 结果替代本轮发布闸门。
+- 因真实 Worker 凭证交接和 Case 2–3 尚未闭环，本轮仅视为 UI 候选已部署；不得以页面 smoke 结果替代完整执行链路发布闸门。
 
 ### 7.4 G1–G6 的具体验收用例
 
