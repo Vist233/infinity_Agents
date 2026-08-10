@@ -63,6 +63,8 @@ env/
 # Runtime paper artifacts (generated locally)
 papers/
 workspace/
+!/frontend/components/workspace/
+!/frontend/components/workspace/**
 
 # Cloudflare Worker sources are tracked on cloudflare-deploy.
 .wrangler/

@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, CheckCircle2, RefreshCw, XCircle } from "lucide-react";
-import { AgentNav } from "@/components/chat/AgentNav";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/lib/i18n";
-import { cancelTask, getJson } from "@/lib/api/tasks";
+import { cancelTask, getJson, listTasks, type TaskItem } from "@/lib/api/tasks";
+import { MobileWorkspaceDrawer } from "@/components/workspace/MobileWorkspaceDrawer";
+import { TaskListPanel } from "@/components/tasks/TaskListPanel";
+import { WorkspaceSidebar } from "@/components/workspace/WorkspaceSidebar";
 
 type TaskStatus = "draft" | "queued" | "claimed" | "running" | "succeeded" | "failed" | "cancelled" | "timeout";
 
@@ -35,6 +37,20 @@ export default function TaskDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(true);
+  const [tasksError, setTasksError] = useState<string | null>(null);
+
+  const loadTasks = useCallback(async () => {
+    try {
+      setTasks(await listTasks());
+      setTasksError(null);
+    } catch (err) {
+      setTasksError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTasksLoading(false);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     if (!taskId) return;
@@ -54,6 +70,12 @@ export default function TaskDetailPage() {
   }, []);
 
   useEffect(() => {
+    void loadTasks();
+    const timer = window.setInterval(() => { void loadTasks(); }, 5000);
+    return () => window.clearInterval(timer);
+  }, [loadTasks]);
+
+  useEffect(() => {
     void load();
     if (!taskId) return;
     const timer = window.setInterval(() => { void load(); }, 5000);
@@ -61,15 +83,50 @@ export default function TaskDetailPage() {
   }, [load, taskId]);
 
   const terminal = task ? ["succeeded", "failed", "cancelled", "timeout"].includes(task.status) : true;
+  const formatDate = useMemo(
+    () => (iso: string) => {
+      if (!iso) return "-";
+      try { return new Date(iso).toLocaleString(); } catch { return iso; }
+    },
+    [],
+  );
+
+  const selectTask = (nextTask: TaskItem) => {
+    router.push(`/code-agent/tasks/?task_id=${encodeURIComponent(nextTask.task_id)}`);
+    setTaskId(nextTask.task_id);
+  };
 
   return (
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
-      <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
-        <AgentNav active="tasks" onNavigate={(path) => router.push(path)} />
-      </aside>
+      <WorkspaceSidebar active="tasks" onNavigate={(path) => router.push(path)} showVersion>
+        <div className="mt-4 min-h-0 flex-1 border-t border-[var(--hairline)] pt-4">
+          <TaskListPanel
+            tasks={tasks}
+            loading={tasksLoading}
+            error={tasksError}
+            selectedTaskId={taskId}
+            onNewTask={() => router.push("/code-agent")}
+            onRetry={() => { setTasksLoading(true); void loadTasks(); }}
+            onSelect={selectTask}
+            formatDate={formatDate}
+          />
+        </div>
+      </WorkspaceSidebar>
       <main className="flex-1 flex flex-col min-w-0">
         <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between bg-[var(--surface-1)] backdrop-blur-xl z-10">
           <div className="flex items-center gap-2">
+            <MobileWorkspaceDrawer active="tasks" onNavigate={(path) => router.push(path)}>
+              <TaskListPanel
+                tasks={tasks}
+                loading={tasksLoading}
+                error={tasksError}
+                selectedTaskId={taskId}
+                onNewTask={() => router.push("/code-agent")}
+                onRetry={() => { setTasksLoading(true); void loadTasks(); }}
+                onSelect={selectTask}
+                formatDate={formatDate}
+              />
+            </MobileWorkspaceDrawer>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.push("/code-agent")}><ArrowLeft size={16} /></Button>
             <div className="text-sm font-semibold text-zinc-700">{t("tasks.detailTitle")}</div>
           </div>

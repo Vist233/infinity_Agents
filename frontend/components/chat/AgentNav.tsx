@@ -1,17 +1,20 @@
 "use client";
 
-import { FileText, ListTodo, Microscope } from "lucide-react";
+import { Download, FileText, ListTodo, Microscope } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
+
+export type WorkspaceSection = "analysis" | "tasks" | "traits" | "downloads";
 
 interface AgentNavProps {
   onNavigate: (path: string) => void;
-  active: "analysis" | "tasks" | "traits";
+  active: WorkspaceSection;
 }
 
 const items = [
   { id: "analysis", labelKey: "nav.analysis", path: "/", icon: FileText },
   { id: "tasks", labelKey: "nav.tasks", path: "/code-agent", icon: ListTodo },
   { id: "traits", labelKey: "nav.traits", path: "/image-judge", icon: Microscope },
+  { id: "downloads", labelKey: "nav.downloads", path: "/downloads", icon: Download },
 ] as const;
 
 export function AgentNav({ onNavigate, active }: AgentNavProps) {

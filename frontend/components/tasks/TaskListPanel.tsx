@@ -31,31 +31,30 @@ interface TaskListPanelProps {
   tasks: TaskItem[];
   loading: boolean;
   error: string | null;
+  selectedTaskId?: string | null;
   onNewTask: () => void;
   onRetry: () => void;
   onSelect: (task: TaskItem) => void;
   formatDate: (iso: string) => string;
 }
 
-export function TaskListPanel({ tasks, loading, error, onNewTask, onRetry, onSelect, formatDate }: TaskListPanelProps) {
+export function TaskListPanel({ tasks, loading, error, selectedTaskId = null, onNewTask, onRetry, onSelect, formatDate }: TaskListPanelProps) {
   const { t } = useLanguage();
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="task-list-panel">
-      <div className="flex items-center justify-between gap-2 px-1">
-        <div className="flex min-w-0 items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
+      <div className="flex min-w-0 items-center gap-2 px-1 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
           <ListTodo size={14} className="shrink-0" />
-          <span className="truncate">{t("tasks.subtitle")}</span>
-        </div>
-        <Button type="button" size="sm" className="h-8 shrink-0 gap-1.5 rounded-lg px-2.5" onClick={onNewTask} data-testid="new-task-button">
+          <span className="truncate">{t("tasks.management")}</span>
+      </div>
+
+      <div className="mt-2 flex items-center gap-2">
+        <Button type="button" size="sm" className="h-9 min-w-0 flex-1 justify-start gap-1.5 rounded-lg px-3" onClick={onNewTask} data-testid="new-task-button">
           <Plus size={14} />
           <span>{t("tasks.newTask")}</span>
         </Button>
-      </div>
-
-      <div className="mt-2 flex items-center justify-end">
-        <Button type="button" variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs text-zinc-500" onClick={onRetry} disabled={loading}>
+        <Button type="button" variant="ghost" size="sm" className="h-9 shrink-0 gap-1 px-2 text-xs text-zinc-500" onClick={onRetry} disabled={loading} aria-label={t("tasks.refresh")} title={t("tasks.refresh")}>
           <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
-          {t("composer.retry")}
+          <span className="sr-only">{t("tasks.refresh")}</span>
         </Button>
       </div>
 
@@ -73,9 +72,10 @@ export function TaskListPanel({ tasks, loading, error, onNewTask, onRetry, onSel
           <button
             type="button"
             key={task.task_id}
-            className="w-full rounded-xl border border-transparent px-2.5 py-2 text-left transition-colors hover:border-[var(--hairline)] hover:bg-white/80"
+            className={`w-full rounded-xl border px-2.5 py-2 text-left transition-colors ${selectedTaskId === task.task_id ? "border-zinc-300 bg-white shadow-sm" : "border-transparent hover:border-[var(--hairline)] hover:bg-white/80"}`}
             onClick={() => onSelect(task)}
             title={task.title}
+            aria-current={selectedTaskId === task.task_id ? "true" : undefined}
           >
             <div className="flex items-start justify-between gap-2">
               <span className="min-w-0 truncate text-xs font-medium text-zinc-700">{task.title}</span>

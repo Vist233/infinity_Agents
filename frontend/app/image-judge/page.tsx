@@ -3,8 +3,7 @@
 import Image from "next/image";
 import { useMemo, useState } from "react";
 import { FileImage, Microscope } from "lucide-react";
-import { AgentNav } from "@/components/chat/AgentNav";
-import { UserFooter } from "@/components/workspace/UserFooter";
+import { WorkspaceSidebar } from "@/components/workspace/WorkspaceSidebar";
 import { MobileWorkspaceDrawer } from "@/components/workspace/MobileWorkspaceDrawer";
 import { useLanguage } from "@/lib/i18n";
 import { useRouter } from "next/navigation";
@@ -90,15 +89,11 @@ export default function ImageJudgePage() {
 
   return (
     <div className="flex h-screen min-h-0 bg-transparent font-sans text-zinc-900">
-      <aside className="hidden min-h-0 w-[320px] shrink-0 flex-col border-r border-[var(--hairline)] bg-[var(--surface-1)] p-3 backdrop-blur-xl md:flex">
-        <AgentNav active="traits" onNavigate={(path) => router.push(path)} />
+      <WorkspaceSidebar active="traits" onNavigate={(path) => router.push(path)}>
         <div className="mt-4 min-h-0 flex-1 border-t border-[var(--hairline)] pt-4">
           <ExampleList selectedId={selected.id} onSelect={setSelectedId} />
         </div>
-        <div className="mt-3">
-          <UserFooter />
-        </div>
-      </aside>
+      </WorkspaceSidebar>
 
       <main className="min-w-0 flex-1 overflow-y-auto">
         <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-[var(--hairline)] bg-[var(--surface-1)] px-4 backdrop-blur-xl">

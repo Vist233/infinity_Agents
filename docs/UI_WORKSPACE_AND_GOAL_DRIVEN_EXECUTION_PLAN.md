@@ -1,6 +1,6 @@
 # Infinity Agents — 工作区、图像示例与统一交互改造执行文档
 
-> 状态：DEPLOYED，Cloudflare 发布与只读 smoke 已通过
+> 状态：实施中；Cloudflare 基线已发布并通过只读 smoke。本轮统一工作区 UI 已完成本地质量检查，但真实 Worker/Case 2–3 闸门尚未通过，因此不把本轮改动提前宣称为已发布。
 > 日期：2026-08-10
 > 适用分支：`cloudflare-deploy`；本地 `main` 的现有修改不在本轮规划中被覆盖。
 
@@ -94,7 +94,7 @@ ImageJudge 页面沿用 Analysis 的工作区结构：左侧原来显示对话�
 ### 2.5 机器人头像和无闪烁交互
 
 - Analysis 页面移除“导出 PDF”入口和对应的前端导出功能；桌面端和手机端都不保留；
-- 性状提取页面移除右上角“下载最新版本”入口，以及与独立桌面下载相关的页面 CTA；性状提取作为统一 Web 工作区使用；
+- Analysis、任务执行中心和性状提取页面移除旧的右上角“下载最新版本”入口；导出 PDF 也从工作区移除；需要下载应用时从统一左侧导航进入独立的“下载最新应用程序”页面；
 - 原有桌面分发文档和安装包能力暂不删除，只是不再从主工作区暴露入口；
 - 对话中的 Assistant 头像统一使用现有产品 Logo 资源，优先复用 `frontend/app/icon.png`，不临时使用字母或随机图标；
 - 首屏、路由切换、任务轮询、图片加载和语言初始化不能造成整页闪烁；
@@ -137,11 +137,12 @@ Worker 是当前登录用户集群中的机器身份，绑定关系必须由服�
 - Namespace 可以复用，但 `(user_id, worker_id, namespace)` 不能越权复用；
 - 只有超级用户映射为完全信任；普通用户和学生都按一般信任处理；
 - Worker 注册记录、状态、信任等级、最后心跳和凭证摘要保存到数据库；
+- 正常 UI 流程只创建 `worker_registrations` 中的非过期持久凭证，不创建一次性 enrollment token；旧 `worker_enrollments`/`enrollment_token` 仅作为历史客户端兼容路径，不是本轮注册入口；
 - “注册状态”和“在线状态”分开：`active` 表示仍属于集群且凭证有效，`online/offline` 由 `last_seen_at` 和心跳窗口推导；
 - Worker 停止后不自动注销、不删除、不生成新 ID，只显示“已注册 · 离线”；重新启动原配置后恢复为在线；
 - 在线窗口使用可配置的心跳超时（当前心跳间隔 30 秒，可先按约 90 秒判断在线），不需要为离线状态增加数据库枚举；
 - 凭证不依赖 Cookie 或 Local Storage 作为权限判断，浏览器只保存 UI 状态；
-- 原始 Worker 凭证只在注册/轮换响应中交给用户，服务端保存摘要；客户端 Worker 将其保存为本机受限配置；
+- 持久 Worker 凭证只在注册/轮换响应中交给用户，服务端在数据库保存其摘要（可长期校验、可单独撤销），客户端 Worker 将原始凭证保存为本机受限配置；数据库不保存可直接还原的明文 secret；
 - 每次 Control API 请求都校验 Worker 凭证、Namespace、所属用户、状态和任务授权，不能只相信前端传入的 Namespace；
 - 任务分配只面向最近在线且未 revoked/draining 的 Worker；Worker 突然掉线时由现有 lease/fencing 机制恢复任务，不把掉线误报为注销；
 - Worker 可以在自己的机器上创建 Docker Job，但不能因此获得其他用户的 Worker、Task、数据库或 Redis 权限；
@@ -252,9 +253,9 @@ Worker 是当前登录用户集群中的机器身份，绑定关系必须由服�
 - 确认本地 PostgreSQL/Redis 和 Cloudflare D1 的事实边界；
 - 不让浏览器或学生 Worker 直连 Redis、D1/PostgreSQL、R2 parent credential 或 Cloudflare API。
 
-### G7 — 集成验收（已完成）
+### G7 — 集成验收（基线已完成，本轮改动待复核）
 
-**结果：** 三个工作区、桌面/手机、任务、示例、设置和 Worker 已通过自动化检查、真实本地链路、两个浏览器 Subagent 和 Zeal Review。
+**结果：** 上一版基线已经通过自动化检查、真实本地链路、两个浏览器 Subagent 和 Zeal Review；本轮新增统一侧栏、任务详情保留列表和独立下载页后，必须重新完成对应的浏览器/Review 闸门。
 
 实际执行顺序：
 
@@ -265,9 +266,9 @@ Worker 是当前登录用户集群中的机器身份，绑定关系必须由服�
 5. 有问题先修复，再重复对应门槛；
 6. 首轮发现本地 Worker GET/POST 兼容、回环来源和权限投影问题；修复后桌面端、手机端和 Review 均重新通过。
 
-### G8 — Cloudflare 发布
+### G8 — Cloudflare 发布（基线已完成，本轮候选待发布）
 
-**结果：** 已发布通过 G7 的版本，线上只读 smoke 全部通过。
+**结果：** 已发布的线上版本是本轮改动的基线；本轮候选必须在真实 Worker 和 Case 2–3 闸门处理完后再发布。
 
 - 先确认 Cloudflare 分支包含 G1–G7 的最终代码和文档；
 - D1 迁移只新增/变更明确版本，不删除现有用户数据；
@@ -404,12 +405,17 @@ node --test worker-client.test.mjs
 
 ### 本轮实际结果（2026-08-10）
 
-- 前端 Lint、TypeScript、单元测试 **29 项**、生产构建通过；Cloudflare Worker TypeScript、单元测试 **32 项** 和跨平台 Worker 客户端测试 **2 项**通过。
+- 前端 `lint`、TypeScript、单元测试 **29 项**、生产构建和 `git diff --check` 通过；Cloudflare Worker TypeScript、单元测试 **32 项** 和跨平台 Worker 客户端测试 **2 项**通过（均为已存在的 Cloudflare 基线检查）。
+- 本轮静态浏览器检查确认 `/`、`/code-agent/`、`/image-judge/`、`/code-agent/tasks/` 和 `/downloads/` 使用同一 `320px` 桌面工作区侧栏；任务详情仍保留左侧任务列表；下载入口进入独立页面，不再把 ImageJudge 示例页当作安装程序页面。
 - Playwright 本地真实服务回归 **7/7**通过；桌面浏览器 Subagent 在 `/`、`/code-agent`、`/image-judge` 上实际点击并创建 Namespace-only Worker 后通过；手机浏览器 Subagent 在 **390×844** 上通过抽屉、遮罩、Escape、任务和 ImageJudge 流程。
 - Zeal Review 首轮发现本地 Worker 兼容接口、回环 CSRF 来源和权限隔离问题；修复后增量 Review **PASS**，桌面浏览器也重新 **PASS**。
 - 本地隔离 API 的 Worker 注册结果写入 PostgreSQL，只返回一次原始凭证；列表按用户隔离、角色重新投影、未连接状态显示为 `never_seen`。
 - 原有 Docker 验收栈的两个本地 Worker 已启动并完成 Redis 心跳存在/停止 TTL/恢复检查；未删除容器、未清空 PostgreSQL 或 Redis。已有历史任务/outbox 数据使“清空后置零”的 preflight 不适用，本轮保留原数据并记录为跳过。
 - 后端目标测试 `tests/test_task_api.py tests/test_auth_flow.py tests/test_security_boundaries.py` 通过 **44 项**；完整后端套件未作为通过项宣称，因为其中一部分需要真实数据库/故障注入环境。
+- 本轮线上 Task Center 通过持久注册接口在同一 Namespace `mac-case23-20260810` 下创建了两个数据库注册记录：`worker-e4e9b008-9120-41cc-a729-a116030fd4e6` 和 `worker-a8fa0e84-b1e0-4e91-b9bb-81b30ea38534`。两条记录均为普通用户的一般信任、永久登记、当前尚未连接；没有调用一次性 token 接口。
+- Case 2 和 Case 3 的真实 Docker 检查均未通过：容器返回 `Not logged in · Please run /login`，事件为 `chunk + error`，没有 `done`，因此不能把两个 Case 标记为 Worker 执行成功。当前执行器只允许 Attempt-scoped gateway 能力进入 Job，不应把长期 Provider key 直接注入容器。
+- 线上边界仍需单独处理：Cloudflare Worker 使用 D1/控制面协议，当前旧 Python Docker consumer 需要 PostgreSQL + Redis；`zhangbot` 上检查到 Redis，但没有可用的 PostgreSQL 服务/连接端点。故“本地 Worker + 线上 Redis + 线上数据库”目前不能被写成已连通，需先补齐协议或提供真实在线 PostgreSQL 端点。
+- 因真实 Worker 凭证交接和 Case 2–3 尚未闭环，本轮前端候选暂不视为已重新部署；不得以既有线上版本的 smoke 结果替代本轮发布闸门。
 
 ### 7.4 G1–G6 的具体验收用例
 
@@ -433,7 +439,7 @@ node --test worker-client.test.mjs
 3. 参考图片下方是上传图片/分析图片区域；
 4. 说明、类别、结果和人工复核信息在同一个示例上下文中；
 5. 示例加载、空列表、坏图片和结果缺失都有稳定状态；
-6. 页面不再出现“下载最新版本”入口，也不出现独立桌面下载 CTA。
+6. ImageJudge 页面不再出现旧的“下载最新版本”入口；统一左侧“下载最新应用程序”进入独立 `/downloads/` 页面，不把示例页当作下载页。
 
 #### F4：稳定交互和统一入口
 

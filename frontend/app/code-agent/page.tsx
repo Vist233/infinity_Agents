@@ -2,14 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AgentNav } from "@/components/chat/AgentNav";
-import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TaskCreationCard } from "@/components/tasks/TaskCreationCard";
 import { TaskListPanel } from "@/components/tasks/TaskListPanel";
 import { WorkerEnrollmentPanel } from "@/components/tasks/WorkerEnrollmentPanel";
-import { UserFooter } from "@/components/workspace/UserFooter";
 import { MobileWorkspaceDrawer } from "@/components/workspace/MobileWorkspaceDrawer";
+import { WorkspaceSidebar } from "@/components/workspace/WorkspaceSidebar";
 import { ListTodo } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 import { listTasks, type TaskItem } from "@/lib/api/tasks";
@@ -63,8 +61,7 @@ export default function CodeAgentPage() {
 
   return (
     <div className="flex h-screen min-h-0 bg-transparent font-sans text-zinc-900">
-      <aside className="hidden min-h-0 w-[320px] shrink-0 flex-col border-r border-[var(--hairline)] bg-[var(--surface-1)] p-3 backdrop-blur-xl md:flex print:hidden">
-        <AgentNav active="tasks" onNavigate={(path: string) => router.push(path)} />
+      <WorkspaceSidebar active="tasks" onNavigate={(path: string) => router.push(path)} showVersion>
         <div className="mt-4 min-h-0 flex-1 border-t border-[var(--hairline)] pt-4">
           <TaskListPanel
             tasks={tasks}
@@ -76,11 +73,7 @@ export default function CodeAgentPage() {
             formatDate={formatDate}
           />
         </div>
-        <div className="mt-3 space-y-2">
-          <UserFooter />
-          <div className="px-1 text-center text-[10px] tracking-tight text-zinc-400">v1.0.0 @ 2026</div>
-        </div>
-      </aside>
+      </WorkspaceSidebar>
 
       <main className="relative flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-[var(--hairline)] bg-[var(--surface-1)] px-4 backdrop-blur-xl print:hidden">
@@ -99,7 +92,6 @@ export default function CodeAgentPage() {
             <ListTodo size={16} className="text-zinc-500" />
             <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("tasks.title")}</div>
           </div>
-          <Button type="button" variant="outline" size="sm" className="md:hidden" onClick={startNewTask}>{t("tasks.newTask")}</Button>
         </header>
 
         <ScrollArea className="flex-1">

@@ -3,15 +3,14 @@
 import { useRouter } from "next/navigation";
 import { LogIn, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { AgentNav } from "@/components/chat/AgentNav";
 import { SessionList } from "@/components/chat/SessionList";
 import { MessagePane } from "@/components/chat/MessagePane";
 import { Composer } from "@/components/chat/Composer";
 import { useChatController } from "@/hooks/use-chat-controller";
 import { redirectToLogin } from "@/lib/runtime-config";
 import { useLanguage } from "@/lib/i18n";
-import { UserFooter } from "@/components/workspace/UserFooter";
 import { MobileWorkspaceDrawer } from "@/components/workspace/MobileWorkspaceDrawer";
+import { WorkspaceSidebar } from "@/components/workspace/WorkspaceSidebar";
 
 /**
  * Analysis is the canonical home page. Task creation cards are rendered by
@@ -25,41 +24,39 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
-      <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
-        <AgentNav active="analysis" onNavigate={(path) => router.push(path)} />
+      <WorkspaceSidebar active="analysis" onNavigate={(path) => router.push(path)} showVersion>
         <Button
           variant="outline"
-          className="justify-start gap-2 bg-white/90 border-[var(--hairline)] shadow-sm hover:bg-white mt-3 rounded-xl"
+          className="mt-3 shrink-0 justify-start gap-2 rounded-xl border-[var(--hairline)] bg-white/90 shadow-sm hover:bg-white"
           onClick={controller.handleNewChat}
         >
           <Plus size={16} />
           {t("home.newChat")}
         </Button>
-        <div className="mt-3 text-xs uppercase tracking-widest text-zinc-400 px-2">{t("home.recentActivities")}</div>
-        <SessionList
-          sessions={controller.state.sessions}
-          currentSessionId={controller.state.sessionId}
-          editingSessionId={controller.state.editingSessionId}
-          editingTitle={controller.state.editingTitle}
-          deletingSessionId={controller.state.deletingSessionId}
-          sessionRunMap={controller.state.sessionRunMap}
-          onSwitchSession={controller.handleSwitchSession}
-          onEditSessionTitle={controller.handleEditSessionTitle}
-          onEditingTitleChange={controller.setEditingTitle}
-          onSaveSessionTitle={(sessionId) => {
-            void controller.saveInlineSessionTitle(sessionId);
-          }}
-          onCancelEditing={controller.cancelInlineSessionTitle}
-          onRequestDelete={controller.requestDeleteSession}
-          onCancelDelete={controller.cancelDeleteSession}
-          onConfirmDelete={(session) => {
-            void controller.confirmDeleteSession(session);
-          }}
-        />
-        <div className="flex-1" />
-        <UserFooter />
-        <div className="p-2 text-xs text-zinc-400 text-center tracking-tighter">v1.0.0 @ 2026</div>
-      </aside>
+        <div className="mt-3 shrink-0 px-2 text-xs uppercase tracking-widest text-zinc-400">{t("home.recentActivities")}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <SessionList
+            sessions={controller.state.sessions}
+            currentSessionId={controller.state.sessionId}
+            editingSessionId={controller.state.editingSessionId}
+            editingTitle={controller.state.editingTitle}
+            deletingSessionId={controller.state.deletingSessionId}
+            sessionRunMap={controller.state.sessionRunMap}
+            onSwitchSession={controller.handleSwitchSession}
+            onEditSessionTitle={controller.handleEditSessionTitle}
+            onEditingTitleChange={controller.setEditingTitle}
+            onSaveSessionTitle={(sessionId) => {
+              void controller.saveInlineSessionTitle(sessionId);
+            }}
+            onCancelEditing={controller.cancelInlineSessionTitle}
+            onRequestDelete={controller.requestDeleteSession}
+            onCancelDelete={controller.cancelDeleteSession}
+            onConfirmDelete={(session) => {
+              void controller.confirmDeleteSession(session);
+            }}
+          />
+        </div>
+      </WorkspaceSidebar>
 
       <main className="flex-1 flex flex-col relative min-w-0">
         <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between sticky top-0 bg-[var(--surface-1)] backdrop-blur-xl z-10 print:hidden">
