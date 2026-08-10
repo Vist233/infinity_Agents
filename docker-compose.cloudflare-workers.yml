@@ -21,8 +21,38 @@ services:
     <<: *cloudflare-worker
     env_file:
       - ${WORKER_A_ENV_FILE:-worker-a.cloudflare.env}
+    environment:
+      WORKER_WORK_ROOT: /worker-inputs
+      WORKER_OUTPUT_ROOT: /worker-outputs
+      CODE_AGENT_INPUT_VOLUME: infinity-agents-worker-a-inputs
+      CODE_AGENT_OUTPUT_VOLUME: infinity-agents-worker-a-outputs
+      CODE_AGENT_INPUT_VOLUME_ROOT: /worker-inputs
+      CODE_AGENT_OUTPUT_VOLUME_ROOT: /worker-outputs
+    volumes:
+      - worker_a_inputs:/worker-inputs
+      - worker_a_outputs:/worker-outputs
 
   worker-b:
     <<: *cloudflare-worker
     env_file:
       - ${WORKER_B_ENV_FILE:-worker-b.cloudflare.env}
+    environment:
+      WORKER_WORK_ROOT: /worker-inputs
+      WORKER_OUTPUT_ROOT: /worker-outputs
+      CODE_AGENT_INPUT_VOLUME: infinity-agents-worker-b-inputs
+      CODE_AGENT_OUTPUT_VOLUME: infinity-agents-worker-b-outputs
+      CODE_AGENT_INPUT_VOLUME_ROOT: /worker-inputs
+      CODE_AGENT_OUTPUT_VOLUME_ROOT: /worker-outputs
+    volumes:
+      - worker_b_inputs:/worker-inputs
+      - worker_b_outputs:/worker-outputs
+
+volumes:
+  worker_a_inputs:
+    name: infinity-agents-worker-a-inputs
+  worker_a_outputs:
+    name: infinity-agents-worker-a-outputs
+  worker_b_inputs:
+    name: infinity-agents-worker-b-inputs
+  worker_b_outputs:
+    name: infinity-agents-worker-b-outputs

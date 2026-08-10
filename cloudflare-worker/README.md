@@ -134,7 +134,9 @@ file with `CONTROL_BASE_URL`, one server-created Worker ID and credential, a
 unique `WORKER_INSTANCE_ID`, the existing remote `REDIS_URL`, and local
 Anthropic key/token, base URL, and model. The Worker downloads exact Attempt
 resources over HTTPS, runs the local executor, and uploads results to R2
-quarantine. None of the Redis or provider secrets are sent to Cloudflare.
+quarantine. None of the Redis or provider secrets are sent to Cloudflare. Each
+Worker has isolated input/output named volumes; per-task `volume-subpath`
+mounts make the same task files visible to the Worker and its executor.
 
 ImageJudge uses the same Worker under an isolated `/image-judge/*` namespace:
 

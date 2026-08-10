@@ -339,6 +339,21 @@ class CloudflareDockerWorker:
     def stop(self) -> None:
         self.stop_event.set()
 
+    async def _connect_until_available(self) -> bool:
+        while not self.stop_event.is_set():
+            try:
+                await self.control.connect()
+                return True
+            except ControlPlaneError as exc:
+                if exc.code not in {"WORKER_ALREADY_CONNECTED", "WORKER_SESSION_LOST", "WORKER_SESSION_REQUIRED"}:
+                    raise
+                logger.warning("Worker control session is occupied; retrying: %s", _safe_error(exc))
+                try:
+                    await asyncio.wait_for(self.stop_event.wait(), timeout=2)
+                except asyncio.TimeoutError:
+                    pass
+        return False
+
     async def run_forever(self) -> None:
         self.config.work_root.mkdir(parents=True, exist_ok=True)
         self.config.output_root.mkdir(parents=True, exist_ok=True)
@@ -346,7 +361,8 @@ class CloudflareDockerWorker:
         if redis_connected:
             self.config.capabilities.append("redis-online")
         logger.info("Connecting Worker %s in namespace %s", self.config.worker_id, self.config.namespace)
-        await self.control.connect()
+        if not await self._connect_until_available():
+            return
         logger.info("Worker %s connected", self.config.worker_id)
         try:
             while not self.stop_event.is_set():
@@ -364,8 +380,7 @@ class CloudflareDockerWorker:
                 except ControlPlaneError as exc:
                     if exc.code in {"WORKER_SESSION_LOST", "WORKER_SESSION_REQUIRED", "WORKER_ALREADY_CONNECTED"}:
                         logger.warning("Worker control session needs reconnect: %s", _safe_error(exc))
-                        await asyncio.sleep(2)
-                        await self.control.connect()
+                        await self._connect_until_available()
                     else:
                         logger.warning("Worker control request failed: %s", _safe_error(exc))
                         await asyncio.sleep(self.config.poll_interval)

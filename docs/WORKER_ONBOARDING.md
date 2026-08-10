@@ -47,6 +47,10 @@ docker compose -f docker-compose.cloudflare-workers.yml up -d --build
 docker compose -f docker-compose.cloudflare-workers.yml logs -f worker-a worker-b
 ```
 
+这套 compose 为两个 Worker 各自创建独立的输入和输出 named volume，并按任务
+子目录挂载到实际执行容器；不要把两个 Worker 改成共享同一个 volume，也不要
+删掉 `/var/run/docker.sock` 挂载，否则 Worker 无法启动本地任务执行器。
+
 配置含义：
 
 - `CONTROL_BASE_URL` 是 Cloudflare Worker 控制/API 地址，不是 D1 的直接 SQL

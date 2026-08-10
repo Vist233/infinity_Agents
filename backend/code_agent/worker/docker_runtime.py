@@ -14,6 +14,14 @@ from typing import Any, AsyncIterator, Dict, Optional
 logger = logging.getLogger(__name__)
 
 
+def _volume_subpath(path: str, volume_root: str, label: str) -> str:
+    """Return a safe task-relative path for Docker's volume-subpath mount."""
+    relative = os.path.relpath(os.path.normpath(path), os.path.normpath(volume_root))
+    if relative in {".", ""} or relative == ".." or relative.startswith(f"..{os.sep}"):
+        raise ValueError(f"{label} must be inside its configured volume root")
+    return relative.replace(os.sep, "/")
+
+
 async def run_docker_task(
     task_id: str,
     task_spec_id: str,
@@ -87,6 +95,7 @@ async def run_docker_task(
     # Anthropic credentials; in that mode the values remain in the local
     # Worker environment and are inherited by name, never placed in Docker
     # command arguments or sent to the Cloudflare control plane.
+    runtime_env = os.environ.copy()
     attempt_env = {
         "ATTEMPT_GATEWAY_URL": "ANTHROPIC_BASE_URL",
         "ATTEMPT_GATEWAY_TOKEN": "ANTHROPIC_AUTH_TOKEN",
@@ -95,7 +104,10 @@ async def run_docker_task(
     for source_name, target_name in attempt_env.items():
         value = os.getenv(source_name, "").strip()
         if value:
-            cmd += ["-e", f"{target_name}={value}"]
+            # Docker inherits the value from the CLI process when only the
+            # variable name is supplied. Keep the secret out of argv, where it
+            # would be visible in process listings and Docker diagnostics.
+            runtime_env[target_name] = value
 
     for provider_name in (
         "ANTHROPIC_API_KEY",
@@ -105,15 +117,30 @@ async def run_docker_task(
     ):
         # Supplying only the variable name makes Docker inherit the value from
         # the local Worker process without exposing the secret in argv.
-        if os.getenv(provider_name, "").strip():
+        if runtime_env.get(provider_name, "").strip():
             cmd += ["-e", provider_name]
 
-    cmd += [
-        "-v", f"{work_dir}:{input_mount}:ro",
-        "-v", f"{out_dir}:{output_mount}",
-        docker_image,
-        "claude", "--print", prompt,
-    ]
+    input_volume = os.getenv("CODE_AGENT_INPUT_VOLUME", "").strip()
+    output_volume = os.getenv("CODE_AGENT_OUTPUT_VOLUME", "").strip()
+    if bool(input_volume) != bool(output_volume):
+        raise ValueError("CODE_AGENT_INPUT_VOLUME and CODE_AGENT_OUTPUT_VOLUME must be configured together")
+    if input_volume:
+        input_root = os.getenv("CODE_AGENT_INPUT_VOLUME_ROOT", "").strip()
+        output_root = os.getenv("CODE_AGENT_OUTPUT_VOLUME_ROOT", "").strip()
+        if not input_root or not output_root:
+            raise ValueError("Named Worker volumes require configured volume roots")
+        input_subpath = _volume_subpath(work_dir, input_root, "case_dir")
+        output_subpath = _volume_subpath(out_dir, output_root, "output_dir")
+        cmd += [
+            "--mount", f"type=volume,source={input_volume},target={input_mount},volume-subpath={input_subpath},readonly",
+            "--mount", f"type=volume,source={output_volume},target={output_mount},volume-subpath={output_subpath}",
+        ]
+    else:
+        cmd += [
+            "-v", f"{work_dir}:{input_mount}:ro",
+            "-v", f"{out_dir}:{output_mount}",
+        ]
+    cmd += [docker_image, "claude", "--print", prompt]
 
     logger.info("Starting Docker container for task %s", task_id)
 
@@ -122,6 +149,7 @@ async def run_docker_task(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=runtime_env,
         )
     except FileNotFoundError:
         yield {"type": "error", "message": "Docker not found. Ensure Docker is installed and running."}

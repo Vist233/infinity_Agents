@@ -795,6 +795,14 @@ async function handleRotateWorkerCredential(workerId: string, request: Request, 
      WHERE worker_id = ?1 AND namespace = ?2 AND user_id = ?3 AND status <> 'revoked'`
   ).bind(workerId, namespace, user.userId, await sha256(credential), credentialCiphertext).run();
   if ((result.meta?.changes ?? 0) !== 1) return errorJson("Worker credential rotation failed", 409, "ENROLLMENT_ROTATION_CONFLICT");
+  // Rotation changes the bearer credential immediately. Invalidate the old
+  // process session as well, so the new credential can connect without
+  // waiting for the previous 90-second lease to expire.
+  await env.DB.prepare(
+    `UPDATE worker_sessions
+     SET disconnected_at = ?3, lease_expires_at = ?3
+     WHERE worker_id = ?1 AND namespace = ?2`
+  ).bind(workerId, namespace, nowSeconds()).run();
   return json({
     worker_id: workerId,
     namespace,
