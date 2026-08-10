@@ -71,6 +71,7 @@ function ExampleList({ selectedId, onSelect }: { selectedId: string; onSelect: (
             className={`w-full rounded-xl px-2.5 py-2.5 text-left transition-colors ${selectedId === example.id ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-100/80 hover:text-zinc-900"}`}
             onClick={() => onSelect(example.id)}
             data-testid={`image-example-${example.id}`}
+            data-workspace-drawer-dismiss="true"
           >
             <span className="block truncate text-sm font-medium">{example.title}</span>
             <span className={`mt-1 block truncate text-xs ${selectedId === example.id ? "text-zinc-300" : "text-zinc-400"}`}>{example.summary}</span>

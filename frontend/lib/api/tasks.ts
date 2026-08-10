@@ -71,6 +71,7 @@ export interface WorkerRegistration {
   last_seen_at: string | null;
   created_at: string | null;
   revoked_at: string | null;
+  credential_available?: boolean;
 }
 
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
@@ -211,6 +212,19 @@ export async function createWorkerEnrollment(input: { namespace: string }): Prom
 export async function listWorkerEnrollments(): Promise<WorkerRegistration[]> {
   const data = await requestJson<{ workers: WorkerRegistration[] }>(`${getApiBase()}/api/worker-enrollments`);
   return data.workers || [];
+}
+
+export async function getWorkerCredential(workerId: string, namespace: string): Promise<WorkerEnrollmentResponse> {
+  return requestJson<WorkerEnrollmentResponse>(
+    `${getApiBase()}/api/worker-enrollments/${encodeURIComponent(workerId)}/credential?namespace=${encodeURIComponent(namespace)}`,
+  );
+}
+
+export async function rotateWorkerCredential(workerId: string, namespace: string): Promise<WorkerEnrollmentResponse> {
+  return requestJson<WorkerEnrollmentResponse>(
+    `${getApiBase()}/api/worker-enrollments/${encodeURIComponent(workerId)}/rotate?namespace=${encodeURIComponent(namespace)}`,
+    { method: "POST" },
+  );
 }
 
 export function artifactDownloadUrl(artifactId: string): string {

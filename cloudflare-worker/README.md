@@ -63,9 +63,13 @@ POST /api/worker-enrollments
     "credential_expires_at": null, "persistent": true, "one_time": false }
 ```
 
-The raw credential is never stored in D1 or returned by the list endpoint;
-`worker_registrations` stores only its SHA-256 digest. It must not be committed
-or placed in a browser bundle. Subsequent Worker requests use
+The raw credential is never stored as plaintext in D1 or returned by the list
+endpoint. `worker_registrations` stores its SHA-256 digest plus an AES-GCM
+encrypted copy; the encryption key is the `WORKER_CREDENTIAL_ENCRYPTION_KEY`
+Cloudflare Secret and never enters D1, the browser bundle, or logs. The owner
+can explicitly retrieve or rotate the persistent credential through the
+authenticated Task Center API. It must not be committed or placed in a browser
+bundle. Subsequent Worker requests use
 `Authorization: Bearer <worker_credential>` and the control flow is:
 
 ```text

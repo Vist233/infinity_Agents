@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/lib/i18n";
 import {
   createWorkerEnrollment,
+  getWorkerCredential,
   listWorkerEnrollments,
+  rotateWorkerCredential,
   type WorkerEnrollmentResponse,
   type WorkerRegistration,
 } from "@/lib/api/tasks";
@@ -37,6 +39,9 @@ export function WorkerEnrollmentPanel() {
   const [workers, setWorkers] = useState<WorkerRegistration[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [savedCopiedWorkerId, setSavedCopiedWorkerId] = useState<string | null>(null);
+  const [credentialWorkerId, setCredentialWorkerId] = useState<string | null>(null);
+  const [credentialError, setCredentialError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [loadingWorkers, setLoadingWorkers] = useState(false);
 
@@ -81,6 +86,23 @@ export function WorkerEnrollmentPanel() {
       setResult({ ...result, worker_credential: "" });
     } catch {
       setCopied(false);
+    }
+  }
+
+  async function copySavedCredential(worker: WorkerRegistration) {
+    setCredentialWorkerId(worker.worker_id);
+    setCredentialError(null);
+    try {
+      const response = worker.credential_available
+        ? await getWorkerCredential(worker.worker_id, worker.namespace)
+        : await rotateWorkerCredential(worker.worker_id, worker.namespace);
+      await navigator.clipboard.writeText(response.worker_credential);
+      setSavedCopiedWorkerId(worker.worker_id);
+      await loadWorkers();
+    } catch (err) {
+      setCredentialError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCredentialWorkerId(null);
     }
   }
 
@@ -151,6 +173,7 @@ export function WorkerEnrollmentPanel() {
                 <RefreshCw size={13} className={loadingWorkers ? "animate-spin" : ""} />
               </Button>
             </div>
+            {credentialError && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{t("tasks.enrollmentCredentialFailed")}: {credentialError}</div>}
             {workers.length === 0 && !loadingWorkers && <div className="text-xs text-amber-900/70">{t("tasks.enrollmentNoExisting")}</div>}
             {workers.length > 0 && (
               <div className="space-y-1">
@@ -165,6 +188,22 @@ export function WorkerEnrollmentPanel() {
                         {t(presenceLabelKey(worker.presence) as never)}
                       </span>
                       <span className="text-amber-900/70">{t(registrationStatusLabelKey(worker.status) as never)}</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-[11px] text-amber-900"
+                        disabled={credentialWorkerId === worker.worker_id}
+                        onClick={() => { void copySavedCredential(worker); }}
+                      >
+                        {credentialWorkerId === worker.worker_id
+                          ? t("tasks.enrollmentIssuing")
+                          : savedCopiedWorkerId === worker.worker_id
+                            ? t("tasks.enrollmentCopied")
+                            : worker.credential_available
+                              ? t("tasks.enrollmentCopySaved")
+                              : t("tasks.enrollmentRotate")}
+                      </Button>
                     </div>
                   </div>
                 ))}

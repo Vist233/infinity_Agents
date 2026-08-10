@@ -94,6 +94,7 @@ export function SessionList({
                   className="flex-1 text-left text-sm truncate disabled:opacity-50"
                   title={session.title}
                   disabled={editingSessionId === session.session_id}
+                  data-workspace-drawer-dismiss="true"
                 >
                   {session.title || t("session.untitled")}
                 </button>

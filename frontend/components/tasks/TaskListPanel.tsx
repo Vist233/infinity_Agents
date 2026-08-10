@@ -48,7 +48,7 @@ export function TaskListPanel({ tasks, loading, error, selectedTaskId = null, on
       </div>
 
       <div className="mt-2 flex items-center gap-2">
-        <Button type="button" size="sm" className="h-9 min-w-0 flex-1 justify-start gap-1.5 rounded-lg px-3" onClick={onNewTask} data-testid="new-task-button">
+        <Button type="button" size="sm" className="h-9 min-w-0 flex-1 justify-start gap-1.5 rounded-lg px-3" onClick={onNewTask} data-testid="new-task-button" data-workspace-drawer-dismiss="true">
           <Plus size={14} />
           <span>{t("tasks.newTask")}</span>
         </Button>
@@ -76,6 +76,7 @@ export function TaskListPanel({ tasks, loading, error, selectedTaskId = null, on
             onClick={() => onSelect(task)}
             title={task.title}
             aria-current={selectedTaskId === task.task_id ? "true" : undefined}
+            data-workspace-drawer-dismiss="true"
           >
             <div className="flex items-start justify-between gap-2">
               <span className="min-w-0 truncate text-xs font-medium text-zinc-700">{task.title}</span>

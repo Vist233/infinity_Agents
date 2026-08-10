@@ -69,6 +69,65 @@ async function sha256(value: ArrayBuffer | Uint8Array | string): Promise<string>
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+const WORKER_CREDENTIAL_CIPHERTEXT_VERSION = "v1";
+
+function base64UrlEncode(value: Uint8Array): string {
+  let binary = "";
+  for (const byte of value) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+function base64UrlDecode(value: string): Uint8Array | null {
+  try {
+    const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
+    const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+    const binary = atob(padded);
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
+async function workerCredentialKey(env: Env): Promise<CryptoKey> {
+  const raw = base64UrlDecode(String(env.WORKER_CREDENTIAL_ENCRYPTION_KEY ?? "").trim());
+  if (!raw || raw.byteLength !== 32) {
+    throw new Error("WORKER_CREDENTIAL_ENCRYPTION_KEY must be a base64url-encoded 32-byte key");
+  }
+  return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+async function encryptWorkerCredential(credential: string, env: Env): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    await workerCredentialKey(env),
+    new TextEncoder().encode(credential),
+  );
+  return [
+    WORKER_CREDENTIAL_CIPHERTEXT_VERSION,
+    base64UrlEncode(iv),
+    base64UrlEncode(new Uint8Array(ciphertext)),
+  ].join(".");
+}
+
+async function decryptWorkerCredential(ciphertext: string, env: Env): Promise<string | null> {
+  const [version, ivText, valueText] = ciphertext.split(".");
+  if (version !== WORKER_CREDENTIAL_CIPHERTEXT_VERSION || !ivText || !valueText) return null;
+  const iv = base64UrlDecode(ivText);
+  const value = base64UrlDecode(valueText);
+  if (!iv || iv.byteLength !== 12 || !value) return null;
+  try {
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv },
+      await workerCredentialKey(env),
+      value,
+    );
+    return new TextDecoder().decode(plaintext);
+  } catch {
+    return null;
+  }
+}
+
 async function jsonBody(request: Request): Promise<Record<string, unknown> | null> {
   try {
     const value = await request.json();
@@ -587,14 +646,20 @@ async function handleWorkerEnrollment(request: Request, env: Env, user: AuthedUs
   const workerId = `worker-${taskId()}`;
   const credential = `wc_${taskId().replaceAll("-", "")}${taskId().replaceAll("-", "")}`;
   const credentialHash = await sha256(credential);
+  let credentialCiphertext: string;
+  try {
+    credentialCiphertext = await encryptWorkerCredential(credential, env);
+  } catch {
+    return errorJson("Persistent Worker credential storage is not configured", 503, "WORKER_CREDENTIAL_STORAGE_UNAVAILABLE");
+  }
   const trustLevel = workerTrustLevel(user);
   try {
     await env.DB.prepare(
       `INSERT INTO worker_registrations
-        (worker_id, namespace, user_id, credential_hash, credential_expires_at,
+        (worker_id, namespace, user_id, credential_hash, credential_ciphertext, credential_expires_at,
          trust_level, status, capabilities_json, created_at)
-       VALUES (?1, ?2, ?3, ?4, NULL, ?5, 'active', '[]', ?6)`
-    ).bind(workerId, namespace, user.userId, credentialHash, trustLevel, nowSeconds()).run();
+       VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, 'active', '[]', ?7)`
+    ).bind(workerId, namespace, user.userId, credentialHash, credentialCiphertext, trustLevel, nowSeconds()).run();
   } catch {
     return errorJson("Worker registration could not be saved", 503, "WORKER_REGISTRATION_UNAVAILABLE");
   }
@@ -619,6 +684,7 @@ type WorkerRegistrationRow = {
   last_seen_at: number | null;
   created_at: number;
   revoked_at: number | null;
+  credential_ciphertext?: string | null;
 };
 
 export type WorkerPresence = "online" | "offline" | "never_seen";
@@ -644,6 +710,7 @@ function publicWorkerRegistration(row: WorkerRegistrationRow, now = nowSeconds()
     last_seen_at: iso(row.last_seen_at),
     created_at: iso(row.created_at),
     revoked_at: iso(row.revoked_at),
+    credential_available: Boolean(row.credential_ciphertext),
   };
 }
 
@@ -651,7 +718,7 @@ async function handleListWorkerEnrollments(env: Env, user: AuthedUser): Promise<
   const now = nowSeconds();
   const persistent = await env.DB.prepare(
     `SELECT worker_id, namespace, trust_level, status, credential_expires_at,
-            last_seen_at, created_at, revoked_at
+            last_seen_at, created_at, revoked_at, credential_ciphertext
      FROM worker_registrations WHERE user_id = ?1`
   ).bind(user.userId).all<WorkerRegistrationRow>();
   const legacy = await env.DB.prepare(
@@ -674,6 +741,68 @@ async function handleListWorkerEnrollments(env: Env, user: AuthedUser): Promise<
     .map((worker) => publicWorkerRegistration(worker, now))
     .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
   return json({ workers });
+}
+
+async function handleWorkerCredential(workerId: string, request: Request, env: Env, user: AuthedUser): Promise<Response> {
+  const namespace = new URL(request.url).searchParams.get("namespace") || "";
+  if (!namespace) return errorJson("namespace is required", 400, "INVALID_ENROLLMENT");
+  const row = await env.DB.prepare(
+    `SELECT worker_id, namespace, credential_ciphertext
+     FROM worker_registrations
+     WHERE worker_id = ?1 AND namespace = ?2 AND user_id = ?3
+       AND status = 'active' AND revoked_at IS NULL`
+  ).bind(workerId, namespace, user.userId).first<{
+    worker_id: string;
+    namespace: string;
+    credential_ciphertext: string | null;
+  }>();
+  if (!row) return errorJson("Active Worker registration not found", 404, "ENROLLMENT_NOT_FOUND");
+  if (!row.credential_ciphertext) return errorJson("This Worker credential must be rotated before it can be recovered", 409, "CREDENTIAL_NOT_RECOVERABLE");
+  const credential = await decryptWorkerCredential(row.credential_ciphertext, env);
+  if (!credential) return errorJson("Persistent Worker credential could not be decrypted", 503, "WORKER_CREDENTIAL_STORAGE_UNAVAILABLE");
+  return json({
+    worker_id: row.worker_id,
+    namespace: row.namespace,
+    worker_credential: credential,
+    credential_expires_at: null,
+    persistent: true,
+    one_time: false,
+  });
+}
+
+async function handleRotateWorkerCredential(workerId: string, request: Request, env: Env, user: AuthedUser): Promise<Response> {
+  const namespace = new URL(request.url).searchParams.get("namespace") || "";
+  if (!namespace) return errorJson("namespace is required", 400, "INVALID_ENROLLMENT");
+  const current = await env.DB.prepare(
+    `SELECT worker_id, namespace, status FROM worker_registrations
+     WHERE worker_id = ?1 AND namespace = ?2 AND user_id = ?3`
+  ).bind(workerId, namespace, user.userId).first<{ worker_id: string; namespace: string; status: string }>();
+  if (!current) return errorJson("Worker registration not found", 404, "ENROLLMENT_NOT_FOUND");
+  if (current.status === "revoked") return errorJson("Revoked Worker registration cannot be rotated", 409, "ENROLLMENT_REVOKED");
+
+  const credential = `wc_${taskId().replaceAll("-", "")}${taskId().replaceAll("-", "")}`;
+  let credentialCiphertext: string;
+  try {
+    credentialCiphertext = await encryptWorkerCredential(credential, env);
+  } catch {
+    return errorJson("Persistent Worker credential storage is not configured", 503, "WORKER_CREDENTIAL_STORAGE_UNAVAILABLE");
+  }
+  const result = await env.DB.prepare(
+    `UPDATE worker_registrations
+     SET credential_hash = ?4, credential_ciphertext = ?5,
+         credential_expires_at = NULL, status = 'active', revoked_at = NULL,
+         last_seen_at = NULL
+     WHERE worker_id = ?1 AND namespace = ?2 AND user_id = ?3 AND status <> 'revoked'`
+  ).bind(workerId, namespace, user.userId, await sha256(credential), credentialCiphertext).run();
+  if ((result.meta?.changes ?? 0) !== 1) return errorJson("Worker credential rotation failed", 409, "ENROLLMENT_ROTATION_CONFLICT");
+  return json({
+    worker_id: workerId,
+    namespace,
+    worker_credential: credential,
+    credential_expires_at: null,
+    persistent: true,
+    one_time: false,
+  });
 }
 
 async function handleRevokeEnrollment(workerId: string, request: Request, env: Env, user: AuthedUser): Promise<Response> {
@@ -746,6 +875,10 @@ export async function handleTaskApi(request: Request, env: Env, user: AuthedUser
   if (artifactMatch && method === "GET") return handleArtifact(decodeURIComponent(artifactMatch[1]), env, user);
   if (method === "GET" && pathname === "/api/worker-enrollments") return handleListWorkerEnrollments(env, user);
   if (method === "POST" && pathname === "/api/worker-enrollments") return handleWorkerEnrollment(request, env, user);
+  const credentialMatch = pathname.match(/^\/api\/worker-enrollments\/([^/]+)\/credential$/);
+  if (credentialMatch && method === "GET") return handleWorkerCredential(decodeURIComponent(credentialMatch[1]), request, env, user);
+  const rotateMatch = pathname.match(/^\/api\/worker-enrollments\/([^/]+)\/rotate$/);
+  if (rotateMatch && method === "POST") return handleRotateWorkerCredential(decodeURIComponent(rotateMatch[1]), request, env, user);
   const revokeMatch = pathname.match(/^\/api\/worker-enrollments\/([^/]+)\/revoke$/);
   if (revokeMatch && method === "POST") return handleRevokeEnrollment(decodeURIComponent(revokeMatch[1]), request, env, user);
 

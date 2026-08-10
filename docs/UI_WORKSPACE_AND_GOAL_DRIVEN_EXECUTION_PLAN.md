@@ -142,7 +142,7 @@ Worker 是当前登录用户集群中的机器身份，绑定关系必须由服�
 - Worker 停止后不自动注销、不删除、不生成新 ID，只显示“已注册 · 离线”；重新启动原配置后恢复为在线；
 - 在线窗口使用可配置的心跳超时（当前心跳间隔 30 秒，可先按约 90 秒判断在线），不需要为离线状态增加数据库枚举；
 - 凭证不依赖 Cookie 或 Local Storage 作为权限判断，浏览器只保存 UI 状态；
-- 持久 Worker 凭证只在注册/轮换响应中交给用户，服务端在数据库保存其摘要（可长期校验、可单独撤销），客户端 Worker 将原始凭证保存为本机受限配置；数据库不保存可直接还原的明文 secret；
+- 持久 Worker 凭证只在注册/轮换响应中交给用户，服务端在数据库保存 AES-GCM 加密副本和校验摘要（可长期校验、可单独撤销）；加密密钥只在 Cloudflare Secret 中；本人可以显式重新取回并复制已登记 Worker 的持久凭证，客户端 Worker 将原始凭证保存为本机受限配置；数据库不保存明文 secret；
 - 每次 Control API 请求都校验 Worker 凭证、Namespace、所属用户、状态和任务授权，不能只相信前端传入的 Namespace；
 - 任务分配只面向最近在线且未 revoked/draining 的 Worker；Worker 突然掉线时由现有 lease/fencing 机制恢复任务，不把掉线误报为注销；
 - Worker 可以在自己的机器上创建 Docker Job，但不能因此获得其他用户的 Worker、Task、数据库或 Redis 权限；
@@ -410,7 +410,7 @@ node --test worker-client.test.mjs
 - 本轮静态浏览器检查确认 `/`、`/code-agent/`、`/image-judge/`、`/code-agent/tasks/` 和 `/downloads/` 使用同一 `320px` 桌面工作区侧栏；任务详情仍保留左侧任务列表；下载入口进入独立页面，不再把 ImageJudge 示例页当作安装程序页面。
 - Playwright 本地真实服务回归 **7/7**通过；桌面浏览器 Subagent 在 `/`、`/code-agent`、`/image-judge` 上实际点击并创建 Namespace-only Worker 后通过；手机浏览器 Subagent 在 **390×844** 上通过抽屉、遮罩、Escape、任务和 ImageJudge 流程。
 - Zeal Review 首轮发现本地 Worker 兼容接口、回环 CSRF 来源和权限隔离问题；修复后增量 Review **PASS**，桌面浏览器也重新 **PASS**。
-- 本地隔离 API 的 Worker 注册结果写入 PostgreSQL，只返回一次原始凭证；列表按用户隔离、角色重新投影、未连接状态显示为 `never_seen`。
+- 本地隔离 API 的 Worker 注册结果写入 PostgreSQL，只返回一次原始凭证；Cloudflare 持久注册使用 D1 的加密凭证副本 + hash，并可由本人显式重新取回；列表按用户隔离、角色重新投影、未连接状态显示为 `never_seen`。
 - 原有 Docker 验收栈的两个本地 Worker 已启动并完成 Redis 心跳存在/停止 TTL/恢复检查；未删除容器、未清空 PostgreSQL 或 Redis。已有历史任务/outbox 数据使“清空后置零”的 preflight 不适用，本轮保留原数据并记录为跳过。
 - 后端目标测试 `tests/test_task_api.py tests/test_auth_flow.py tests/test_security_boundaries.py` 通过 **44 项**；完整后端套件未作为通过项宣称，因为其中一部分需要真实数据库/故障注入环境。
 - 本轮线上 Task Center 通过持久注册接口在同一 Namespace `mac-case23-20260810` 下创建了两个数据库注册记录：`worker-e4e9b008-9120-41cc-a729-a116030fd4e6` 和 `worker-a8fa0e84-b1e0-4e91-b9bb-81b30ea38534`。两条记录均为普通用户的一般信任、永久登记、当前尚未连接；没有调用一次性 token 接口。

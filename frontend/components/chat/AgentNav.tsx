@@ -35,6 +35,7 @@ export function AgentNav({ onNavigate, active }: AgentNavProps) {
                   : "text-zinc-600 hover:bg-zinc-100/80 hover:text-zinc-900"
               }`}
               title={t(item.labelKey)}
+              aria-current={selected ? "page" : undefined}
               onClick={() => onNavigate(item.path)}
             >
               <Icon size={16} />

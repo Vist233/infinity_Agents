@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, CheckCircle2, RefreshCw, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,7 @@ export default function TaskDetailPage() {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [tasksError, setTasksError] = useState<string | null>(null);
+  const latestTaskIdRef = useRef<string | null>(null);
 
   const loadTasks = useCallback(async () => {
     try {
@@ -53,20 +54,36 @@ export default function TaskDetailPage() {
   }, []);
 
   const load = useCallback(async () => {
-    if (!taskId) return;
+    const requestedTaskId = taskId;
+    if (!requestedTaskId) {
+      setTask(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      setTask(await getJson<TaskDetail>(`/api/tasks/${encodeURIComponent(taskId)}`));
+      const nextTask = await getJson<TaskDetail>(`/api/tasks/${encodeURIComponent(requestedTaskId)}`);
+      if (latestTaskIdRef.current !== requestedTaskId) return;
+      setTask(nextTask);
     } catch (err) {
+      if (latestTaskIdRef.current !== requestedTaskId) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (latestTaskIdRef.current === requestedTaskId) setLoading(false);
     }
   }, [taskId]);
 
   useEffect(() => {
-    setTaskId(new URLSearchParams(window.location.search).get("task_id"));
+    const syncTaskIdFromUrl = () => {
+      const nextTaskId = new URLSearchParams(window.location.search).get("task_id");
+      latestTaskIdRef.current = nextTaskId;
+      setTaskId(nextTaskId);
+    };
+    syncTaskIdFromUrl();
+    window.addEventListener("popstate", syncTaskIdFromUrl);
+    return () => window.removeEventListener("popstate", syncTaskIdFromUrl);
   }, []);
 
   useEffect(() => {
@@ -92,6 +109,7 @@ export default function TaskDetailPage() {
   );
 
   const selectTask = (nextTask: TaskItem) => {
+    latestTaskIdRef.current = nextTask.task_id;
     router.push(`/code-agent/tasks/?task_id=${encodeURIComponent(nextTask.task_id)}`);
     setTaskId(nextTask.task_id);
   };
