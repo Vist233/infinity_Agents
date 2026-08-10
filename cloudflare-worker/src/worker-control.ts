@@ -18,6 +18,8 @@ import { workerTrustLevelFromRole } from "./tasks";
 
 const OFFER_TTL_SECONDS = 30;
 const LEASE_TTL_SECONDS = 120;
+export const WORKER_SESSION_TTL_SECONDS = 90;
+export const WORKER_HEARTBEAT_INTERVAL_SECONDS = 30;
 const CREDENTIAL_TTL_SECONDS = 30 * 24 * 60 * 60;
 const DEFAULT_UPLOAD_LIMIT = 25 * 1024 * 1024;
 const MAX_ERROR_LENGTH = 500;
@@ -29,6 +31,8 @@ interface WorkerContext {
   userId: string;
   trustLevel: string;
   status: string;
+  persistent: boolean;
+  sessionId: string | null;
 }
 
 interface EnrollmentRow {
@@ -123,6 +127,11 @@ function capabilities(value: unknown): string[] {
     .slice(0, MAX_CAPABILITIES);
 }
 
+function workerSessionId(request: Request): string | null {
+  const value = safeText(request.headers.get("x-worker-session"), 160);
+  return value || null;
+}
+
 async function authenticateWorker(request: Request, env: Env): Promise<WorkerContext | null> {
   const token = bearerToken(request);
   if (!token) return null;
@@ -143,6 +152,8 @@ async function authenticateWorker(request: Request, env: Env): Promise<WorkerCon
       userId: persistent.user_id,
       trustLevel: workerTrustLevelFromRole(persistent.current_role),
       status: persistent.status,
+      persistent: true,
+      sessionId: workerSessionId(request),
     };
   }
 
@@ -162,7 +173,146 @@ async function authenticateWorker(request: Request, env: Env): Promise<WorkerCon
     userId: legacy.user_id,
     trustLevel: workerTrustLevelFromRole(legacy.current_role),
     status: legacy.status,
+    persistent: false,
+    sessionId: workerSessionId(request),
   };
+}
+
+type WorkerSessionRow = {
+  worker_id: string;
+  namespace: string;
+  session_id: string;
+  instance_id: string;
+  user_id: string;
+  version: string | null;
+  capabilities_json: string;
+  connected_at: number;
+  last_seen_at: number;
+  lease_expires_at: number;
+  disconnected_at: number | null;
+};
+
+function sessionError(message: string, code: string, status = 409): Response {
+  return errorJson(message, status, code);
+}
+
+async function claimWorkerSession(
+  request: Request,
+  env: Env,
+  context: WorkerContext,
+): Promise<Response> {
+  const body = await bodyJson(request);
+  const suppliedWorkerId = safeText(body?.worker_id, 160);
+  const suppliedNamespace = safeText(body?.namespace, 160);
+  const instanceId = safeText(body?.instance_id, 160);
+  const version = safeText(body?.version, 120) || "unknown";
+  const workerCapabilities = capabilities(body?.capabilities);
+  if ((suppliedWorkerId && suppliedWorkerId !== context.workerId)
+    || (suppliedNamespace && suppliedNamespace !== context.namespace)) {
+    return errorJson("Worker identity does not match its credential", 409, "WORKER_IDENTITY_MISMATCH");
+  }
+  if (!instanceId || instanceId.length < 8 || /\s/.test(instanceId)) {
+    return errorJson("instance_id is required", 400, "INVALID_WORKER_SESSION");
+  }
+
+  const now = nowSeconds();
+  const sessionId = id();
+  const result = await env.DB.prepare(
+    `INSERT INTO worker_sessions
+      (worker_id, namespace, session_id, instance_id, user_id, version,
+       capabilities_json, connected_at, last_seen_at, lease_expires_at, disconnected_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, NULL)
+     ON CONFLICT(worker_id, namespace) DO UPDATE SET
+       session_id = excluded.session_id,
+       instance_id = excluded.instance_id,
+       user_id = excluded.user_id,
+       version = excluded.version,
+       capabilities_json = excluded.capabilities_json,
+       connected_at = excluded.connected_at,
+       last_seen_at = excluded.last_seen_at,
+       lease_expires_at = excluded.lease_expires_at,
+       disconnected_at = NULL
+     WHERE worker_sessions.instance_id = ?4
+        OR worker_sessions.lease_expires_at <= ?8`
+  ).bind(
+    context.workerId,
+    context.namespace,
+    sessionId,
+    instanceId,
+    context.userId,
+    version,
+    JSON.stringify(workerCapabilities),
+    now,
+    now + WORKER_SESSION_TTL_SECONDS,
+  ).run();
+  if ((result.meta?.changes ?? 0) !== 1) {
+    return sessionError(
+      "This Worker credential is already connected by another active instance",
+      "WORKER_ALREADY_CONNECTED",
+    );
+  }
+
+  await touchWorkerPresence(env, { ...context, sessionId }, now);
+  return json({
+    worker_id: context.workerId,
+    namespace: context.namespace,
+    trust_level: context.trustLevel,
+    session_id: sessionId,
+    heartbeat_interval_seconds: WORKER_HEARTBEAT_INTERVAL_SECONDS,
+    lease_expires_at: new Date((now + WORKER_SESSION_TTL_SECONDS) * 1000).toISOString(),
+    connected: true,
+  }, 201);
+}
+
+async function touchWorkerSession(
+  env: Env,
+  context: WorkerContext,
+  now = nowSeconds(),
+): Promise<boolean> {
+  if (!context.persistent) return true;
+  if (!context.sessionId) return false;
+  const result = await env.DB.prepare(
+    `UPDATE worker_sessions
+     SET last_seen_at = ?4, lease_expires_at = ?5, disconnected_at = NULL
+     WHERE worker_id = ?1 AND namespace = ?2 AND session_id = ?3
+       AND lease_expires_at > ?4`
+  ).bind(
+    context.workerId,
+    context.namespace,
+    context.sessionId,
+    now,
+    now + WORKER_SESSION_TTL_SECONDS,
+  ).run();
+  return (result.meta?.changes ?? 0) === 1;
+}
+
+async function requireActiveWorkerSession(env: Env, context: WorkerContext): Promise<Response | null> {
+  if (!context.persistent) return null;
+  if (!context.sessionId) {
+    return sessionError("Worker must complete the reverse handshake first", "WORKER_SESSION_REQUIRED", 428);
+  }
+  if (!(await touchWorkerSession(env, context))) {
+    return sessionError("Worker session is no longer active; reconnect is required", "WORKER_SESSION_LOST");
+  }
+  return null;
+}
+
+async function disconnectWorkerSession(env: Env, context: WorkerContext): Promise<Response> {
+  if (!context.persistent || !context.sessionId) return json({ disconnected: false });
+  const now = nowSeconds();
+  const result = await env.DB.prepare(
+    `UPDATE worker_sessions
+     SET disconnected_at = ?4, lease_expires_at = ?4
+     WHERE worker_id = ?1 AND namespace = ?2 AND session_id = ?3`
+  ).bind(context.workerId, context.namespace, context.sessionId, now).run();
+  if ((result.meta?.changes ?? 0) !== 1) {
+    return sessionError("Worker session is no longer active", "WORKER_SESSION_LOST");
+  }
+  await env.DB.prepare(
+    `UPDATE worker_registrations SET last_seen_at = NULL
+     WHERE worker_id = ?1 AND namespace = ?2 AND status = 'active'`
+  ).bind(context.workerId, context.namespace).run();
+  return json({ disconnected: true, worker_id: context.workerId, namespace: context.namespace });
 }
 
 function publicAttempt(row: AttemptRow, origin: string): Record<string, unknown> {
@@ -391,6 +541,21 @@ async function handlePoll(request: Request, env: Env, context: WorkerContext): P
       required_runtime: "infinity-worker-control-v1",
     }],
     poll_after_seconds: 5,
+  });
+}
+
+async function handleWorkerHeartbeat(env: Env, context: WorkerContext): Promise<Response> {
+  const sessionErrorResponse = await requireActiveWorkerSession(env, context);
+  if (sessionErrorResponse) return sessionErrorResponse;
+  await touchWorkerPresence(env, context);
+  const now = nowSeconds();
+  return json({
+    worker_id: context.workerId,
+    namespace: context.namespace,
+    trust_level: context.trustLevel,
+    heartbeat_interval_seconds: WORKER_HEARTBEAT_INTERVAL_SECONDS,
+    lease_expires_at: new Date((now + WORKER_SESSION_TTL_SECONDS) * 1000).toISOString(),
+    connected: true,
   });
 }
 
@@ -778,13 +943,24 @@ async function handleVerifiedPublish(request: Request, env: Env, attemptId: stri
 }
 
 async function workerHealth(env: Env, context: WorkerContext): Promise<Response> {
+  const sessionErrorResponse = await requireActiveWorkerSession(env, context);
+  if (sessionErrorResponse) return sessionErrorResponse;
   const now = nowSeconds();
   const attempts = await env.DB.prepare(
     `SELECT attempt_id, task_id, fencing_epoch, lease_expires_at, status
      FROM worker_attempts WHERE worker_id = ?1 AND namespace = ?2 AND status IN ('claimed', 'running') ORDER BY created_at DESC LIMIT 4`
   ).bind(context.workerId, context.namespace).all<Record<string, unknown>>();
   await touchWorkerPresence(env, context, now);
-  return json({ worker_id: context.workerId, namespace: context.namespace, trust_level: context.trustLevel, status: "active", attempts: attempts.results ?? [] });
+  return json({
+    worker_id: context.workerId,
+    namespace: context.namespace,
+    trust_level: context.trustLevel,
+    status: "active",
+    connected: context.persistent ? Boolean(context.sessionId) : true,
+    session_required: context.persistent && !context.sessionId,
+    heartbeat_interval_seconds: WORKER_HEARTBEAT_INTERVAL_SECONDS,
+    attempts: attempts.results ?? [],
+  });
 }
 
 export async function handleWorkerControlApi(request: Request, env: Env): Promise<Response> {
@@ -800,28 +976,64 @@ export async function handleWorkerControlApi(request: Request, env: Env): Promis
 
   const context = await authenticateWorker(request, env);
   if (!context) return unauthorized();
+  if (request.method === "POST" && pathname === "/api/worker/v1/connect") {
+    if (!context.persistent) return errorJson("Legacy Worker enrollments cannot create persistent sessions", 409, "WORKER_SESSION_UNSUPPORTED");
+    return claimWorkerSession(request, env, context);
+  }
+  if (request.method === "POST" && pathname === "/api/worker/v1/heartbeat") {
+    return handleWorkerHeartbeat(env, context);
+  }
+  if (request.method === "POST" && pathname === "/api/worker/v1/disconnect") {
+    return disconnectWorkerSession(env, context);
+  }
   if (request.method === "GET" && pathname === "/api/worker/v1/health") return workerHealth(env, context);
-  if (request.method === "POST" && pathname === "/api/worker/v1/poll") return handlePoll(request, env, context);
+  if (request.method === "POST" && pathname === "/api/worker/v1/poll") {
+    const sessionErrorResponse = await requireActiveWorkerSession(env, context);
+    if (sessionErrorResponse) return sessionErrorResponse;
+    return handlePoll(request, env, context);
+  }
 
   const offerMatch = pathname.match(/^\/api\/worker\/v1\/offers\/([^/]+)\/accept$/);
-  if (offerMatch && request.method === "POST") return handleAcceptOffer(request, env, context, decodeURIComponent(offerMatch[1]));
+  if (offerMatch && request.method === "POST") {
+    const sessionErrorResponse = await requireActiveWorkerSession(env, context);
+    if (sessionErrorResponse) return sessionErrorResponse;
+    return handleAcceptOffer(request, env, context, decodeURIComponent(offerMatch[1]));
+  }
 
   const heartbeatMatch = pathname.match(/^\/api\/worker\/v1\/attempts\/([^/]+)\/heartbeat$/);
-  if (heartbeatMatch && request.method === "POST") return handleHeartbeat(request, env, context, decodeURIComponent(heartbeatMatch[1]));
+  if (heartbeatMatch && request.method === "POST") {
+    const sessionErrorResponse = await requireActiveWorkerSession(env, context);
+    if (sessionErrorResponse) return sessionErrorResponse;
+    return handleHeartbeat(request, env, context, decodeURIComponent(heartbeatMatch[1]));
+  }
 
   const failureMatch = pathname.match(/^\/api\/worker\/v1\/attempts\/([^/]+)\/fail$/);
-  if (failureMatch && request.method === "POST") return handleFailure(request, env, context, decodeURIComponent(failureMatch[1]));
+  if (failureMatch && request.method === "POST") {
+    const sessionErrorResponse = await requireActiveWorkerSession(env, context);
+    if (sessionErrorResponse) return sessionErrorResponse;
+    return handleFailure(request, env, context, decodeURIComponent(failureMatch[1]));
+  }
 
   const resourceMatch = pathname.match(/^\/api\/worker\/v1\/attempts\/([^/]+)\/resources\/([^/]+)$/);
   if (resourceMatch && request.method === "GET") {
+    const sessionErrorResponse = await requireActiveWorkerSession(env, context);
+    if (sessionErrorResponse) return sessionErrorResponse;
     return handleResource(request, env, context, decodeURIComponent(resourceMatch[1]), decodeURIComponent(resourceMatch[2]));
   }
 
   const artifactMatch = pathname.match(/^\/api\/worker\/v1\/attempts\/([^/]+)\/artifacts$/);
-  if (artifactMatch && request.method === "POST") return handleArtifactUpload(request, env, context, decodeURIComponent(artifactMatch[1]));
+  if (artifactMatch && request.method === "POST") {
+    const sessionErrorResponse = await requireActiveWorkerSession(env, context);
+    if (sessionErrorResponse) return sessionErrorResponse;
+    return handleArtifactUpload(request, env, context, decodeURIComponent(artifactMatch[1]));
+  }
 
   const finalizeMatch = pathname.match(/^\/api\/worker\/v1\/attempts\/([^/]+)\/finalize$/);
-  if (finalizeMatch && request.method === "POST") return handleFinalize(request, env, context, decodeURIComponent(finalizeMatch[1]));
+  if (finalizeMatch && request.method === "POST") {
+    const sessionErrorResponse = await requireActiveWorkerSession(env, context);
+    if (sessionErrorResponse) return sessionErrorResponse;
+    return handleFinalize(request, env, context, decodeURIComponent(finalizeMatch[1]));
+  }
 
   return errorJson("Not found", 404, "NOT_FOUND");
 }

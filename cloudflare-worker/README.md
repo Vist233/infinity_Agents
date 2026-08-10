@@ -69,10 +69,17 @@ encrypted copy; the encryption key is the `WORKER_CREDENTIAL_ENCRYPTION_KEY`
 Cloudflare Secret and never enters D1, the browser bundle, or logs. The owner
 can explicitly retrieve or rotate the persistent credential through the
 authenticated Task Center API. It must not be committed or placed in a browser
-bundle. Subsequent Worker requests use
-`Authorization: Bearer <worker_credential>` and the control flow is:
+bundle.
+
+Before polling, a persistent Worker performs a reverse handshake. D1 keeps one
+short lease per `worker_id + namespace`; a second active instance using the same
+credential receives `WORKER_ALREADY_CONNECTED`. The session expires without
+revoking the durable credential when a machine stops. The control flow is:
 
 ```text
+POST /api/worker/v1/connect
+POST /api/worker/v1/heartbeat
+GET  /api/worker/v1/health
 POST /api/worker/v1/poll
 POST /api/worker/v1/offers/:offer_id/accept
 POST /api/worker/v1/attempts/:attempt_id/heartbeat
@@ -89,9 +96,9 @@ quarantine after Worker finalize. Worker finalize returns
 `verification_pending`; only a separately authenticated verifier holding the
 private `WORKER_VERIFIER_TOKEN` can independently validate and publish a
 user-visible Artifact. If that verifier secret is not configured, no Worker
-can self-promote an arbitrary result to `succeeded`. The current Cloudflare
-control plane does not expose D1, Redis, R2 parent credentials, or provider
-keys to the Worker.
+can self-promote an arbitrary result to `succeeded`. The Worker receives no D1
+or R2 parent credential. Redis and provider settings are local Worker settings;
+only non-secret capability flags and the provider model name cross the handshake.
 
 ### macOS / Windows bootstrap client
 
@@ -105,16 +112,29 @@ node worker-client.mjs configure \
   --control-url https://infinity.zhangyvjing.com \
   --worker-id worker-from-task-center \
   --namespace infinity
+node worker-client.mjs connect
 node worker-client.mjs health
 node worker-client.mjs poll
 ```
 
 On Windows, set `INFINITY_WORKER_CREDENTIAL` in the Worker service environment and
 apply a Windows ACL granting only that service account access to the config
-file. The control endpoint is HTTPS-only and the client never needs a
-Cloudflare account, D1, Redis, R2, Tunnel, Queue, or provider key. The older
+file. The control endpoint is HTTPS-only. The client config can also hold local
+`REDIS_URL`, `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`,
+`ANTHROPIC_BASE_URL`, and `ANTHROPIC_MODEL` values; only boolean capability
+signals and the non-secret model name are sent during the handshake. The older
 `enroll` command and `/api/worker/v1/enroll` endpoint remain only as a legacy
 one-time bootstrap path while pre-existing clients are migrated.
+
+### Local Docker execution
+
+`docker-compose.cloudflare-workers.yml` starts two local Docker Workers without
+PostgreSQL or a second Redis container. Each service uses a separate local env
+file with `CONTROL_BASE_URL`, one server-created Worker ID and credential, a
+unique `WORKER_INSTANCE_ID`, the existing remote `REDIS_URL`, and local
+Anthropic key/token, base URL, and model. The Worker downloads exact Attempt
+resources over HTTPS, runs the local executor, and uploads results to R2
+quarantine. None of the Redis or provider secrets are sent to Cloudflare.
 
 ImageJudge uses the same Worker under an isolated `/image-judge/*` namespace:
 

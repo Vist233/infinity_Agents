@@ -12,14 +12,14 @@
 - Infinity Agents 的浏览器产品使用 Analysis/Coding 命名；ImageJudge 继续使用
   独立的 `/image-judge/*` 命名空间、D1、KV 和 Durable Object。
 - D1 是任务事实源，R2 保存资源和隔离中的 Artifact；Redis 不作为 Cloudflare
-  binding，也不接受浏览器或学生 Worker 的连接。
+  binding。用户自有 Docker Worker 可以通过本地配置访问现有远程 Redis。
 - 任务中心提供直接创建任务卡，使用与 Agent confirmation 卡相同的
   TaskSpec/Task 上传与幂等路径，并将 `agent_confirmation=false`；Analysis
   对话中的 confirmation 卡仍保留为聊天入口。
 - Worker 注册卡默认折叠，只填写 Namespace。Namespace 可以被同一用户的多台
   Worker 复用；每台 Worker ID 和长期凭证由服务端生成并写入 D1（只存凭证摘要）。
   只有 superuser 映射到 `owner_trusted`，普通用户和学生映射到
-  `institution_trusted`。
+  `institution_trusted`。每个 Worker 凭证同时只能占用一个反向握手会话。
 
 ## 每次发布
 
@@ -80,11 +80,12 @@ curl -fsSI https://infinity.zhangyvjing.com/image-judge/
    HttpOnly；不打印 state、nonce、code 或 verifier。
 2. 未登录的 `POST /api/chat`、ImageJudge evaluate 和 Worker poll 都返回
    401；Worker 认证响应带 `WWW-Authenticate: Bearer`。
-3. 首页可见 `Analysis`、`任务执行中心`、`性状提取`，不再出现旧的
+3. 首页可见 `Analysis`、`任务执行中心`、`Image Judge`，不再出现旧的
    `PaperAgent` 标签或旧的“发送给 PaperAgent”文案。
 4. 新 Worker 注册只提交 Namespace；持久 credential 原文不落盘到 D1，之后用
-   `health`、`poll` 和 revoke 验证生命周期。同一 Namespace 下应能创建第二个
-   不同 Worker ID；旧版一次性 enrollment 仅做兼容回归。
+   `connect`、`heartbeat`、`health`、`poll` 和 revoke 验证生命周期。同一
+   Namespace 下应能创建第二个不同 Worker ID；同一凭证的第二个活动实例必须
+   返回 `WORKER_ALREADY_CONNECTED`；旧版一次性 enrollment 仅做兼容回归。
 5. `ss -ltn` 在 `zhangbot` 上只允许 Redis loopback 监听；Cloudflare Worker
    源码和构建产物不得出现 Redis/Docker/6379 直连能力。
 
@@ -99,19 +100,20 @@ node worker-client.mjs configure \
   --control-url https://infinity.zhangyvjing.com \
   --worker-id '<任务中心返回的 Worker ID>' \
   --namespace '<任务中心填写的 Namespace>'
+node worker-client.mjs connect
 node worker-client.mjs health
 node worker-client.mjs poll
 ```
 
 Windows 使用同一 Node 18+ 客户端和 HTTPS 控制面，把配置文件 ACL 限定给
-Worker 服务账号；不安装 Wrangler，不配置 Cloudflare account/API token，
-也不配置 D1、R2、Redis、Queue 或 Provider secret。客户端只保存可撤销的
-opaque Worker credential。
+Worker 服务账号；不安装 Wrangler，不配置 Cloudflare account/API token。若
+运行本地 Docker Worker，则在本地配置文件中增加远程 `REDIS_URL`、Provider
+key、Base URL 和 Model，不把这些值上传到 Cloudflare。
 
 ## Redis 与后续 Relay
 
-`zhangbot` 上的 Redis 仅由本机用户级 systemd 服务运行，使用 loopback、
-ACL、AOF、内存上限和 `noeviction`。当前 Cloudflare Worker 不直连 Redis。
-只有在 Task Relay 和 Cloudflare Tunnel、Access service-auth、D1 outbox
-重放/幂等验收都完成后，才允许接入 Redis hint；Relay 不能提供 raw Redis
-command、任务事实、用户身份或 Provider secret。
+`zhangbot` 上的 Redis 继续由本机用户级 systemd 服务运行，使用 loopback、
+ACL、AOF、内存上限和 `noeviction`。Cloudflare D1 Worker 不直接绑定 Redis；
+用户自有 Docker Worker 只在本地使用已配置的安全 Redis 地址做健康检查和任务
+运行配套。Relay 不能提供 raw Redis command、任务事实、用户身份或 Provider
+secret。

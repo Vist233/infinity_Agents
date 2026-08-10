@@ -2,6 +2,7 @@
 
 import {
   generateKeyPairSync,
+  randomUUID,
 } from "node:crypto";
 import {
   chmodSync,
@@ -23,12 +24,16 @@ Commands:
   enroll --control-url URL [--config PATH]
   configure --control-url URL --worker-id ID --namespace NS [--config PATH]
   health [--config PATH]
+  connect [--config PATH]
+  heartbeat [--config PATH]
+  disconnect [--config PATH]
   poll [--config PATH]
   accept OFFER_ID [--config PATH]
 
 configure reads INFINITY_WORKER_CREDENTIAL and writes a user-only config
-file for a persistent registration returned by the Task Center. enroll
-remains only as a legacy one-time bootstrap path.
+file for a persistent registration returned by the Task Center. Optional Redis
+and Anthropic settings are kept in that local file and never sent to the
+control plane. enroll remains only as a legacy one-time bootstrap path.
 `);
 }
 
@@ -83,6 +88,7 @@ async function requestJson(config, path, init = {}) {
   headers.set("accept", "application/json");
   if (init.body !== undefined) headers.set("content-type", "application/json");
   if (config.worker_credential) headers.set("authorization", `Bearer ${config.worker_credential}`);
+  if (config.session_id) headers.set("x-worker-session", config.session_id);
   const response = await fetch(new URL(path, `${controlUrl}/`), { ...init, headers });
   const text = await response.text();
   let payload;
@@ -100,6 +106,41 @@ async function requestJson(config, path, init = {}) {
 export class WorkerControlClient {
   constructor(config) {
     this.config = config;
+    if (!this.config.instance_id) this.config.instance_id = randomUUID();
+    if (!this.config.version) this.config.version = "https-worker-client/2";
+  }
+
+  connect() {
+    const capabilities = ["cloudflare-worker-v1", process.platform, process.arch];
+    if (this.config.redis_url) capabilities.push("redis-configured");
+    if (this.config.anthropic_api_key || this.config.anthropic_auth_token) capabilities.push("provider-configured");
+    return requestJson(this.config, "/api/worker/v1/connect", {
+      method: "POST",
+      // Provider and Redis secrets stay in the local config. Only non-secret
+      // capability signals and the model name cross the control-plane boundary.
+      body: JSON.stringify({
+        worker_id: this.config.worker_id,
+        namespace: this.config.namespace,
+        instance_id: this.config.instance_id,
+        version: this.config.version || "https-worker-client/2",
+        capabilities,
+        redis_configured: Boolean(this.config.redis_url),
+        provider_configured: Boolean(this.config.anthropic_api_key || this.config.anthropic_auth_token),
+        provider_model: this.config.anthropic_model || null,
+      }),
+    }).then((response) => {
+      this.config.session_id = response.session_id;
+      return response;
+    });
+  }
+
+  heartbeat() {
+    return requestJson(this.config, "/api/worker/v1/heartbeat", { method: "POST", body: "{}" });
+  }
+
+  disconnect() {
+    return requestJson(this.config, "/api/worker/v1/disconnect", { method: "POST", body: "{}" })
+      .finally(() => { delete this.config.session_id; });
   }
 
   health() { return requestJson(this.config, "/api/worker/v1/health"); }
@@ -172,6 +213,14 @@ async function configure(args) {
     worker_credential: credential,
     credential_expires_at: null,
     registration_mode: "persistent",
+    instance_id: option(args, "--instance-id", process.env.INFINITY_WORKER_INSTANCE_ID || randomUUID()),
+    version: process.env.INFINITY_WORKER_VERSION || "https-worker-client/2",
+    redis_url: option(args, "--redis-url", process.env.INFINITY_WORKER_REDIS_URL || process.env.REDIS_URL || null),
+    redis_namespace: option(args, "--redis-namespace", process.env.INFINITY_WORKER_REDIS_NAMESPACE || process.env.REDIS_NAMESPACE || namespace),
+    anthropic_api_key: option(args, "--anthropic-api-key", process.env.INFINITY_ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || null),
+    anthropic_auth_token: option(args, "--anthropic-auth-token", process.env.INFINITY_ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_AUTH_TOKEN || null),
+    anthropic_base_url: option(args, "--anthropic-base-url", process.env.INFINITY_ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL || null),
+    anthropic_model: option(args, "--anthropic-model", process.env.INFINITY_ANTHROPIC_MODEL || process.env.ANTHROPIC_MODEL || null),
   });
   console.log(JSON.stringify({
     worker_id: workerId,
@@ -191,12 +240,19 @@ async function main() {
   const client = new WorkerControlClient(config);
   const result = command === "health"
     ? await client.health()
+    : command === "connect"
+      ? await client.connect()
+      : command === "heartbeat"
+        ? await client.heartbeat()
+        : command === "disconnect"
+          ? await client.disconnect()
     : command === "poll"
       ? await client.poll(Number(option(args, "--slots", "1")))
       : command === "accept"
         ? await client.accept(required(args[0], "OFFER_ID"))
         : null;
   if (!result) { usage(); process.exitCode = 2; return; }
+  if (["connect", "heartbeat", "disconnect"].includes(command)) saveConfig(file, config);
   console.log(JSON.stringify(result, null, 2));
 }
 

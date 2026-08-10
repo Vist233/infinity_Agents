@@ -43,6 +43,32 @@ export interface TaskRow {
   chat_confirmation_id: string | null;
 }
 
+export interface PersistentWorkerRow {
+  worker_id: string;
+  namespace: string;
+  user_id: string;
+  credential_hash: string;
+  status: string;
+  revoked_at: number | null;
+  credential_expires_at: number | null;
+  trust_level: string;
+  last_seen_at: number | null;
+}
+
+export interface WorkerSessionRow {
+  worker_id: string;
+  namespace: string;
+  session_id: string;
+  instance_id: string;
+  user_id: string;
+  version: string | null;
+  capabilities_json: string;
+  connected_at: number;
+  last_seen_at: number;
+  lease_expires_at: number;
+  disconnected_at: number | null;
+}
+
 export interface ChatRequestIdempotencyRow {
   user_id: string;
   session_id: string;
@@ -63,6 +89,8 @@ export class FakeD1 {
   chatTaskConfirmations = new Map<string, ChatTaskConfirmationRow>();
   chatRequestIdempotency = new Map<string, ChatRequestIdempotencyRow>();
   tasks = new Map<string, TaskRow>();
+  workerRegistrations = new Map<string, PersistentWorkerRow>();
+  workerSessions = new Map<string, WorkerSessionRow>();
   private messageSeq = 0;
 
   seedChatSession(id: string, userId: string, title = "Test session"): void {
@@ -87,6 +115,13 @@ export class FakeD1 {
       const confirmation = this.chatTaskConfirmations.get(chatConfirmationId);
       if (confirmation) confirmation.task_id = taskId;
     }
+  }
+
+  seedPersistentWorker(row: Omit<PersistentWorkerRow, "last_seen_at"> & { last_seen_at?: number | null }): void {
+    this.workerRegistrations.set(`${row.worker_id}|${row.namespace}`, {
+      ...row,
+      last_seen_at: row.last_seen_at ?? null,
+    });
   }
 
   prepare(sql: string) {
@@ -153,6 +188,23 @@ class FakeStatement {
       const row = this.db.tasks.get(taskId);
       return row && row.created_by === userId ? (row as T) : null;
     }
+    if (sql.includes("FROM worker_registrations") && sql.includes("credential_hash = ?1")) {
+      const [credentialHash] = this.args as [string];
+      const row = [...this.db.workerRegistrations.values()].find((worker) =>
+        worker.credential_hash === credentialHash
+          && worker.status === "active"
+          && worker.revoked_at == null
+          && (worker.credential_expires_at == null || worker.credential_expires_at > Number(this.args[1])));
+      return row ? ({
+        worker_id: row.worker_id,
+        namespace: row.namespace,
+        user_id: row.user_id,
+        trust_level: row.trust_level,
+        status: row.status,
+        credential_expires_at: row.credential_expires_at,
+        current_role: null,
+      } as T) : null;
+    }
     if (sql.includes("FROM paper_cache")) {
       const [key] = this.args as [string];
       const row = this.db.cache.get(key);
@@ -177,6 +229,52 @@ class FakeStatement {
     if (sql.includes("INSERT INTO chat_messages")) {
       const [sessionId, role, content] = this.args as [string, string, string];
       this.db.addMessage(sessionId, role, content);
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT INTO worker_sessions")) {
+      const [workerId, namespace, sessionId, instanceId, userId, version, capabilitiesJson, now, leaseExpiresAt] = this.args as [string, string, string, string, string, string, string, number, number];
+      const key = `${workerId}|${namespace}`;
+      const current = this.db.workerSessions.get(key);
+      if (current && current.instance_id !== instanceId && current.lease_expires_at > now) {
+        return { meta: { changes: 0 } };
+      }
+      this.db.workerSessions.set(key, {
+        worker_id: workerId,
+        namespace,
+        session_id: sessionId,
+        instance_id: instanceId,
+        user_id: userId,
+        version,
+        capabilities_json: capabilitiesJson,
+        connected_at: now,
+        last_seen_at: now,
+        lease_expires_at: leaseExpiresAt,
+        disconnected_at: null,
+      });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE worker_sessions") && sql.includes("SET last_seen_at")) {
+      const [workerId, namespace, sessionId, now, leaseExpiresAt] = this.args as [string, string, string, number, number];
+      const row = this.db.workerSessions.get(`${workerId}|${namespace}`);
+      if (!row || row.session_id !== sessionId || row.lease_expires_at <= now) return { meta: { changes: 0 } };
+      row.last_seen_at = now;
+      row.lease_expires_at = leaseExpiresAt;
+      row.disconnected_at = null;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE worker_sessions") && sql.includes("SET disconnected_at")) {
+      const [workerId, namespace, sessionId, now] = this.args as [string, string, string, number];
+      const row = this.db.workerSessions.get(`${workerId}|${namespace}`);
+      if (!row || row.session_id !== sessionId) return { meta: { changes: 0 } };
+      row.disconnected_at = now;
+      row.lease_expires_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE worker_registrations SET last_seen_at")) {
+      const [workerId, namespace, now] = this.args as [string, string, number];
+      const row = this.db.workerRegistrations.get(`${workerId}|${namespace}`);
+      if (!row || row.status !== "active") return { meta: { changes: 0 } };
+      row.last_seen_at = now;
       return { meta: { changes: 1 } };
     }
     if (sql.includes("INSERT INTO chat_task_confirmations")) {

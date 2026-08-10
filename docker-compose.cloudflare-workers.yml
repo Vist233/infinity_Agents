@@ -1,0 +1,28 @@
+# Two local Docker Workers connected to the Cloudflare control plane.
+#
+# This file intentionally does not start PostgreSQL or Redis. Redis is the
+# existing remote service, and Cloudflare D1 is reached through
+# CONTROL_BASE_URL. Each Worker has its own persistent Worker credential and
+# instance id.
+
+x-cloudflare-worker: &cloudflare-worker
+  image: infinity-agent-worker:cloudflare
+  build:
+    context: .
+    dockerfile: backend/Dockerfile.worker
+  restart: unless-stopped
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+    - ./workspace:/workspace
+  command: python -m backend.code_agent.worker.cloudflare_worker
+
+services:
+  worker-a:
+    <<: *cloudflare-worker
+    env_file:
+      - ${WORKER_A_ENV_FILE:-worker-a.cloudflare.env}
+
+  worker-b:
+    <<: *cloudflare-worker
+    env_file:
+      - ${WORKER_B_ENV_FILE:-worker-b.cloudflare.env}

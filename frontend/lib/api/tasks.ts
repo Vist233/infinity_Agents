@@ -95,12 +95,14 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
     try {
       const payload = await response.json() as {
         detail?: string;
-        error?: { message?: string };
+        error?: { message?: string; code?: string | null };
       };
       if (payload && typeof payload.detail === "string") {
         detail = payload.detail;
       } else if (payload?.error && typeof payload.error.message === "string") {
-        detail = payload.error.message;
+        detail = payload.error.code
+          ? `${payload.error.message} [${payload.error.code}]`
+          : payload.error.message;
       }
     } catch {
       // keep default detail

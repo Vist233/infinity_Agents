@@ -82,10 +82,11 @@ async def run_docker_task(
     if job_user:
         cmd += ["--user", job_user]
 
-    # Only Attempt-scoped gateway capabilities may enter the Job. Long-lived
-    # provider keys on the Worker are never inherited by child containers.
-    # Claude Code reads the standard Anthropic names; the source values are
-    # short-lived capabilities minted for this Attempt, never provider keys.
+    # The normal hosted execution path uses Attempt-scoped gateway
+    # capabilities. A user-owned local Worker may explicitly provide its own
+    # Anthropic credentials; in that mode the values remain in the local
+    # Worker environment and are inherited by name, never placed in Docker
+    # command arguments or sent to the Cloudflare control plane.
     attempt_env = {
         "ATTEMPT_GATEWAY_URL": "ANTHROPIC_BASE_URL",
         "ATTEMPT_GATEWAY_TOKEN": "ANTHROPIC_AUTH_TOKEN",
@@ -95,6 +96,17 @@ async def run_docker_task(
         value = os.getenv(source_name, "").strip()
         if value:
             cmd += ["-e", f"{target_name}={value}"]
+
+    for provider_name in (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+    ):
+        # Supplying only the variable name makes Docker inherit the value from
+        # the local Worker process without exposing the secret in argv.
+        if os.getenv(provider_name, "").strip():
+            cmd += ["-e", provider_name]
 
     cmd += [
         "-v", f"{work_dir}:{input_mount}:ro",
