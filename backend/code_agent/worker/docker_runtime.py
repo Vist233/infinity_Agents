@@ -114,6 +114,14 @@ async def run_docker_task(
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_REASONING_MODEL",
+        "CLAUDE_CODE_FAST_MODEL",
+        "CLAUDE_CODE_THINKING_MODEL",
+        "CLAUDE_CODE_SUBAGENT_MODEL",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
     ):
         # Supplying only the variable name makes Docker inherit the value from
         # the local Worker process without exposing the secret in argv.

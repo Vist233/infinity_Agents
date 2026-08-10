@@ -22,6 +22,8 @@ export const WORKER_SESSION_TTL_SECONDS = 90;
 export const WORKER_HEARTBEAT_INTERVAL_SECONDS = 30;
 const CREDENTIAL_TTL_SECONDS = 30 * 24 * 60 * 60;
 const DEFAULT_UPLOAD_LIMIT = 25 * 1024 * 1024;
+const DEFAULT_ARTIFACT_LIMIT = 2 * 1024 * 1024 * 1024;
+const MULTIPART_PART_SIZE = 8 * 1024 * 1024;
 const MAX_ERROR_LENGTH = 500;
 const MAX_CAPABILITIES = 32;
 
@@ -83,6 +85,11 @@ function safeFilename(value: unknown, fallback: string): string {
 function uploadLimit(env: Env): number {
   const configured = Number(env.TASK_UPLOAD_MAX_BYTES);
   return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_UPLOAD_LIMIT;
+}
+
+function artifactLimit(env: Env): number {
+  const configured = Number(env.TASK_ARTIFACT_MAX_BYTES);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_ARTIFACT_LIMIT;
 }
 
 async function sha256(value: ArrayBuffer | Uint8Array | string): Promise<string> {
@@ -348,7 +355,7 @@ function publicAttempt(row: AttemptRow, origin: string): Record<string, unknown>
     method_source_id: row.method_source_id,
     resources,
     heartbeat_interval_seconds: 30,
-    required_runtime: "infinity-worker-control-v1",
+    required_runtime: "infinity-claude-worker-v1",
   };
 }
 
@@ -538,7 +545,7 @@ async function handlePoll(request: Request, env: Env, context: WorkerContext): P
       max_attempts: task.max_attempts,
       expires_at: new Date(expiresAt * 1000).toISOString(),
       expires_in_seconds: OFFER_TTL_SECONDS,
-      required_runtime: "infinity-worker-control-v1",
+      required_runtime: "infinity-claude-worker-v1",
     }],
     poll_after_seconds: 5,
   });
@@ -805,6 +812,211 @@ async function handleArtifactUpload(
   return json({ artifact_id: artifactId, task_id: attempt.task_id, attempt_id: attemptId, checksum_sha256: checksum, file_size_bytes: bytes.byteLength }, 201);
 }
 
+type MultipartArtifactPart = { etag: string; size: number };
+type MultipartArtifactState = {
+  upload_id: string;
+  part_size: number;
+  total_size: number;
+  checksum_sha256: string;
+  parts: Record<string, MultipartArtifactPart>;
+};
+
+function parseMultipartArtifactState(value: string | null): MultipartArtifactState | null {
+  try {
+    const parsed = JSON.parse(value || "") as Record<string, unknown>;
+    if (!parsed || typeof parsed.upload_id !== "string" || !parsed.upload_id
+      || !Number.isInteger(parsed.part_size) || !Number.isInteger(parsed.total_size)
+      || typeof parsed.checksum_sha256 !== "string") return null;
+    const rawParts = parsed.parts && typeof parsed.parts === "object"
+      ? parsed.parts as Record<string, unknown>
+      : {};
+    const parts: Record<string, MultipartArtifactPart> = {};
+    for (const [partNumber, raw] of Object.entries(rawParts)) {
+      if (!raw || typeof raw !== "object") continue;
+      const entry = raw as Record<string, unknown>;
+      if (typeof entry.etag === "string" && entry.etag && Number.isInteger(entry.size) && Number(entry.size) > 0) {
+        parts[partNumber] = { etag: entry.etag, size: Number(entry.size) };
+      }
+    }
+    return {
+      upload_id: parsed.upload_id,
+      part_size: Number(parsed.part_size),
+      total_size: Number(parsed.total_size),
+      checksum_sha256: parsed.checksum_sha256,
+      parts,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function handleMultipartArtifactInit(
+  request: Request,
+  env: Env,
+  context: WorkerContext,
+  attemptId: string,
+): Promise<Response> {
+  if (!env.RESOURCE_BUCKET) return errorJson("Task resource storage is not configured", 503, "RESOURCE_STORAGE_UNAVAILABLE");
+  const body = await bodyJson(request);
+  const epoch = Number(body?.fencing_epoch);
+  if (!Number.isInteger(epoch) || epoch < 1) return errorJson("fencing_epoch is required", 400, "INVALID_EPOCH");
+  const attempt = await loadAttempt(env, context, attemptId, epoch, true);
+  if (!attempt) return errorJson("Attempt lease is expired or fenced", 409, "LEASE_FENCED");
+  const size = Number(body?.file_size_bytes);
+  const checksum = safeText(body?.checksum_sha256, 128).toLowerCase();
+  if (!Number.isSafeInteger(size) || size <= 0 || size > artifactLimit(env)) {
+    return errorJson("Artifact exceeds the configured total-size limit", 413, "ARTIFACT_TOO_LARGE");
+  }
+  if (!/^[a-f0-9]{64}$/.test(checksum)) return errorJson("A SHA-256 checksum is required", 400, "INVALID_CHECKSUM");
+
+  const artifactId = id();
+  const key = `task-outputs/quarantine/${context.workerId}/${attemptId}/${artifactId}-${safeFilename(body?.name, "artifact.zip")}`;
+  const multipart = await env.RESOURCE_BUCKET.createMultipartUpload(key);
+  const state: MultipartArtifactState = {
+    upload_id: multipart.uploadId,
+    part_size: MULTIPART_PART_SIZE,
+    total_size: size,
+    checksum_sha256: checksum,
+    parts: {},
+  };
+  try {
+    await env.DB.prepare(
+      `INSERT INTO artifacts
+        (artifact_id, task_id, attempt_id, worker_id, name, kind, object_key,
+         file_size_bytes, checksum_sha256, content_type, status, manifest_json, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, 'quarantine', ?6, ?7, ?8, ?9, 'uploading', ?10, ?11)`
+    ).bind(
+      artifactId,
+      attempt.task_id,
+      attemptId,
+      context.workerId,
+      safeFilename(body?.name, "artifact.zip"),
+      key,
+      size,
+      checksum,
+      safeText(body?.content_type, 160) || "application/zip",
+      JSON.stringify(state),
+      nowSeconds(),
+    ).run();
+  } catch {
+    await multipart.abort();
+    return errorJson("Multipart artifact could not be registered", 503, "ARTIFACT_UNAVAILABLE");
+  }
+  return json({
+    artifact_id: artifactId,
+    task_id: attempt.task_id,
+    attempt_id: attemptId,
+    part_size: MULTIPART_PART_SIZE,
+    total_size: size,
+  }, 201);
+}
+
+async function handleMultipartArtifactPart(
+  request: Request,
+  env: Env,
+  context: WorkerContext,
+  attemptId: string,
+  artifactId: string,
+  partNumber: number,
+): Promise<Response> {
+  if (!env.RESOURCE_BUCKET) return errorJson("Task resource storage is not configured", 503, "RESOURCE_STORAGE_UNAVAILABLE");
+  const epoch = Number(request.headers.get("x-fencing-epoch"));
+  if (!Number.isInteger(epoch) || epoch < 1) return errorJson("x-fencing-epoch is required", 400, "INVALID_EPOCH");
+  const attempt = await loadAttempt(env, context, attemptId, epoch, true);
+  if (!attempt) return errorJson("Attempt lease is expired or fenced", 409, "LEASE_FENCED");
+  const artifact = await env.DB.prepare(
+    `SELECT artifact_id, object_key, status, manifest_json
+     FROM artifacts
+     WHERE artifact_id = ?1 AND task_id = ?2 AND attempt_id = ?3 AND worker_id = ?4 AND status = 'uploading'`
+  ).bind(artifactId, attempt.task_id, attemptId, context.workerId).first<{
+    artifact_id: string;
+    object_key: string;
+    status: string;
+    manifest_json: string | null;
+  }>();
+  const state = parseMultipartArtifactState(artifact?.manifest_json ?? null);
+  if (!artifact || !state) return errorJson("Multipart artifact upload was not found", 404, "ARTIFACT_NOT_FOUND");
+  const maxParts = Math.ceil(state.total_size / state.part_size);
+  if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > maxParts || partNumber > 10000) {
+    return errorJson("Invalid multipart part number", 400, "INVALID_PART");
+  }
+  const contentLength = Number(request.headers.get("content-length") || "0");
+  if (contentLength > state.part_size) return errorJson("Multipart part is too large", 413, "PART_TOO_LARGE");
+  const bytes = await request.arrayBuffer();
+  if (bytes.byteLength <= 0 || bytes.byteLength > state.part_size) return errorJson("Multipart part is empty or too large", 400, "INVALID_PART");
+
+  let uploaded: R2UploadedPart;
+  try {
+    uploaded = await env.RESOURCE_BUCKET.resumeMultipartUpload(artifact.object_key, state.upload_id).uploadPart(partNumber, bytes);
+  } catch {
+    return errorJson("Multipart part upload failed", 502, "PART_UPLOAD_FAILED");
+  }
+  state.parts[String(partNumber)] = { etag: uploaded.etag, size: bytes.byteLength };
+  await env.DB.prepare(
+    `UPDATE artifacts SET manifest_json = ?1
+     WHERE artifact_id = ?2 AND task_id = ?3 AND attempt_id = ?4 AND worker_id = ?5 AND status = 'uploading'`
+  ).bind(JSON.stringify(state), artifactId, attempt.task_id, attemptId, context.workerId).run();
+  return json({ artifact_id: artifactId, part_number: partNumber, file_size_bytes: bytes.byteLength }, 200);
+}
+
+async function handleMultipartArtifactComplete(
+  request: Request,
+  env: Env,
+  context: WorkerContext,
+  attemptId: string,
+  artifactId: string,
+): Promise<Response> {
+  if (!env.RESOURCE_BUCKET) return errorJson("Task resource storage is not configured", 503, "RESOURCE_STORAGE_UNAVAILABLE");
+  const body = await bodyJson(request);
+  const epoch = Number(body?.fencing_epoch);
+  if (!Number.isInteger(epoch) || epoch < 1) return errorJson("fencing_epoch is required", 400, "INVALID_EPOCH");
+  const attempt = await loadAttempt(env, context, attemptId, epoch, true);
+  if (!attempt) return errorJson("Attempt lease is expired or fenced", 409, "LEASE_FENCED");
+  const artifact = await env.DB.prepare(
+    `SELECT artifact_id, object_key, file_size_bytes, checksum_sha256, status, manifest_json
+     FROM artifacts
+     WHERE artifact_id = ?1 AND task_id = ?2 AND attempt_id = ?3 AND worker_id = ?4 AND status = 'uploading'`
+  ).bind(artifactId, attempt.task_id, attemptId, context.workerId).first<{
+    artifact_id: string;
+    object_key: string;
+    file_size_bytes: number;
+    checksum_sha256: string;
+    status: string;
+    manifest_json: string | null;
+  }>();
+  const state = parseMultipartArtifactState(artifact?.manifest_json ?? null);
+  if (!artifact || !state) return errorJson("Multipart artifact upload was not found", 404, "ARTIFACT_NOT_FOUND");
+  const entries = Object.entries(state.parts)
+    .map(([partNumber, part]) => ({ partNumber: Number(partNumber), ...part }))
+    .sort((left, right) => left.partNumber - right.partNumber);
+  if (!entries.length || entries.some((part, index) => part.partNumber !== index + 1)) {
+    return errorJson("Multipart artifact is missing one or more parts", 409, "PARTS_INCOMPLETE");
+  }
+  const totalSize = entries.reduce((sum, part) => sum + part.size, 0);
+  if (totalSize !== Number(artifact.file_size_bytes) || totalSize !== state.total_size) {
+    return errorJson("Multipart artifact size does not match its manifest", 409, "PARTS_SIZE_MISMATCH");
+  }
+  if (entries.slice(0, -1).some((part) => part.size !== state.part_size)
+    || entries[entries.length - 1].size > state.part_size) {
+    return errorJson("Multipart artifact part sizes are invalid", 409, "PARTS_SIZE_INVALID");
+  }
+  try {
+    await env.RESOURCE_BUCKET.resumeMultipartUpload(artifact.object_key, state.upload_id).complete(
+      entries.map((part) => ({ partNumber: part.partNumber, etag: part.etag })),
+    );
+  } catch {
+    return errorJson("Multipart artifact could not be completed", 502, "MULTIPART_COMPLETE_FAILED");
+  }
+  const head = await env.RESOURCE_BUCKET.head(artifact.object_key);
+  if (!head || head.size !== totalSize) return errorJson("Completed artifact size could not be verified", 409, "ARTIFACT_SIZE_UNVERIFIED");
+  const completedState = JSON.stringify({ ...state, completed: true, completed_at: nowSeconds(), r2_etag: head.etag });
+  await env.DB.prepare(
+    `UPDATE artifacts SET status = 'quarantine', manifest_json = ?1
+     WHERE artifact_id = ?2 AND task_id = ?3 AND attempt_id = ?4 AND worker_id = ?5 AND status = 'uploading'`
+  ).bind(completedState, artifactId, attempt.task_id, attemptId, context.workerId).run();
+  return json({ artifact_id: artifactId, task_id: attempt.task_id, attempt_id: attemptId, checksum_sha256: artifact.checksum_sha256, file_size_bytes: totalSize }, 201);
+}
+
 async function handleFinalize(
   request: Request,
   env: Env,
@@ -1019,6 +1231,40 @@ export async function handleWorkerControlApi(request: Request, env: Env): Promis
     const sessionErrorResponse = await requireActiveWorkerSession(env, context);
     if (sessionErrorResponse) return sessionErrorResponse;
     return handleResource(request, env, context, decodeURIComponent(resourceMatch[1]), decodeURIComponent(resourceMatch[2]));
+  }
+
+  const multipartInitMatch = pathname.match(/^\/api\/worker\/v1\/attempts\/([^/]+)\/artifacts\/multipart\/init$/);
+  if (multipartInitMatch && request.method === "POST") {
+    const sessionErrorResponse = await requireActiveWorkerSession(env, context);
+    if (sessionErrorResponse) return sessionErrorResponse;
+    return handleMultipartArtifactInit(request, env, context, decodeURIComponent(multipartInitMatch[1]));
+  }
+
+  const multipartPartMatch = pathname.match(/^\/api\/worker\/v1\/attempts\/([^/]+)\/artifacts\/([^/]+)\/parts\/([0-9]+)$/);
+  if (multipartPartMatch && request.method === "PUT") {
+    const sessionErrorResponse = await requireActiveWorkerSession(env, context);
+    if (sessionErrorResponse) return sessionErrorResponse;
+    return handleMultipartArtifactPart(
+      request,
+      env,
+      context,
+      decodeURIComponent(multipartPartMatch[1]),
+      decodeURIComponent(multipartPartMatch[2]),
+      Number(multipartPartMatch[3]),
+    );
+  }
+
+  const multipartCompleteMatch = pathname.match(/^\/api\/worker\/v1\/attempts\/([^/]+)\/artifacts\/([^/]+)\/multipart\/complete$/);
+  if (multipartCompleteMatch && request.method === "POST") {
+    const sessionErrorResponse = await requireActiveWorkerSession(env, context);
+    if (sessionErrorResponse) return sessionErrorResponse;
+    return handleMultipartArtifactComplete(
+      request,
+      env,
+      context,
+      decodeURIComponent(multipartCompleteMatch[1]),
+      decodeURIComponent(multipartCompleteMatch[2]),
+    );
   }
 
   const artifactMatch = pathname.match(/^\/api\/worker\/v1\/attempts\/([^/]+)\/artifacts$/);

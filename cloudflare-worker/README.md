@@ -85,6 +85,9 @@ POST /api/worker/v1/offers/:offer_id/accept
 POST /api/worker/v1/attempts/:attempt_id/heartbeat
 GET  /api/worker/v1/attempts/:attempt_id/resources/:resource_id
 POST /api/worker/v1/attempts/:attempt_id/artifacts
+POST /api/worker/v1/attempts/:attempt_id/artifacts/multipart/init
+PUT  /api/worker/v1/attempts/:attempt_id/artifacts/:artifact_id/parts/:part_number
+POST /api/worker/v1/attempts/:attempt_id/artifacts/:artifact_id/multipart/complete
 POST /api/worker/v1/attempts/:attempt_id/finalize
 POST /api/worker/v1/verifier/attempts/:attempt_id/publish  (trusted verifier only)
 ```
@@ -131,12 +134,17 @@ one-time bootstrap path while pre-existing clients are migrated.
 `docker-compose.cloudflare-workers.yml` starts two local Docker Workers without
 PostgreSQL or a second Redis container. Each service uses a separate local env
 file with `CONTROL_BASE_URL`, one server-created Worker ID and credential, a
-unique `WORKER_INSTANCE_ID`, the existing remote `REDIS_URL`, and local
-Anthropic key/token, base URL, and model. The Worker downloads exact Attempt
-resources over HTTPS, runs the local executor, and uploads results to R2
-quarantine. None of the Redis or provider secrets are sent to Cloudflare. Each
-Worker has isolated input/output named volumes; per-task `volume-subpath`
-mounts make the same task files visible to the Worker and its executor.
+unique `WORKER_INSTANCE_ID`, the existing remote `REDIS_URL`, and the provider
+variables inherited from the user's local shell. The Worker downloads exact
+Attempt resources over HTTPS, invokes the Claude Code CLI directly inside that
+same container with Goal-Driven instructions, and uploads results to R2
+quarantine. It never mounts the host Docker socket and never starts Docker
+inside Docker. None of the Redis or provider secrets are sent to Cloudflare.
+Each Worker has isolated input/output named volumes; after one Attempt the
+task-local files are removed and Compose restarts the container for the next
+cycle. Results up to 20 MB use the single upload endpoint; larger results use
+8 MB R2 Multipart parts and are checked for contiguous parts, total size, and
+object size before finalize.
 
 ImageJudge uses the same Worker under an isolated `/image-judge/*` namespace:
 

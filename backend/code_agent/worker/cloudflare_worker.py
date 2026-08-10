@@ -1,4 +1,4 @@
-"""Cloudflare-control-plane Docker Worker.
+"""Cloudflare-control-plane local Claude Code Worker.
 
 This Worker runs on the user's machine and keeps all provider/Redis settings
 local.  Cloudflare D1 is reached only through the authenticated Worker Control
@@ -28,6 +28,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 _MAX_ERROR_LENGTH = 500
+_SINGLE_ARTIFACT_UPLOAD_THRESHOLD = 20 * 1024 * 1024
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 
@@ -74,14 +75,14 @@ class CloudflareWorkerConfig:
     anthropic_auth_token: Optional[str]
     anthropic_base_url: Optional[str]
     anthropic_model: Optional[str]
-    docker_image: str = "claude-code-env:v2"
     work_root: Path = Path("/workspace/task-workdirs")
     output_root: Path = Path("/workspace/task-outputs")
     poll_interval: float = 5.0
-    version: str = "cloudflare-docker-worker/1"
+    version: str = "cloudflare-claude-worker/1"
     redis_required: bool = True
     session_id: Optional[str] = None
     heartbeat_interval: float = 30.0
+    recycle_after_task: bool = True
     capabilities: list[str] = field(default_factory=list)
 
     @classmethod
@@ -100,7 +101,7 @@ class CloudflareWorkerConfig:
         provider_token = _optional("ANTHROPIC_AUTH_TOKEN")
         provider_base = _optional("ANTHROPIC_BASE_URL")
         provider_model = _optional("ANTHROPIC_MODEL")
-        capabilities = ["cloudflare-docker-worker-v1", os.name, "docker"]
+        capabilities = ["cloudflare-claude-worker-v1", os.name, "claude-code"]
         if redis_url:
             capabilities.append("redis-configured")
         if provider_key or provider_token:
@@ -117,12 +118,12 @@ class CloudflareWorkerConfig:
             anthropic_auth_token=provider_token,
             anthropic_base_url=provider_base,
             anthropic_model=provider_model,
-            docker_image=os.getenv("CODE_AGENT_DOCKER_IMAGE", "claude-code-env:v2").strip(),
             work_root=Path(os.getenv("WORKER_WORK_ROOT", "/workspace/task-workdirs")),
             output_root=Path(os.getenv("WORKER_OUTPUT_ROOT", "/workspace/task-outputs")),
             poll_interval=max(1.0, float(os.getenv("WORKER_POLL_INTERVAL", "5"))),
-            version=os.getenv("WORKER_VERSION", "cloudflare-docker-worker/1").strip(),
+            version=os.getenv("WORKER_VERSION", "cloudflare-claude-worker/1").strip(),
             redis_required=_bool_env("WORKER_REDIS_REQUIRED", True),
+            recycle_after_task=_bool_env("WORKER_RECYCLE_AFTER_TASK", True),
             capabilities=capabilities,
         )
 
@@ -253,7 +254,10 @@ class CloudflareControlClient:
 
         await asyncio.to_thread(_download)
 
-    async def upload_artifact(self, attempt_id: str, epoch: int, archive: Path) -> dict[str, Any]:
+    async def upload_artifact(self, attempt_id: str, epoch: int, archive: Path, checksum: str) -> dict[str, Any]:
+        if archive.stat().st_size > _SINGLE_ARTIFACT_UPLOAD_THRESHOLD:
+            return await asyncio.to_thread(self._upload_artifact_multipart, attempt_id, epoch, archive, checksum)
+
         def _upload() -> dict[str, Any]:
             with archive.open("rb") as handle:
                 return self._request(
@@ -265,6 +269,44 @@ class CloudflareControlClient:
                 )
 
         return await asyncio.to_thread(_upload)
+
+    def _upload_artifact_multipart(self, attempt_id: str, epoch: int, archive: Path, checksum: str) -> dict[str, Any]:
+        init = self._request(
+            "POST",
+            f"/api/worker/v1/attempts/{attempt_id}/artifacts/multipart/init",
+            json_body={
+                "fencing_epoch": epoch,
+                "name": archive.name,
+                "content_type": "application/zip",
+                "file_size_bytes": archive.stat().st_size,
+                "checksum_sha256": checksum,
+            },
+            epoch=epoch,
+            timeout=60.0,
+        )
+        artifact_id = str(init["artifact_id"])
+        part_size = max(1, int(init.get("part_size", 8 * 1024 * 1024)))
+        part_number = 0
+        with archive.open("rb") as handle:
+            while True:
+                chunk = handle.read(part_size)
+                if not chunk:
+                    break
+                part_number += 1
+                self._request(
+                    "PUT",
+                    f"/api/worker/v1/attempts/{attempt_id}/artifacts/{artifact_id}/parts/{part_number}",
+                    epoch=epoch,
+                    data=chunk,
+                    timeout=120.0,
+                )
+        return self._request(
+            "POST",
+            f"/api/worker/v1/attempts/{attempt_id}/artifacts/{artifact_id}/multipart/complete",
+            json_body={"fencing_epoch": epoch},
+            epoch=epoch,
+            timeout=120.0,
+        )
 
     async def finalize(self, task_id: str, attempt_id: str, epoch: int, artifact_id: str, checksum: str) -> dict[str, Any]:
         return await asyncio.to_thread(
@@ -326,11 +368,15 @@ def _zip_output(output_dir: Path, task_id: str) -> tuple[Path, str]:
         for path in sorted(output_dir.rglob("*")):
             if path.is_file():
                 bundle.write(path, path.relative_to(output_dir).as_posix())
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    digest_context = hashlib.sha256()
+    with archive.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest_context.update(chunk)
+    digest = digest_context.hexdigest()
     return archive, digest
 
 
-class CloudflareDockerWorker:
+class CloudflareClaudeWorker:
     def __init__(self, config: CloudflareWorkerConfig):
         self.config = config
         self.control = CloudflareControlClient(config)
@@ -338,6 +384,19 @@ class CloudflareDockerWorker:
 
     def stop(self) -> None:
         self.stop_event.set()
+
+    def _clear_local_workspace(self) -> None:
+        """Remove stale task data from this Worker’s dedicated volumes."""
+        for root in (self.config.work_root, self.config.output_root):
+            root.mkdir(parents=True, exist_ok=True)
+            for child in root.iterdir():
+                if child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    try:
+                        child.unlink()
+                    except FileNotFoundError:
+                        pass
 
     async def _connect_until_available(self) -> bool:
         while not self.stop_event.is_set():
@@ -355,8 +414,7 @@ class CloudflareDockerWorker:
         return False
 
     async def run_forever(self) -> None:
-        self.config.work_root.mkdir(parents=True, exist_ok=True)
-        self.config.output_root.mkdir(parents=True, exist_ok=True)
+        self._clear_local_workspace()
         redis_connected = await _redis_ping(self.config)
         if redis_connected:
             self.config.capabilities.append("redis-online")
@@ -373,6 +431,9 @@ class CloudflareDockerWorker:
                     if offers:
                         attempt = await self.control.accept(str(offers[0]["offer_id"]))
                         await self._execute_attempt(attempt)
+                        if self.config.recycle_after_task:
+                            logger.info("Worker %s completed one Attempt; recycling container", self.config.worker_id)
+                            self.stop_event.set()
                     else:
                         await asyncio.wait_for(self.stop_event.wait(), timeout=self.config.poll_interval)
                 except asyncio.TimeoutError:
@@ -391,7 +452,7 @@ class CloudflareDockerWorker:
             await self.control.disconnect()
 
     async def _execute_attempt(self, attempt: dict[str, Any]) -> None:
-        from backend.code_agent.worker.docker_runtime import run_docker_task
+        from backend.code_agent.worker.claude_runtime import run_claude_task
 
         task_id = str(attempt.get("task_id", ""))
         attempt_id = str(attempt.get("attempt_id", ""))
@@ -410,6 +471,16 @@ class CloudflareDockerWorker:
         input_dir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        cancel_event = asyncio.Event()
+
+        async def heartbeat_loop() -> None:
+            while not cancel_event.is_set():
+                try:
+                    await asyncio.wait_for(cancel_event.wait(), timeout=max(5.0, self.config.heartbeat_interval / 2))
+                except asyncio.TimeoutError:
+                    await self.control.heartbeat_attempt(attempt_id, epoch, "executing")
+
+        heartbeat_task = asyncio.create_task(heartbeat_loop())
         try:
             for resource in attempt.get("resources", []):
                 resource_id = str(resource.get("resource_id", "resource"))
@@ -418,38 +489,21 @@ class CloudflareDockerWorker:
                 destination = input_dir / f"{kind}-{logical_name}"
                 await self.control.download_resource(str(resource["url"]), destination, epoch)
 
-            cancel_event = asyncio.Event()
-
-            async def heartbeat_loop() -> None:
-                while not cancel_event.is_set():
-                    try:
-                        await asyncio.wait_for(cancel_event.wait(), timeout=max(5.0, self.config.heartbeat_interval / 2))
-                    except asyncio.TimeoutError:
-                        await self.control.heartbeat_attempt(attempt_id, epoch, "executing")
-
-            heartbeat_task = asyncio.create_task(heartbeat_loop())
-            try:
-                async for event in run_docker_task(
-                    task_id=task_id,
-                    task_spec_id=task_spec_id,
-                    dataset_snapshot_id=dataset_snapshot_id,
-                    docker_image=self.config.docker_image,
-                    case_dir=input_dir,
-                    output_dir=output_dir,
-                    cancel_event=cancel_event,
-                ):
-                    if event.get("type") == "error":
-                        raise RuntimeError(str(event.get("message", "Docker execution failed")))
-            finally:
-                cancel_event.set()
-                heartbeat_task.cancel()
-                try:
-                    await heartbeat_task
-                except asyncio.CancelledError:
-                    pass
+            async for event in run_claude_task(
+                task_id=task_id,
+                task_spec_id=task_spec_id,
+                dataset_snapshot_id=dataset_snapshot_id,
+                title=str(attempt.get("title", "")),
+                goal=str(attempt.get("goal", "")),
+                case_dir=input_dir,
+                output_dir=output_dir,
+                cancel_event=cancel_event,
+            ):
+                if event.get("type") == "error":
+                    raise RuntimeError(str(event.get("message", "Claude Code execution failed")))
 
             archive, checksum = _zip_output(output_dir, task_id)
-            uploaded = await self.control.upload_artifact(attempt_id, epoch, archive)
+            uploaded = await self.control.upload_artifact(attempt_id, epoch, archive, checksum)
             artifact_id = str(uploaded["artifact_id"])
             # The control API binds the manifest to the attempt. Add the task
             # identifier here because it is the final anti-confusion check.
@@ -475,12 +529,29 @@ class CloudflareDockerWorker:
                 await self.control.fail_attempt(attempt_id, epoch, _safe_error(exc))
             except Exception as report_error:
                 logger.warning("Could not report Attempt failure: %s", _safe_error(report_error))
+        finally:
+            cancel_event.set()
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            # The artifact is already in the control plane/R2 after finalize.
+            # Clear all task-local input, output, and temporary archive data so
+            # the next task starts from an empty local workspace.
+            shutil.rmtree(task_root, ignore_errors=True)
+            shutil.rmtree(output_dir, ignore_errors=True)
+            archive_path = self.config.output_root / f"{task_id}-artifacts.zip"
+            try:
+                archive_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 async def _main() -> None:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s")
     config = CloudflareWorkerConfig.from_env()
-    worker = CloudflareDockerWorker(config)
+    worker = CloudflareClaudeWorker(config)
     loop = asyncio.get_running_loop()
     for signal_name in ("SIGTERM", "SIGINT"):
         if hasattr(signal, signal_name):

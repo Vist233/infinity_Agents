@@ -11,10 +11,7 @@ x-cloudflare-worker: &cloudflare-worker
     context: .
     dockerfile: backend/Dockerfile.worker
   restart: unless-stopped
-  volumes:
-    - /var/run/docker.sock:/var/run/docker.sock
-    - ./workspace:/workspace
-  command: python -m backend.code_agent.worker.cloudflare_worker
+  command: python3 -m backend.code_agent.worker.cloudflare_worker
 
 services:
   worker-a:
@@ -28,6 +25,19 @@ services:
       CODE_AGENT_OUTPUT_VOLUME: infinity-agents-worker-a-outputs
       CODE_AGENT_INPUT_VOLUME_ROOT: /worker-inputs
       CODE_AGENT_OUTPUT_VOLUME_ROOT: /worker-outputs
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:?ANTHROPIC_BASE_URL is required}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:?ANTHROPIC_MODEL is required}
+      ANTHROPIC_DEFAULT_OPUS_MODEL: ${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
+      ANTHROPIC_DEFAULT_SONNET_MODEL: ${ANTHROPIC_DEFAULT_SONNET_MODEL:-}
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: ${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
+      ANTHROPIC_REASONING_MODEL: ${ANTHROPIC_REASONING_MODEL:-}
+      CLAUDE_CODE_FAST_MODEL: ${CLAUDE_CODE_FAST_MODEL:-}
+      CLAUDE_CODE_THINKING_MODEL: ${CLAUDE_CODE_THINKING_MODEL:-}
+      CLAUDE_CODE_SUBAGENT_MODEL: ${CLAUDE_CODE_SUBAGENT_MODEL:-}
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: ${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-}
+      REDIS_URL: ${WORKER_A_REDIS_URL:?WORKER_A_REDIS_URL is required}
+      ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:?ANTHROPIC_AUTH_TOKEN is required}
     volumes:
       - worker_a_inputs:/worker-inputs
       - worker_a_outputs:/worker-outputs
@@ -43,6 +53,19 @@ services:
       CODE_AGENT_OUTPUT_VOLUME: infinity-agents-worker-b-outputs
       CODE_AGENT_INPUT_VOLUME_ROOT: /worker-inputs
       CODE_AGENT_OUTPUT_VOLUME_ROOT: /worker-outputs
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:?ANTHROPIC_BASE_URL is required}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:?ANTHROPIC_MODEL is required}
+      ANTHROPIC_DEFAULT_OPUS_MODEL: ${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
+      ANTHROPIC_DEFAULT_SONNET_MODEL: ${ANTHROPIC_DEFAULT_SONNET_MODEL:-}
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: ${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
+      ANTHROPIC_REASONING_MODEL: ${ANTHROPIC_REASONING_MODEL:-}
+      CLAUDE_CODE_FAST_MODEL: ${CLAUDE_CODE_FAST_MODEL:-}
+      CLAUDE_CODE_THINKING_MODEL: ${CLAUDE_CODE_THINKING_MODEL:-}
+      CLAUDE_CODE_SUBAGENT_MODEL: ${CLAUDE_CODE_SUBAGENT_MODEL:-}
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: ${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-}
+      REDIS_URL: ${WORKER_B_REDIS_URL:?WORKER_B_REDIS_URL is required}
+      ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:?ANTHROPIC_AUTH_TOKEN is required}
     volumes:
       - worker_b_inputs:/worker-inputs
       - worker_b_outputs:/worker-outputs

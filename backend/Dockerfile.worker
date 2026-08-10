@@ -1,15 +1,18 @@
-FROM python:3.11-slim
+FROM claude-code-env:v2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    docker.io \
+    python3-pip \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.worker.txt .
+RUN python3 -m pip install --no-cache-dir -r requirements.worker.txt
 
 COPY backend/ ./backend/
 RUN mkdir -p /workspace/task-workdirs /workspace/task-outputs
 
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
 WORKDIR /app
-CMD ["python", "-m", "backend.code_agent.worker.consumer", "worker-default"]
+CMD ["python3", "-m", "backend.code_agent.worker.cloudflare_worker"]

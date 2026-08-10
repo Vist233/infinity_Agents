@@ -37,6 +37,7 @@ export interface Env {
   // Cloudflare-native Analysis/Coding task inputs and enrollment controls.
   RESOURCE_BUCKET?: R2Bucket;
   TASK_UPLOAD_MAX_BYTES?: string;
+  TASK_ARTIFACT_MAX_BYTES?: string;
   WORKER_ENROLLMENT_ADMIN_USER_IDS?: string;
   // AES-GCM key used to keep a recoverable copy of persistent Worker
   // credentials encrypted at rest. The raw key is configured as a secret.

@@ -47,9 +47,17 @@ docker compose -f docker-compose.cloudflare-workers.yml up -d --build
 docker compose -f docker-compose.cloudflare-workers.yml logs -f worker-a worker-b
 ```
 
-这套 compose 为两个 Worker 各自创建独立的输入和输出 named volume，并按任务
-子目录挂载到实际执行容器；不要把两个 Worker 改成共享同一个 volume，也不要
-删掉 `/var/run/docker.sock` 挂载，否则 Worker 无法启动本地任务执行器。
+这套 compose 为两个 Worker 各自创建独立的输入和输出 named volume。Worker
+直接在自己的容器内调用 Claude Code，镜像中不包含 Docker CLI，也不挂载
+`/var/run/docker.sock`，因此不能也不需要在容器内再启动 Docker。每次只执行
+一个 Attempt，上传完成后清理任务目录并退出，Compose 会自动启动下一轮。
+
+推荐用仓库中的启动脚本读取本机 `.zshrc` 中已有的 Provider 配置，并通过 SSH
+读取 `zhangbot` 上现有 Redis 的 ACL（不会打印或写入仓库）：
+
+```sh
+zsh -ic 'bash scripts/run_local_cloudflare_workers.sh'
+```
 
 配置含义：
 
@@ -59,8 +67,10 @@ docker compose -f docker-compose.cloudflare-workers.yml logs -f worker-a worker-
   不会加入集群；这套 compose 不会再启动一个本地 Redis。
 - `WORKER_CREDENTIAL` 是 Worker API 凭证，不是 Cloudflare Account API Token。
 - `ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`、
-  `ANTHROPIC_MODEL` 只保存在本地 env 文件，并只传给本地执行容器；不会上传
-  到 D1、浏览器、日志或 Cloudflare 控制面。
+  `ANTHROPIC_MODEL` 只从本机现有 shell 环境注入 Worker 容器；不会上传到
+  D1、浏览器、日志或 Cloudflare 控制面。不要改成仓库中的硬编码值。
+- 结果超过单次请求大小时，Worker 使用 R2 Multipart 分片上传；单个分片为
+  8 MB，完成时会校验分片连续性和总大小。
 
 配置文件只允许本机 Worker 服务账号读取。不要提交 Git，也不要把这些值写入
 前端设置或聊天内容。
