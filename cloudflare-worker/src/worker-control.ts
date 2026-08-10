@@ -1093,8 +1093,101 @@ async function verifierAuthorized(request: Request, env: Env): Promise<boolean> 
   return (await sha256(configured)) === (await sha256(supplied));
 }
 
+function verifierUnavailable(env: Env): Response | null {
+  return env.WORKER_VERIFIER_TOKEN?.trim()
+    ? null
+    : errorJson("Trusted verifier is not configured", 503, "VERIFIER_NOT_CONFIGURED");
+}
+
+async function handleVerifierPending(request: Request, env: Env): Promise<Response> {
+  const unavailable = verifierUnavailable(env);
+  if (unavailable) return unavailable;
+  if (!(await verifierAuthorized(request, env))) {
+    return errorJson("Trusted verifier authentication required", 401, "VERIFIER_UNAUTHENTICATED");
+  }
+  const url = new URL(request.url);
+  const requestedLimit = Number(url.searchParams.get("limit") ?? "10");
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.min(20, Math.max(1, Math.floor(requestedLimit)))
+    : 10;
+  const result = await env.DB.prepare(
+    `SELECT a.artifact_id, a.task_id, a.name, a.file_size_bytes,
+            a.checksum_sha256, a.content_type, a.created_at,
+            a.attempt_id, wa.fencing_epoch
+     FROM artifacts a
+     JOIN tasks t ON t.task_id = a.task_id
+     JOIN worker_attempts wa ON wa.attempt_id = a.attempt_id AND wa.task_id = a.task_id
+     WHERE a.status = 'quarantine'
+       AND a.manifest_json IS NOT NULL
+       AND t.status = 'running'
+       AND wa.status = 'succeeded'
+     ORDER BY a.created_at ASC
+     LIMIT ?1`
+  ).bind(limit).all<{
+    artifact_id: string;
+    task_id: string;
+    name: string;
+    file_size_bytes: number;
+    checksum_sha256: string;
+    content_type: string | null;
+    created_at: number;
+    attempt_id: string;
+    fencing_epoch: number;
+  }>();
+  return json({
+    artifacts: (result.results ?? []).map((artifact) => ({
+      ...artifact,
+      created_at: new Date(Number(artifact.created_at) * 1000).toISOString(),
+      download_url: `${url.origin}/api/worker/v1/verifier/artifacts/${encodeURIComponent(artifact.artifact_id)}`,
+      publish_url: `${url.origin}/api/worker/v1/verifier/attempts/${encodeURIComponent(artifact.attempt_id)}/publish`,
+    })),
+  });
+}
+
+async function handleVerifierArtifact(request: Request, env: Env, artifactId: string): Promise<Response> {
+  const unavailable = verifierUnavailable(env);
+  if (unavailable) return unavailable;
+  if (!(await verifierAuthorized(request, env))) {
+    return errorJson("Trusted verifier authentication required", 401, "VERIFIER_UNAUTHENTICATED");
+  }
+  if (!env.RESOURCE_BUCKET) return errorJson("Task resource storage is not configured", 503, "RESOURCE_STORAGE_UNAVAILABLE");
+  const artifact = await env.DB.prepare(
+    `SELECT a.artifact_id, a.name, a.object_key, a.file_size_bytes,
+            a.checksum_sha256, a.content_type
+     FROM artifacts a
+     JOIN tasks t ON t.task_id = a.task_id
+     JOIN worker_attempts wa ON wa.attempt_id = a.attempt_id AND wa.task_id = a.task_id
+     WHERE a.artifact_id = ?1
+       AND a.status = 'quarantine'
+       AND a.manifest_json IS NOT NULL
+       AND t.status = 'running'
+       AND wa.status = 'succeeded'`
+  ).bind(artifactId).first<{
+    artifact_id: string;
+    name: string;
+    object_key: string;
+    file_size_bytes: number;
+    checksum_sha256: string;
+    content_type: string | null;
+  }>();
+  if (!artifact) return errorJson("Quarantine artifact is not ready for verification", 404, "ARTIFACT_NOT_FOUND");
+  const object = await env.RESOURCE_BUCKET.get(artifact.object_key);
+  if (!object) return errorJson("Quarantine artifact is missing", 404, "ARTIFACT_NOT_FOUND");
+  const headers = new Headers({
+    "cache-control": "no-store",
+    "content-type": artifact.content_type || "application/zip",
+    "content-length": String(object.size),
+    "x-artifact-id": artifact.artifact_id,
+    "x-artifact-size": String(artifact.file_size_bytes),
+    "x-artifact-sha256": artifact.checksum_sha256,
+  });
+  object.writeHttpMetadata(headers);
+  return new Response(object.body, { headers });
+}
+
 async function handleVerifiedPublish(request: Request, env: Env, attemptId: string): Promise<Response> {
-  if (!env.WORKER_VERIFIER_TOKEN) return errorJson("Trusted verifier is not configured", 503, "VERIFIER_NOT_CONFIGURED");
+  const unavailable = verifierUnavailable(env);
+  if (unavailable) return unavailable;
   if (!(await verifierAuthorized(request, env))) return errorJson("Trusted verifier authentication required", 401, "VERIFIER_UNAUTHENTICATED");
   const body = await bodyJson(request);
   const artifactId = safeText(body?.artifact_id, 120);
@@ -1182,6 +1275,14 @@ export async function handleWorkerControlApi(request: Request, env: Env): Promis
   }
   const { pathname } = url;
   if (request.method === "POST" && pathname === "/api/worker/v1/enroll") return handleEnroll(request, env);
+
+  const verifierPendingPath = "/api/worker/v1/verifier/pending";
+  if (verifierPendingPath === pathname && request.method === "GET") return handleVerifierPending(request, env);
+
+  const verifierArtifactMatch = pathname.match(/^\/api\/worker\/v1\/verifier\/artifacts\/([^/]+)$/);
+  if (verifierArtifactMatch && request.method === "GET") {
+    return handleVerifierArtifact(request, env, decodeURIComponent(verifierArtifactMatch[1]));
+  }
 
   const verifierMatch = pathname.match(/^\/api\/worker\/v1\/verifier\/attempts\/([^/]+)\/publish$/);
   if (verifierMatch && request.method === "POST") return handleVerifiedPublish(request, env, decodeURIComponent(verifierMatch[1]));

@@ -26,6 +26,15 @@ export interface TaskItem {
   created_at: string;
 }
 
+export interface TaskArtifact {
+  artifact_id: string;
+  name: string;
+  kind: string;
+  file_size_bytes: number | null;
+  checksum_sha256: string | null;
+  created_at: string;
+}
+
 export interface ProjectInfo {
   project_id: string;
   name: string;
@@ -198,6 +207,10 @@ export async function listTasks(limit = 50): Promise<TaskItem[]> {
   return data.tasks || [];
 }
 
+export async function getTaskArtifacts(taskId: string): Promise<TaskArtifact[]> {
+  return requestJson<TaskArtifact[]>(`${getApiBase()}/api/tasks/${encodeURIComponent(taskId)}/artifacts`);
+}
+
 export async function cancelTask(taskId: string): Promise<{ status: string }> {
   return requestJson(`${getApiBase()}/api/tasks/${taskId}/cancel`, { method: "POST" });
 }
@@ -246,7 +259,7 @@ export async function downloadArtifact(artifactId: string, filename = "artifact.
   a.href = url;
   a.download = filename;
   a.click();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export function taskEventStreamUrl(taskId: string): string {

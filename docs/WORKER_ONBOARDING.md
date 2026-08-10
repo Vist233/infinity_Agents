@@ -52,6 +52,13 @@ docker compose -f docker-compose.cloudflare-workers.yml logs -f worker-a worker-
 `/var/run/docker.sock`，因此不能也不需要在容器内再启动 Docker。每次只执行
 一个 Attempt，上传完成后清理任务目录并退出，Compose 会自动启动下一轮。
 
+如需让网页端立即看到并下载已提交结果，在同一目录准备仅本机可读的
+`verifier.cloudflare.env`，写入 `CONTROL_BASE_URL` 和独立的
+`WORKER_VERIFIER_TOKEN`，然后用仓库脚本启动。脚本会额外启动一个不带
+Worker 凭证、Provider 密钥、Redis 密钥或 Docker socket 的验证器容器。它只
+读取隔离 Artifact，校验大小、哈希、ZIP 完整性和路径安全后才发布；WiFi
+不属于这条链路。
+
 推荐用仓库中的启动脚本读取本机 `.zshrc` 中已有的 Provider 配置，并通过 SSH
 读取 `zhangbot` 上现有 Redis 的 ACL（不会打印或写入仓库）：
 
@@ -71,6 +78,8 @@ zsh -ic 'bash scripts/run_local_cloudflare_workers.sh'
   D1、浏览器、日志或 Cloudflare 控制面。不要改成仓库中的硬编码值。
 - 结果超过单次请求大小时，Worker 使用 R2 Multipart 分片上传；单个分片为
   8 MB，完成时会校验分片连续性和总大小。
+- Worker 提交后先进入 `verification_pending`；独立验证器发布后，网页任务
+  才变为 `succeeded` 并显示下载结果。
 
 配置文件只允许本机 Worker 服务账号读取。不要提交 Git，也不要把这些值写入
 前端设置或聊天内容。

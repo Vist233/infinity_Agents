@@ -70,6 +70,21 @@ services:
       - worker_b_inputs:/worker-inputs
       - worker_b_outputs:/worker-outputs
 
+  # This service is deliberately separate from the execution Workers. It is
+  # started only when WORKER_VERIFIER_TOKEN is loaded by the local bootstrap
+  # script, and it has no Worker credential, provider key, Redis credential, or
+  # Docker socket.
+  verifier:
+    <<: *cloudflare-worker
+    command: python3 -m backend.code_agent.verifier_service
+    environment:
+      CONTROL_BASE_URL: ${CONTROL_BASE_URL:-https://infinity.zhangyvjing.com}
+      WORKER_VERIFIER_TOKEN: ${WORKER_VERIFIER_TOKEN:-}
+      VERIFIER_POLL_INTERVAL: ${VERIFIER_POLL_INTERVAL:-5}
+      VERIFIER_WORK_ROOT: /verifier-work
+    volumes:
+      - verifier_work:/verifier-work
+
 volumes:
   worker_a_inputs:
     name: infinity-agents-worker-a-inputs
@@ -79,3 +94,5 @@ volumes:
     name: infinity-agents-worker-b-inputs
   worker_b_outputs:
     name: infinity-agents-worker-b-outputs
+  verifier_work:
+    name: infinity-agents-verifier-work

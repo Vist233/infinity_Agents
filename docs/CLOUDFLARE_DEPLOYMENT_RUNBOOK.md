@@ -59,9 +59,10 @@ npx wrangler secret put IMAGE_JUDGE_DASHSCOPE_API_KEY
 ```
 
 `WORKER_ENROLLMENT_ADMIN_USER_IDS` 只能填写明确批准的 Zhang Auth `sub`，不
-能按“最近登录用户”或用户数量猜测。`WORKER_VERIFIER_TOKEN` 在独立验证器
-上线前保持未配置；这样 Worker 只能把结果放入 R2 quarantine，不能自行把
-结果提升为用户可见的 `published` Artifact。
+能按“最近登录用户”或用户数量猜测。`WORKER_VERIFIER_TOKEN` 只配置在独立
+验证器已启动的情况下；执行 Worker 不会收到这个 Secret，只能把结果放入
+R2 quarantine，验证器校验后才提升为用户可见的 `published` Artifact。验证器
+未运行时，不应把执行 Worker 直接配置成发布者。
 
 ## 发布后验收
 

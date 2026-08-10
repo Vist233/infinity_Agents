@@ -22,5 +22,17 @@ export WORKER_B_REDIS_PASSWORD="$(printf '%s\n' "$redis_values" | sed -n '4p')"
 export WORKER_A_REDIS_URL="$(node -e 'console.log("redis://" + encodeURIComponent(process.env.WORKER_A_REDIS_USERNAME) + ":" + encodeURIComponent(process.env.WORKER_A_REDIS_PASSWORD) + "@host.docker.internal:16379/0")')"
 export WORKER_B_REDIS_URL="$(node -e 'console.log("redis://" + encodeURIComponent(process.env.WORKER_B_REDIS_USERNAME) + ":" + encodeURIComponent(process.env.WORKER_B_REDIS_PASSWORD) + "@host.docker.internal:16379/0")')"
 
-docker rm -f infinity-cf-merge-2-worker-a-1 infinity-cf-merge-2-worker-b-1 >/dev/null 2>&1 || true
-docker compose -f docker-compose.cloudflare-workers.yml up -d --no-build worker-a worker-b
+docker rm -f infinity-cf-merge-2-worker-a-1 infinity-cf-merge-2-worker-b-1 infinity-cf-merge-2-verifier-1 >/dev/null 2>&1 || true
+
+compose_services=(worker-a worker-b)
+verifier_env_file="${VERIFIER_ENV_FILE:-verifier.cloudflare.env}"
+if [[ -f "$verifier_env_file" ]]; then
+  # The verifier token is local-only. It is passed to the verifier container
+  # through the process environment and never printed or committed.
+  set -a
+  . "$verifier_env_file"
+  set +a
+  compose_services+=(verifier)
+fi
+
+docker compose -f docker-compose.cloudflare-workers.yml up -d --no-build "${compose_services[@]}"

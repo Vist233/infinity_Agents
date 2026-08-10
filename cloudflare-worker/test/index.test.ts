@@ -128,6 +128,22 @@ describe("Infinity Edge route composition", () => {
     expect(await response.json()).toMatchObject({ error: { code: "VERIFIER_NOT_CONFIGURED" } });
   });
 
+  it("does not expose verifier queue or quarantine objects before configuration", async () => {
+    const pending = await worker.fetch(
+      new Request("https://app.test/api/worker/v1/verifier/pending"),
+      testEnv(),
+    );
+    expect(pending.status).toBe(503);
+    expect(await pending.json()).toMatchObject({ error: { code: "VERIFIER_NOT_CONFIGURED" } });
+
+    const artifact = await worker.fetch(
+      new Request("https://app.test/api/worker/v1/verifier/artifacts/artifact-1"),
+      testEnv(),
+    );
+    expect(artifact.status).toBe(503);
+    expect(await artifact.json()).toMatchObject({ error: { code: "VERIFIER_NOT_CONFIGURED" } });
+  });
+
   it("falls back to the Next static export for product pages", async () => {
     const response = await worker.fetch(new Request("https://app.test/"), testEnv());
     expect(response.status).toBe(200);

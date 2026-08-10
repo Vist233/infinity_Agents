@@ -89,6 +89,8 @@ POST /api/worker/v1/attempts/:attempt_id/artifacts/multipart/init
 PUT  /api/worker/v1/attempts/:attempt_id/artifacts/:artifact_id/parts/:part_number
 POST /api/worker/v1/attempts/:attempt_id/artifacts/:artifact_id/multipart/complete
 POST /api/worker/v1/attempts/:attempt_id/finalize
+GET  /api/worker/v1/verifier/pending                         (trusted verifier only)
+GET  /api/worker/v1/verifier/artifacts/:artifact_id          (trusted verifier only)
 POST /api/worker/v1/verifier/attempts/:attempt_id/publish  (trusted verifier only)
 ```
 
@@ -102,6 +104,13 @@ user-visible Artifact. If that verifier secret is not configured, no Worker
 can self-promote an arbitrary result to `succeeded`. The Worker receives no D1
 or R2 parent credential. Redis and provider settings are local Worker settings;
 only non-secret capability flags and the provider model name cross the handshake.
+
+The local verifier is a separate Docker service. It polls the two verifier-only
+endpoints, streams each quarantine ZIP to its own temporary volume, validates
+the SHA-256, size, ZIP CRCs, duplicate/path-traversal entries, and symlinks,
+then calls the publish endpoint. The execution Workers never receive the
+verifier token. Once published, the ordinary authenticated task artifact API
+and the Task Center download action can read the result from R2.
 
 ### macOS / Windows bootstrap client
 
@@ -145,6 +154,12 @@ task-local files are removed and Compose restarts the container for the next
 cycle. Results up to 20 MB use the single upload endpoint; larger results use
 8 MB R2 Multipart parts and are checked for contiguous parts, total size, and
 object size before finalize.
+
+When `verifier.cloudflare.env` exists, the same bootstrap also starts the
+separate `verifier` service. It is the only local process that uses
+`WORKER_VERIFIER_TOKEN`; it has no Docker socket and does not execute Claude
+Code. Without that file, execution Workers can still run and submit quarantine
+artifacts, but the web download remains intentionally gated.
 
 ImageJudge uses the same Worker under an isolated `/image-judge/*` namespace:
 
@@ -190,11 +205,13 @@ npx wrangler secret put IMAGE_JUDGE_TOKEN_SIGNING_SECRET
 npx wrangler secret put IMAGE_JUDGE_DASHSCOPE_API_KEY
 ```
 
-`WORKER_VERIFIER_TOKEN` must remain unset until an independent verifier service
-exists. Worker finalize therefore remains `verification_pending` and cannot
-self-publish a user-visible artifact. Redis on `zhangbot` is intentionally
-not a Worker binding: the deployed Worker uses D1/R2 only, while a future
-Task Relay may reach Redis solely through an outbound Tunnel.
+`WORKER_VERIFIER_TOKEN` is configured only when the separate Docker verifier is
+running. The execution Workers never receive this secret: they finalize into
+`verification_pending`, while the verifier checks and publishes the result.
+If the verifier is stopped, the secret may remain configured but no new result
+is promoted. Redis on `zhangbot` is intentionally not a Worker binding: the
+deployed Worker uses D1/R2 only, while the local execution Workers use the
+existing Redis service.
 
 After deploy, run the read-only smoke checks below and record the version ID
 shown by Wrangler:
