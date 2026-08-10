@@ -35,6 +35,7 @@ describe("ImageJudge file-analysis workspace", () => {
     expect(screen.getByAltText("上传叶片一")).toBeDefined();
     expect(screen.getByText("PASS")).toBeDefined();
     expect(screen.getByText("REVIEW")).toBeDefined();
+    expect(screen.getByTestId("image-judge-download-app")).toBeDefined();
   });
 
   it("switches the right-side run instance when an example tab is selected", async () => {
@@ -62,5 +63,6 @@ describe("ImageJudge file-analysis workspace", () => {
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByTestId("image-example-list")).toBeDefined();
     expect(within(dialog).getByTestId("image-example-sequence")).toBeDefined();
+    expect(within(dialog).getByTestId("image-judge-download-app-mobile")).toBeDefined();
   });
 });

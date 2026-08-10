@@ -2,7 +2,8 @@
 
 import Image from "next/image";
 import { useMemo, useState } from "react";
-import { FileImage, Microscope } from "lucide-react";
+import { Download, FileImage, Microscope } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { WorkspaceSidebar } from "@/components/workspace/WorkspaceSidebar";
 import { MobileWorkspaceDrawer } from "@/components/workspace/MobileWorkspaceDrawer";
 import { useLanguage } from "@/lib/i18n";
@@ -91,6 +92,15 @@ export default function ImageJudgePage() {
   return (
     <div className="flex h-screen min-h-0 bg-transparent font-sans text-zinc-900">
       <WorkspaceSidebar active="traits" onNavigate={(path) => router.push(path)}>
+        <Button
+          variant="outline"
+          className="mt-3 shrink-0 justify-start gap-2 rounded-xl border-[var(--hairline)] bg-white/90 shadow-sm hover:bg-white"
+          onClick={() => router.push("/downloads")}
+          data-testid="image-judge-download-app"
+        >
+          <Download size={16} />
+          {t("nav.downloads")}
+        </Button>
         <div className="mt-4 min-h-0 flex-1 border-t border-[var(--hairline)] pt-4">
           <ExampleList selectedId={selected.id} onSelect={setSelectedId} />
         </div>
@@ -100,7 +110,20 @@ export default function ImageJudgePage() {
         <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-[var(--hairline)] bg-[var(--surface-1)] px-4 backdrop-blur-xl">
           <div className="flex items-center gap-2 text-sm font-semibold tracking-tight text-zinc-700">
             <MobileWorkspaceDrawer active="traits" onNavigate={(path) => router.push(path)}>
-              <ExampleList selectedId={selected.id} onSelect={setSelectedId} />
+              <div className="flex min-h-0 flex-1 flex-col">
+                <Button
+                  variant="outline"
+                  className="shrink-0 justify-start gap-2 rounded-xl border-[var(--hairline)] bg-white/90 shadow-sm hover:bg-white"
+                  onClick={() => router.push("/downloads")}
+                  data-testid="image-judge-download-app-mobile"
+                >
+                  <Download size={16} />
+                  {t("nav.downloads")}
+                </Button>
+                <div className="mt-4 min-h-0 flex-1 border-t border-[var(--hairline)] pt-4">
+                  <ExampleList selectedId={selected.id} onSelect={setSelectedId} />
+                </div>
+              </div>
             </MobileWorkspaceDrawer>
             <Microscope className="h-4 w-4" />
             {t("nav.traits")}

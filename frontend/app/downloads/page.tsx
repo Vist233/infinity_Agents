@@ -15,11 +15,11 @@ export default function DownloadsPage() {
 
   return (
     <div className="flex h-screen min-h-0 bg-transparent font-sans text-zinc-900">
-      <WorkspaceSidebar active="downloads" onNavigate={(path) => router.push(path)} />
+      <WorkspaceSidebar active="traits" onNavigate={(path) => router.push(path)} />
 
       <main className="min-w-0 flex-1 overflow-y-auto">
         <header className="sticky top-0 z-10 flex h-14 items-center gap-2 border-b border-[var(--hairline)] bg-[var(--surface-1)] px-4 backdrop-blur-xl">
-          <MobileWorkspaceDrawer active="downloads" onNavigate={(path) => router.push(path)} />
+          <MobileWorkspaceDrawer active="traits" onNavigate={(path) => router.push(path)} />
           <Download className="h-4 w-4 text-zinc-500" />
           <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("downloads.title")}</div>
         </header>
