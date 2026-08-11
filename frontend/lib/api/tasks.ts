@@ -34,6 +34,57 @@ export interface WorkerEnrollmentInfo {
   one_time: boolean;
 }
 
+// Compatibility contracts retained for the legacy Task Center cards that are
+// still shipped on the Cloudflare branch. The current direct bundle endpoint
+// remains the preferred path for the new Task Center UI.
+export interface ProjectInfo {
+  project_id: string;
+  name: string;
+  created_at?: string;
+}
+
+export interface MethodSourceInfo {
+  method_source_id: string;
+  project_id: string;
+  original_filename: string;
+  stored_path?: string;
+  file_hash_sha256?: string;
+  file_size_bytes?: number;
+}
+
+export interface DatasetUploadInfo {
+  resource_id: string;
+  project_id: string;
+  logical_name: string;
+  file_hash_sha256: string;
+  file_size_bytes: number;
+  original_filename?: string;
+}
+
+export interface WorkerEnrollmentResponse {
+  worker_id: string;
+  namespace: string;
+  trust_level: "owner_trusted" | "institution_trusted" | "student_untrusted";
+  worker_credential: string;
+  credential_expires_at: string | null;
+  control_base_url: string;
+  persistent: boolean;
+  one_time: boolean;
+}
+
+export interface WorkerRegistration {
+  worker_id: string;
+  namespace: string;
+  trust_level: "owner_trusted" | "institution_trusted" | "student_untrusted";
+  status: "active" | "revoked" | "draining" | string;
+  presence: "online" | "offline" | "never_seen";
+  credential_expires_at: string | null;
+  last_seen_at: string | null;
+  created_at: string | null;
+  revoked_at: string | null;
+  credential_available?: boolean;
+}
+
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -69,6 +120,101 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
 /** Generic authenticated GET against the Task API. */
 export function getJson<T>(url: string): Promise<T> {
   return requestJson<T>(url);
+}
+
+export async function getDefaultProject(): Promise<ProjectInfo> {
+  return requestJson(`${getApiBase()}/api/projects/default`);
+}
+
+export async function uploadMethodSource(file: File): Promise<MethodSourceInfo> {
+  const form = new FormData();
+  form.append("file", file);
+  return requestJson(`${getApiBase()}/api/method-sources/upload`, { method: "POST", body: form });
+}
+
+export async function uploadDataset(file: File, projectId: string): Promise<DatasetUploadInfo> {
+  const form = new FormData();
+  form.append("project_id", projectId);
+  form.append("file", file);
+  return requestJson(`${getApiBase()}/api/dataset-snapshots/upload`, { method: "POST", body: form });
+}
+
+export async function createTaskSpec(input: {
+  project_id: string;
+  title: string;
+  analysis_type?: string;
+  research_question?: string;
+}): Promise<{ task_spec_id: string; revision: number; status: string }> {
+  return requestJson(`${getApiBase()}/api/task-specs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function freezeTaskSpec(taskSpecId: string): Promise<{ task_spec_id: string; status: string; frozen: boolean }> {
+  return requestJson(`${getApiBase()}/api/task-specs/${encodeURIComponent(taskSpecId)}/freeze`, { method: "POST" });
+}
+
+export async function createDatasetSnapshot(input: {
+  project_id: string;
+  task_spec_id: string;
+  original_filename: string;
+  resource_id: string;
+  file_hash_sha256?: string;
+  validation_passed?: boolean;
+}): Promise<{ dataset_snapshot_id: string }> {
+  return requestJson(`${getApiBase()}/api/dataset-snapshots`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function createTask(input: {
+  project_id: string;
+  task_spec_id: string;
+  dataset_snapshot_id: string;
+  title: string;
+  method_source_id?: string;
+  idempotency_key?: string;
+  chat_confirmation_id?: string | false;
+  submission_source?: "task_center";
+  agent_confirmation?: boolean;
+  direct?: boolean;
+}): Promise<{ task_id: string; status: string; duplicate?: boolean }> {
+  const { direct, ...body } = input;
+  return requestJson(`${getApiBase()}${direct ? "/api/tasks/direct" : "/api/tasks"}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function createWorkerEnrollment(input: { namespace: string }): Promise<WorkerEnrollmentResponse> {
+  return requestJson(`${getApiBase()}/api/worker-enrollments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function listWorkerEnrollments(): Promise<WorkerRegistration[]> {
+  const data = await requestJson<{ workers: WorkerRegistration[] }>(`${getApiBase()}/api/worker-enrollments`);
+  return data.workers || [];
+}
+
+export async function getWorkerCredential(workerId: string, namespace: string): Promise<WorkerEnrollmentResponse> {
+  return requestJson<WorkerEnrollmentResponse>(
+    `${getApiBase()}/api/worker-enrollments/${encodeURIComponent(workerId)}/credential?namespace=${encodeURIComponent(namespace)}`,
+  );
+}
+
+export async function rotateWorkerCredential(workerId: string, namespace: string): Promise<WorkerEnrollmentResponse> {
+  return requestJson<WorkerEnrollmentResponse>(
+    `${getApiBase()}/api/worker-enrollments/${encodeURIComponent(workerId)}/rotate?namespace=${encodeURIComponent(namespace)}`,
+    { method: "POST" },
+  );
 }
 
 export async function submitTaskBundle(input: {

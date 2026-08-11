@@ -8,6 +8,8 @@ interface AgentNavProps {
   active: "analysis" | "chat" | "tasks" | "traits";
 }
 
+export type WorkspaceSection = AgentNavProps["active"];
+
 const items = [
   { id: "analysis", labelKey: "nav.analysis", path: "/", icon: FileText },
   { id: "chat", labelKey: "nav.chatAgent", path: "/chat-agent", icon: MessageCircle },
