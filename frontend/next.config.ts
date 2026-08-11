@@ -5,9 +5,9 @@ import { dirname } from "node:path";
 const projectRoot = dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
-  // output: "export" removed: incompatible with dynamic routes without
-  // generateStaticParams() and breaks SSE streaming. Standard server mode
-  // supports both runtime routing and SSE.
+  // Cloudflare serves the browser shell from Workers Assets; API/SSE routes
+  // are handled by the companion Worker and never pass through Next.
+  output: process.env.CLOUDFLARE_EXPORT === "1" ? "export" : undefined,
   experimental: {
     // Local Task Center uploads can exceed Next.js proxy's default 10MB body
     // buffer. Raise it so same-origin /api/* and /auth/* rewrites keep working

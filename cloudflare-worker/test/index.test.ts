@@ -149,4 +149,19 @@ describe("Infinity Edge route composition", () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("static asset");
   });
+
+  it("serves the dynamic task detail shell without changing the browser URL", async () => {
+    let requestedPath = "";
+    const env = testEnv();
+    env.ASSETS = {
+      fetch: async (request: Request) => {
+        requestedPath = new URL(request.url).pathname;
+        return new Response("task shell");
+      },
+    } as unknown as typeof env.ASSETS;
+
+    const response = await worker.fetch(new Request("https://app.test/task-center/tasks/task-123/"), env);
+    expect(response.status).toBe(200);
+    expect(requestedPath).toBe("/task-center/tasks/preview/");
+  });
 });

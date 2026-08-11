@@ -28,6 +28,11 @@ function withCookies(response: Response, setCookies?: string[]): Response {
   return new Response(response.body, { status: response.status, headers });
 }
 
+function taskDetailShellPath(pathname: string): string | null {
+  const match = pathname.match(/^\/(code-agent|task-center)\/tasks\/[^/]+\/?$/);
+  return match ? `/${match[1]}/tasks/preview/` : null;
+}
+
 /** GET /api/me — current user and today's quota usage. */
 async function handleMe(env: Env, user: AuthedUser): Promise<Response> {
   const usage = await currentDailyUsage(env, user.userId);
@@ -142,6 +147,15 @@ export default {
     }
 
     if (method === "GET" || method === "HEAD") {
+      // Next static export emits one deterministic dynamic-route shell. Keep
+      // the browser URL (and therefore useParams()) intact while serving that
+      // shell for every authenticated task ID.
+      const shellPath = taskDetailShellPath(pathname);
+      if (shellPath) {
+        const shellUrl = new URL(request.url);
+        shellUrl.pathname = shellPath;
+        return env.ASSETS.fetch(new Request(shellUrl, request));
+      }
       return env.ASSETS.fetch(request);
     }
     return errorJson("Not found", 404, "NOT_FOUND");

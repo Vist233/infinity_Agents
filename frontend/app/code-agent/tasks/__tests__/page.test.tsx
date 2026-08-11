@@ -28,6 +28,7 @@ import { downloadArtifact, getJson, listTasks } from "@/lib/api/tasks";
 describe("Task detail downloads", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.setItem("infinity-agents-language", "zh");
     window.history.replaceState({}, "", "/code-agent/tasks/?task_id=task-1");
     (listTasks as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     const task = {
@@ -56,6 +57,7 @@ describe("Task detail downloads", () => {
 
   afterEach(() => {
     cleanup();
+    window.localStorage.removeItem("infinity-agents-language");
     vi.useRealTimers();
   });
 

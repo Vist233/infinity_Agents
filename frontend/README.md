@@ -39,8 +39,8 @@ npm run test:e2e
 npm run build
 ```
 
-`npm run build` produces `out/`. The Worker configuration serves that directory
-through its `assets` binding when deployed.
+`CLOUDFLARE_EXPORT=1 npm run build` produces `out/` for the Cloudflare Worker.
+The ordinary `npm run build` keeps Next's server mode for local/acceptance use.
 
 ## Test Strategy
 

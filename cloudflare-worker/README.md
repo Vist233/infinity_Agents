@@ -181,7 +181,7 @@ applied to the configured Cloudflare databases, never to a local preview.
 ```sh
 cd frontend
 npm ci
-npm run build
+CLOUDFLARE_EXPORT=1 npm run build
 
 cd ../cloudflare-worker
 npm ci
