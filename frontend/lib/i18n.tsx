@@ -548,11 +548,20 @@ const LanguageContext = createContext<LanguageContextValue | null>(null);
 const STORAGE_KEY = "infinity-agents-language";
 
 export function LanguageProvider({ children, initialLanguage = "zh" }: { children: ReactNode; initialLanguage?: Language }) {
-  // The server already resolved the language from the signed-in user's
-  // cookie/Accept-Language header.  Do not read localStorage in the lazy
-  // initializer: a stale browser value would render different text during
-  // hydration and cause a visible React re-mount/flash.
+  // Keep the first render deterministic for static export, then honor the
+  // saved account preference or the browser's system language on the client.
   const [language, setLanguage] = useState<Language>(initialLanguage);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    const detected: Language = stored === "zh" || stored === "en"
+      ? stored
+      : window.navigator.language.toLowerCase().startsWith("en") ? "en" : "zh";
+    const timer = window.setTimeout(() => {
+      setLanguage((current) => current === detected ? current : detected);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, language);
