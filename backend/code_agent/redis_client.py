@@ -4,18 +4,27 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Redis key/stream constants
-STREAM_TASKS_EXECUTE = "stream:tasks:execute"
-STREAM_TASK_EVENTS = "stream:task-events"
-CONSUMER_GROUP = "task-workers-v1"
+# Redis key/stream constants. A namespace isolates acceptance runs while an
+# empty value preserves the existing local-development key names.
+_REDIS_NAMESPACE = os.getenv("REDIS_NAMESPACE", "").strip().strip(":")
 
-PROGRESS_KEY_PREFIX = "progress:"
-WORKER_HEARTBEAT_PREFIX = "worker:"
-RATE_LIMIT_PREFIX = "rate:user:"
+
+def _scoped_key(key: str) -> str:
+    return f"{_REDIS_NAMESPACE}:{key}" if _REDIS_NAMESPACE else key
+
+
+STREAM_TASKS_EXECUTE = _scoped_key("stream:tasks:execute")
+STREAM_TASK_EVENTS = _scoped_key("stream:task-events")
+CONSUMER_GROUP = _scoped_key("task-workers-v1")
+
+PROGRESS_KEY_PREFIX = _scoped_key("progress:")
+WORKER_HEARTBEAT_PREFIX = _scoped_key("worker:")
+RATE_LIMIT_PREFIX = _scoped_key("rate:user:")
 
 
 class RedisClient:
@@ -25,19 +34,30 @@ class RedisClient:
         self._url = url
         self._client = None
 
+    @property
+    def namespace(self) -> str:
+        """Return the process-scoped Redis key Namespace used by this client."""
+        return _REDIS_NAMESPACE
+
     async def connect(self) -> None:
         """Initialize Redis connection."""
+        from backend.security import validate_runtime_redis_url
+        validate_runtime_redis_url(self._url)
         try:
             import redis.asyncio as aioredis
             self._client = aioredis.from_url(
                 self._url,
                 decode_responses=True,
                 socket_connect_timeout=5,
-                socket_timeout=5,
+                # XREADGROUP may block for block_ms=5000; keep the socket
+                # timeout longer than the blocking window so an idle stream
+                # is not logged as a failed consumer cycle.
+                socket_timeout=max(10, int(os.getenv("REDIS_SOCKET_TIMEOUT", "15"))),
             )
             # Test connection
             await self._client.ping()
-            logger.info("Connected to Redis at %s", self._url)
+            # Never log the URL: acceptance URLs may contain a Redis password.
+            logger.info("Connected to Redis")
         except ImportError:
             logger.warning("redis-py not installed, Redis features disabled")
             self._client = None
@@ -130,6 +150,24 @@ class RedisClient:
             logger.error("Failed to consume tasks from Redis: %s", exc)
             return []
 
+    @staticmethod
+    def _decode_task_messages(messages: Any) -> List[Dict[str, Any]]:
+        """Normalize Redis stream tuples into the worker task shape."""
+        results: List[Dict[str, Any]] = []
+        for message_id, raw_data in messages or []:
+            task_data: Dict[str, Any] = {}
+            for key, value in (raw_data or {}).items():
+                try:
+                    task_data[key] = json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    task_data[key] = value
+            results.append({
+                "message_id": message_id,
+                "task_data": task_data,
+                "raw_data": raw_data,
+            })
+        return results
+
     async def ack_message(self, message_id: str) -> bool:
         """Acknowledge a message from the execution stream."""
         if not self._client:
@@ -162,12 +200,28 @@ class RedisClient:
     async def recover_pending_messages(self, consumer_name: str, min_idle_time_ms: int = 60000) -> int:
         """Recover pending messages that have been idle longer than min_idle_time_ms.
 
-        Uses XAUTOCLAIM (or XCLAIM with IDLE) to move stale pending messages
-        back to the consumer's pending entry list so they can be reprocessed.
-        Returns the number of recovered messages.
+        Compatibility wrapper for callers that only need the count. The worker
+        uses ``claim_pending_tasks`` so the complete stream payload is passed
+        back through the same task processing path before ACK.
+        """
+        return len(await self.claim_pending_tasks(consumer_name, min_idle_time_ms=min_idle_time_ms))
+
+    async def claim_pending_tasks(
+        self,
+        consumer_name: str,
+        min_idle_time_ms: int = 60000,
+        count: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Claim stale pending task messages and return their full payloads.
+
+        ``XAUTOCLAIM`` changes ownership but does not itself execute a task.
+        Returning the claimed entries lets the Worker feed them through
+        ``_process_next_task`` and ACK only after the normal DB claim/finish
+        path has handled them. The XPENDING/XCLAIM branch keeps compatibility
+        with Redis versions without XAUTOCLAIM.
         """
         if not self._client:
-            return 0
+            return []
         try:
             # Try XAUTOCLAIM first (Redis 6.2+)
             try:
@@ -177,9 +231,13 @@ class RedisClient:
                     consumer_name,
                     min_idle_time_ms=min_idle_time_ms,
                     start_id="0-0",
+                    count=max(1, min(count, 100)),
                 )
-                if result and len(result) > 0:
-                    return len(result)
+                if isinstance(result, (tuple, list)) and len(result) > 1:
+                    # XAUTOCLAIM returns (next_start_id, messages, deleted_ids)
+                    # rather than a flat message list. A valid empty result is
+                    # authoritative; do not immediately rescan XPENDING.
+                    return self._decode_task_messages(result[1])
             except Exception:
                 # Fallback to XCLAIM if XAUTOCLAIM is not supported
                 pass
@@ -188,15 +246,15 @@ class RedisClient:
             pending = await self._client.xpending_range(
                 STREAM_TASKS_EXECUTE,
                 CONSUMER_GROUP,
-                min=min_idle_time_ms,
+                min="-",
                 max="+",
-                count=100,
+                count=max(1, min(count, 100)),
             )
             if not pending:
-                return 0
-            message_ids = [entry["message_id"] for entry in pending]
+                return []
+            message_ids = [entry["message_id"] for entry in pending if entry.get("message_id")]
             if not message_ids:
-                return 0
+                return []
             claimed = await self._client.xclaim(
                 STREAM_TASKS_EXECUTE,
                 CONSUMER_GROUP,
@@ -204,10 +262,10 @@ class RedisClient:
                 min_idle_time=min_idle_time_ms,
                 message_ids=message_ids,
             )
-            return len(claimed) if claimed else 0
+            return self._decode_task_messages(claimed)
         except Exception as exc:
             logger.error("Failed to recover pending messages: %s", exc)
-            return 0
+            return []
 
     # ========================================================================
     # Event Streaming (for SSE)
@@ -238,28 +296,56 @@ class RedisClient:
         if not self._client:
             return []
         try:
-            if last_event_id:
-                messages = await self._client.xread(
-                    {STREAM_TASK_EVENTS: last_event_id},
-                    count=count,
-                )
-            else:
-                # Read from the beginning for initial load
-                messages = await self._client.xread(
-                    {STREAM_TASK_EVENTS: "0"},
-                    count=count,
-                )
             results = []
-            for stream_name, stream_messages in messages:
-                for message_id, raw_data in stream_messages:
-                    event_data = {}
-                    for k, v in raw_data.items():
-                        try:
-                            event_data[k] = json.loads(v)
-                        except (json.JSONDecodeError, TypeError):
-                            event_data[k] = v
-                    event_data["_message_id"] = message_id
-                    results.append(event_data)
+            cursor = last_event_id or "0-0"
+            scanned_cursor = cursor
+            # The stream is shared by all tasks.  Redis Streams do not support
+            # a field predicate in XREAD, so scan bounded batches and advance
+            # the cursor past unrelated tasks as well.  Without this filter a
+            # user subscribed to task A could receive task B's events.
+            for _ in range(10):
+                messages = await self._client.xread(
+                    {STREAM_TASK_EVENTS: cursor},
+                    count=max(1, min(count * 4, 200)),
+                )
+                if not messages:
+                    break
+                batch_count = 0
+                for _stream_name, stream_messages in messages:
+                    for message_id, raw_data in stream_messages:
+                        batch_count += 1
+                        scanned_cursor = message_id
+                        event_data = {}
+                        for k, v in raw_data.items():
+                            try:
+                                event_data[k] = json.loads(v)
+                            except (json.JSONDecodeError, TypeError):
+                                event_data[k] = v
+                        if str(event_data.get("task_id", "")) != str(task_id):
+                            continue
+                        event_data["_message_id"] = message_id
+                        results.append(event_data)
+                        if len(results) >= count:
+                            break
+                    if len(results) >= count:
+                        break
+                if len(results) >= count or batch_count == 0:
+                    break
+                cursor = scanned_cursor
+                # A second read is useful when the first batch consisted only
+                # of another task's events.  XREAD without BLOCK returns
+                # immediately when there is no newer message.
+                if batch_count < max(1, min(count * 4, 200)):
+                    break
+            if scanned_cursor != (last_event_id or "0-0"):
+                if results:
+                    # Let the SSE endpoint acknowledge the whole scanned
+                    # range while still emitting only matching task events.
+                    results[-1]["_stream_cursor"] = scanned_cursor
+                else:
+                    # A cursor-only marker prevents an idle stream containing
+                    # other tasks from being rescanned forever.
+                    results.append({"_cursor_only": scanned_cursor})
             return results
         except Exception as exc:
             logger.error("Failed to read task events: %s", exc)
@@ -327,8 +413,22 @@ class RedisClient:
         if not self._client:
             return []
         try:
-            keys = await self._client.keys(f"{WORKER_HEARTBEAT_PREFIX}*")
-            return [k.replace(WORKER_HEARTBEAT_PREFIX, "") for k in keys]
+            # KEYS is blocking and its cost grows with the entire Redis key
+            # space.  Heartbeats are short-lived, but a busy shared Redis can
+            # still contain many unrelated keys, so enumerate this prefix in
+            # bounded SCAN batches and cap the result used by the health view.
+            cursor = 0
+            keys: List[str] = []
+            while True:
+                cursor, batch = await self._client.scan(
+                    cursor=cursor,
+                    match=f"{WORKER_HEARTBEAT_PREFIX}*",
+                    count=100,
+                )
+                keys.extend(batch or [])
+                if cursor == 0 or len(keys) >= 1000:
+                    break
+            return [k.replace(WORKER_HEARTBEAT_PREFIX, "", 1) for k in keys[:1000]]
         except Exception as exc:
             logger.error("Failed to get alive workers: %s", exc)
             return []
@@ -343,21 +443,46 @@ class RedisClient:
         """Check if user is within rate limit.
 
         Fixed-window counter keyed by (user_id, action). Returns
-        (is_allowed, remaining_count). Fails open when Redis is unavailable.
+        (is_allowed, remaining_count). Deployed-like environments return a
+        negative remaining value when Redis is unavailable so callers can
+        return a service-unavailable response instead of bypassing limits.
         """
         if not self._client:
-            return True, limit
+            strict = os.getenv("APP_ENV", "development").lower() in {"acceptance", "production", "prod"}
+            return (False, -1) if strict else (True, limit)
         try:
             key = f"{RATE_LIMIT_PREFIX}{user_id}:{action}"
-            current = await self._client.get(key)
-            if current is None:
-                await self._client.set(key, 1, ex=window_seconds)
-                return True, limit - 1
-            count = int(current)
-            if count >= limit:
-                return False, 0
-            await self._client.incr(key)
-            return True, limit - count - 1
+            # Keep the counter increment and first-write TTL in one Redis
+            # script. GET followed by SET/INCR allowed concurrent requests to
+            # observe the same old value and exceed the configured limit.
+            result = await self._client.eval(
+                """
+                local current = redis.call('INCR', KEYS[1])
+                if current == 1 then
+                    redis.call('EXPIRE', KEYS[1], ARGV[1])
+                end
+                local limit = tonumber(ARGV[2])
+                local remaining = limit - current
+                if remaining < 0 then remaining = 0 end
+                if current > limit then return {0, remaining} end
+                return {1, remaining}
+                """,
+                1,
+                key,
+                int(window_seconds),
+                int(limit),
+            )
+            if isinstance(result, (list, tuple)) and len(result) >= 2:
+                return bool(int(result[0])), int(result[1])
+
+            # Lightweight fakes and older Redis-compatible implementations may
+            # not expose EVAL. INCR is still atomic; expire immediately after
+            # the first increment so the fallback preserves the fixed window.
+            current = int(await self._client.incr(key))
+            if current == 1 and hasattr(self._client, "expire"):
+                await self._client.expire(key, window_seconds)
+            return (current <= limit, max(0, limit - current))
         except Exception as exc:
             logger.error("Rate limit check failed: %s", exc)
-            return True, limit
+            strict = os.getenv("APP_ENV", "development").lower() in {"acceptance", "production", "prod"}
+            return (False, -1) if strict else (True, limit)

@@ -1,24 +1,25 @@
 "use client";
 
-import { FileText, Microscope, Terminal } from "lucide-react";
+import { FileText, ListTodo, MessageCircle, Microscope } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 
 interface AgentNavProps {
   onNavigate: (path: string) => void;
-  active: "paper" | "code" | "image-judge";
+  active: "analysis" | "chat" | "tasks" | "traits";
 }
 
 const items = [
-  { id: "paper", labelKey: "nav.paper", path: "/", icon: FileText },
-  { id: "code", labelKey: "nav.code", path: "/code-agent", icon: Terminal },
-  { id: "image-judge", labelKey: "nav.imageJudge", path: "/image-judge", icon: Microscope },
+  { id: "analysis", labelKey: "nav.analysis", path: "/", icon: FileText },
+  { id: "chat", labelKey: "nav.chatAgent", path: "/chat-agent", icon: MessageCircle },
+  { id: "tasks", labelKey: "nav.tasks", path: "/task-center", icon: ListTodo },
+  { id: "traits", labelKey: "nav.imageJudge", path: "/image-judge", icon: Microscope },
 ] as const;
 
 export function AgentNav({ onNavigate, active }: AgentNavProps) {
   const { t } = useLanguage();
   return (
     <div className="space-y-1">
-      <div className="text-[11px] uppercase tracking-[0.22em] text-zinc-400 px-2">{t("nav.agents")}</div>
+      <div className="text-[11px] uppercase tracking-[0.22em] text-zinc-400 px-2">{t("nav.workspace")}</div>
       <div className="space-y-1">
         {items.map((item) => {
           const Icon = item.icon;

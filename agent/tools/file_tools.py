@@ -30,6 +30,7 @@ class FileSystemTools(Toolkit):
     def __init__(
         self,
         allowed_dirs: Optional[List[Path]] = None,
+        allow_basename_search: bool = True,
         **kwargs,
     ):
         self.allowed_dirs = allowed_dirs or [
@@ -37,6 +38,7 @@ class FileSystemTools(Toolkit):
             PLOT_OUTPUTS_DIR,
             PLOTLY_OUTPUTS_DIR,
         ]
+        self.allow_basename_search = allow_basename_search
         # Ensure all allowed dirs exist
         for d in self.allowed_dirs:
             d.mkdir(parents=True, exist_ok=True)
@@ -51,12 +53,24 @@ class FileSystemTools(Toolkit):
 
     def _is_path_allowed(self, path: Path) -> bool:
         """Check if a path is within allowed directories."""
-        resolved = path.resolve()
-        return any(
-            resolved == allowed.resolve() or
-            str(resolved).startswith(str(allowed.resolve()) + "/")
-            for allowed in self.allowed_dirs
-        )
+        candidate = path.absolute()
+        for allowed in self.allowed_dirs:
+            root = allowed.absolute()
+            try:
+                relative = candidate.relative_to(root)
+            except ValueError:
+                continue
+            current = root
+            try:
+                for part in relative.parts:
+                    current = current / part
+                    if current.is_symlink():
+                        return False
+                candidate.resolve().relative_to(root.resolve())
+                return True
+            except (OSError, ValueError):
+                return False
+        return False
 
     def _resolve_path(self, path_str: str) -> Optional[Path]:
         """Resolve a path string. Try absolute first, then relative to each allowed dir."""
@@ -78,7 +92,7 @@ class FileSystemTools(Toolkit):
                 return candidate
 
         # Backward compatibility for basename-only references.
-        if "/" not in normalized:
+        if self.allow_basename_search and "/" not in normalized:
             for allowed in self.allowed_dirs:
                 for candidate in allowed.rglob(normalized):
                     if candidate.exists() and candidate.is_file() and self._is_path_allowed(candidate):
@@ -115,7 +129,6 @@ class FileSystemTools(Toolkit):
                 if d.exists():
                     count = sum(1 for _ in d.rglob("*") if _.is_file())
                     roots.append({
-                        "path": str(d),
                         "name": d.name,
                         "type": "directory",
                         "file_count": count,
@@ -126,7 +139,7 @@ class FileSystemTools(Toolkit):
         if target is None:
             return json.dumps({
                 "error": f"Path '{directory}' not found or not in allowed directories.",
-                "allowed_directories": [str(d) for d in self.allowed_dirs],
+                "allowed_directories": [d.name for d in self.allowed_dirs],
             })
 
         if not target.exists():
@@ -152,7 +165,7 @@ class FileSystemTools(Toolkit):
             return json.dumps({"error": "Permission denied."})
 
         return json.dumps({
-            "directory": str(target),
+            "directory": self._to_relative_ref_path(target) or target.name,
             "items": items,
             "total": len(items),
         }, indent=2, ensure_ascii=False)
@@ -195,7 +208,7 @@ class FileSystemTools(Toolkit):
                 text = text[:max_chars]
 
             return json.dumps({
-                "file_path": str(target),
+                "file_ref": self._to_relative_ref_path(target),
                 "file_name": target.name,
                 "size_bytes": target.stat().st_size,
                 "content": text,
@@ -270,7 +283,6 @@ class FileSystemTools(Toolkit):
 
             return json.dumps({
                 "file_name": target.name,
-                "resolved_path": str(target.resolve()),
                 "size_bytes": size_bytes,
                 "mime_type": mime,
                 "image_ref": img_ref,

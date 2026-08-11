@@ -1,0 +1,18 @@
+# Least-privilege local acceptance worker.  It deliberately contains no
+# Docker CLI/runtime: CODE_AGENT_EXECUTOR_MODE=fixture is the only supported
+# executor in this image.
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY backend/ ./backend/
+RUN mkdir -p /workspace/task-workdirs /workspace/task-outputs
+
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV CODE_AGENT_EXECUTOR_MODE=fixture
+ENV ALLOW_FIXTURE_EXECUTOR=1
+
+CMD ["python", "-m", "backend.code_agent.worker.consumer", "worker-default"]

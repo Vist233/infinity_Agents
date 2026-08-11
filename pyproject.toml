@@ -28,3 +28,8 @@ filterwarnings = [
     "ignore:builtin type SwigPyObject has no __module__ attribute:DeprecationWarning",
     "ignore:builtin type swigvarlink has no __module__ attribute:DeprecationWarning",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# The legacy FastAPI module is intentionally assembled in import sections so
+# its compatibility routes can stay below the original PaperAgent code.
+"backend/app.py" = ["E402"]

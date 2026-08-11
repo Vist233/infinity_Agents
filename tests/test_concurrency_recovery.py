@@ -48,6 +48,16 @@ class FakeConn:
         self._updates.append((query, args))
         return self._route("execute", query, args) or "OK 1"
 
+    def transaction(self):
+        class _Transaction:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+        return _Transaction()
+
     def _route(self, method, query, args):
         qu = query.strip().upper()
         for pat, fn in self._state.get(method, {}).items():
@@ -74,6 +84,33 @@ class FakePool:
 
     def acquire(self):
         return FakeCM(self.conn)
+
+
+@pytest.mark.asyncio
+async def test_outbox_failure_uses_error_parameter_separate_from_claim_token():
+    calls = []
+
+    class Conn:
+        async def execute(self, query, *args):
+            calls.append((query, args))
+            return "UPDATE 1"
+
+    class Acquire:
+        async def __aenter__(self):
+            return Conn()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Pool:
+        def acquire(self):
+            return Acquire()
+
+    await mark_outbox_failed(Pool(), 7, "claim-token", "publish failed")
+
+    query, args = calls[0]
+    assert "last_error = $3" in query
+    assert args == (7, "claim-token", "publish failed")
 
 
 def _now():
@@ -284,7 +321,7 @@ class TestDuplicateOutboxPublication:
             batch = await get_pending_outbox_events(pool, limit=50)
             assert len(batch) == 1
 
-            await mark_outbox_published(pool, 1)
+            await mark_outbox_published(pool, 1, batch[0]["claim_token"])
 
             batch2 = await get_pending_outbox_events(pool, limit=50)
             assert len(batch2) == 0, "Event must not appear as pending after publish"
@@ -347,7 +384,7 @@ class TestWorkerCrashDuringExecution:
         def fn_fetch(query, args):
             qu = query.strip().upper()
             # Match only the 'reap expired leases from dead workers' query
-            if "FOR UPDATE SKIP LOCKED" in qu and "LEASE_EXPIRES_AT" in qu and "ATTEMPT_COUNT" in qu:
+            if "FOR UPDATE SKIP LOCKED" in qu and "LEASE_EXPIRES_AT" in qu and "LEASE_OWNER = $1" not in qu:
                 # Only return expired tasks
                 if task["lease_expires_at"] is not None and task["lease_expires_at"] < datetime.now():
                     return [task]

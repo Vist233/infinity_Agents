@@ -34,8 +34,11 @@ from .models import (
     Project,
     TaskItem,
     TaskRun,
+    TraitDefinitionRecord,
+    TraitObservationRecord,
     utcnow,
 )
+from ..model.traits import TraitDefinition, TraitObservation
 
 logger = logging.getLogger("imagejudge.repository")
 
@@ -636,3 +639,84 @@ class Repository:
         with self.session() as s:
             row = s.get(AppSetting, key)
             return row.value_json if row else None
+
+    # ------------------------------------------------------------------
+    # Versioned TraitDefinition / TraitObservation contract
+    # ------------------------------------------------------------------
+    def save_trait_definition(self, definition: TraitDefinition) -> int:
+        """Persist a frozen trait definition exactly once per version."""
+        with self.session() as s, s.begin():
+            row = s.execute(
+                select(TraitDefinitionRecord).where(
+                    TraitDefinitionRecord.trait_id == definition.trait_id,
+                    TraitDefinitionRecord.version == definition.version,
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                row = TraitDefinitionRecord(
+                    trait_id=definition.trait_id,
+                    version=definition.version,
+                    name=definition.name,
+                    trait_type=definition.type,
+                    unit=definition.unit or "",
+                    allowed_values_json=json.dumps(definition.allowed_values, ensure_ascii=False),
+                    protocol=definition.protocol,
+                    calibration_required=1 if definition.calibration_required else 0,
+                    qc_rules_json=json.dumps(definition.qc_rules, ensure_ascii=False, sort_keys=True),
+                )
+                s.add(row)
+                s.flush()
+            return int(row.id)
+
+    def save_trait_observation(self, observation: TraitObservation) -> int:
+        """Idempotently persist one image/trait observation for a run."""
+        with self.session() as s, s.begin():
+            row = s.execute(
+                select(TraitObservationRecord).where(
+                    TraitObservationRecord.run_id == observation.run_id,
+                    TraitObservationRecord.image_id == observation.image_id,
+                    TraitObservationRecord.trait_id == observation.trait_id,
+                )
+            ).scalar_one_or_none()
+            values = {
+                "specimen_id": observation.specimen_id,
+                "value_json": json.dumps(observation.value, ensure_ascii=False),
+                "unit": observation.unit or "",
+                "calibrated_confidence": observation.calibrated_confidence,
+                "quality_flags_json": json.dumps(observation.quality_flags, ensure_ascii=False),
+                "model_or_rule_version": observation.model_or_rule_version,
+                "review_status": observation.review_status,
+                "image_sha256": observation.image_sha256 or "",
+            }
+            if row is None:
+                row = TraitObservationRecord(
+                    run_id=observation.run_id,
+                    image_id=observation.image_id,
+                    trait_id=observation.trait_id,
+                    **values,
+                )
+                s.add(row)
+                s.flush()
+            else:
+                for key, value in values.items():
+                    setattr(row, key, value)
+            return int(row.id)
+
+    def list_trait_observations(self, run_id: str) -> list[TraitObservationRecord]:
+        with self.session() as s:
+            return list(
+                s.execute(
+                    select(TraitObservationRecord)
+                    .where(TraitObservationRecord.run_id == run_id)
+                    .order_by(TraitObservationRecord.id)
+                ).scalars()
+            )
+
+    def trait_observation_counts(self, run_id: str) -> dict[str, int]:
+        with self.session() as s:
+            rows = s.execute(
+                select(TraitObservationRecord.review_status, func.count(TraitObservationRecord.id))
+                .where(TraitObservationRecord.run_id == run_id)
+                .group_by(TraitObservationRecord.review_status)
+            ).all()
+            return {str(status): int(count) for status, count in rows}

@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """Test PubMed PMC PDF retrieval."""
 
+import os
+import pytest
 from Bio import Entrez
 import json
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("RUN_LIVE_NETWORK_TESTS") != "1",
+    reason="PubMed tests require explicit live-network opt-in",
+)
 
 Entrez.email = "test@example.com"
 

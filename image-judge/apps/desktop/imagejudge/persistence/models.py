@@ -127,6 +127,46 @@ class EvaluationSpottingFeature(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class TraitDefinitionRecord(Base):
+    """Versioned trait contract; the database stores the frozen definition."""
+
+    __tablename__ = "trait_definitions"
+    __table_args__ = (UniqueConstraint("trait_id", "version", name="uq_trait_definition_version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    trait_id: Mapped[str] = mapped_column(String(100), index=True)
+    version: Mapped[str] = mapped_column(String(30))
+    name: Mapped[str] = mapped_column(String(200))
+    trait_type: Mapped[str] = mapped_column(String(30))
+    unit: Mapped[str] = mapped_column(String(50), default="")
+    allowed_values_json: Mapped[str] = mapped_column(Text, default="[]")
+    protocol: Mapped[str] = mapped_column(Text, default="")
+    calibration_required: Mapped[int] = mapped_column(Integer, default=0)
+    qc_rules_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class TraitObservationRecord(Base):
+    """One structured observation per image/trait, including QC provenance."""
+
+    __tablename__ = "trait_observations"
+    __table_args__ = (UniqueConstraint("run_id", "image_id", "trait_id", name="uq_trait_observation"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(100), index=True)
+    image_id: Mapped[str] = mapped_column(Text)
+    specimen_id: Mapped[str] = mapped_column(String(200), default="")
+    trait_id: Mapped[str] = mapped_column(String(100), index=True)
+    value_json: Mapped[str] = mapped_column(Text, default="null")
+    unit: Mapped[str] = mapped_column(String(50), default="")
+    calibrated_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quality_flags_json: Mapped[str] = mapped_column(Text, default="[]")
+    model_or_rule_version: Mapped[str] = mapped_column(String(100), default="")
+    review_status: Mapped[str] = mapped_column(String(30), default="REVIEW", index=True)
+    image_sha256: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class ExportOutbox(Base):
     """CSV 待同步事件。"""
 

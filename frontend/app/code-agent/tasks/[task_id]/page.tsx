@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useLanguage } from "@/lib/i18n";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLanguage, type TranslationKey } from "@/lib/i18n";
 import { AgentNav } from "@/components/chat/AgentNav";
+import { MobileWorkspaceMenu } from "@/components/chat/MobileWorkspaceMenu";
+import { WorkspaceUserFooter } from "@/components/chat/WorkspaceUserFooter";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, RefreshCw, Download, PlayCircle, CheckCircle2, XCircle, Clock, AlertTriangle } from "lucide-react";
 import { useRouter, useParams } from "next/navigation";
 import { getApiBase } from "@/lib/runtime-config";
-import { getJson, cancelTask, downloadArtifact, taskEventStreamUrl } from "@/lib/api/tasks";
+import { getJson, cancelTask, downloadArtifact, listTasks, taskEventStreamUrl, type TaskItem } from "@/lib/api/tasks";
 
 type TaskStatus = "draft" | "queued" | "claimed" | "running" | "succeeded" | "failed" | "cancelled" | "timeout";
 
@@ -44,7 +46,6 @@ interface Artifact {
   artifact_id: string;
   name: string;
   kind: string;
-  storage_path: string;
   file_size_bytes: number | null;
   checksum_sha256: string | null;
   created_at: string;
@@ -72,6 +73,17 @@ const STATUS_COLORS: Record<TaskStatus, string> = {
   timeout: "bg-orange-100 text-orange-700",
 };
 
+const STATUS_LABELS: Record<TaskStatus, TranslationKey> = {
+  draft: "tasks.statusDraft",
+  queued: "tasks.statusQueued",
+  claimed: "tasks.statusClaimed",
+  running: "tasks.statusRunning",
+  succeeded: "tasks.statusSucceeded",
+  failed: "tasks.statusFailed",
+  cancelled: "tasks.statusCancelled",
+  timeout: "tasks.statusTimeout",
+};
+
 function formatDate(iso: string | null) {
   if (!iso) return "-";
   try { return new Date(iso).toLocaleString(); } catch { return iso; }
@@ -84,6 +96,11 @@ function formatBytes(bytes: number | null) {
   let size = bytes;
   while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
   return `${size.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function artifactDownloadFilename(name: string) {
+  const normalized = name.trim() || "artifact";
+  return /\.zip$/i.test(normalized) ? normalized : `${normalized}.zip`;
 }
 
 export default function TaskDetailPage() {
@@ -102,31 +119,69 @@ export default function TaskDetailPage() {
   const eventsEndRef = useRef<HTMLDivElement>(null);
   const [liveEvents, setLiveEvents] = useState<TaskEvent[]>([]);
   const [sseConnected, setSseConnected] = useState(false);
+  const [taskList, setTaskList] = useState<TaskItem[]>([]);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [eventsError, setEventsError] = useState<string | null>(null);
+  const [artifactsError, setArtifactsError] = useState<string | null>(null);
+  const [taskListError, setTaskListError] = useState<string | null>(null);
+  const [downloadingArtifactId, setDownloadingArtifactId] = useState<string | null>(null);
+  const detailRequestRef = useRef(0);
 
-  const loadDetail = async () => {
+  const loadDetail = useCallback(async () => {
+    const requestId = ++detailRequestRef.current;
     setLoading(true);
     setError(null);
+    setEventsError(null);
+    setArtifactsError(null);
+    setTaskListError(null);
     try {
-      const [taskData, evts, arts] = await Promise.all([
-        getJson<TaskDetail>(`${getApiBase()}/api/tasks/${taskId}`),
-        getJson<TaskEvent[] | { events?: TaskEvent[] }>(`${getApiBase()}/api/tasks/${taskId}/events`).catch(() => []),
-        getJson<Artifact[]>(`${getApiBase()}/api/tasks/${taskId}/artifacts`).catch(() => []),
+      const taskData = await getJson<TaskDetail>(`${getApiBase()}/api/tasks/${taskId}`);
+      const [eventsResult, artifactsResult, taskListResult] = await Promise.allSettled([
+        getJson<TaskEvent[] | { events?: TaskEvent[] }>(`${getApiBase()}/api/tasks/${taskId}/events`),
+        getJson<Artifact[]>(`${getApiBase()}/api/tasks/${taskId}/artifacts`),
+        listTasks(50),
       ]);
+      if (requestId !== detailRequestRef.current) return;
       setTask(taskData);
-      const evtList = Array.isArray(evts) ? evts : (evts?.events ?? []);
-      setEvents(Array.isArray(evtList) ? evtList : []);
-      setArtifacts(Array.isArray(arts) ? arts : []);
+      if (eventsResult.status === "fulfilled") {
+        const evtList = Array.isArray(eventsResult.value) ? eventsResult.value : (eventsResult.value?.events ?? []);
+        setEvents(Array.isArray(evtList) ? evtList : []);
+      } else {
+        setEvents([]);
+        setEventsError(eventsResult.reason instanceof Error ? eventsResult.reason.message : String(eventsResult.reason));
+      }
+      if (artifactsResult.status === "fulfilled") {
+        setArtifacts(Array.isArray(artifactsResult.value) ? artifactsResult.value : []);
+      } else {
+        setArtifacts([]);
+        setArtifactsError(artifactsResult.reason instanceof Error ? artifactsResult.reason.message : String(artifactsResult.reason));
+      }
+      if (taskListResult.status === "fulfilled") {
+        setTaskList(taskListResult.value);
+      } else {
+        setTaskList([]);
+        setTaskListError(taskListResult.reason instanceof Error ? taskListResult.reason.message : String(taskListResult.reason));
+      }
     } catch (err) {
+      if (requestId !== detailRequestRef.current) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (requestId === detailRequestRef.current) setLoading(false);
     }
-  };
+  }, [taskId]);
 
-  useEffect(() => { if (taskId) loadDetail(); }, [taskId]);
+  useEffect(() => { if (taskId) void loadDetail(); }, [taskId, loadDetail]);
+
+  useEffect(() => {
+    setLiveEvents([]);
+    setSseConnected(false);
+    setDownloadError(null);
+    setCancelSuccess(false);
+  }, [taskId]);
 
   useEffect(() => {
     if (!taskId) return;
+    let active = true;
     let es: EventSource | null = null;
     let timer: ReturnType<typeof setInterval> | null = null;
     let failures = 0;
@@ -135,10 +190,12 @@ export default function TaskDetailPage() {
       // the optional api_key query param — EventSource cannot set headers).
       es = new EventSource(taskEventStreamUrl(taskId));
       es.onopen = () => {
+        if (!active) return;
         failures = 0;
         setSseConnected(true);
       };
       es.onerror = () => {
+        if (!active) return;
         setSseConnected(false);
         failures += 1;
         // A persistently failing stream (e.g. 404) would otherwise reconnect
@@ -151,25 +208,45 @@ export default function TaskDetailPage() {
         }
       };
       es.addEventListener("task_state", (e) => {
+        if (!active) return;
         const data = JSON.parse((e as MessageEvent).data);
-        if (data.status) setTask((prev) => prev ? { ...prev, status: data.status } : prev);
+        if (data.status) {
+          const nextStatus = data.status as TaskStatus;
+          setTask((prev) => prev ? { ...prev, status: nextStatus } : prev);
+          setTaskList((prev) => prev.map((item) => item.task_id === taskId ? { ...item, status: nextStatus } : item));
+        }
       });
       es.addEventListener("update", (e) => {
+        if (!active) return;
         const data = JSON.parse((e as MessageEvent).data);
         setLiveEvents((prev) => [...prev, { ...data, task_event_id: Date.now(), event_type: data.event_type || "update", created_at: new Date().toISOString() }]);
       });
       es.addEventListener("task_terminal", () => {
+        if (!active) return;
         es?.close();
-        loadDetail();
+        void loadDetail();
       });
     } catch {
       timer = setInterval(loadDetail, 3000);
     }
     return () => {
+      active = false;
       es?.close();
       if (timer) clearInterval(timer);
     };
-  }, [taskId]);
+  }, [taskId, loadDetail]);
+
+  const handleDownload = async (artifact: Artifact) => {
+    setDownloadError(null);
+    setDownloadingArtifactId(artifact.artifact_id);
+    try {
+      await downloadArtifact(artifact.artifact_id, artifactDownloadFilename(artifact.name));
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDownloadingArtifactId(null);
+    }
+  };
 
   const handleCancel = async () => {
     if (!task) return;
@@ -194,12 +271,43 @@ export default function TaskDetailPage() {
   return (
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
       <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
-        <AgentNav active="code" onNavigate={(path) => router.push(path)} />
+        <AgentNav active="tasks" onNavigate={(path) => router.push(path)} />
+        <div className="mt-3 px-2 text-xs font-semibold uppercase tracking-widest text-zinc-400">{t("tasks.title")}</div>
+        <ScrollArea className="mt-2 min-h-0 flex-1">
+          <div className="space-y-1 pr-1">
+            {taskList.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-zinc-200 px-3 py-4 text-center text-xs text-zinc-400">
+                {taskListError ? `${t("tasks.loadFailedToast")}: ${taskListError}` : t("tasks.empty")}
+              </div>
+            ) : taskList.map((item) => (
+              <button
+                key={item.task_id}
+                type="button"
+                onClick={() => router.push(`/task-center/tasks/${item.task_id}`)}
+                className={`w-full rounded-xl px-3 py-2 text-left transition-colors ${item.task_id === taskId ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-100"}`}
+              >
+                <div className="truncate text-xs font-medium">{item.title}</div>
+                <div className={`mt-1 text-[10px] ${item.task_id === taskId ? "text-zinc-300" : "text-zinc-400"}`}>{t(STATUS_LABELS[item.status])}</div>
+              </button>
+            ))}
+          </div>
+        </ScrollArea>
+        <WorkspaceUserFooter />
+        <div className="p-2 text-center text-xs tracking-tighter text-zinc-400">v1.0.0 @ 2026</div>
       </aside>
       <main className="flex-1 flex flex-col relative min-w-0">
         <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between sticky top-0 bg-[var(--surface-1)] backdrop-blur-xl z-10 print:hidden">
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.push("/code-agent/tasks")}>
+            <div className="flex items-center gap-2">
+              <MobileWorkspaceMenu
+                active="tasks"
+                activeTaskId={taskId}
+                taskItems={taskList.map((item) => ({
+                  task_id: item.task_id,
+                  title: item.title,
+                  statusLabel: t(STATUS_LABELS[item.status]),
+                }))}
+              />
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.push("/task-center")}>
               <ArrowLeft size={16} />
             </Button>
             <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("tasks.detailTitle")}</div>
@@ -244,7 +352,7 @@ export default function TaskDetailPage() {
                     <div className="text-xs text-zinc-400">{t("tasks.detailStatus")}</div>
                     <div className="mt-0.5">
                       <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[task.status]}`}>
-                        {t(`tasks.status${task.status.charAt(0).toUpperCase() + task.status.slice(1)}` as any)}
+                        {t(STATUS_LABELS[task.status])}
                       </span>
                     </div>
                   </div>
@@ -279,6 +387,16 @@ export default function TaskDetailPage() {
 
               <section>
                 <h2 className="text-sm font-semibold text-zinc-700 mb-2">{t("tasks.detailArtifacts")}</h2>
+                {artifactsError && (
+                  <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+                    {t("tasks.loadArtifactsFailed").replace("{{message}}", artifactsError)}
+                  </div>
+                )}
+                {downloadError && (
+                  <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+                    {t("tasks.downloadFailed").replace("{{message}}", downloadError)}
+                  </div>
+                )}
                 {artifacts.length === 0 ? (
                   <div className="rounded-2xl border border-[var(--hairline)] bg-white/80 px-4 py-8 text-center text-sm text-zinc-400">
                     {t("tasks.detailNoArtifacts")}
@@ -304,8 +422,15 @@ export default function TaskDetailPage() {
                             <td className="px-4 py-3 text-xs text-zinc-600">{formatBytes(a.file_size_bytes)}</td>
                             <td className="px-4 py-3 font-mono text-xs text-zinc-500">{a.checksum_sha256 ? a.checksum_sha256.slice(0, 12) + "..." : "-"}</td>
                             <td className="px-4 py-3">
-                              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1" onClick={() => { void downloadArtifact(a.artifact_id, `${a.name || "artifact"}.zip`); }}>
-                                <Download size={14} />
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 px-2 text-xs gap-1"
+                                disabled={downloadingArtifactId === a.artifact_id}
+                                aria-busy={downloadingArtifactId === a.artifact_id}
+                                onClick={() => { void handleDownload(a); }}
+                              >
+                                {downloadingArtifactId === a.artifact_id ? <RefreshCw size={14} className="animate-spin" /> : <Download size={14} />}
                                 {t("tasks.view")}
                               </Button>
                             </td>
@@ -319,6 +444,11 @@ export default function TaskDetailPage() {
 
               <section>
                 <h2 className="text-sm font-semibold text-zinc-700 mb-2">{t("tasks.detailEvents")}</h2>
+                {eventsError && (
+                  <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+                    {t("tasks.loadEventsFailed").replace("{{message}}", eventsError)}
+                  </div>
+                )}
                 {events.length === 0 && liveEvents.length === 0 ? (
                   <div className="rounded-2xl border border-[var(--hairline)] bg-white/80 px-4 py-8 text-center text-sm text-zinc-400">
                     {t("tasks.detailNoEvents")}

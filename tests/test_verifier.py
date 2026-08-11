@@ -101,6 +101,23 @@ class TestContentLevelVerification:
         content_failures = [f for f in result["failures"] if f["level"] == "content"]
         assert len(content_failures) == 0
 
+    def test_biopython_fixture_column_aliases_and_summary_pass(self, tmp_path):
+        (tmp_path / "sequence_statistics.csv").write_text(
+            "Record_ID,Description,Length_bp,GC_percent\nseq-1,Example,100,45.0\n"
+        )
+        (tmp_path / "summary_statistics.csv").write_text("Metric,Value\nTotal_sequences,1\n")
+        spec = {
+            "analysis_type": "biopython",
+            "spec_json": {
+                "deliverables": [
+                    {"path": "sequence_statistics.csv", "required": True},
+                    {"path": "summary_statistics.csv", "required": True},
+                ]
+            },
+        }
+        result = verify_outputs(tmp_path, spec)
+        assert result["passed"]
+
 
 class TestExecutionLevelVerification:
     def test_missing_execution_events_fails(self, tmp_path):

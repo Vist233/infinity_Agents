@@ -1,7 +1,13 @@
 import json
+import os
 import pytest
 from pathlib import Path
 from agent.tools.arxiv_agno import ArxivTools
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("RUN_LIVE_NETWORK_TESTS") != "1",
+    reason="arXiv tests require explicit live-network opt-in",
+)
 
 @pytest.fixture
 def arxiv_tools():

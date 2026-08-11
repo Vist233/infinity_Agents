@@ -68,7 +68,7 @@ const MOCK_ARTIFACTS = [
   },
 ];
 
-test("CodeAgent main page shows the new-task form and task list", async ({ page }) => {
+test("Task Center shows the new-task form and task list", async ({ page }) => {
   await page.route("**/api/tasks*", async (route) => {
     await route.fulfill({
       status: 200,
@@ -77,21 +77,19 @@ test("CodeAgent main page shows the new-task form and task list", async ({ page 
     });
   });
 
-  await page.goto("/code-agent");
-  // New task card
-  await expect(page.getByText("执行文档")).toBeVisible();
-  await expect(page.getByText("数据集")).toBeVisible();
-  await expect(page.getByRole("button", { name: "创建任务" })).toBeVisible();
+  await page.goto("/task-center");
+  await expect(page.getByText("执行文档", { exact: true })).toBeVisible();
+  await expect(page.getByText("数据集", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "确认并提交" })).toBeVisible();
+  await expect(page.getByText("添加 Worker")).toBeVisible();
   // Task list
-  await expect(page.getByRole("columnheader", { name: "ID" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "标题" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "DESeq2 Differential Expression" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "Biopython Sequence Analysis" })).toBeVisible();
-  await expect(page.getByText("成功")).toBeVisible();
-  await expect(page.getByText("运行中")).toBeVisible();
+  await expect(page.getByText("DESeq2 Differential Expression")).toBeVisible();
+  await expect(page.getByText("Biopython Sequence Analysis")).toBeVisible();
+  await expect(page.getByText("成功", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("运行中", { exact: true }).first()).toBeVisible();
 });
 
-test("CodeAgent /tasks index redirects to the main page", async ({ page }) => {
+test("legacy /code-agent/tasks index redirects to Task Center", async ({ page }) => {
   await page.route("**/api/tasks*", async (route) => {
     await route.fulfill({
       status: 200,
@@ -101,11 +99,14 @@ test("CodeAgent /tasks index redirects to the main page", async ({ page }) => {
   });
 
   await page.goto("/code-agent/tasks");
-  await expect(page).toHaveURL(/\/code-agent\/?$/);
-  await expect(page.getByRole("button", { name: "创建任务" })).toBeVisible();
+  await expect(page).toHaveURL(/\/task-center\/?$/);
+  await expect(page.getByRole("button", { name: "确认并提交" })).toBeVisible();
 });
 
-test("CodeAgent task detail page loads with events and artifacts", async ({ page }) => {
+test("legacy task detail route loads with events and artifacts", async ({ page }) => {
+  await page.route("**/api/tasks?limit=50", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify({ tasks: MOCK_TASKS }), contentType: "application/json" });
+  });
   await page.route("**/api/tasks/task-1", async (route) => {
     await route.fulfill({
       status: 200,
@@ -130,14 +131,18 @@ test("CodeAgent task detail page loads with events and artifacts", async ({ page
     });
   });
 
-  await page.goto("/code-agent/tasks/task-1");
+  await page.goto("/task-center/tasks/task-1");
   await expect(page.getByRole("heading", { name: "DESeq2 Differential Expression" })).toBeVisible();
-  await expect(page.getByText("成功")).toBeVisible();
+  await expect(page.getByRole("main").getByText("成功", { exact: true })).toBeVisible();
   await expect(page.getByText("result.zip")).toBeVisible();
   await expect(page.getByText("task_state").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Biopython Sequence Analysis" })).toBeVisible();
 });
 
 test("Task detail page shows task information correctly", async ({ page }) => {
+  await page.route("**/api/tasks?limit=50", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify({ tasks: MOCK_TASKS }), contentType: "application/json" });
+  });
   await page.route("**/api/tasks/task-2", async (route) => {
     await route.fulfill({
       status: 200,
@@ -162,8 +167,8 @@ test("Task detail page shows task information correctly", async ({ page }) => {
     });
   });
 
-  await page.goto("/code-agent/tasks/task-2");
+  await page.goto("/task-center/tasks/task-2");
   await expect(page.getByRole("heading", { name: "Biopython Sequence Analysis" })).toBeVisible();
-  await expect(page.getByText("运行中")).toBeVisible();
+  await expect(page.getByRole("main").getByText("运行中", { exact: true })).toBeVisible();
   await expect(page.getByText("1").first()).toBeVisible();
 });

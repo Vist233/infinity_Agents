@@ -102,10 +102,40 @@ jobs:
           path: package/ImageJudge-linux-amd64.deb
           if-no-files-found: error
 
+  macos:
+    name: macOS App
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install desktop dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r image-judge/requirements.txt "pyinstaller>=6.6"
+
+      - name: Build macOS app bundle
+        run: |
+          bash image-judge/scripts/package_macos_app.sh "$GITHUB_WORKSPACE/package/macos"
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: imagejudge-macos
+          path: |
+            package/macos/ImageJudge-macos.zip
+            package/macos/ImageJudge-macos-*.zip
+          if-no-files-found: error
+
   release:
     name: Publish tagged release
     if: startsWith(github.ref, 'refs/tags/imagejudge-v')
-    needs: [windows, linux]
+    needs: [windows, linux, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
