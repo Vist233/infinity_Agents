@@ -1,74 +1,30 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { CheckCircle2, FileArchive, FileSearch, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/lib/i18n";
-import type { TaskConfirmation } from "@/lib/chat-state";
-import {
-  createDatasetSnapshot,
-  createTask,
-  createTaskSpec,
-  findTaskByConfirmation,
-  freezeTaskSpec,
-  getDefaultProject,
-  uploadDataset,
-  uploadMethodSource,
-} from "@/lib/api/tasks";
+import { submitTaskBundle } from "@/lib/api/tasks";
 
 interface TaskConfirmationCardProps {
-  confirmation: TaskConfirmation;
-  onCreated?: (confirmationId: string, taskId: string, title: string) => void;
+  onCreated?: (taskId: string) => void;
 }
 
 const METHOD_DOC_ACCEPT = ".html,.htm,.pdf,.md,.txt,.doc,.docx";
 const DATASET_ACCEPT = ".zip";
 
-interface PreparedInputs {
-  project_id: string;
-  task_spec_id: string;
-  dataset_snapshot_id: string;
-  method_source_id: string;
-  title: string;
-  methodFile: File;
-  datasetFile: File;
-}
-
-/** An inline form emitted by Analysis' request_task_creation tool. */
-export function TaskConfirmationCard({ confirmation, onCreated }: TaskConfirmationCardProps) {
+/** The only browser entry point that can submit a formal Coding Task. */
+export function TaskConfirmationCard({ onCreated }: TaskConfirmationCardProps) {
   const { t } = useLanguage();
-  const onCreatedRef = useRef(onCreated);
-  const [title, setTitle] = useState(confirmation.title);
+  const [title, setTitle] = useState("");
   const [methodFile, setMethodFile] = useState<File | null>(null);
   const [datasetFile, setDatasetFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(confirmation.error || null);
-  const [prepared, setPrepared] = useState<PreparedInputs | null>(null);
-
-  useEffect(() => {
-    setTitle(confirmation.title);
-    setError(confirmation.error || null);
-  }, [confirmation.error, confirmation.title]);
-
-  useEffect(() => {
-    onCreatedRef.current = onCreated;
-  }, [onCreated]);
-
-  useEffect(() => {
-    if (confirmation.status !== "pending") return;
-    let active = true;
-    void findTaskByConfirmation(confirmation.confirmation_id)
-      .then((existingTask) => {
-        if (active && existingTask) {
-          onCreatedRef.current?.(confirmation.confirmation_id, existingTask.task_id, existingTask.title);
-        }
-      })
-      .catch(() => {
-        // A transient lookup failure should leave the card usable; submission
-        // will report a concrete API error if the user retries.
-      });
-    return () => { active = false; };
-  }, [confirmation.confirmation_id, confirmation.status]);
+  const [error, setError] = useState<string | null>(null);
+  const [createdTaskId, setCreatedTaskId] = useState<string | null>(null);
+  // Keep the operation identity stable across a network failure and retry.
+  // Changing any input starts a new logical submission instead.
+  const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null);
 
   const submit = async () => {
     if (!methodFile || !datasetFile) {
@@ -77,63 +33,27 @@ export function TaskConfirmationCard({ confirmation, onCreated }: TaskConfirmati
     }
     setSubmitting(true);
     setError(null);
+    setCreatedTaskId(null);
+    const submissionKey = idempotencyKey || (
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+    );
+    if (!idempotencyKey) setIdempotencyKey(submissionKey);
     try {
-      const existingTask = await findTaskByConfirmation(confirmation.confirmation_id);
-      if (existingTask) {
-        onCreatedRef.current?.(confirmation.confirmation_id, existingTask.task_id, existingTask.title);
-        return;
-      }
-      const taskTitle = title.trim() || datasetFile.name.replace(/\.zip$/i, "");
-      let inputs = prepared;
-      const canReuse = inputs
-        && inputs.title === taskTitle
-        && inputs.methodFile === methodFile
-        && inputs.datasetFile === datasetFile;
-      if (!canReuse) {
-        const project = await getDefaultProject();
-        const spec = await createTaskSpec({
-          project_id: project.project_id,
-          title: taskTitle,
-          analysis_type: "generic",
-        });
-        await freezeTaskSpec(spec.task_spec_id);
-        const method = await uploadMethodSource(methodFile);
-        const upload = await uploadDataset(datasetFile, project.project_id);
-        const dataset = await createDatasetSnapshot({
-          project_id: project.project_id,
-          task_spec_id: spec.task_spec_id,
-          original_filename: datasetFile.name,
-          resource_id: upload.resource_id,
-          file_hash_sha256: upload.file_hash_sha256,
-          validation_passed: true,
-        });
-        inputs = {
-          project_id: project.project_id,
-          task_spec_id: spec.task_spec_id,
-          dataset_snapshot_id: dataset.dataset_snapshot_id,
-          method_source_id: method.method_source_id,
-          title: taskTitle,
-          methodFile,
-          datasetFile,
-        };
-        // Keep the prepared inputs in memory so a dropped createTask response
-        // retries the same IDs instead of uploading orphaned duplicates.
-        setPrepared(inputs);
-      }
-      if (!inputs) throw new Error("Task inputs were not prepared");
-      const task = await createTask({
-        project_id: inputs.project_id,
-        task_spec_id: inputs.task_spec_id,
-        dataset_snapshot_id: inputs.dataset_snapshot_id,
-        title: inputs.title,
-        method_source_id: inputs.method_source_id,
-        // Keep retries for this inline confirmation on the same server-side
-        // idempotency key; a flaky upload or response must not create a second
-        // queued Task for the same card.
-        idempotency_key: confirmation.confirmation_id,
-        chat_confirmation_id: confirmation.confirmation_id,
+      const taskTitle = title.trim() || methodFile.name.replace(/\.[^.]+$/, "");
+      const task = await submitTaskBundle({
+        methodFile,
+        datasetFile,
+        title: taskTitle,
+        idempotencyKey: submissionKey,
       });
-      onCreatedRef.current?.(confirmation.confirmation_id, task.task_id, taskTitle);
+      setCreatedTaskId(task.task_id);
+      onCreated?.(task.task_id);
+      setTitle("");
+      setMethodFile(null);
+      setDatasetFile(null);
+      setIdempotencyKey(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -141,13 +61,11 @@ export function TaskConfirmationCard({ confirmation, onCreated }: TaskConfirmati
     }
   };
 
-  const submitted = confirmation.status === "submitted";
-
   return (
-    <section className="mt-4 rounded-2xl border border-blue-200 bg-blue-50/60 p-5 space-y-4" data-testid={`task-confirmation-${confirmation.confirmation_id}`}>
+    <section className="rounded-2xl border border-[var(--hairline)] bg-white/80 p-5 space-y-4">
       <div>
-        <div className="text-sm font-semibold text-blue-950">{t("tasks.confirmationTitle")}</div>
-        <p className="text-xs text-blue-900/70 mt-1">{t("tasks.confirmationDescription")}</p>
+        <div className="text-sm font-semibold text-zinc-700">{t("tasks.confirmationTitle")}</div>
+        <p className="text-xs text-zinc-500 mt-1">{t("tasks.confirmationDescription")}</p>
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
@@ -157,9 +75,8 @@ export function TaskConfirmationCard({ confirmation, onCreated }: TaskConfirmati
             {t("tasks.methodDoc")}
           </div>
           <div className="text-xs text-zinc-400">{t("tasks.methodDocHint")}</div>
-          <input type="file" accept={METHOD_DOC_ACCEPT} disabled={submitted || submitting} className="text-xs text-zinc-600" onChange={(event) => setMethodFile(event.target.files?.[0] || null)} />
+          <input type="file" accept={METHOD_DOC_ACCEPT} disabled={submitting} className="text-xs text-zinc-600" onChange={(event) => { setMethodFile(event.target.files?.[0] || null); setIdempotencyKey(null); }} />
           {methodFile && <span className="text-xs text-emerald-600 truncate">{methodFile.name}</span>}
-          {!methodFile && confirmation.method_document_name && <span className="text-xs text-blue-700 truncate">{confirmation.method_document_name}</span>}
         </label>
 
         <label className="flex flex-col gap-2 rounded-xl border border-dashed border-zinc-300 p-4 cursor-pointer hover:border-zinc-400 transition-colors">
@@ -168,22 +85,21 @@ export function TaskConfirmationCard({ confirmation, onCreated }: TaskConfirmati
             {t("tasks.dataset")}
           </div>
           <div className="text-xs text-zinc-400">{t("tasks.datasetHint")}</div>
-          <input type="file" accept={DATASET_ACCEPT} disabled={submitted || submitting} className="text-xs text-zinc-600" onChange={(event) => setDatasetFile(event.target.files?.[0] || null)} />
+          <input type="file" accept={DATASET_ACCEPT} disabled={submitting} className="text-xs text-zinc-600" onChange={(event) => { setDatasetFile(event.target.files?.[0] || null); setIdempotencyKey(null); }} />
           {datasetFile && <span className="text-xs text-emerald-600 truncate">{datasetFile.name} ({(datasetFile.size / 1024 / 1024).toFixed(1)} MB)</span>}
-          {!datasetFile && confirmation.dataset_name && <span className="text-xs text-blue-700 truncate">{confirmation.dataset_name}</span>}
         </label>
       </div>
 
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <input type="text" value={title} onChange={(event) => setTitle(event.target.value)} disabled={submitted || submitting} placeholder={t("tasks.taskTitlePlaceholder")} className="flex-1 rounded-xl border border-[var(--hairline)] bg-white/90 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-300" />
-        <Button className="gap-2 rounded-xl" disabled={submitted || !methodFile || !datasetFile || submitting} onClick={() => { void submit(); }}>
+        <input type="text" value={title} disabled={submitting} onChange={(event) => { setTitle(event.target.value); setIdempotencyKey(null); }} placeholder={t("tasks.taskTitlePlaceholder")} className="flex-1 rounded-xl border border-[var(--hairline)] bg-white/90 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-300" />
+        <Button className="gap-2 rounded-xl" disabled={!methodFile || !datasetFile || submitting} onClick={() => { void submit(); }}>
           {submitting ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-          {submitting ? t("tasks.creating") : submitted ? t("tasks.createSuccess") : t("tasks.confirmAndSubmit")}
+          {submitting ? t("tasks.creating") : t("tasks.confirmAndSubmit")}
         </Button>
       </div>
 
       {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{t("tasks.createFailed").replace("{{message}}", error)}</div>}
-      {submitted && confirmation.task_id && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{t("tasks.createSuccess")} <span className="font-mono text-xs">{confirmation.task_id}</span></div>}
+      {createdTaskId && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{t("tasks.createSuccess")}</div>}
     </section>
   );
 }

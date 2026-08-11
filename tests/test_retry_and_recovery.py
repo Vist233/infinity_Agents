@@ -64,16 +64,35 @@ class TestLeaseReaperBackoff:
                 self._updates = []
 
             async def fetch(self, query, *args):
-                if "lease_expires_at < NOW()" in query and "FOR UPDATE SKIP LOCKED" in query:
+                if "lease_expires_at < NOW()" in query and "FOR UPDATE SKIP LOCKED" in query and "lease_owner = $1" not in query:
                     return [{"task_id": "task-1", "attempt_count": 1, "lease_token": "t1"}]
                 return []
 
             async def fetchrow(self, query, *args):
+                if "FROM tasks" in query:
+                    return {
+                        "task_id": "task-1",
+                        "active_attempt_id": None,
+                        "attempt_count": 1,
+                        "max_attempts": 3,
+                        "lease_token": "t1",
+                        "status": "running",
+                    }
                 return None
 
             async def execute(self, query, *args):
                 self._updates.append((query, args))
                 return "OK 1"
+
+            def transaction(self):
+                class _Transaction:
+                    async def __aenter__(self):
+                        return self
+
+                    async def __aexit__(self, *args):
+                        return None
+
+                return _Transaction()
 
         class FakePool:
             def __init__(self):
@@ -126,3 +145,95 @@ class TestPendingMessageRecovery:
         assert result == 0
         client._client.xautoclaim.assert_called_once()
         client._client.xautoclaim.assert_called_once()
+
+    def test_claim_pending_messages_returns_payload_for_normal_processing(self):
+        from backend.code_agent.redis_client import RedisClient
+        import asyncio
+
+        async def _run():
+            client = RedisClient("redis://localhost:6379/0")
+            client._client = AsyncMock()
+            client._client.xautoclaim = AsyncMock(return_value=(
+                "0-0",
+                [("7-0", {"task_id": "task-7", "attempt": "2"})],
+                [],
+            ))
+            return await client.claim_pending_tasks("worker-2", min_idle_time_ms=60000, count=1)
+
+        claimed = asyncio.run(_run())
+        assert claimed == [{
+            "message_id": "7-0",
+            "task_data": {"task_id": "task-7", "attempt": 2},
+            "raw_data": {"task_id": "task-7", "attempt": "2"},
+        }]
+
+    def test_pending_fallback_scans_id_range_then_applies_idle_claim(self):
+        from backend.code_agent.redis_client import RedisClient
+        import asyncio
+
+        async def _run():
+            client = RedisClient("redis://localhost:6379/0")
+            client._client = AsyncMock()
+            client._client.xautoclaim = AsyncMock(side_effect=RuntimeError("unsupported"))
+            client._client.xpending_range = AsyncMock(return_value=[{"message_id": "8-0"}])
+            client._client.xclaim = AsyncMock(return_value=[("8-0", {"task_id": "task-8"})])
+            result = await client.claim_pending_tasks("worker-3", min_idle_time_ms=60000, count=1)
+            return result, client
+
+        result, client = asyncio.run(_run())
+        assert result[0]["task_data"]["task_id"] == "task-8"
+        client._client.xpending_range.assert_awaited_once()
+        assert client._client.xpending_range.await_args.kwargs["min"] == "-"
+
+
+@pytest.mark.asyncio
+async def test_worker_does_not_ack_queued_task_it_cannot_claim(monkeypatch):
+    from unittest.mock import AsyncMock
+    from backend.code_agent.worker.consumer import _process_next_task
+
+    monkeypatch.setattr(
+        "backend.code_agent.task_service.get_task",
+        AsyncMock(return_value={"task_id": "task-owner-b", "status": "queued"}),
+    )
+    monkeypatch.setattr(
+        "backend.code_agent.task_service.try_claim_task",
+        AsyncMock(return_value=None),
+    )
+    redis_client = type("Redis", (), {"ack_message": AsyncMock(return_value=True)})()
+
+    await _process_next_task(
+        "worker-owner-a",
+        object(),
+        redis_client,
+        "fixture-image",
+        60,
+        worker_namespace="namespace-a",
+        messages=[{"message_id": "msg-owner-b", "task_data": {"task_id": "task-owner-b"}}],
+    )
+
+    redis_client.ack_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_worker_does_not_ack_task_hidden_by_rls(monkeypatch):
+    """An RLS-hidden task must remain pending for its authorized Worker."""
+    from unittest.mock import AsyncMock
+    from backend.code_agent.worker.consumer import _process_next_task
+
+    monkeypatch.setattr(
+        "backend.code_agent.task_service.get_task",
+        AsyncMock(return_value=None),
+    )
+    redis_client = type("Redis", (), {"ack_message": AsyncMock(return_value=True)})()
+
+    await _process_next_task(
+        "worker-owner-a",
+        object(),
+        redis_client,
+        "fixture-image",
+        60,
+        worker_namespace="namespace-a",
+        messages=[{"message_id": "msg-owner-b", "task_data": {"task_id": "task-owner-b"}}],
+    )
+
+    redis_client.ack_message.assert_not_awaited()

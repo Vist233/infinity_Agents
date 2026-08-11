@@ -1,4 +1,4 @@
-import type { RunPhase, TaskConfirmation, TokenInfo } from "@/lib/chat-state";
+import type { RunPhase, TokenInfo } from "@/lib/chat-state";
 import { translate, type Language } from "@/lib/i18n";
 import { redirectToLogin, withCsrfHeader } from "@/lib/runtime-config";
 
@@ -7,8 +7,6 @@ export interface ChatRequestPayload {
   messages: Array<{ role: "user" | "assistant"; content: string }>;
   retry_attempt: number;
   client_request_id: string;
-  task_confirmation_id?: string;
-  task_id?: string;
 }
 
 export interface ChatStatusEvent {
@@ -31,10 +29,6 @@ export interface ChatToolCallEvent {
   tool_name: string;
 }
 
-export interface ChatTaskConfirmationEvent extends Omit<TaskConfirmation, "status" | "task_id" | "error"> {
-  type: "task_confirmation";
-}
-
 export interface ChatDoneEvent {
   type: "done";
   token_info?: Partial<TokenInfo>;
@@ -45,7 +39,7 @@ export interface ChatErrorEvent {
   message: string;
 }
 
-export type ChatEvent = ChatStatusEvent | ChatChunkEvent | ChatToolCallEvent | ChatTaskConfirmationEvent | ChatDoneEvent | ChatErrorEvent;
+export type ChatEvent = ChatStatusEvent | ChatChunkEvent | ChatToolCallEvent | ChatDoneEvent | ChatErrorEvent;
 
 export interface StartChatStreamOptions {
   apiBase: string;
@@ -64,7 +58,7 @@ export interface ChatStreamHandle {
 const OPEN = 1;
 const CLOSED = 3;
 
-const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "task_confirmation", "done", "error"]);
+const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "done", "error"]);
 
 export function toFriendlyChatError(message: string, language: Language = "en"): string {
   if (message.includes("paper_not_authorized_for_session")) {
@@ -98,19 +92,6 @@ export function normalizeChatEvent(rawData: unknown): ChatEvent | null {
     if (payload.type === "tool_call") {
       if (typeof payload.tool_name !== "string") return null;
       return { type: "tool_call", tool_name: payload.tool_name };
-    }
-    if (payload.type === "task_confirmation") {
-      if (typeof payload.confirmation_id !== "string" || typeof payload.tool_name !== "string") return null;
-      return {
-        type: "task_confirmation",
-        confirmation_id: payload.confirmation_id,
-        tool_name: payload.tool_name,
-        title: typeof payload.title === "string" ? payload.title : "Analysis background task",
-        analysis_type: typeof payload.analysis_type === "string" ? payload.analysis_type : "generic",
-        research_question: typeof payload.research_question === "string" ? payload.research_question : "",
-        method_document_name: typeof payload.method_document_name === "string" ? payload.method_document_name : "",
-        dataset_name: typeof payload.dataset_name === "string" ? payload.dataset_name : "",
-      };
     }
     if (payload.type === "done") {
       return { type: "done", token_info: (payload.token_info as Partial<TokenInfo> | undefined) ?? undefined };
@@ -177,17 +158,6 @@ export function startChatStream(options: StartChatStreamOptions): ChatStreamHand
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    const dispatchFrame = (frame: string) => {
-      const line = frame
-        .split("\n")
-        .map((l) => l.trim())
-        .find((l) => l.startsWith("data:"));
-      if (!line) return;
-      const data = line.slice(5).trim();
-      if (!data) return;
-      const event = normalizeChatEvent(data);
-      if (event) options.onEvent(event);
-    };
     try {
       while (true) {
         const { done, value } = await reader.read();
@@ -195,10 +165,18 @@ export function startChatStream(options: StartChatStreamOptions): ChatStreamHand
         buffer += decoder.decode(value, { stream: true });
         const frames = buffer.split("\n\n");
         buffer = frames.pop() ?? "";
-        for (const frame of frames) dispatchFrame(frame);
+        for (const frame of frames) {
+          const line = frame
+            .split("\n")
+            .map((l) => l.trim())
+            .find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          const data = line.slice(5).trim();
+          if (!data) continue;
+          const event = normalizeChatEvent(data);
+          if (event) options.onEvent(event);
+        }
       }
-      buffer += decoder.decode();
-      if (buffer.trim()) dispatchFrame(buffer);
     } catch {
       if (!controller.signal.aborted) {
         options.onSocketError?.();

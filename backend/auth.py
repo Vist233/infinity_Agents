@@ -23,6 +23,7 @@ from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.core.config import settings
+from backend.db_rls import set_rls_user
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,11 @@ class Principal:
     subject: str = ""
     email: str | None = None
     session_id: str | None = None
-    role: str | None = None
+    roles: tuple[str, ...] = ()
+
+    @property
+    def is_superuser(self) -> bool:
+        return any(role.strip().lower() in {"superuser", "root"} for role in self.roles)
 
 
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "infinity_session")
@@ -43,8 +48,8 @@ _COOKIE_VERSION = "v1"
 def _session_secret() -> bytes:
     value = os.getenv("SESSION_COOKIE_SECRET", "")
     if not value:
-        if os.getenv("APP_ENV", "development").lower() in {"production", "prod"}:
-            raise RuntimeError("SESSION_COOKIE_SECRET is required in production")
+        if os.getenv("APP_ENV", "development").lower() not in {"development", "dev", "test"}:
+            raise RuntimeError("SESSION_COOKIE_SECRET is required outside development/test")
         value = "development-only-change-this-session-secret"
     return value.encode("utf-8")
 
@@ -68,8 +73,8 @@ def create_session_cookie(principal: Principal, *, ttl_seconds: int = 8 * 60 * 6
     }
     if principal.email:
         payload["email"] = principal.email
-    if principal.role:
-        payload["role"] = principal.role
+    if principal.roles:
+        payload["roles"] = list(principal.roles)
     encoded = _b64(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
     signature = _b64(hmac.new(_session_secret(), f"{_COOKIE_VERSION}.{encoded}".encode("ascii"), hashlib.sha256).digest())
     return f"{_COOKIE_VERSION}.{encoded}.{signature}"
@@ -89,13 +94,20 @@ def principal_from_session_cookie(value: str) -> Principal:
         subject = str(claims.get("sub") or "").strip()
         if not subject:
             raise ValueError("missing session subject")
+        raw_roles = claims.get("roles", [])
+        if isinstance(raw_roles, str):
+            roles = (raw_roles,)
+        elif isinstance(raw_roles, (list, tuple, set)):
+            roles = tuple(str(role) for role in raw_roles if str(role).strip())
+        else:
+            roles = ()
         return Principal(
             user_id=subject,
             issuer=str(claims.get("iss") or ""),
             subject=subject,
             email=str(claims.get("email")) if claims.get("email") else None,
             session_id=str(claims.get("sid")) if claims.get("sid") else None,
-            role=str(claims.get("role")) if claims.get("role") else None,
+            roles=roles,
         )
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired session") from exc
@@ -159,13 +171,16 @@ class TokenVerifier:
             user_id = str(claims.get("sub") or "").strip()
             if not user_id:
                 raise jwt.InvalidTokenError("Missing subject")
-            role = claims.get("role")
-            return Principal(
-                user_id=user_id,
-                issuer=settings.oidc_issuer,
-                subject=user_id,
-                role=str(role).strip() if role else None,
-            )
+            raw_roles = claims.get("roles", claims.get("role", []))
+            if isinstance(raw_roles, str):
+                roles = (raw_roles,)
+            elif isinstance(raw_roles, (list, tuple, set)):
+                roles = tuple(str(role) for role in raw_roles if str(role).strip())
+            else:
+                roles = ()
+            if claims.get("is_superuser") is True and "superuser" not in {role.lower() for role in roles}:
+                roles = (*roles, "superuser")
+            return Principal(user_id=user_id, issuer=settings.oidc_issuer, subject=user_id, roles=roles)
         except HTTPException:
             raise
         except (jwt.PyJWTError, TypeError, ValueError) as exc:
@@ -182,10 +197,18 @@ _bearer = HTTPBearer(auto_error=False)
 async def require_user(request: Request) -> Principal:
     credentials: HTTPAuthorizationCredentials | None = await _bearer(request)
     if credentials is not None and credentials.scheme.lower() == "bearer":
-        return await request.app.state.token_verifier.verify(credentials.credentials)
+        principal = await request.app.state.token_verifier.verify(credentials.credentials)
+        set_rls_user(principal.user_id)
+        recorder = getattr(request.app.state, "principal_recorder", None)
+        if recorder is not None:
+            await recorder(principal)
+        return principal
     cookie = _cookie_value(request)
     if cookie:
-        return principal_from_session_cookie(cookie)
+        principal = principal_from_session_cookie(cookie)
+        set_rls_user(principal.user_id)
+        await _ensure_session_active(request.app, principal)
+        return principal
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Authentication required",
@@ -193,13 +216,50 @@ async def require_user(request: Request) -> Principal:
     )
 
 
+async def _ensure_session_active(app: Any, principal: Principal) -> None:
+    """Check the durable session record for cookie-authenticated requests.
+
+    The signed cookie proves integrity and expiry, but it is intentionally not
+    the source of revocation truth.  Keep this check shared by HTTP and
+    WebSocket authentication so logout/revocation takes effect on both paths.
+    """
+    pool = getattr(app.state, "db_pool", None)
+    if pool is None or not principal.session_id:
+        return
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT 1 FROM auth_sessions
+                WHERE session_id = $1::uuid
+                  AND user_id = $2
+                  AND revoked_at IS NULL
+                  AND expires_at > NOW()
+                """,
+                principal.session_id,
+                principal.user_id,
+            )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Authentication session store is unavailable") from exc
+    if not row:
+        raise HTTPException(status_code=401, detail="Session has been revoked or expired")
+
+
 async def verify_websocket_token(websocket: WebSocket, token: str | None) -> Principal:
     if token:
-        return await websocket.app.state.token_verifier.verify(token)
+        principal = await websocket.app.state.token_verifier.verify(token)
+        set_rls_user(principal.user_id)
+        recorder = getattr(websocket.app.state, "principal_recorder", None)
+        if recorder is not None:
+            await recorder(principal)
+        return principal
     raw = websocket.headers.get("cookie", "")
     jar = SimpleCookie()
     jar.load(raw)
     morsel = jar.get(SESSION_COOKIE_NAME)
     if morsel:
-        return principal_from_session_cookie(morsel.value)
+        principal = principal_from_session_cookie(morsel.value)
+        set_rls_user(principal.user_id)
+        await _ensure_session_active(websocket.app, principal)
+        return principal
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")

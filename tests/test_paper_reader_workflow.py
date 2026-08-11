@@ -99,7 +99,12 @@ class TestPDFExtractor:
 
 class TestPaperReaderWorkflow:
     @pytest.fixture
-    def workflow(self):
+    def workflow(self, monkeypatch):
+        # These tests exercise filesystem/session behavior only.  Keep the
+        # provider profile on a local, syntactically valid URL so offline CI
+        # does not need DNS or a live model endpoint during construction.
+        monkeypatch.setenv("APP_ENV", "test")
+        monkeypatch.setenv("ANALYSIS_PROVIDER_BASE_URL", "http://127.0.0.1:1/v1")
         with tempfile.TemporaryDirectory() as tmpdir:
             from agent.paperReaderWorkflow import PaperReaderWorkflow
             workflow = PaperReaderWorkflow(

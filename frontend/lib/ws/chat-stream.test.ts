@@ -23,20 +23,6 @@ describe("chat stream event normalization", () => {
     const event = normalizeChatEvent(JSON.stringify({ type: "other", data: 1 }));
     expect(event).toBeNull();
   });
-
-  it("normalizes inline task confirmation events", () => {
-    expect(normalizeChatEvent(JSON.stringify({
-      type: "task_confirmation",
-      confirmation_id: "c1",
-      tool_name: "request_task_creation",
-      title: "Trait extraction",
-    }))).toMatchObject({
-      type: "task_confirmation",
-      confirmation_id: "c1",
-      title: "Trait extraction",
-      analysis_type: "generic",
-    });
-  });
 });
 
 describe("friendly chat error", () => {

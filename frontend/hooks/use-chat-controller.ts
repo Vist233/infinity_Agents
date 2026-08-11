@@ -11,7 +11,6 @@ import {
   INITIAL_CHAT_STATE,
   isDefaultSessionTitle,
   type Message,
-  type TaskConfirmation,
   type SessionItem,
   type SessionRunState,
   type TerminalState,
@@ -20,14 +19,11 @@ import {
   createSession,
   deleteSession,
   listSessionMessages,
-  listSessionUploadedPapers,
   listSessions,
   updateSessionTitle,
-  uploadSessionPaper,
-  type UploadedPaperItem,
 } from "@/lib/api/sessions";
 import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
-import { startChatStream, toFriendlyChatError, type ChatDoneEvent, type ChatEvent, type ChatStreamHandle, type ChatTaskConfirmationEvent } from "@/lib/ws/chat-stream";
+import { startChatStream, toFriendlyChatError, type ChatDoneEvent, type ChatEvent, type ChatStreamHandle } from "@/lib/ws/chat-stream";
 import { useLanguage } from "@/lib/i18n";
 
 const isSocketOpen = (socket?: ChatStreamHandle | null) => {
@@ -41,16 +37,12 @@ const toTokenInfo = (payload?: ChatDoneEvent["token_info"]) => ({
   total: Number(payload?.total) || 0,
 });
 
-const toTaskConfirmation = (payload: ChatTaskConfirmationEvent): TaskConfirmation => ({
-  confirmation_id: payload.confirmation_id,
-  tool_name: payload.tool_name,
-  title: payload.title,
-  analysis_type: payload.analysis_type,
-  research_question: payload.research_question,
-  method_document_name: payload.method_document_name,
-  dataset_name: payload.dataset_name,
-  status: "pending",
-});
+const TASK_CONFIRMATION_TOOLS = new Set([
+  "create_task",
+  "create_analysis_task",
+  "request_task_confirmation",
+  "submit_task_bundle",
+]);
 
 export function useChatController() {
   const { language, t } = useLanguage();
@@ -65,10 +57,8 @@ export function useChatController() {
   const sessionMessagesMapRef = useRef<Record<string, Message[]>>({});
   const sessionLoadPromiseRef = useRef<Map<string, Promise<Message[]>>>(new Map());
   const sessionsRef = useRef<SessionItem[]>([]);
-  const initialSessionsLoadRef = useRef(false);
-  const [uploadedPapersMap, setUploadedPapersMap] = useState<Record<string, UploadedPaperItem[]>>({});
-  const [uploadingPdf, setUploadingPdf] = useState(false);
   const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated">("checking");
+  const [taskConfirmationRequested, setTaskConfirmationRequested] = useState(false);
 
   const sessionId = state.sessionId;
   const messages = useMemo(() => getMessagesForSession(state, sessionId), [state, sessionId]);
@@ -82,18 +72,6 @@ export function useChatController() {
   useEffect(() => {
     sessionsRef.current = state.sessions;
   }, [state.sessions]);
-
-  const loadUploadedPapers = useCallback(async (targetSessionId: string): Promise<UploadedPaperItem[]> => {
-    try {
-      const papers = await listSessionUploadedPapers(apiBase, targetSessionId);
-      setUploadedPapersMap((prev) => ({ ...prev, [targetSessionId]: papers }));
-      return papers;
-    } catch (error) {
-      console.error("Failed to load uploaded papers", error);
-      setUploadedPapersMap((prev) => ({ ...prev, [targetSessionId]: prev[targetSessionId] || [] }));
-      return [];
-    }
-  }, [apiBase]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -147,8 +125,6 @@ export function useChatController() {
   }, [apiBase, t]);
 
   useEffect(() => {
-    if (initialSessionsLoadRef.current) return;
-    initialSessionsLoadRef.current = true;
     void loadSessions();
   }, [loadSessions]);
 
@@ -199,12 +175,11 @@ export function useChatController() {
     });
     void ensureSessionMessagesLoaded(sessionId).catch((error) => {
       console.error("Failed to load messages", error);
-      const message = error instanceof Error ? error.message : t("upload.unknown");
+      const message = error instanceof Error ? error.message : t("error.network");
       setError(t("error.loadMessages", { message }));
       toast.error(t("error.loadMessagesToast"));
     });
-    void loadUploadedPapers(sessionId);
-  }, [sessionId, ensureSessionMessagesLoaded, loadUploadedPapers, setError, t]);
+  }, [sessionId, ensureSessionMessagesLoaded, setError, t]);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -281,7 +256,6 @@ export function useChatController() {
       });
       dispatch({ type: "set_session_messages", sessionId: createdSessionId, messages: [] });
       dispatch({ type: "set_session_run_state", sessionId: createdSessionId, runState: DEFAULT_RUN_STATE });
-      setUploadedPapersMap((prev) => ({ ...prev, [createdSessionId]: [] }));
       loadedSessionIdsRef.current.add(createdSessionId);
       return createdSessionId;
     } catch (error) {
@@ -322,18 +296,19 @@ export function useChatController() {
   );
 
   const handleNewChat = useCallback(() => {
+    setTaskConfirmationRequested(false);
     dispatch({ type: "reset_new_chat" });
   }, []);
 
   const handleSwitchSession = useCallback(
     (id: string) => {
       if (state.editingSessionId) return;
+      setTaskConfirmationRequested(false);
       setSessionRunState(id, { unreadDone: false });
       dispatch({ type: "set_session_id", sessionId: id });
       dispatch({ type: "set_deleting_session", sessionId: null });
-      void loadUploadedPapers(id);
     },
-    [loadUploadedPapers, setSessionRunState, state.editingSessionId],
+    [setSessionRunState, state.editingSessionId],
   );
 
   const handleEditSessionTitle = useCallback((session: SessionItem) => {
@@ -442,6 +417,7 @@ export function useChatController() {
       }
 
       const userMessage: Message = { role: "user", content: value };
+      setTaskConfirmationRequested(false);
       const baseMessages = sessionMessagesMapRef.current[targetSessionId] || [];
       const messagesForRequest = [...baseMessages, userMessage];
       dispatch({
@@ -529,19 +505,13 @@ export function useChatController() {
         if (eventPayload.type === "tool_call") {
           const toolName = eventPayload.tool_name;
           if (!toolName) return;
+          if (TASK_CONFIRMATION_TOOLS.has(toolName)) setTaskConfirmationRequested(true);
           setSessionRunState(targetSessionId!, (prev) => ({
             ...prev,
             hasReceivedToolCall: true,
             toolName,
             activeTools: prev.activeTools.includes(toolName) ? prev.activeTools : [...prev.activeTools, toolName],
           }));
-          return;
-        }
-        if (eventPayload.type === "task_confirmation") {
-          const confirmation = toTaskConfirmation(eventPayload);
-          dispatch({ type: "attach_task_confirmation", sessionId: targetSessionId!, confirmation });
-          finalize("success");
-          wsByRequestRef.current.get(clientRequestId)?.close(1000, "awaiting_task_confirmation");
           return;
         }
         if (eventPayload.type === "done") {
@@ -615,173 +585,6 @@ export function useChatController() {
     ],
   );
 
-  const handleTaskConfirmationCreated = useCallback(
-    async (confirmationId: string, taskId: string) => {
-      const targetSessionId = state.sessionId;
-      if (!targetSessionId) return;
-      if (runningRequestBySessionRef.current.has(targetSessionId)) {
-        toast.info(t("error.runningWait"));
-        return;
-      }
-
-      const baseMessages = sessionMessagesMapRef.current[targetSessionId] || [];
-      dispatch({
-        type: "update_task_confirmation",
-        sessionId: targetSessionId,
-        confirmationId,
-        patch: { status: "submitted", task_id: taskId, error: undefined },
-      });
-      // Keep the card attached to the previous assistant message and place the
-      // resumed Agent answer after it in the same conversation flow.
-      dispatch({ type: "append_assistant_message", sessionId: targetSessionId, content: "" });
-
-      const clientRequestId =
-        typeof crypto !== "undefined" && "randomUUID" in crypto
-          ? crypto.randomUUID()
-          : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      runningRequestBySessionRef.current.set(targetSessionId, clientRequestId);
-      setSessionRunState(targetSessionId, {
-        running: true,
-        phase: "thinking",
-        toolName: null,
-        unreadDone: false,
-        terminal: null,
-        requestId: clientRequestId,
-        elapsedMs: 0,
-        attempt: 1,
-        maxAttempts: 1,
-        reason: null,
-        hasReceivedChunk: false,
-        hasReceivedToolCall: false,
-        activeTools: [],
-        tokenInfo: null,
-      });
-
-      let accumulatedResponse = "";
-      let completed = false;
-      const isCurrentRequest = () => runningRequestBySessionRef.current.get(targetSessionId) === clientRequestId;
-      const finalize = (terminal: TerminalState) => {
-        if (completed) return;
-        completed = true;
-        if (isCurrentRequest()) runningRequestBySessionRef.current.delete(targetSessionId);
-        wsByRequestRef.current.delete(clientRequestId);
-        setSessionRunState(targetSessionId, (prev) => ({
-          ...prev,
-          running: false,
-          phase: null,
-          toolName: null,
-          unreadDone: true,
-          terminal,
-          requestId: null,
-          activeTools: [],
-        }));
-      };
-
-      const onEvent = (eventPayload: ChatEvent) => {
-        if (!isCurrentRequest()) return;
-        if (eventPayload.type === "status") {
-          setSessionRunState(targetSessionId, (prev) => ({
-            ...prev,
-            phase: eventPayload.phase,
-            elapsedMs: Number.isFinite(eventPayload.elapsed_ms) && eventPayload.elapsed_ms >= 0 ? eventPayload.elapsed_ms : prev.elapsedMs,
-            toolName: eventPayload.tool_name ?? prev.toolName,
-            reason: eventPayload.reason ?? prev.reason,
-          }));
-          return;
-        }
-        if (eventPayload.type === "chunk") {
-          accumulatedResponse += eventPayload.content;
-          setAssistantContent(targetSessionId, accumulatedResponse);
-          setSessionRunState(targetSessionId, { hasReceivedChunk: true });
-          return;
-        }
-        if (eventPayload.type === "tool_call") {
-          setSessionRunState(targetSessionId, (prev) => ({
-            ...prev,
-            hasReceivedToolCall: true,
-            toolName: eventPayload.tool_name,
-            activeTools: prev.activeTools.includes(eventPayload.tool_name) ? prev.activeTools : [...prev.activeTools, eventPayload.tool_name],
-          }));
-          return;
-        }
-        if (eventPayload.type === "task_confirmation") {
-          dispatch({ type: "attach_task_confirmation", sessionId: targetSessionId, confirmation: toTaskConfirmation(eventPayload) });
-          finalize("success");
-          wsByRequestRef.current.get(clientRequestId)?.close(1000, "awaiting_task_confirmation");
-          return;
-        }
-        if (eventPayload.type === "done") {
-          finalize("success");
-          void refreshSessions();
-          wsByRequestRef.current.get(clientRequestId)?.close(1000, "completed");
-          return;
-        }
-        if (eventPayload.type === "error") {
-          const friendly = toFriendlyChatError(eventPayload.message || t("error.connection"), language);
-          dispatch({
-            type: "update_task_confirmation",
-            sessionId: targetSessionId,
-            confirmationId,
-            patch: { status: "pending", error: friendly },
-          });
-          appendAssistantContent(targetSessionId, accumulatedResponse ? `\n\n[Error] ${friendly}` : `[Error] ${friendly}`);
-          finalize("error");
-          wsByRequestRef.current.get(clientRequestId)?.close(1000, "error");
-        }
-      };
-
-      try {
-        const stream = startChatStream({
-          apiBase,
-          payload: {
-            session_id: targetSessionId,
-            messages: baseMessages.map(({ role, content }) => ({ role, content })),
-            retry_attempt: 0,
-            client_request_id: clientRequestId,
-            task_confirmation_id: confirmationId,
-            task_id: taskId,
-          },
-          onEvent,
-          onSocketError: () => {
-            if (!isCurrentRequest()) return;
-            const message = t("error.network");
-            dispatch({
-              type: "update_task_confirmation",
-              sessionId: targetSessionId,
-              confirmationId,
-              patch: { status: "pending", error: message },
-            });
-            appendAssistantContent(targetSessionId, accumulatedResponse ? `\n\n[Error] ${message}` : `[Error] ${message}`);
-            finalize("error");
-            toast.error(t("error.networkToast"));
-          },
-          onClose: () => {
-            if (!isCurrentRequest() || completed) return;
-            dispatch({
-              type: "update_task_confirmation",
-              sessionId: targetSessionId,
-              confirmationId,
-              patch: { status: "pending", error: t("error.connection") },
-            });
-            finalize("error");
-          },
-        });
-        wsByRequestRef.current.set(clientRequestId, stream);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : t("error.connection");
-        dispatch({
-          type: "update_task_confirmation",
-          sessionId: targetSessionId,
-          confirmationId,
-          patch: { status: "pending", error: message },
-        });
-        appendAssistantContent(targetSessionId, `[Error] ${message}`);
-        finalize("error");
-      }
-    },
-    [apiBase, appendAssistantContent, language, refreshSessions, setAssistantContent, setSessionRunState, state.sessionId, t],
-  );
-
   const handleStopGeneration = useCallback(() => {
     if (!state.sessionId) return;
     const requestId = runningRequestBySessionRef.current.get(state.sessionId);
@@ -817,53 +620,6 @@ export function useChatController() {
     });
   }, [setSessionRunState, state.sessionId]);
 
-  const handleUploadPdf = useCallback(async (file: File) => {
-    if (!file) return;
-    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-    if (!isPdf) {
-      toast.error(t("upload.onlyPdf"));
-      return;
-    }
-
-    let targetSessionId = state.sessionId;
-    if (!targetSessionId) {
-      targetSessionId = await createSessionIfNeeded();
-      if (!targetSessionId) {
-        toast.error(t("upload.createSession"));
-        return;
-      }
-    }
-
-    setUploadingPdf(true);
-    try {
-      const uploaded = await uploadSessionPaper(apiBase, targetSessionId, file);
-      setUploadedPapersMap((prev) => {
-        const current = prev[targetSessionId!] || [];
-        const deduped = [uploaded, ...current.filter((item) => item.paper_id !== uploaded.paper_id)];
-        return { ...prev, [targetSessionId!]: deduped };
-      });
-      dispatch({
-        type: "update_session_messages",
-        sessionId: targetSessionId,
-        updater: (current) => [
-          ...current,
-          {
-            role: "assistant",
-            content: t("upload.message", { filename: uploaded.original_filename, paperId: uploaded.paper_id }),
-          },
-        ],
-      });
-      loadedSessionIdsRef.current.add(targetSessionId);
-      toast.success(t("upload.success", { filename: uploaded.original_filename }));
-    } catch (error) {
-      console.error("Failed to upload pdf", error);
-      const message = error instanceof Error ? error.message : t("upload.unknown");
-      toast.error(t("upload.failed", { message }));
-    } finally {
-      setUploadingPdf(false);
-    }
-  }, [apiBase, createSessionIfNeeded, state.sessionId, t]);
-
   const statusText = useMemo(() => {
     const seconds = Math.max(0, Math.floor(currentRunState.elapsedMs / 1000));
     const attemptText = currentRunState.maxAttempts > 1 ? ` · ${currentRunState.attempt}/${currentRunState.maxAttempts}` : "";
@@ -883,11 +639,6 @@ export function useChatController() {
     const suffix = currentRunState.hasReceivedToolCall && !currentRunState.hasReceivedChunk ? t("run.toolTriggered") : "";
     return t("run.thinking", { seconds, attempt: attemptText, suffix });
   }, [currentRunState, language, t]);
-
-  const uploadedPapers = useMemo(() => {
-    if (!state.sessionId) return [];
-    return uploadedPapersMap[state.sessionId] || [];
-  }, [state.sessionId, uploadedPapersMap]);
 
   return {
     apiBase,
@@ -911,11 +662,9 @@ export function useChatController() {
     cancelDeleteSession,
     confirmDeleteSession,
     handleSubmit,
-    handleTaskConfirmationCreated,
     handleStopGeneration,
-    handleUploadPdf,
-    uploadedPapers,
-    uploadingPdf,
+    taskConfirmationRequested,
+    clearTaskConfirmation: () => setTaskConfirmationRequested(false),
     authStatus,
     setError,
     appendAssistantContent,

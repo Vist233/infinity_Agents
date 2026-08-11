@@ -327,36 +327,3 @@
   color: #71717a;
   font-style: italic;
 }
-
-@media print {
-  body {
-    background: #ffffff !important;
-    color: #111827 !important;
-  }
-
-  aside,
-  header,
-  form,
-  .md-copy-btn,
-  [data-radix-scroll-area-scrollbar],
-  [data-radix-scroll-area-corner] {
-    display: none !important;
-  }
-
-  #chat-export-content {
-    max-width: 100% !important;
-    padding: 0 !important;
-  }
-
-  .md-code-block,
-  .md-table-wrapper,
-  .md-image-wrapper {
-    break-inside: avoid;
-    page-break-inside: avoid;
-  }
-
-  .md-image {
-    max-width: 100% !important;
-    box-shadow: none !important;
-  }
-}

@@ -38,7 +38,7 @@ export function SessionList({
 }: SessionListProps) {
   const { t } = useLanguage();
   return (
-    <div className="mt-2 space-y-1 overflow-y-auto">
+    <div className="mt-2 min-h-0 space-y-1 overflow-y-auto">
       {sessions.length === 0 ? (
         <div className="text-xs text-zinc-400 px-2 py-2">{t("session.noActivities")}</div>
       ) : (
@@ -94,7 +94,6 @@ export function SessionList({
                   className="flex-1 text-left text-sm truncate disabled:opacity-50"
                   title={session.title}
                   disabled={editingSessionId === session.session_id}
-                  data-workspace-drawer-dismiss="true"
                 >
                   {session.title || t("session.untitled")}
                 </button>

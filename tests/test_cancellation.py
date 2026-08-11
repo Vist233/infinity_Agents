@@ -52,6 +52,14 @@ class _CancelFakeConn:
         self._updates.append((query, args))
         return "OK 1"
 
+    def transaction(self):
+        class _Transaction:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return None
+        return _Transaction()
+
 
 class _CancelFakePool:
     def __init__(self, rows):
@@ -95,6 +103,8 @@ def _make_task_row(task_id="task-1", status="running", cancel_requested_at=None)
 
 @pytest.fixture
 def client(monkeypatch):
+    monkeypatch.setenv("LOCAL_DEV_OPEN_TASK_API", "1")
+    monkeypatch.delenv("AUTH_REQUIRED_TASK_API", raising=False)
     fake_redis = type("R", (), {
         "is_connected": False,
         "connect": lambda s: None,

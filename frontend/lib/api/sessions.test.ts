@@ -2,10 +2,8 @@ import {
   createSession,
   deleteSession,
   listSessionMessages,
-  listSessionUploadedPapers,
   listSessions,
   updateSessionTitle,
-  uploadSessionPaper,
 } from "@/lib/api/sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -79,16 +77,4 @@ describe("sessions api", () => {
     );
   });
 
-  it("returns no uploaded papers (upload disabled in v1)", async () => {
-    const papers = await listSessionUploadedPapers("http://localhost:8008", "s1");
-    expect(papers).toHaveLength(0);
-  });
-
-  it("rejects paper upload (unsupported in v1)", async () => {
-    const file = new File(["%PDF-1.4"], "paper.pdf", { type: "application/pdf" });
-    await expect(uploadSessionPaper("http://localhost:8008", "s1", file)).rejects.toMatchObject({
-      status: 400,
-      detail: "upload_unsupported",
-    });
-  });
 });

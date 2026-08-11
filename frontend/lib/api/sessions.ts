@@ -6,18 +6,6 @@ export interface ApiError extends Error {
   detail?: string;
 }
 
-export interface UploadedPaperItem {
-  paper_id: string;
-  original_filename: string;
-  stored_pdf_path: string;
-  canonical_md_path: string;
-  images_dir: string | null;
-  page_count: number;
-  image_count: number;
-  status: string;
-  created_at?: string;
-}
-
 function createApiError(message: string, status?: number, detail?: string): ApiError {
   const error = new Error(message) as ApiError;
   error.status = status;
@@ -26,16 +14,19 @@ function createApiError(message: string, status?: number, detail?: string): ApiE
 }
 
 async function parseErrorResponse(response: Response): Promise<string> {
+  // A Response body is single-use.  Read it once, then attempt JSON parsing
+  // from the captured text so a non-standard JSON error cannot turn into the
+  // misleading "body stream already read" exception.
+  const body = await response.text();
   try {
-    const payload = await response.json();
+    const payload = JSON.parse(body) as { detail?: unknown };
     if (payload && typeof payload.detail === "string") {
       return payload.detail;
     }
   } catch {
     // ignore malformed json
   }
-  const text = await response.text();
-  return text || `HTTP ${response.status}`;
+  return body || `HTTP ${response.status}`;
 }
 
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
@@ -96,27 +87,4 @@ export async function deleteSession(apiBase: string, sessionId: string): Promise
   await requestJson(`${apiBase}/api/sessions/${sessionId}`, {
     method: "DELETE",
   });
-}
-
-// PDF upload is intentionally not supported in the public v1 (no filesystem /
-// PDF pipeline in the edge Worker). These stubs keep the existing call sites
-// compiling without hitting a non-existent endpoint.
-export async function uploadSessionPaper(
-  _apiBase: string,
-  _sessionId: string,
-  _file: File,
-): Promise<UploadedPaperItem> {
-  void _apiBase;
-  void _sessionId;
-  void _file;
-  throw createApiError("PDF upload is not available in this version.", 400, "upload_unsupported");
-}
-
-export async function listSessionUploadedPapers(
-  _apiBase: string,
-  _sessionId: string,
-): Promise<UploadedPaperItem[]> {
-  void _apiBase;
-  void _sessionId;
-  return [];
 }

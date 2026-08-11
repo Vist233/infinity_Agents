@@ -1,360 +1,490 @@
-# Infinity Agents Cloudflare 交接
-
-> 最后更新：2026-08-10
-> 当前分支：cloudflare-deploy
-> 当前代码提交：f2c98fb complete worker artifact verification and downloads
-> 生产 Worker：infinity-agents-edge
-> 生产入口：https://infinity.zhangyvjing.com
-
-这份文档是当前 Cloudflare 版本的操作交接，不是旧 FastAPI/PostgreSQL 本地版本的交接。完整组件职责和数据流见
-[docs/CLOUDFLARE_WORKER_ARCHITECTURE.md](docs/CLOUDFLARE_WORKER_ARCHITECTURE.md)。
-
-## 0. 本轮范围
-
-本轮按最新要求处理：
-
-- 不启动浏览器验收 Subagent。
-- 不启动代码审查 Subagent。
-- 只由主 Agent 做全局静态检查、线上只读检查和本地运行状态核对。
-- 交接文档记录当前真实实现，不把一次性验收写成部署前置条件。
-
-需要区分两个概念：本轮省略的是验收 Subagent；当前代码里已有的 Artifact 完整性发布边界仍然存在。执行 Worker 先把结果放进 R2 quarantine，当前分支的独立结果发布服务检查 ZIP 的大小、SHA-256、CRC、路径和符号链接后，再将 Artifact 发布为网页可下载的 published 状态。它不是对话 Agent，也不是本轮新增的验收工作。
-
-## 1. 当前状态
-
-| 项目 | 当前状态 |
-|---|---|
-| Cloudflare Worker | infinity-agents-edge，线上健康 |
-| 最新线上版本 | fdd9f34a-5d58-40eb-94fc-2bd422d7b2cb |
-| D1 | infinity-agents-db，ID 9ee9ec94-cb42-40b5-8372-681c7b57c105 |
-| R2 | infinity-agents-resources |
-| 本地执行 Worker | worker-a、worker-b 两个容器 |
-| 本地结果发布服务 | 当前 Compose 中的 verifier 容器 |
-| Redis | 继续使用 zhangbot 上的现有 Redis；不启动新的 Redis 容器 |
-| Docker 边界 | Worker 容器不挂载宿主机 Docker socket，不在容器中启动 Docker |
-| Provider | Claude Code 直接在 Worker 容器中执行，配置来自本机环境变量 |
-| 主工作树 | /Users/zhangyvjing/Code/infinity_Agents 有用户未提交修改，不要用破坏性命令覆盖 |
-
-线上只读检查结果：
-
-- /health 返回 status=ok，service=infinity-agents-edge。
-- /image-judge/healthz 返回 ok=true。
-- /code-agent/ 返回 HTTP 200。
-- D1 中 Case 2：succeeded，Artifact published，大小 37,325 字节。
-- D1 中 Case 3：succeeded，Artifact published，大小 32,218,769 字节；该大小走 R2 Multipart 上传路径。
-- 当前本地容器只挂载各自的输入/输出 named volume，没有 /var/run/docker.sock。
-
-## 2. 系统边界
-
-| 组件 | 负责什么 | 不负责什么 |
-|---|---|---|
-| 浏览器 | OIDC 登录、Analysis 对话、Task Center、Image Judge 页面 | 不拿 D1/R2/Redis/Provider 主凭证 |
-| Cloudflare Edge Worker | API、会话、任务状态、Worker 注册、D1/R2 读写 | 不直接连接 zhangbot Redis，不执行 Claude Code |
-| D1 | 用户、任务、Attempt、Worker 注册、事件、Artifact 元数据 | 不保存 Artifact 二进制 |
-| R2 | 执行文档、数据集、结果 ZIP | 不作为浏览器公开桶；下载必须经过鉴权 API |
-| 本地 Docker Worker A/B | 连接控制面、领取任务、下载输入、执行 Claude Code、上传结果 | 不把 Provider/Redis 密钥上传到 Cloudflare |
-| zhangbot Redis | 本地 Worker 的现有远程 Redis 依赖和健康检查 | 不被 Cloudflare Worker 当作公网 Binding |
-| 结果发布服务 | 检查 quarantine ZIP 并将其发布为 published | 不执行 Claude Code，不拿 Worker 凭证，不拿 Redis/Provider 凭证 |
-
-当前不采用的方式：
-
-- 不使用一次性 Token 作为新 Worker 的长期连接凭证。
-- 不把 D1 当成 PostgreSQL 直连地址。
-- 不把 Redis 暴露给 Cloudflare Worker。
-- 不在 Docker Worker 里再启动 Docker。
-- 不依赖 WiFi 专用链路；控制面使用 HTTPS，Redis 由本机 SSH 端口转发访问。
-- 不把任务结果长期保留在本地 Docker；上传完成后清理输入、输出和 ZIP 临时文件。
-
-## 3. 用户和 Worker 身份模型
-
-### 3.1 创建 Worker
-
-登录用户在 Task Center 的添加 Worker 卡中只填写 Namespace：
-
-1. 浏览器通过当前 OIDC 会话调用 POST /api/worker-enrollments。
-2. Cloudflare 生成新的 worker_id 和长期 bearer credential。
-3. D1 保存 credential 的 SHA-256 摘要，并保存加密副本。
-4. 原始 credential 只在创建/重新生成时返回给当前用户。
-5. 同一 Namespace 可以创建多个 Worker；每个 Worker 都有不同的 ID 和凭证。
-6. 同一个凭证同时只能有一个活动的反向握手实例。
-
-### 3.2 信任等级
-
-信任等级从已验证的账号权限生成，不能由浏览器提交：
-
-- superuser：owner_trusted。
-- 普通用户和学生：institution_trusted。
-- 代码中保留的 student_untrusted 仅是兼容分支，当前账号映射不会把普通学生降为该等级。
-
-### 3.3 连接状态
-
-长期 credential 不因机器暂时关闭而失效。机器启动后：
-
-1. 使用 credential 调用 POST /api/worker/v1/connect。
-2. D1 创建或更新该 Worker 的短期 session lease。
-3. Worker 定期调用 heartbeat。
-4. 停机后 session lease 过期，下一次启动重新握手即可。
-5. 如果另一台机器误用同一个 credential，返回 WORKER_ALREADY_CONNECTED；应为另一台机器创建新的 Worker ID/credential。
-
-## 4. 完整任务流程
-
-### 4.1 创建任务
-
-1. 用户在 Analysis 对话中提出任务，或在 Task Center 直接点击新建任务。
-2. Analysis 入口可以通过确认卡继续对话，使用普通任务路径。
-3. Task Center 是直接创建入口，使用 /api/tasks/direct，设置 agent_confirmation=false，不要求 Agent 再次确认。
-4. 浏览器上传执行文档和数据集：
-   - 执行文档进入 R2，并在 D1 写入 method source 元数据。
-   - 数据集进入 R2，并在 D1 写入 dataset snapshot 元数据。
-5. 浏览器创建并冻结 TaskSpec。
-6. Cloudflare 在 D1 创建 queued 任务和幂等记录。
-7. 任务详情和实时事件通过 D1/SSE 返回浏览器。
-
-任务的核心区分是执行文档；数据集只是本次任务的输入，不在前端做“一次性打包后不可复用”的限制。
-
-### 4.2 Worker 领取任务
-
-1. Worker connect 建立反向握手。
-2. Worker 发送 heartbeat，然后 poll。
-3. Cloudflare 从 D1 找到属于该用户、可由该信任等级执行的 queued 任务。
-4. Cloudflare 创建短期 offer。
-5. Worker 调用 offers/:offer_id/accept。
-6. Cloudflare 用 worker_id + namespace + fencing_epoch + lease 原子认领任务。
-7. 旧 Worker 或过期 Attempt 后续回写会被 fencing 条件拒绝。
-
-### 4.3 容器内执行
-
-1. Worker 在自己的 named volume 创建任务目录。
-2. Attempt heartbeat 在资源下载前建立并持续发送，避免大输入下载期间租约失效。
-3. Worker 只通过 Attempt 专属 HTTPS URL 下载执行文档和数据集。
-4. Worker 在同一个容器内直接调用 Claude Code CLI：
-   - 使用本机传入的 ANTHROPIC_AUTH_TOKEN 或 ANTHROPIC_API_KEY。
-   - 使用本机的 ANTHROPIC_BASE_URL 和 ANTHROPIC_MODEL。
-   - 使用 Goal-Driven 执行文档完成任务。
-   - 不调用宿主 Docker，不启动嵌套 Docker。
-5. 任务输出写入本地临时输出目录。
-
-### 4.4 结果上传
-
-1. Worker 将输出目录打包成 task_id-artifacts.zip。
-2. Worker 对完整 ZIP 计算 SHA-256。
-3. 不超过 20 MB：走单请求上传。
-4. 超过 20 MB：走 R2 Multipart，默认每片 8 MB；当前总大小上限为 2 GB。
-5. Cloudflare 检查 Attempt fencing、文件大小、R2 对象头和 checksum。
-6. Artifact 先记录为 quarantine，避免未完成/损坏对象被网页下载。
-
-### 4.5 结果发布和下载
-
-1. 当前结果发布服务从 verifier-only API 读取待发布 Artifact。
-2. 它在自己的临时 volume 中下载 ZIP，检查文件大小、SHA-256、ZIP 可读性和 CRC、空包、重复成员、绝对路径、.. 路径和符号链接。
-3. 检查通过后调用发布 API。
-4. Cloudflare 在一个 D1 事务批次中将 Task 置为 succeeded，写入 result_artifact_id，将 Attempt 置为 succeeded，将 Artifact 置为 kind=result、status=published，并写入 task_succeeded 事件。
-5. Task Center 收到终态事件后，读取 /api/tasks/:id/artifacts。
-6. 用户点击 Download result，请求 /api/artifacts/:artifact_id。
-7. Cloudflare 校验当前用户拥有该任务后，从 R2 流式返回 ZIP。
-8. 发布服务清理自己的临时 ZIP；执行 Worker 清理本地输入、输出和归档文件。
-
-## 5. 状态机
-
-~~~text
-Task:
-queued
-  -> claimed
-  -> running
-  -> running + artifact quarantine
-  -> succeeded
-
-Attempt:
-claimed -> running -> succeeded
-                    -> failed / expired / cancelled
-
-Artifact:
-uploading -> quarantine -> published
-                    -> 保留为 quarantine，等待发布或故障处理
-~~~
-
-故障路径：
-
-- Worker 心跳失败或容器退出：lease 过期后 D1 重新排队或将任务置为 timeout。
-- Attempt fencing 失败：旧 Worker 不得继续上传、完成或回写状态。
-- Claude Code 失败：Worker 调用 fail，由服务端决定失败记录和后续重试。
-- Artifact 上传不完整：不能进入 published，网页不会显示下载链接。
-- 结果发布服务暂时停止：任务保持中间状态；恢复后继续处理，不需要重新执行 Claude Code。
-- R2/D1 不可用：API 返回明确错误，不把失败伪装成成功。
-
-## 6. 本地 Mac 上启动两个 Worker
-
-所有本地凭证文件只放在当前机器，建议权限为 600。不要提交 Git。
-
-### 6.1 创建两个持久注册
-
-在网页中重复两次：
-
-1. 登录 https://infinity.zhangyvjing.com/code-agent/。
-2. 展开添加 Worker。
-3. 填同一个 Namespace，分别提交两次。
-4. 记录两组不同的 Worker ID 和 credential。
-5. 不要把 credential 发到聊天、截图或提交到仓库。
-
-### 6.2 准备配置
-
-~~~sh
-cd /path/to/infinity_Agents
-cp worker.cloudflare.env.example worker-a.cloudflare.env
-cp worker.cloudflare.env.example worker-b.cloudflare.env
-chmod 600 worker-a.cloudflare.env worker-b.cloudflare.env
-~~~
-
-分别填写 WORKER_ID、WORKER_NAMESPACE、WORKER_CREDENTIAL、WORKER_INSTANCE_ID 和 CONTROL_BASE_URL。A/B 的 instance id 必须不同。
-
-不要在文件中复制陌生的 Claude Code 配置。启动脚本通过交互式 zsh 读取本机已有的 Provider 环境变量，并将原值传给两个容器。
-
-### 6.3 启动
-
-~~~sh
-zsh -ic 'bash scripts/run_local_cloudflare_workers.sh'
-~~~
-
-脚本会：
-
-1. 检查本机 SSH 隧道 16379 -> zhangbot:127.0.0.1:6379，没有时建立隧道。
-2. 通过 SSH 读取 zhangbot 上现有 Redis 的两个 ACL 配置，不打印密码。
-3. 给 A/B 生成分别带 ACL 的本地 Redis URL。
-4. 删除同名旧容器后启动 worker-a 和 worker-b。
-5. 如果当前目录有本机可读的 verifier.cloudflare.env，同时启动当前分支的结果发布服务。
-
-查看状态：
-
-~~~sh
-docker ps --format '{{.Names}}\t{{.Status}}\t{{.Image}}'
-docker compose -f docker-compose.cloudflare-workers.yml logs -f worker-a worker-b
-~~~
-
-确认 A/B 都 connected、各自只有输入/输出 named volume，并且没有 /var/run/docker.sock。新建任务后应出现 accepted、执行、上传和清理日志。
-
-停止本地服务：
-
-~~~sh
-docker compose -f docker-compose.cloudflare-workers.yml stop worker-a worker-b verifier
-~~~
-
-停止不会撤销 D1 中的 Worker 注册；重新启动时使用相同 credential 即可重新握手。
-
-## 7. 常用客户端操作
-
-如果只需要测试连接，而不运行 Docker Worker，可使用 Node 18+ 客户端：
-
-~~~sh
-export INFINITY_WORKER_CREDENTIAL='从任务中心复制的持久 credential'
-node cloudflare-worker/worker-client.mjs configure \
-  --control-url https://infinity.zhangyvjing.com \
-  --worker-id '<Worker ID>' \
-  --namespace '<Namespace>'
-node cloudflare-worker/worker-client.mjs connect
-node cloudflare-worker/worker-client.mjs health
-node cloudflare-worker/worker-client.mjs poll
-~~~
-
-客户端配置保存到用户目录下的 ~/.infinity-agents/worker.json，文件权限为用户可读写；不要将该文件提交。
-
-## 8. Cloudflare 发布操作
-
-在独立工作树中发布，避免覆盖主工作树中的用户修改：
-
-~~~sh
-git switch cloudflare-deploy
-git pull --ff-only origin cloudflare-deploy
-
-cd frontend
-npm ci
-npm run build
-
-cd ../cloudflare-worker
-npm ci
-npm run check
-npm test
-npx wrangler d1 migrations apply infinity-agents-db --remote
-npx wrangler d1 migrations apply image-judge-db --remote
-npx wrangler deploy
-~~~
-
-发布前可做不改变线上状态的预检：
-
-~~~sh
-npx wrangler deploy --dry-run
-~~~
-
-生产 Secret 只通过 Wrangler 交互式配置；不写入代码、前端 bundle、.env 或 Git。任何 Secret 变更都要单独记录，不能把值写入本文件。
-
-发布后只读检查：
-
-~~~sh
-curl -fsS https://infinity.zhangyvjing.com/health
-curl -fsS https://infinity.zhangyvjing.com/image-judge/healthz
-curl -fsSI https://infinity.zhangyvjing.com/code-agent/
-~~~
-
-D1 只读核对示例：
-
-~~~sh
-npx wrangler d1 execute infinity-agents-db --remote --command \
-  "SELECT task_id, status, result_artifact_id FROM tasks ORDER BY created_at DESC LIMIT 10"
-~~~
-
-## 9. 测试与全局检查顺序
-
-本轮不启动 Subagent；后续需要人工执行时，按下面顺序：
-
-1. 静态检查：git diff --check、TypeScript check、Python import/pytest。
-2. Compose 检查：只验证服务和变量，不把包含 Secret 的 docker compose config 输出到日志。
-3. Cloudflare 健康端点。
-4. 登录后检查 Analysis、Task Center、Image Judge 三个入口。
-5. 创建一条小任务，观察 queued -> claimed -> running -> succeeded。
-6. 检查 Artifact 列表和下载响应。
-7. 再测大于 20 MB 的结果，确认 Multipart。
-8. 最后检查本地 Worker 清理和容器是否按预期回收。
-
-已完成的当前分支测试证据：
-
-- Cloudflare Worker TypeScript check + Vitest：35 tests passed。
-- 前端 typecheck + unit：30 tests passed，production build 成功。
-- Python Cloudflare Worker/Claude runtime/Docker runtime targeted tests：6 passed。
-- Case 2 和 Case 3 已在真实线上控制面完成，D1 状态为 succeeded，Artifact 为 published。
-- 本次文档改动完成后仍需重新执行 git diff --check；文档改动不影响运行时代码。
-
-## 10. 故障排查
-
-### Worker 一直 WORKER_ALREADY_CONNECTED
-
-同一个 credential 已有活动 session。停止旧机器或容器，等待 session lease 过期，再启动；不要复制同一 credential 到第二台机器。第二台机器应在 Task Center 新建一个 Worker 注册。
-
-### Worker WORKER_SESSION_REQUIRED
-
-Worker 尚未成功 connect，或本地配置中的 WORKER_ID、namespace、credential 不匹配。确认三者来自同一条 D1 注册记录。
-
-### Redis 检查失败
-
-确认 SSH 到 zhangbot 可用、Redis 仍监听 loopback、本机 16379 没有被其他进程占用。不要启动新的 Redis 容器覆盖现有服务。
-
-### 任务一直 queued
-
-依次检查 Worker 是否 connected 和持续 heartbeat、Worker 用户是否与任务创建者一致、Task 信任等级是否允许当前 Worker、Worker 是否因为 Redis 必需检查失败而退出，以及 poll 是否返回 offer。
-
-### 任务处于中间状态但没有下载
-
-当前分支需要结果发布服务把 quarantine Artifact 提升为 published。检查 verifier 容器日志、控制面 verifier token 配置和 R2 对象是否存在。不要重新执行任务或手工把 D1 状态改成 succeeded。
-
-### 大文件上传失败
-
-确认 ZIP 不超过 TASK_ARTIFACT_MAX_BYTES，Multipart parts 从 1 连续，非最后分片为 8 MB，R2 object head 大小等于预期，且 Worker 的 Attempt lease 在整个上传期间持续 heartbeat。
-
-## 11. 相关文件
-
-- docs/CLOUDFLARE_WORKER_ARCHITECTURE.md：组件、数据流、状态、边界和设计解释。
-- docs/CLOUDFLARE_DEPLOYMENT_RUNBOOK.md：Cloudflare 发布手册。
-- docs/WORKER_ONBOARDING.md：新机器加入清单。
-- docker-compose.cloudflare-workers.yml：两个本地 Worker 和当前结果发布服务。
-- scripts/run_local_cloudflare_workers.sh：SSH 隧道、Redis ACL 和本地启动入口。
-- cloudflare-worker/src/worker-control.ts：Worker 控制面、租约、上传和发布 API。
-- backend/code_agent/worker/cloudflare_worker.py：本地 Worker 主循环和 Claude Code 执行。
-- backend/code_agent/verifier_service.py：当前分支的结果发布服务。
+# Infinity Agents — Handoff / 交接文档
+
+> 最后更新：2026-08-11
+> 分支：`stepfun-agent-developing`
+> 当前验证：后端全量回归 `279 passed, 44 skipped`，前端 Vitest `25 passed`、Playwright E2E `8 passed`，ruff、lint/typecheck 通过，Next webpack production build 通过；隔离 PostgreSQL RLS 凭证绑定、信任分级、租约领取/完成、无上下文探针通过。
+
+> **当前权威实现**：Worker 使用 `backend/Dockerfile.direct-worker`，在 Worker 容器内直接启动 Claude Code；不挂载宿主机 Docker Socket，也不在容器内启动 Docker。网页任务接口使用登录会话与 CSRF，Worker 使用数据库保存摘要的持久凭证；凭证不是一次性 Token。远程 Worker 通过受凭证和租约保护的输入下载、产物上传接口与中心 API 交换文件。本文早期历史段落若与上述说明冲突，以当前代码、`worker.env.example` 和 `docs/WORKER_ONBOARDING.md` 为准。
+
+---
+
+## 1. 项目概述
+
+Infinity Agents 是一个多智能体工作台，包含三条产品线：
+
+| 产品 | 路径 | 说明 |
+|------|------|------|
+| **PaperAgent** | `/`（前端）+ `agent/`（后端） | 检索、阅读和整理论文（PubMed / Europe PMC / arXiv），OIDC 登录后使用 |
+| **CodeAgent** | `/code-agent`（前端）+ `backend/code_agent/`（后端） | 基于 Claude Code 的科学数据分析任务执行引擎（Infinity Agent） |
+| **ImageJudge** | `/image-judge`（下载页）+ `image-judge/`（桌面端源码） | 基于参考图的桌面图像分类工具，GitHub Release 分发 |
+
+本文件重点记录 **CodeAgent 任务执行系统** 的架构与实现状态，以及 2026-08 生产加固后的运维要点。
+
+---
+
+## 2. 技术栈
+
+| 层 | 技术 |
+|----|------|
+| 前端 | Next.js 14 (App Router), React, TypeScript, Tailwind CSS, Vitest + Playwright |
+| 后端 | FastAPI, Python 3.11, asyncpg, SSE-Starlette |
+| 数据库 | PostgreSQL（asyncpg 驱动；本地开发在 Docker 容器 `prisma-postgres-1`，端口 5450，trust 认证） |
+| 任务队列 | Redis Streams (redis-py >= 5.0)；本地容器 `infinity-redis`，端口 6379 |
+| 执行 | Direct Worker 容器直接运行 Claude Code；不挂载 `docker.sock`，不使用 Docker-in-Docker；Lease Reaper 使用独立数据库角色 |
+| 认证 | OIDC/本地开发登录会话；Worker 使用每个 Worker 独立的持久凭证 |
+
+---
+
+## 3. 系统架构
+
+```text
+用户浏览器
+    |
+    | REST + SSE（/api/* 由前端 :3000 rewrites 代理到后端 :8000）
+    v
+FastAPI Backend (backend/app.py)
+    |
+    |--- Task API（创建/查询/取消/SSE/产物下载，会话 + CSRF 鉴权）
+    |--- PaperAgent API + /ws/chat（OIDC + 每用户限流）
+    |--- ImageJudge 下载页（纯静态，无后端）
+    |
+    +--- PostgreSQL（任务状态、事件、产物、Outbox）
+    +--- Redis（Stream 队列 + SSE 事件流 + 心跳 + 限流计数器）
+    |
+    +--- Worker A / Worker B / ...（消费 Redis Stream，直接执行 Claude Code）
+            |
+            | 本地输入可直接读取；远程输入通过控制面下载
+            |   claude --print <prompt>（Worker 容器内子进程）
+            v
+        产物收集 → 本地或控制面上传 → Verifier 验证 → Artifact 原子发布 → SSE 推送
+```
+
+### 数据流（任务创建 → 完成）
+
+```
+前端上传执行文档(method source) + ZIP 数据集 → POST /api/task-specs + /api/dataset-snapshots
+  → POST /api/tasks（幂等性检查 + DB 插入 status=queued）
+    → OutboxEvent 写入 outbox_events 表（pending）
+      → OutboxPublisher 轮询 pending → 写入 Redis Stream `stream:tasks:execute`
+        → Worker 消费 → try_claim_task (CAS 原子认领) → Direct Claude Code 执行
+          → 本地收集或控制面上传 → Verifier 验证 → Artifact ZIP 原子发布
+            → Task 状态 → succeeded/failed/cancelled/timeout
+              → task_events 表 + Redis Stream → SSE 推送给前端
+```
+
+**可靠性要点（Outbox 模式）**：任务创建先写 DB，Redis 宕机时事件保持 pending，
+Redis 恢复后 OutboxPublisher 自动排空——已用真实停机测试验证。
+`/api/outbox/publish` 在 Redis 不可用时**返回 503 拒绝**，绝不静默标记 published（防丢事件）。
+
+### Worker 水平扩展
+
+新 Worker 节点先在任务中心签发唯一的 Worker ID/Namespace 和持久凭证，再配置
+`worker.env` 指向中心 Redis、PostgreSQL/API 与模型服务。启动后自动加入 Redis 任务竞争队列，
+CAS 租约保证同一任务只被一个 Worker 认领；凭证撤销后该 Worker 不能继续握手。详见
+`docs/WORKER_ONBOARDING.md`。
+
+---
+
+## 4. 目录结构
+
+```
+infinity_Agents/
+├── backend/
+│   ├── app.py                          # FastAPI 主应用（PaperAgent + Task API + SSE）
+│   ├── auth.py                         # OIDC: require_user / verify_websocket_token
+│   ├── db.py                           # 数据库初始化 + 全部 schema（21 张表）
+│   ├── db_rls.py                        # 请求/Worker/Outbox 上下文与连接池隔离
+│   ├── Dockerfile.direct-worker        # Direct Worker 镜像（代码烘焙进镜像）
+│   ├── code_agent/
+│   │   ├── models.py                   # Task/TaskSpec 数据模型 + 状态机 TRANSITIONS
+│   │   ├── task_service.py             # 服务层（CRUD、CAS claim、requeue、Outbox、Artifact）
+│   │   ├── redis_client.py             # Redis 客户端（Stream/心跳/限流；断连时 fail-open）
+│   │   ├── outbox.py                   # OutboxPublisher（lifespan 自动启动轮询）
+│   │   ├── retry_policy.py             # 失败分类 + 指数退避(full jitter)
+│   │   ├── verifier.py                 # 多级验证器（file/format/content/... + 领域规则）
+│   │   ├── analysis_agent.py           # TaskSpec 生成（LLM，无 key 时降级 mock）
+│   │   └── worker/
+│   │       ├── consumer.py             # Worker 主循环 + 失败分类路由
+│   │       ├── reaper.py               # 独立 Lease Reaper（专用数据库角色）
+│   │       ├── direct_runtime.py       # Claude Code 直接运行器（取消 + 超时）
+│   │       └── executor.py             # 执行编排（产物写入 ARTIFACT_STORAGE_ROOT）
+├── frontend/
+│   ├── app/
+│   │   ├── page.tsx                    # 首页路由（PaperAgent 聊天）
+│   │   ├── code-agent/
+│   │   │   ├── page.tsx                # 任务创建（执行文档 + ZIP 数据集上传）+ 任务列表
+│   │   │   └── tasks/[task_id]/        # 任务详情（SSE 实时事件 + 产物下载）
+│   │   └── image-judge/page.tsx        # ImageJudge 示例 + 下载页（Windows/Linux 平台直链）
+│   ├── components/chat/ChatWorkspace.tsx       # Analysis/Chat 共用工作区
+│   ├── components/chat/MobileWorkspaceMenu.tsx # 移动端工作区抽屉
+│   └── lib/                            # i18n.tsx（中英）、api/tasks.ts、runtime-config.ts
+├── image-judge/                        # 桌面端源码 + 打包脚本
+├── .github/workflows/imagejudge-package.yml  # Windows EXE + Linux DEB 打包发布
+├── docker-compose.local.yml            # Redis + worker-a/b + outbox-publisher
+├── worker.env.example                  # 远程 Worker 接入配置模板
+├── docs/
+│   ├── LOCAL_DEVELOPMENT.md            # 本地开发指南
+│   └── WORKER_ONBOARDING.md            # Worker 接入 + 生产安全清单
+├── tests/                              # 后端测试（23 个文件）
+└── HANDOFF.md                          # 本文件
+```
+
+**注意**：旧的聊天室（`/ws/code`、`/ws/analysis`、`/api/code/sessions`）与
+`/code-agent/analysis` 页面已在重构中删除，任务创建改由 `/code-agent` 页面的
+"执行文档 + 数据集" 表单完成。
+
+---
+
+## 5. 数据库 schema
+
+`backend/db.py` 的 `init_db()` 共 21 张表：
+
+- **PaperAgent**：sessions, messages, paper_records, authorized_paper_refs,
+  session_paper_links, session_uploaded_papers, paper_cache, paper_records_global,
+  paper_cache_global, session_tool_calls, session_context_compression
+- **Task 系统**（核心 9 张）：projects, task_specs, method_sources,
+  dataset_snapshots, tasks, task_attempts, task_events, outbox_events, artifacts,
+  idempotency_keys
+
+### tasks 表关键字段
+
+| 字段 | 说明 |
+|------|------|
+| status | draft / queued / claimed / running / succeeded / failed / cancelled / timeout |
+| phase | RUNNING 子状态：preparing / executing / verifying / packaging |
+| lease_owner / lease_token / lease_expires_at | CAS 租约三元组；终态保留租约标记至自然过期，数据面策略仍只允许 active claimed/running |
+| attempt_count / max_attempts（默认 3） | 重试计数 |
+| next_attempt_at | 退避重试的到期时间，claim 时要求 `<= NOW()` |
+| error_message | 已 sanitize 的错误信息（≤500 字符） |
+
+### task_attempts
+
+每次执行一条记录：worker_id、attempt_index、container_id、exit_code、
+failure_code（失败分类码）、failure_detail、token_usage。
+
+### outbox_events
+
+status: pending / published / failed；含 retry_count、last_error、next_attempt_at。
+OutboxPublisher 只发布 pending；发布失败保持 pending 等待下轮。
+
+### artifacts
+
+artifact_id、storage_path、checksum_sha256、content_type；下载时受
+`ARTIFACT_DOWNLOAD_ROOT` 白名单约束。
+
+### method_sources（执行文档）
+
+用户上传的执行方法文档（HTML/PDF 等自由格式），任务通过 `method_source_id` 关联。
+
+---
+
+## 6. 状态机
+
+```
+draft → queued → claimed → running → succeeded
+          ↑          |          |
+          |          |          +→ failed / timeout / cancelled
+          |          +→ cancelled
+          +← failed/timeout（可重试时 re-queue，带 next_attempt_at 退避）
+```
+
+**失败分类**（`retry_policy.py`）：
+- 不可重试：`verification_failed`、`invalid_spec`、`dataset_invalid` → 直接 failed
+- 可重试：`infrastructure_error`、`execution_error`、None → attempt_count < max_attempts
+  时 requeue，延迟 = `random(0, min(5 * 2^attempt, 300))` 秒（指数退避 + full jitter）
+
+**CAS 保护**：`try_claim_task` 原子 UPDATE（queued + 租约过期 + 退避到期）；
+`requeue_task` / `update_task_status` 要求 `WHERE lease_token = $2`，防止过期 Worker
+醒来后污染已被接管的任务。
+
+---
+
+## 7. 后端 API 端点
+
+### PaperAgent（OIDC 鉴权：`require_user` / WebSocket token）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST/GET/DELETE | `/api/sessions[/{id}]` | 会话管理（POST 受限流保护） |
+| POST/GET | `/api/sessions/{id}/uploads/papers` | 论文上传 |
+| GET | `/api/sessions/{id}/messages` | 历史消息 |
+| WS | `/ws/chat` | 聊天流（受限流保护：默认 3 次/分钟/用户） |
+
+### Task API（浏览器使用 HttpOnly 登录会话 + CSRF）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/projects/default` | 默认项目 |
+| POST | `/api/method-sources/upload` | 上传执行文档 |
+| POST | `/api/task-specs` | 创建 TaskSpec |
+| POST | `/api/dataset-snapshots/upload`、`/api/dataset-snapshots` | 数据集上传/登记 |
+| POST | `/api/tasks` | 创建任务（支持 idempotency_key） |
+| GET | `/api/tasks`、`/api/tasks/{id}` | 列表 / 详情 |
+| POST | `/api/tasks/{id}/cancel` | 取消（运行中置 cancel_requested_at） |
+| GET | `/api/tasks/{id}/events`、`/events/stream` | 事件列表 / SSE 实时流 |
+| GET | `/api/tasks/{id}/artifacts`、`/api/artifacts/{id}` | 产物列表 / 下载 ZIP |
+| POST | `/api/worker-enrollments` | 管理员签发持久 Worker 凭证 |
+| POST | `/api/worker-enrollments/{worker_id}/revoke` | 撤销 Worker 凭证 |
+| GET | `/api/worker/tasks/{id}/inputs/{kind}` | 按 Worker 凭证和租约下载 dataset/method |
+| POST | `/api/worker/tasks/{id}/artifacts` | 按 Worker 凭证和租约上传结果 ZIP |
+| POST | `/api/worker/poll` | 仅本地显式开发开关可用；部署环境返回 404 |
+| POST/GET | `/api/outbox/publish`、`/api/worker/health` | 仅本地显式开关或管理员可用 |
+
+### SSE 行为（`/api/tasks/{id}/events/stream`）
+
+- 优先从 Redis Stream 读事件并按 `task_id` 过滤；Redis 不可用时回退 DB 轮询 task_events 表
+- 支持 `last_event_id` 断点续传（前端自动重连）
+- Redis 事件若已有数据库事件号，SSE ID 为 `redis_cursor|db:<task_event_id>`；Redis 故障时可无重复地切到 DB 游标
+- 每 15 秒发送 `: keep-alive` 心跳注释；连接最长 2 小时后优雅关闭
+  （`SSE_MAX_CONNECTION_SECONDS` 可调），前端重连不丢事件
+
+---
+
+## 8. Worker 执行流程
+
+### 主循环（consumer.py）
+
+```
+run_worker(worker_id, db_pool, redis_client, docker_image)
+  ├── ensure_consumer_group("stream:tasks:execute", "task-workers-v1")
+  ├── _heartbeat_loop        — 每 15s 更新 Redis 心跳
+  └── _process_next_task     — 循环
+        ├── consume_tasks (XREADGROUP, block 5s)
+        ├── try_claim_task (CAS)
+        ├── execute_task (executor.py) + 后台取消检测协程
+        │     ├── Worker 私有 scratch 目录接收输入并生成结果
+        │     ├── 通过控制面下载输入并上传结果归档
+        │     └── direct_runtime 启动 Claude Code，默认任务超时 12h
+        ├── 失败 → _fail_or_requeue（按 failure_code 分类）
+        └── ack_message (XACK)
+
+dedicated reaper service
+  ├── 每 10s 扫描过期租约
+  ├── attempt_count < 3 → requeue（带退避 next_attempt_at）
+  └── attempt_count ≥ 3 → failed
+```
+
+### 取消流程
+
+用户取消 → DB 置 `cancel_requested_at` → Worker 后台协程检测 → `cancel_event` →
+Claude Code 子进程 SIGTERM（30s 宽限）→ SIGKILL → 状态置 cancelled → SSE 推送终态。
+
+### Redis 客户端与任务真相源
+
+`redis_client.py` 对 API 侧连接故障返回安全默认值，任务状态仍以 PostgreSQL 为准；
+任务投递依赖 Outbox 在恢复后补齐。Worker 在 Redis 断开时不会退回未经保护的数据库轮询，
+而是重连并等待认证 Redis Stream。
+
+---
+
+## 9. 安全措施（2026-08 生产加固后）
+
+| 项 | 状态 |
+|----|------|
+| 浏览器 Task API 使用登录会话 + CSRF；未认证部署默认拒绝 | ✅ `LOCAL_DEV_OPEN_TASK_API=1` 仅允许本地开发显式打开 |
+| Worker 使用每个 Worker 独立的持久凭证，数据库只保存摘要，可撤销 | ✅ |
+| `/api/outbox/publish` Redis 断连返回 503，不静默丢事件 | ✅ |
+| Redis 可选密码（compose `REDIS_PASSWORD` → requirepass） | ✅ 生产必须设置 |
+| paperAgent `/ws/chat` + `/api/sessions` 每用户 3 次/分钟限流 | ✅ fail-open；`PAPER_CHAT_RATE_LIMIT/WINDOW` 可调 |
+| 错误 sanitize（路径/URI/凭证脱敏 + 500 字符截断） | ✅ `_sanitize_error` |
+| Direct Worker 不挂载 Docker Socket/Docker-in-Docker，任务超时默认 12h | ✅ 仍需专用主机/账号承载 Claude Code |
+| 产物下载白名单 + 禁符号链接 + 禁路径遍历 | ✅ `ARTIFACT_DOWNLOAD_ROOT` |
+| LLM 密钥透传用 `-e NAME`（不进容器 argv） | ✅ |
+| SSE 心跳 15s + 2h 连接上限 | ✅ |
+
+**生产部署必配**（详见 `docs/WORKER_ONBOARDING.md` 安全清单）：
+随机 `SESSION_COOKIE_SECRET`、`SECRET_STORE_KEK`、Redis 密码、数据库访问控制、
+`WORKER_ENROLLMENT_ADMIN_USER_IDS`、`SUPERUSER_USER_IDS`，以及每个 Worker 的持久凭证。只有
+认证角色为 `superuser`/`root` 或列在 `SUPERUSER_USER_IDS` 的用户能签发 full-trust Worker；
+其他用户自动得到 general-trust，不能通过请求体或 worker.env 提升。PostgreSQL、Redis
+不暴露公网；远程 Worker 还要配置 `WORKER_CONTROL_PLANE_URL`。
+
+---
+
+## 10. 环境变量
+
+```env
+# --- API 服务器 ---
+DATABASE_URL=postgresql://postgres@localhost:5450/infinity_agents
+REDIS_URL=redis://localhost:6379/0            # 带密码: redis://:pass@host:6379/0
+SESSION_COOKIE_SECRET=<random-secret>          # acceptance/production 必须
+SECRET_STORE_KEK=<random-key>                  # acceptance/production 必须
+ARTIFACT_DOWNLOAD_ROOT=$(pwd)/workspace/task-outputs  # API 读控制面上传的产物
+# PAPER_CHAT_RATE_LIMIT=3 / PAPER_CHAT_RATE_WINDOW=60 / SSE_MAX_CONNECTION_SECONDS=7200
+
+# --- Worker（worker.env，见 worker.env.example）---
+REDIS_URL / WORKER_DATABASE_URL / WORKER_ID / WORKER_CREDENTIAL
+WORKER_ENROLLMENT_REQUIRED=1
+WORKER_CONTROL_PLANE_URL=https://<central-api> # 远程输入/产物传输时需要
+ANTHROPIC_API_KEY=<...>                        # 仅传给 Claude Code 子进程
+ANTHROPIC_BASE_URL=<...>
+ANTHROPIC_MODEL=<...>
+ARTIFACT_STORAGE_ROOT=/workspace/task-outputs  # Worker 本地工作目录
+# Local Compose Outbox/Reaper use separate OUTBOX_DATABASE_URL and
+# REAPER_DATABASE_URL service logins; the API Worker gateway uses its own
+# server-side WORKER_GATEWAY_DATABASE_URL.
+```
+
+**artifact 存储一致性**：每个 Worker 只使用自己的 scratch 目录；输入和结果统一
+通过受凭证与租约保护的控制面传输，API 将归档绑定到当前租约后记录到中心数据库。
+这样本机两个 Worker 也不会共享任务输入、输出或中间文件。
+
+---
+
+## 11. 本地运行
+
+```bash
+# 1. PostgreSQL（Docker 容器 prisma-postgres-1，端口 5450，trust 认证）
+#    数据库名 infinity_agents，应用启动时 init_db() 自动建表
+
+# 2. Redis + 两个 Direct Worker + Outbox（compose，配置来自 worker.env）
+docker compose -f docker-compose.local.yml --env-file worker.env up -d --build
+
+# 3. API 服务器
+pyenv shell Agent
+DATABASE_URL="postgresql://postgres@localhost:5450/infinity_agents" \
+REDIS_URL="redis://localhost:6379/0" \
+ARTIFACT_DOWNLOAD_ROOT="$PWD/workspace/task-outputs" \
+uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
+
+# 4. 前端（:3000，rewrites 代理 /api/* → :8000）
+cd frontend && npm install && npm run dev
+```
+
+远程 Worker 接入（只装 Docker + 填 worker.env）见 `docs/WORKER_ONBOARDING.md`。
+
+---
+
+## 12. 测试
+
+```bash
+# 后端全量（真实 Docker/外部服务测试仍按标记单独运行）
+eval "$(pyenv init - zsh)"
+pyenv shell Agent
+DATABASE_URL="postgresql://postgres@localhost:5450/infinity_agents" \
+REDIS_URL="redis://localhost:6379/0" pytest -q  # 279 passed, 44 skipped
+
+# 前端
+cd frontend && npm run lint                    # clean
+npm run typecheck                              # clean
+npm run test:unit -- --run                     # 25 passed（6 个文件）
+npm run test:e2e                                # 8 passed
+npm run build                                   # webpack production build passed
+
+# 后端静态检查
+ruff check backend                              # clean
+# mypy backend 仍包含旧 PaperAgent/vendor 与第三方 stub 的类型债务，不能作为发布通过条件
+```
+
+### 关键测试文件
+
+| 文件 | 覆盖 |
+|------|------|
+| `test_fault_injection.py` | 34 个韧性测试：Redis 宕机 Outbox、Worker 崩溃 Reaper、失败分类、CAS 竞争、错误脱敏、DB 断连、SSE 断流 |
+| `test_rate_limit.py` | 11 个：窗口计数、用户/action 隔离、过期重置、fail-open、env 配置 |
+| `test_concurrency_recovery.py` / `test_retry_and_recovery.py` | 并发 claim、租约恢复、退避重试 |
+| `test_sse_reconnection.py` | SSE last_event_id 断点续传 |
+| `test_db_rls.py` | API/Worker/Outbox 角色绑定、持久凭证注入、连接归还清理、无上下文拒绝 |
+| `scripts/rls_roles.sql` + 隔离 PostgreSQL | 凭证绑定、账号范围 general/full 信任领取、终态提交、Reaper 回收、直接信任写入阻断 |
+| `test_security.py` / `test_artifact_download.py` | 路径遍历、符号链接、白名单 |
+| `test_regression.py` | case1/2/3 全链路（mock Docker；`@pytest.mark.integration` 为真实 Docker） |
+| `frontend/app/image-judge/__tests__/page.test.tsx` | 下载直链、平台探测、推荐卡片 |
+
+---
+
+## 13. 关键设计决策
+
+1. **Outbox 模式**：状态变更先写 DB outbox_events，OutboxPublisher 异步发布到 Redis
+   Stream；Redis 宕机事件保持 pending，恢复后自动排空。**绝不**在未投递成功时标记
+   published（503 显式失败优于静默丢事件）。
+2. **CAS 租约**：认领/回写全部带 lease_token 条件的原子 UPDATE，杜绝双 Worker 竞争
+   与僵尸 Worker 污染。
+3. **Lease Reaper**：独立 `reaper` 服务每 10s 扫描过期租约，实现崩溃自动接管 + 退避重试；普通 Worker 不再重复扫描。
+4. **Redis 与数据库分工**：Redis 承担队列/事件，PostgreSQL 保存任务真相；API 的 SSE
+   可在 Redis 故障时回退数据库事件，Worker 不使用未认证的数据库轮询回退。
+5. **持久 Worker 身份**：每个 Worker ID/Namespace 对应一个可撤销的持久凭证；同一
+   Worker ID 重新签发会替换旧凭证，凭证不作为一次性任务 Token 使用。
+   普通用户/学生签发 `general` Worker，只能处理该账号创建的任务；超级用户签发的 `full`
+   Worker 才是跨账号的受控服务器执行层，Redis Namespace 必须与数据库 enrollment 一致。
+6. **Worker 隔离与传输**：每个 Worker 使用独立 scratch 目录；通过认证控制面下载输入、
+   上传结果归档，归档绑定到当前任务租约。
+7. **幂等性**：`idempotency_keys` 表（24h 过期）+ ON CONFLICT DO NOTHING。
+
+---
+
+## 14. ImageJudge 发布流程
+
+- 工作流 `.github/workflows/imagejudge-package.yml`：Windows PyInstaller EXE →
+  `ImageJudge-windows-x64.zip`；Linux → 固定名 `ImageJudge-linux-amd64.deb`
+- 打 tag `imagejudge-v*` 触发 release job，资产附到 GitHub Release
+- 下载页（`/image-judge`）使用 `releases/latest/download/<固定名>` 直链，
+  点击直接下载（不跳 GitHub 页面），自动探测平台并高亮"推荐"卡片
+- **待办**：deb 改名后需发布新 tag（如 `imagejudge-v0.2.1`）才能让 Linux 直链生效
+
+---
+
+## 15. 已知问题与限制
+
+1. **Analysis Agent（`analysis_agent.py`）保留为库**：`/ws/analysis` 端点已删除，
+   `run_analysis_stream` 仅被单元测试使用；如需恢复对话式 TaskSpec 生成需重新接端点。
+2. **真实 Docker 集成测试**：`test_regression.py` 的 3 个 case（`real_docker`）耗时长，
+   常规运行用 `-k "not real_docker"` 排除，发布前建议手动跑一次。
+3. **arxiv 网络测试**：依赖外部 API，偶发 HTTP 429，与本项目代码无关。
+4. **数据库 RLS 是发布门禁**：`scripts/rls_roles.sql` 提供
+   `infinity_api`/`infinity_worker`/`infinity_outbox` 三个数据面 `NOBYPASSRLS` 角色，
+   以及仅用于服务器派生完全信任签发的 `infinity_trust_issuer` 和仅用于过期租约恢复的
+   `infinity_reaper` 角色与策略；
+   `backend/db_rls.py` 已把 HTTP 用户、Worker lease、Outbox publisher 的身份绑定到
+   每次连接 checkout，并在归还前清除上下文。Worker 凭证摘要匹配后才产生有效
+   `app.current_worker_id()`；`tasks_worker_update_guard` 在数据库层再校验 Worker 的
+   claim/lease/state/attempt/artifact 变更；终态提交在租约窗口内完成，终态保留租约标记但不再开放数据面操作。
+   隔离 PostgreSQL 上凭证绑定、general/full 信任和终态提交探针已通过。目标 acceptance/生产库仍必须由数据库管理员执行脚本并完成同样的负向探针，
+   不能把现有开发库自动改角色；使用 `scripts/acceptance_prepare_db_logins.sh` 创建
+   API、Worker gateway、Outbox、Worker-A/B、Reaper 的独立登录，再把对应
+   `RLS_*_LOGIN_ROLE` 传给迁移脚本授予 `SET ROLE` membership，`scripts/acceptance_preflight.sh` 默认
+   `ACCEPTANCE_REQUIRE_RLS=1`，会阻断缺少角色、membership、FORCE RLS 或策略的 acceptance 环境。
+5. **Direct Worker 的权限边界**：Claude Code 在专用 Worker 容器内允许完整工具权限，
+   因此 Worker 主机和凭证必须专用；如果把中心 Provider 密钥放进不受信的学生 Worker，
+   Claude Code 在“全权限 + 可出网”边界内理论上可以读取并外传该密钥。当前实现不把它
+   宣称为宿主机级安全沙箱；不受信 Worker 应改用 Attempt-scoped gateway 能力。
+6. **未做 GB 级压力测试**：单文件/解压/产物有上限且采用流式写盘；Worker 产物上传已改为
+   认证/租约预检后的原始 request body，避免 multipart 在鉴权前先 spool，但用户级总磁盘配额、
+   长期产物清理和真实大文件链路仍需在部署环境验证。
+7. **限流为固定窗口**：分钟边界处理论上限是 2×limit/分钟，满足基础用户场景；
+   如需更严格可升级为滑动窗口。
+8. **已有 13000/线上实例可能仍持有旧构建**：源码与隔离验收实例已通过，若浏览器
+   仍看到旧的 PDF/English/旧导航，必须重新构建并重启对应服务；不能用旧进程的页面
+   反推当前源码状态。
+9. **Cloudflare 部署对象不在当前分支**：当前 `stepfun-agent-developing` 不包含
+   `cloudflare-worker/`；相关实现只存在于 `origin/cloudflare-deploy`。在没有明确合并
+   并重新验收前，不能把当前本地通过结果当作 Cloudflare 线上部署通过。
+10. **布局验收基线**：Task Center 当前为“创建任务 → 任务管理 → Worker 设置”的纵向
+    全宽结构；移动端抽屉分别保留 Analysis/Chat 会话操作、Task Center 任务列表和
+    Image Judge 示例/下载入口。旧服务若仍显示左右两列或缺少抽屉内容，先确认构建版本。
+
+---
+
+## 16. 下一步行动（建议优先级）
+
+1. **在目标 acceptance/生产库执行 RLS 迁移**：运行 `scripts/rls_roles.sql`，配置连接账号
+   的 `SET ROLE` 权限，跑 preflight 和 Alice/Bob 负向探针
+2. **整合 Cloudflare 分支**：确认 `cloudflare-worker` 的数据库/队列/对象存储协议后，
+   在目标环境单独构建、部署和验收，不能直接沿用本分支状态
+3. **发布 ImageJudge 新 tag**（`imagejudge-v0.2.1`）激活 Linux 下载直链
+4. **生产部署**：按 `docs/WORKER_ONBOARDING.md` 安全清单配置会话/密钥、Redis 密码、
+   数据库角色和管理员名单，验证远程 Worker 输入下载与产物上传
+5. **端到端验证**：compose 起 worker → 真实任务 → 产物下载全链路
+6. **性能验证**：10+ Worker 并发下 Lease Reaper / Outbox Publisher 表现
+7. **监控**：outbox pending 堆积告警、worker 心跳丢失告警、限流触发统计
+
+---
+
+## 17. 最近变更历史
+
+| 提交 | 说明 |
+|------|------|
+| `fe7fda9` | 生产加固五阶段：端点鉴权、限流、下载直链、artifact 统一、SSE 心跳 + 死代码清理 |
+| `db0b84f` | 故障注入测试套件（34 个）+ Outbox SSE 事件丢失修复 |
+| `038151a` | 代码审查修复：安全加固、jsonb 处理、状态机修正 |
+| `9c2b817` | 任务链对齐设计：method sources、失败重试、Worker 接入 |
+| `560ef4c` | StepFun 开发前的系统快照 |

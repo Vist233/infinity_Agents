@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" role="img" aria-labelledby="title desc">
+  <title id="title">Leaf reference image</title>
+  <desc id="desc">A stylized healthy leaf reference image.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ecfdf5"/><stop offset="1" stop-color="#e0f2fe"/></linearGradient>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#86efac"/><stop offset="1" stop-color="#15803d"/></linearGradient>
+  </defs>
+  <rect width="800" height="450" rx="28" fill="url(#bg)"/>
+  <circle cx="120" cy="95" r="42" fill="#fff" opacity=".6"/><circle cx="690" cy="350" r="72" fill="#fff" opacity=".45"/>
+  <path d="M398 380C396 310 402 245 430 184" fill="none" stroke="#166534" stroke-width="10" stroke-linecap="round"/>
+  <path d="M405 278C289 270 198 192 230 92c111 9 202 73 175 186Z" fill="url(#leaf)" stroke="#166534" stroke-width="7"/>
+  <path d="M413 278C518 260 594 188 574 102c-104 13-176 74-161 176Z" fill="#4ade80" stroke="#166534" stroke-width="7"/>
+  <path d="M405 275C347 221 300 164 247 111M409 275c48-54 88-105 151-153" fill="none" stroke="#bbf7d0" stroke-width="5" stroke-linecap="round" opacity=".9"/>
+  <text x="32" y="414" fill="#166534" font-family="system-ui, sans-serif" font-size="22" font-weight="600">REFERENCE · LEAF</text>
+</svg>

@@ -20,10 +20,11 @@ def _key() -> bytes:
         except (ValueError, TypeError):
             pass
         return hashlib.sha256(raw.encode("utf-8")).digest()
-    if os.getenv("APP_ENV", "development").lower() in {"production", "prod"}:
-        raise RuntimeError("SECRET_STORE_KEK is required in production")
-    # Development fallback is deliberately stable only within this local
-    # process configuration; acceptance should always set an explicit KEK.
+    if os.getenv("APP_ENV", "development").lower() not in {"development", "dev", "test"}:
+        raise RuntimeError("SECRET_STORE_KEK is required outside development/test")
+    # A stable fallback is intentionally limited to local development and
+    # tests. Acceptance/staging must fail closed rather than silently sharing
+    # a repository-known encryption key.
     return hashlib.sha256(b"infinity-agents-development-secret-store").digest()
 
 

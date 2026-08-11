@@ -26,15 +26,17 @@ export interface TaskItem {
   created_at: string;
 }
 
-export interface TaskArtifact {
-  artifact_id: string;
-  name: string;
-  kind: string;
-  file_size_bytes: number | null;
-  checksum_sha256: string | null;
-  created_at: string;
+export interface WorkerEnrollmentInfo {
+  worker_id: string;
+  namespace: string;
+  credential: string;
+  persistent: boolean;
+  one_time: boolean;
 }
 
+// Compatibility contracts retained for the legacy Task Center cards that are
+// still shipped on the Cloudflare branch. The current direct bundle endpoint
+// remains the preferred path for the new Task Center UI.
 export interface ProjectInfo {
   project_id: string;
   name: string;
@@ -96,22 +98,16 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
       `Network request failed: ${error instanceof Error ? error.message : "unknown error"}`,
     );
   }
-  if (response.status === 401) {
-    redirectToLogin();
-  }
+  // A background list/refresh request must not navigate the whole workspace
+  // away while the user is moving between agents.  Callers that represent an
+  // explicit action can decide to invoke redirectToLogin themselves; the
+  // error still carries the 401 status for that decision.
   if (!response.ok) {
-    let detail = `HTTP ${response.status}`;
+    let detail = response.status === 401 ? "Authentication required" : `HTTP ${response.status}`;
     try {
-      const payload = await response.json() as {
-        detail?: string;
-        error?: { message?: string; code?: string | null };
-      };
+      const payload = await response.json();
       if (payload && typeof payload.detail === "string") {
         detail = payload.detail;
-      } else if (payload?.error && typeof payload.error.message === "string") {
-        detail = payload.error.code
-          ? `${payload.error.message} [${payload.error.code}]`
-          : payload.error.message;
       }
     } catch {
       // keep default detail
@@ -121,13 +117,13 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function getDefaultProject(): Promise<ProjectInfo> {
-  return requestJson(`${getApiBase()}/api/projects/default`);
-}
-
 /** Generic authenticated GET against the Task API. */
 export function getJson<T>(url: string): Promise<T> {
   return requestJson<T>(url);
+}
+
+export async function getDefaultProject(): Promise<ProjectInfo> {
+  return requestJson(`${getApiBase()}/api/projects/default`);
 }
 
 export async function uploadMethodSource(file: File): Promise<MethodSourceInfo> {
@@ -157,7 +153,7 @@ export async function createTaskSpec(input: {
 }
 
 export async function freezeTaskSpec(taskSpecId: string): Promise<{ task_spec_id: string; status: string; frozen: boolean }> {
-  return requestJson(`${getApiBase()}/api/task-specs/${taskSpecId}/freeze`, { method: "POST" });
+  return requestJson(`${getApiBase()}/api/task-specs/${encodeURIComponent(taskSpecId)}/freeze`, { method: "POST" });
 }
 
 export async function createDatasetSnapshot(input: {
@@ -195,27 +191,6 @@ export async function createTask(input: {
   });
 }
 
-export async function findTaskByConfirmation(confirmationId: string): Promise<TaskItem | null> {
-  const data = await requestJson<{ task: TaskItem | null }>(
-    `${getApiBase()}/api/task-confirmations/${encodeURIComponent(confirmationId)}/task`,
-  );
-  return data.task;
-}
-
-export async function listTasks(limit = 50): Promise<TaskItem[]> {
-  const data = await requestJson<{ tasks: TaskItem[] }>(`${getApiBase()}/api/tasks?limit=${limit}`);
-  return data.tasks || [];
-}
-
-export async function getTaskArtifacts(taskId: string): Promise<TaskArtifact[]> {
-  return requestJson<TaskArtifact[]>(`${getApiBase()}/api/tasks/${encodeURIComponent(taskId)}/artifacts`);
-}
-
-export async function cancelTask(taskId: string): Promise<{ status: string }> {
-  return requestJson(`${getApiBase()}/api/tasks/${taskId}/cancel`, { method: "POST" });
-}
-
-/** Create a persistent Worker registration for the current user. */
 export async function createWorkerEnrollment(input: { namespace: string }): Promise<WorkerEnrollmentResponse> {
   return requestJson(`${getApiBase()}/api/worker-enrollments`, {
     method: "POST",
@@ -242,6 +217,39 @@ export async function rotateWorkerCredential(workerId: string, namespace: string
   );
 }
 
+export async function submitTaskBundle(input: {
+  methodFile: File;
+  datasetFile: File;
+  title?: string;
+  idempotencyKey: string;
+  projectId?: string;
+}): Promise<{ task_id: string; status: string; attempt_count: number; duplicate?: boolean }> {
+  const form = new FormData();
+  form.append("method_file", input.methodFile);
+  form.append("dataset_file", input.datasetFile);
+  form.append("title", input.title || "");
+  form.append("idempotency_key", input.idempotencyKey);
+  if (input.projectId) form.append("project_id", input.projectId);
+  return requestJson(`${getApiBase()}/api/tasks/submit-bundle`, { method: "POST", body: form });
+}
+
+export async function listTasks(limit = 50): Promise<TaskItem[]> {
+  const data = await requestJson<{ tasks: TaskItem[] }>(`${getApiBase()}/api/tasks?limit=${limit}`);
+  return data.tasks || [];
+}
+
+export async function issueWorkerEnrollment(input: { worker_id: string; namespace: string }): Promise<WorkerEnrollmentInfo> {
+  return requestJson(`${getApiBase()}/api/worker-enrollments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function cancelTask(taskId: string): Promise<{ status: string }> {
+  return requestJson(`${getApiBase()}/api/tasks/${taskId}/cancel`, { method: "POST" });
+}
+
 export function artifactDownloadUrl(artifactId: string): string {
   return `${getApiBase()}/api/artifacts/${artifactId}`;
 }
@@ -252,14 +260,27 @@ export async function downloadArtifact(artifactId: string, filename = "artifact.
     credentials: "include",
     headers: withCsrfHeader(),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (res.status === 401) {
+    redirectToLogin();
+    throw new Error("Authentication required");
+  }
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const payload = await res.json();
+      if (payload && typeof payload.detail === "string") detail = payload.detail;
+    } catch {
+      // Keep the HTTP fallback for non-JSON errors.
+    }
+    throw new Error(detail);
+  }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  URL.revokeObjectURL(url);
 }
 
 export function taskEventStreamUrl(taskId: string): string {

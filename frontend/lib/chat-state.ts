@@ -1,22 +1,6 @@
-export type TaskConfirmationStatus = "pending" | "submitting" | "submitted" | "failed";
-
-export interface TaskConfirmation {
-  confirmation_id: string;
-  tool_name: string;
-  title: string;
-  analysis_type: string;
-  research_question: string;
-  method_document_name: string;
-  dataset_name: string;
-  status: TaskConfirmationStatus;
-  task_id?: string;
-  error?: string;
-}
-
 export interface Message {
   role: "user" | "assistant";
   content: string;
-  taskConfirmation?: TaskConfirmation;
 }
 
 export interface SessionItem {
@@ -99,9 +83,6 @@ export type ChatAction =
   | { type: "set_sessions"; sessions: SessionItem[] }
   | { type: "set_session_messages"; sessionId: string; messages: Message[] }
   | { type: "update_session_messages"; sessionId: string; updater: (prev: Message[]) => Message[] }
-  | { type: "append_assistant_message"; sessionId: string; content?: string }
-  | { type: "attach_task_confirmation"; sessionId: string; confirmation: TaskConfirmation }
-  | { type: "update_task_confirmation"; sessionId: string; confirmationId: string; patch: Partial<TaskConfirmation> }
   | { type: "upsert_session"; session: SessionItem; toTop?: boolean }
   | { type: "remove_session"; sessionId: string }
   | { type: "set_session_run_state"; sessionId: string; runState: SessionRunState }
@@ -136,43 +117,6 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         sessionMessagesMap: {
           ...state.sessionMessagesMap,
           [action.sessionId]: action.updater(current),
-        },
-      };
-    }
-    case "append_assistant_message": {
-      const current = state.sessionMessagesMap[action.sessionId] || [];
-      return {
-        ...state,
-        sessionMessagesMap: {
-          ...state.sessionMessagesMap,
-          [action.sessionId]: [...current, { role: "assistant", content: action.content ?? "" }],
-        },
-      };
-    }
-    case "attach_task_confirmation": {
-      const current = [...(state.sessionMessagesMap[action.sessionId] || [])];
-      const last = current[current.length - 1];
-      if (last?.role === "assistant") {
-        current[current.length - 1] = { ...last, taskConfirmation: action.confirmation };
-      } else {
-        current.push({ role: "assistant", content: "", taskConfirmation: action.confirmation });
-      }
-      return {
-        ...state,
-        sessionMessagesMap: { ...state.sessionMessagesMap, [action.sessionId]: current },
-      };
-    }
-    case "update_task_confirmation": {
-      const current = state.sessionMessagesMap[action.sessionId] || [];
-      return {
-        ...state,
-        sessionMessagesMap: {
-          ...state.sessionMessagesMap,
-          [action.sessionId]: current.map((message) =>
-            message.taskConfirmation?.confirmation_id === action.confirmationId
-              ? { ...message, taskConfirmation: { ...message.taskConfirmation, ...action.patch } }
-              : message,
-          ),
         },
       };
     }

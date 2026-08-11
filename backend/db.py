@@ -1,11 +1,12 @@
 import logging
-from contextlib import asynccontextmanager
 import uuid
 import json
+import os
 from typing import Any, Dict, List, Optional
 import asyncpg
 
 from backend.core.config import settings
+from backend.db_rls import rls_enabled_from_env, wrap_runtime_pool
 
 
 async def ensure_table(pool: asyncpg.Pool) -> None:
@@ -225,6 +226,17 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions (user_id, expires_at);
 
+                CREATE TABLE IF NOT EXISTS oauth_states (
+                    state_hash CHAR(64) PRIMARY KEY,
+                    verifier TEXT NOT NULL,
+                    nonce TEXT NOT NULL,
+                    return_to TEXT NOT NULL,
+                    code_challenge TEXT,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states (expires_at);
+
                 CREATE TABLE IF NOT EXISTS project_members (
                     project_id UUID NOT NULL,
                     user_id TEXT NOT NULL,
@@ -311,6 +323,10 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     active_attempt_id BIGINT,
                     attempt_count INT NOT NULL DEFAULT 0,
                     max_attempts INT NOT NULL DEFAULT 3,
+                    -- The safe internal default is full trust. The
+                    -- authenticated API derives general for ordinary users
+                    -- and full for server-recognized superusers.
+                    required_trust_level VARCHAR(20) NOT NULL DEFAULT 'full',
                     cancel_requested_at TIMESTAMPTZ,
                     result_artifact_id TEXT,
                     error_message TEXT,
@@ -344,6 +360,10 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     failure_detail TEXT,
                     token_usage JSONB DEFAULT '{}'::jsonb
                 );
+                ALTER TABLE task_attempts DROP CONSTRAINT IF EXISTS chk_task_attempt_status;
+                ALTER TABLE task_attempts ADD CONSTRAINT chk_task_attempt_status CHECK (status IN (
+                    'running', 'succeeded', 'failed', 'lost', 'cancelled', 'timeout'
+                ));
                 CREATE INDEX IF NOT EXISTS idx_task_attempts_task ON task_attempts (task_id, attempt_index DESC);
 
                 CREATE TABLE IF NOT EXISTS task_events (
@@ -367,6 +387,7 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     retry_count INT NOT NULL DEFAULT 0,
                     last_error TEXT,
                     claim_expires_at TIMESTAMPTZ,
+                    claim_token TEXT,
                     next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
@@ -385,19 +406,21 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     checksum_sha256 CHAR(64),
                     content_type TEXT,
                     metadata JSONB DEFAULT '{}'::jsonb,
+                    deleted_at TIMESTAMPTZ,
+                    cleanup_completed_at TIMESTAMPTZ,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 CREATE INDEX IF NOT EXISTS idx_artifacts_task ON artifacts (task_id, created_at DESC);
 
                 CREATE TABLE IF NOT EXISTS idempotency_keys (
                     idempotency_key VARCHAR(255) NOT NULL,
-                    user_id TEXT,
+                    user_id TEXT NOT NULL DEFAULT '__legacy__',
                     resource_type VARCHAR(50) NOT NULL,
                     resource_id UUID,
                     request_hash TEXT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '24 hours',
-                    PRIMARY KEY (idempotency_key, resource_type)
+                    PRIMARY KEY (idempotency_key, user_id, resource_type)
                 );
                 CREATE INDEX IF NOT EXISTS idx_idempotency_keys_expires ON idempotency_keys (expires_at);
 
@@ -409,17 +432,39 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
                 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
                 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS method_source_id UUID;
+                ALTER TABLE tasks ADD COLUMN IF NOT EXISTS required_trust_level VARCHAR(20) NOT NULL DEFAULT 'full';
+                UPDATE tasks
+                SET required_trust_level = 'full'
+                WHERE required_trust_level IS NULL OR required_trust_level NOT IN ('general', 'full');
+                ALTER TABLE tasks DROP CONSTRAINT IF EXISTS chk_tasks_required_trust_level;
+                ALTER TABLE tasks ADD CONSTRAINT chk_tasks_required_trust_level
+                    CHECK (required_trust_level IN ('general', 'full'));
                 ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS container_id TEXT;
                 ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS executor_image_digest TEXT;
                 ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS failure_code VARCHAR(50);
                 ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS failure_detail TEXT;
+                ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+                ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS cleanup_completed_at TIMESTAMPTZ;
+                CREATE INDEX IF NOT EXISTS idx_artifacts_cleanup
+                    ON artifacts (deleted_at, cleanup_completed_at, created_at)
+                    WHERE deleted_at IS NOT NULL;
                 ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
                 ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMPTZ;
+                ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS claim_token TEXT;
                 UPDATE outbox_events
-                SET status = 'pending', claim_expires_at = NULL
+                SET status = 'pending', claim_expires_at = NULL, claim_token = NULL
                 WHERE status = 'publishing' AND claim_expires_at IS NULL;
                 ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS user_id TEXT;
                 ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS request_hash TEXT;
+                -- Authenticated idempotency is user-scoped.  Existing legacy
+                -- rows had a nullable owner and a global primary key; map
+                -- those rows to an explicit compatibility owner before
+                -- replacing the constraint so two users cannot collide.
+                UPDATE idempotency_keys SET user_id = '__legacy__' WHERE user_id IS NULL;
+                ALTER TABLE idempotency_keys ALTER COLUMN user_id SET DEFAULT '__legacy__';
+                ALTER TABLE idempotency_keys ALTER COLUMN user_id SET NOT NULL;
+                ALTER TABLE idempotency_keys DROP CONSTRAINT IF EXISTS idempotency_keys_pkey;
+                ALTER TABLE idempotency_keys ADD CONSTRAINT idempotency_keys_pkey PRIMARY KEY (idempotency_key, user_id, resource_type);
 
                 CREATE TABLE IF NOT EXISTS project_resources (
                     resource_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -477,28 +522,39 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     worker_id TEXT PRIMARY KEY,
                     credential_hash CHAR(64) NOT NULL,
                     namespace TEXT NOT NULL,
-                    user_id TEXT,
-                    trust_level VARCHAR(32) NOT NULL DEFAULT 'institution_trusted',
+                    owner_user_id TEXT,
+                    trust_level VARCHAR(20) NOT NULL DEFAULT 'general',
                     status VARCHAR(20) NOT NULL DEFAULT 'active',
                     enrolled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     revoked_at TIMESTAMPTZ,
-                    last_seen_at TIMESTAMPTZ,
-                    credential_expires_at TIMESTAMPTZ
+                    last_seen_at TIMESTAMPTZ
                 );
-                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS user_id TEXT;
-                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS trust_level VARCHAR(32) NOT NULL DEFAULT 'institution_trusted';
-                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS credential_expires_at TIMESTAMPTZ;
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS trust_level VARCHAR(20) NOT NULL DEFAULT 'general';
+                UPDATE worker_enrollments
+                SET trust_level = 'general'
+                WHERE trust_level IS NULL OR trust_level NOT IN ('general', 'full');
+                ALTER TABLE worker_enrollments DROP CONSTRAINT IF EXISTS chk_worker_enrollment_trust_level;
+                ALTER TABLE worker_enrollments ADD CONSTRAINT chk_worker_enrollment_trust_level
+                    CHECK (trust_level IN ('general', 'full'));
                 CREATE INDEX IF NOT EXISTS idx_worker_enrollments_namespace ON worker_enrollments (namespace, status);
-                CREATE INDEX IF NOT EXISTS idx_worker_enrollments_user ON worker_enrollments (user_id, enrolled_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_worker_enrollments_owner ON worker_enrollments (owner_user_id, namespace, status);
 
                 CREATE TABLE IF NOT EXISTS worker_enrollment_tokens (
                     token_hash CHAR(64) PRIMARY KEY,
                     worker_id TEXT NOT NULL,
                     namespace TEXT NOT NULL,
+                    owner_user_id TEXT,
+                    trust_level VARCHAR(20) NOT NULL DEFAULT 'general',
                     expires_at TIMESTAMPTZ NOT NULL,
                     used_at TIMESTAMPTZ,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
+                ALTER TABLE worker_enrollment_tokens ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
+                ALTER TABLE worker_enrollment_tokens ADD COLUMN IF NOT EXISTS trust_level VARCHAR(20) NOT NULL DEFAULT 'general';
+                ALTER TABLE worker_enrollment_tokens DROP CONSTRAINT IF EXISTS chk_worker_enrollment_token_trust_level;
+                ALTER TABLE worker_enrollment_tokens ADD CONSTRAINT chk_worker_enrollment_token_trust_level
+                    CHECK (trust_level IN ('general', 'full'));
                 CREATE INDEX IF NOT EXISTS idx_worker_enrollment_tokens_worker
                     ON worker_enrollment_tokens (worker_id, namespace, expires_at);
             """
@@ -507,13 +563,29 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
 
 
 async def init_db(app) -> None:
-    app.state.db_pool = await asyncpg.create_pool(
+    if not settings.database_url:
+        raise RuntimeError("DATABASE_URL is required to initialize the database")
+    from backend.security import validate_runtime_database_url
+    validate_runtime_database_url(settings.database_url)
+    raw_pool = await asyncpg.create_pool(
         dsn=settings.database_url,
         min_size=settings.db_pool_min_size,
         max_size=settings.db_pool_max_size,
         timeout=settings.db_pool_timeout,
     )
-    await ensure_table(app.state.db_pool)
+    # Schema creation/migrations need an operator connection. A deployed
+    # runtime login must not own the schema, so migrations can be explicitly
+    # disabled after the operator has applied them. Fresh local stacks keep
+    # the default enabled bootstrap path.
+    default_migrations_enabled = os.getenv("APP_ENV", "development").lower() not in {
+        "acceptance", "production", "prod"
+    }
+    migrations_enabled = os.getenv("DB_MIGRATIONS_ENABLED", "1" if default_migrations_enabled else "0").strip().lower() not in {
+        "0", "false", "no", "off"
+    }
+    if migrations_enabled:
+        await ensure_table(raw_pool)
+    app.state.db_pool = wrap_runtime_pool(raw_pool) if rls_enabled_from_env() else raw_pool
 
 
 async def close_db(app) -> None:
@@ -782,6 +854,64 @@ async def insert_session_uploaded_paper(
     except Exception as e:
         logging.error(f"Error inserting uploaded paper {paper_id} for session {session_id}: {e}")
         return None
+
+
+async def reserve_session_upload_slot(
+    pool: asyncpg.Pool,
+    session_id: str,
+    paper_id: str,
+    original_filename: str,
+    stored_pdf_path: str,
+    canonical_md_path: str,
+    images_dir: Optional[str],
+    max_papers: int,
+) -> bool:
+    """Reserve one upload slot atomically for a session.
+
+    The reservation row closes the count-then-insert race without holding a
+    database lock during PDF extraction.  A crashed upload can be reclaimed
+    on the next reservation after the stale timeout.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+                """,
+                session_id,
+            )
+            await conn.execute(
+                """
+                DELETE FROM session_uploaded_papers
+                WHERE session_id = $1::uuid
+                  AND status = 'uploading'
+                  AND created_at < NOW() - INTERVAL '1 hour'
+                """,
+                session_id,
+            )
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM session_uploaded_papers WHERE session_id = $1::uuid",
+                session_id,
+            )
+            if int(count or 0) >= max(1, int(max_papers)):
+                return False
+            await conn.execute(
+                """
+                INSERT INTO session_uploaded_papers (
+                    session_id, paper_id, original_filename, stored_pdf_path,
+                    canonical_md_path, images_dir, page_count, image_count,
+                    status, created_at
+                )
+                VALUES ($1::uuid, $2, $3, $4, $5, $6, 0, 0, 'uploading', NOW())
+                """,
+                session_id,
+                paper_id,
+                original_filename,
+                stored_pdf_path,
+                canonical_md_path,
+                images_dir,
+            )
+    return True
 
 
 async def list_session_uploaded_papers(pool: asyncpg.Pool, session_id: str) -> List[Dict[str, Any]]:

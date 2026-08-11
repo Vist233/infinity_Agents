@@ -9,17 +9,32 @@ import asyncio
 import json
 import logging
 import os
+import signal
+import time
 from typing import Any, AsyncIterator, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 
-def _volume_subpath(path: str, volume_root: str, label: str) -> str:
-    """Return a safe task-relative path for Docker's volume-subpath mount."""
-    relative = os.path.relpath(os.path.normpath(path), os.path.normpath(volume_root))
-    if relative in {".", ""} or relative == ".." or relative.startswith(f"..{os.sep}"):
-        raise ValueError(f"{label} must be inside its configured volume root")
-    return relative.replace(os.sep, "/")
+def _task_timeout_seconds() -> int:
+    try:
+        configured = int(os.getenv("TASK_EXECUTION_TIMEOUT_SECONDS", "43200"))
+    except (TypeError, ValueError):
+        configured = 43200
+    return max(60, min(configured, 7 * 24 * 60 * 60))
+
+
+def _signal_process_group(proc: asyncio.subprocess.Process, signal_number: int) -> None:
+    try:
+        os.killpg(proc.pid, signal_number)
+    except (ProcessLookupError, PermissionError):
+        try:
+            if signal_number == signal.SIGKILL:
+                proc.kill()
+            else:
+                proc.terminate()
+        except ProcessLookupError:
+            pass
 
 
 async def run_docker_task(
@@ -31,6 +46,9 @@ async def run_docker_task(
     case_dir: Optional[str] = None,
     output_dir: Optional[str] = None,
     cancel_event: Optional[asyncio.Event] = None,
+    attempt_gateway_url: Optional[str] = None,
+    attempt_gateway_token: Optional[str] = None,
+    attempt_model_id: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Run a task in a Docker container.
 
@@ -72,7 +90,7 @@ async def run_docker_task(
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
         "--pids-limit=512",
-        f"--cpus=2", "--memory=2g", "--memory-swap=2g",
+        "--cpus=2", "--memory=2g", "--memory-swap=2g",
         "--read-only",
         # A writable /tmp is mandatory under --read-only (design doc §24).
         "--tmpfs", "/tmp:size=512m",
@@ -90,65 +108,31 @@ async def run_docker_task(
     if job_user:
         cmd += ["--user", job_user]
 
-    # The normal hosted execution path uses Attempt-scoped gateway
-    # capabilities. A user-owned local Worker may explicitly provide its own
-    # Anthropic credentials; in that mode the values remain in the local
-    # Worker environment and are inherited by name, never placed in Docker
-    # command arguments or sent to the Cloudflare control plane.
-    runtime_env = os.environ.copy()
+    # Only Attempt-scoped gateway capabilities may enter the Job. Long-lived
+    # provider keys on the Worker are never inherited by child containers.
+    # Claude Code reads the standard Anthropic names; the source values are
+    # short-lived capabilities minted for this Attempt, never provider keys.
     attempt_env = {
         "ATTEMPT_GATEWAY_URL": "ANTHROPIC_BASE_URL",
         "ATTEMPT_GATEWAY_TOKEN": "ANTHROPIC_AUTH_TOKEN",
         "ATTEMPT_MODEL_ID": "ANTHROPIC_MODEL",
     }
     for source_name, target_name in attempt_env.items():
-        value = os.getenv(source_name, "").strip()
+        explicit_values = {
+            "ATTEMPT_GATEWAY_URL": attempt_gateway_url,
+            "ATTEMPT_GATEWAY_TOKEN": attempt_gateway_token,
+            "ATTEMPT_MODEL_ID": attempt_model_id,
+        }
+        value = str(explicit_values.get(source_name) or os.getenv(source_name, "")).strip()
         if value:
-            # Docker inherits the value from the CLI process when only the
-            # variable name is supplied. Keep the secret out of argv, where it
-            # would be visible in process listings and Docker diagnostics.
-            runtime_env[target_name] = value
+            cmd += ["-e", f"{target_name}={value}"]
 
-    for provider_name in (
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_MODEL",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-        "ANTHROPIC_REASONING_MODEL",
-        "CLAUDE_CODE_FAST_MODEL",
-        "CLAUDE_CODE_THINKING_MODEL",
-        "CLAUDE_CODE_SUBAGENT_MODEL",
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-    ):
-        # Supplying only the variable name makes Docker inherit the value from
-        # the local Worker process without exposing the secret in argv.
-        if runtime_env.get(provider_name, "").strip():
-            cmd += ["-e", provider_name]
-
-    input_volume = os.getenv("CODE_AGENT_INPUT_VOLUME", "").strip()
-    output_volume = os.getenv("CODE_AGENT_OUTPUT_VOLUME", "").strip()
-    if bool(input_volume) != bool(output_volume):
-        raise ValueError("CODE_AGENT_INPUT_VOLUME and CODE_AGENT_OUTPUT_VOLUME must be configured together")
-    if input_volume:
-        input_root = os.getenv("CODE_AGENT_INPUT_VOLUME_ROOT", "").strip()
-        output_root = os.getenv("CODE_AGENT_OUTPUT_VOLUME_ROOT", "").strip()
-        if not input_root or not output_root:
-            raise ValueError("Named Worker volumes require configured volume roots")
-        input_subpath = _volume_subpath(work_dir, input_root, "case_dir")
-        output_subpath = _volume_subpath(out_dir, output_root, "output_dir")
-        cmd += [
-            "--mount", f"type=volume,source={input_volume},target={input_mount},volume-subpath={input_subpath},readonly",
-            "--mount", f"type=volume,source={output_volume},target={output_mount},volume-subpath={output_subpath}",
-        ]
-    else:
-        cmd += [
-            "-v", f"{work_dir}:{input_mount}:ro",
-            "-v", f"{out_dir}:{output_mount}",
-        ]
-    cmd += [docker_image, "claude", "--print", prompt]
+    cmd += [
+        "-v", f"{work_dir}:{input_mount}:ro",
+        "-v", f"{out_dir}:{output_mount}",
+        docker_image,
+        "claude", "--print", prompt,
+    ]
 
     logger.info("Starting Docker container for task %s", task_id)
 
@@ -157,7 +141,7 @@ async def run_docker_task(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            env=runtime_env,
+            start_new_session=True,
         )
     except FileNotFoundError:
         yield {"type": "error", "message": "Docker not found. Ensure Docker is installed and running."}
@@ -167,23 +151,32 @@ async def run_docker_task(
         return
 
     output = ""
+    started_at = time.monotonic()
     try:
         while True:
+            if time.monotonic() - started_at >= _task_timeout_seconds():
+                logger.warning("Task %s exceeded the Docker execution time limit", task_id)
+                _signal_process_group(proc, signal.SIGTERM)
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=30)
+                except asyncio.TimeoutError:
+                    _signal_process_group(proc, signal.SIGKILL)
+                    await proc.wait()
+                yield {
+                    "type": "error",
+                    "message": "Docker execution exceeded the Worker time limit.",
+                    "failure_code": "timeout",
+                }
+                return
             if cancel_event and cancel_event.is_set():
                 logger.info("Cancellation requested for task %s, sending SIGTERM", task_id)
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
+                _signal_process_group(proc, signal.SIGTERM)
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=30)
                 except asyncio.TimeoutError:
                     logger.info("Task %s did not exit after SIGTERM, sending SIGKILL", task_id)
-                    try:
-                        proc.kill()
-                        await proc.wait()
-                    except Exception:
-                        pass
+                    _signal_process_group(proc, signal.SIGKILL)
+                    await proc.wait()
                 yield {"type": "cancelled", "message": "Task cancelled by user"}
                 return
 
@@ -198,11 +191,8 @@ async def run_docker_task(
             yield {"type": "chunk", "content": text}
         await proc.wait()
     except asyncio.CancelledError:
-        try:
-            proc.kill()
-            await proc.wait()
-        except Exception:
-            pass
+        _signal_process_group(proc, signal.SIGKILL)
+        await proc.wait()
         yield {"type": "error", "message": "Task cancelled"}
         return
     except Exception as exc:
@@ -210,11 +200,8 @@ async def run_docker_task(
         return
     finally:
         if proc.returncode is None:
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
+            _signal_process_group(proc, signal.SIGKILL)
+            await proc.wait()
 
     if proc.returncode == 0:
         yield {"type": "done", "output": output}

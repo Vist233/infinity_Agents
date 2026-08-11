@@ -50,6 +50,8 @@ class _FakePool:
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCAL_DEV_OPEN_TASK_API", "1")
+    monkeypatch.delenv("AUTH_REQUIRED_TASK_API", raising=False)
     from datetime import datetime, timezone
     DT = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -127,6 +129,17 @@ class TestArtifactDownloadEndpoint:
         r = client.get(f"/api/artifacts/{row['artifact_id']}")
         # Should reject serving files outside the task output area
         assert r.status_code in (400, 403, 404), r.text
+
+    def test_download_rejects_lexical_parent_traversal(self, client, monkeypatch, tmp_path):
+        monkeypatch.setenv("ARTIFACT_DOWNLOAD_ROOT", str(tmp_path))
+        secret = tmp_path.parent / "lexical-secret.txt"
+        secret.write_text("secret")
+        nested_parent_path = tmp_path / "nested" / ".." / ".." / secret.name
+        row = _make_artifact_row(storage_path=str(nested_parent_path))
+        backend_app_module.app.state.db_pool = _FakePool([row])
+
+        r = client.get(f"/api/artifacts/{row['artifact_id']}")
+        assert r.status_code == 403, r.text
 
     def test_download_rejects_symlink_escape(self, client, monkeypatch, tmp_path):
         monkeypatch.setenv("ARTIFACT_DOWNLOAD_ROOT", str(tmp_path))

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 
 # ============================================================================
@@ -34,7 +34,17 @@ class TaskPhase(str, Enum):
 TRANSITIONS: Dict[TaskStatus, set[TaskStatus]] = {
     TaskStatus.DRAFT: {TaskStatus.QUEUED, TaskStatus.CANCELLED},
     TaskStatus.QUEUED: {TaskStatus.CLAIMED, TaskStatus.CANCELLED},
-    TaskStatus.CLAIMED: {TaskStatus.RUNNING, TaskStatus.QUEUED, TaskStatus.CANCELLED},
+    # A Worker may finish before emitting a separate RUNNING heartbeat (for
+    # short fixture jobs and fast failures), so terminal transitions from
+    # CLAIMED are valid as well as the normal CLAIMED -> RUNNING path.
+    TaskStatus.CLAIMED: {
+        TaskStatus.RUNNING,
+        TaskStatus.QUEUED,
+        TaskStatus.SUCCEEDED,
+        TaskStatus.FAILED,
+        TaskStatus.TIMEOUT,
+        TaskStatus.CANCELLED,
+    },
     TaskStatus.RUNNING: {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.TIMEOUT, TaskStatus.CANCELLED},
     TaskStatus.SUCCEEDED: set(),
     TaskStatus.FAILED: {TaskStatus.QUEUED},
@@ -112,6 +122,10 @@ class Task:
     active_attempt_id: Optional[int] = None
     attempt_count: int = 0
     max_attempts: int = 3
+    # The API derives this from the creator: ordinary users create
+    # account-scoped general tasks, while a superuser can create full-trust
+    # tasks. Internal callers keep the conservative full default.
+    required_trust_level: str = "full"
     cancel_requested_at: Optional[str] = None
     result_artifact_id: Optional[str] = None
     error_message: Optional[str] = None

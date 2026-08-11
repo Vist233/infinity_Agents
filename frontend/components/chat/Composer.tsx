@@ -6,17 +6,15 @@ import { useLanguage } from "@/lib/i18n";
 interface ComposerProps {
   input: string;
   isLoading: boolean;
-  uploadingPdf: boolean;
-  uploadedPapers: Array<{ paper_id: string; original_filename: string }>;
   inlineError: string | null;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   onInputChange: (value: string) => void;
   onSubmit: (event?: FormEvent) => void;
-  onUploadPdf: (file: File) => void;
   onStop: () => void;
   onRetry: () => void;
   onDismissError: () => void;
   unauthenticated?: boolean;
+  agentMode?: "analysis" | "chat";
 }
 
 export function Composer({
@@ -30,8 +28,10 @@ export function Composer({
   onRetry,
   onDismissError,
   unauthenticated = false,
+  agentMode = "analysis",
 }: ComposerProps) {
   const { t } = useLanguage();
+  const messagePlaceholder = agentMode === "chat" ? t("composer.chatMessagePlaceholder") : t("composer.messagePlaceholder");
   return (
     <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-white via-white/95 to-transparent pt-10 print:hidden">
       <div className="max-w-3xl mx-auto px-4 pb-8">
@@ -68,7 +68,7 @@ export function Composer({
                   onSubmit(e);
                 }
               }}
-              placeholder={unauthenticated ? t("composer.signInPlaceholder") : t("composer.messagePlaceholder")}
+              placeholder={unauthenticated ? t("composer.signInPlaceholder") : messagePlaceholder}
               className="w-full bg-white/95 border border-[var(--hairline-strong)] rounded-2xl py-4 pl-4 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] transition-all duration-150 ease-[var(--easing-standard)] resize-none shadow-sm"
             />
             <Button

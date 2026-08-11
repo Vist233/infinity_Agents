@@ -102,7 +102,8 @@ class TestCheckRateLimit:
     @pytest.mark.asyncio
     async def test_fails_open_on_redis_error(self):
         client, _ = _make_client_with_fake_redis()
-        client._client.get = AsyncMock(side_effect=ConnectionError("boom"))
+        client._client.eval = AsyncMock(side_effect=ConnectionError("boom"))
+        client._client.incr = AsyncMock(side_effect=ConnectionError("boom"))
         allowed, remaining = await client.check_rate_limit("u1", 3, 60, action="chat")
         assert allowed
         assert remaining == 3

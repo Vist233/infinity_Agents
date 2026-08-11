@@ -52,7 +52,6 @@ agent/tools/arxiv_pdfs/
 .mypy_cache/
 .ruff_cache/
 .coverage
-cloudflare-worker/node_modules/
 coverage.xml
 htmlcov/
 
@@ -63,10 +62,9 @@ env/
 # Runtime paper artifacts (generated locally)
 papers/
 workspace/
-!/frontend/components/workspace/
-!/frontend/components/workspace/**
 
-# Cloudflare Worker sources are tracked on cloudflare-deploy.
+# Cloudflare Worker deployment surfaces remain exclusive to cloudflare-deploy.
+cloudflare-worker/
 .wrangler/
 
 # Generated desktop release bundles (uploaded by GitHub Actions).

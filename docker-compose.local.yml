@@ -2,8 +2,9 @@
 #
 # Starts:
 # - Redis (task queue + event streaming)
-# - Worker A / Worker B (Docker-out-of-Docker via /var/run/docker.sock)
+# - Worker A / Worker B (Claude Code runs directly inside each Worker)
 # - Outbox Publisher (delivers queued tasks to the Redis stream)
+# - Lease Reaper (recovers expired Worker leases with its own DB role)
 #
 # PostgreSQL is NOT part of this stack. Point DATABASE_URL at your own
 # instance. From inside these containers, a database on the host machine
@@ -11,19 +12,20 @@
 #
 # All connection settings come from worker.env (see worker.env.example):
 #   docker compose -f docker-compose.local.yml --env-file worker.env up -d
+# Each Worker has an isolated ./workspace/worker-{a,b} scratch directory;
+# configure WORKER_CONTROL_PLANE_URL so inputs/results move through the
+# credential-protected API transfer endpoints.
 
 services:
   redis:
     image: redis:7-alpine
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     environment:
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-    # Optional password: set REDIS_PASSWORD in worker.env for production.
-    # Unset = open access (local development only).
-    command: sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"; else exec redis-server --appendonly yes; fi'
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD is required for local Redis}
+    command: sh -c 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"'
     healthcheck:
       test: ["CMD-SHELL", "redis-cli $${REDIS_PASSWORD:+-a $$REDIS_PASSWORD} ping | grep -q PONG"]
       interval: 5s
@@ -34,18 +36,26 @@ services:
     image: infinity-agent-worker:latest
     build:
       context: .
-      dockerfile: backend/Dockerfile.worker
+      dockerfile: backend/Dockerfile.direct-worker
     env_file: ${WORKER_ENV_FILE:-worker.env}
     environment:
       - WORKER_ID=worker-a
+      - APP_ENV=${APP_ENV:-production}
       # Default to the compose-local Redis; override in worker.env for remote.
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres@host.docker.internal:5450/infinity_agents}
+      - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      - DATABASE_URL=${WORKER_DATABASE_URL:?WORKER_DATABASE_URL is required for the data-plane Worker}
+      - DB_RLS_ENABLED=${DB_RLS_ENABLED:-1}
+      - DB_RLS_REQUIRE_CONTEXT=${DB_RLS_REQUIRE_CONTEXT:-1}
+      - DB_RLS_WORKER_ROLE=${DB_RLS_WORKER_ROLE:-infinity_worker}
+      - ENABLE_LEASE_REAPER=0
+      - WORKER_CREDENTIAL=${WORKER_A_CREDENTIAL:?WORKER_A_CREDENTIAL is required for worker-a}
+      # Workers use isolated workspaces and transfer inputs/results through the
+      # authenticated control plane instead of sharing another Worker's files.
+      - WORKER_CONTROL_PLANE_URL=${WORKER_CONTROL_PLANE_URL:?WORKER_CONTROL_PLANE_URL is required; use an HTTPS control plane outside development}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Artifacts land here inside the container; the host sees them under ./workspace,
-      # where the API server downloads them from (ARTIFACT_DOWNLOAD_ROOT).
-      - ./workspace:/workspace
+      # Each Worker gets its own scratch volume. Results are uploaded through
+      # WORKER_CONTROL_PLANE_URL and are not exposed through a shared mount.
+      - ./workspace/worker-a:/workspace
       # For live code debugging, temporarily re-add: - ./backend:/app/backend
     depends_on:
       redis:
@@ -56,15 +66,21 @@ services:
     image: infinity-agent-worker:latest
     build:
       context: .
-      dockerfile: backend/Dockerfile.worker
+      dockerfile: backend/Dockerfile.direct-worker
     env_file: ${WORKER_ENV_FILE:-worker.env}
     environment:
       - WORKER_ID=worker-b
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres@host.docker.internal:5450/infinity_agents}
+      - APP_ENV=${APP_ENV:-production}
+      - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      - DATABASE_URL=${WORKER_DATABASE_URL:?WORKER_DATABASE_URL is required for the data-plane Worker}
+      - DB_RLS_ENABLED=${DB_RLS_ENABLED:-1}
+      - DB_RLS_REQUIRE_CONTEXT=${DB_RLS_REQUIRE_CONTEXT:-1}
+      - DB_RLS_WORKER_ROLE=${DB_RLS_WORKER_ROLE:-infinity_worker}
+      - ENABLE_LEASE_REAPER=0
+      - WORKER_CREDENTIAL=${WORKER_B_CREDENTIAL:?WORKER_B_CREDENTIAL is required for worker-b}
+      - WORKER_CONTROL_PLANE_URL=${WORKER_CONTROL_PLANE_URL:?WORKER_CONTROL_PLANE_URL is required; use an HTTPS control plane outside development}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./workspace:/workspace
+      - ./workspace/worker-b:/workspace
       # For live code debugging, temporarily re-add: - ./backend:/app/backend
     depends_on:
       redis:
@@ -75,16 +91,46 @@ services:
     image: infinity-agent-worker:latest
     build:
       context: .
-      dockerfile: backend/Dockerfile.worker
-    env_file: ${WORKER_ENV_FILE:-worker.env}
+      dockerfile: backend/Dockerfile.direct-worker
     environment:
+      - APP_ENV=${APP_ENV:-production}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres@host.docker.internal:5450/infinity_agents}
+      - DATABASE_URL=${OUTBOX_DATABASE_URL:?OUTBOX_DATABASE_URL is required for the Outbox service}
+      - DB_RLS_ENABLED=${DB_RLS_ENABLED:-1}
+      - DB_RLS_REQUIRE_CONTEXT=${DB_RLS_REQUIRE_CONTEXT:-1}
+      - DB_RLS_SERVICE_ROLE=${DB_RLS_SERVICE_ROLE:-infinity_outbox}
+      - REDIS_NAMESPACE=${REDIS_NAMESPACE:-default}
     # Runs from the image's baked-in code; add - ./backend:/app/backend only when debugging.
     depends_on:
       redis:
         condition: service_healthy
     command: python -m backend.code_agent.outbox
+
+  reaper:
+    image: infinity-agent-worker:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.direct-worker
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - DATABASE_URL=${REAPER_DATABASE_URL:?REAPER_DATABASE_URL is required for the Reaper service}
+      - DB_RLS_ENABLED=${DB_RLS_ENABLED:-1}
+      - DB_RLS_REQUIRE_CONTEXT=${DB_RLS_REQUIRE_CONTEXT:-1}
+      - DB_RLS_REAPER_ROLE=${DB_RLS_REAPER_ROLE:-infinity_reaper}
+      - REAPER_INTERVAL_SECONDS=${REAPER_INTERVAL_SECONDS:-10}
+      - REAPER_SCAN_LIMIT=${REAPER_SCAN_LIMIT:-10}
+      # The host path must be the same artifact directory used by the local
+      # control plane. Failing closed here prevents false GC success from an
+      # unrelated worker-only filesystem.
+      - ARTIFACT_DOWNLOAD_ROOT=/workspace/task-outputs
+      - ARTIFACT_STORAGE_ROOT=/workspace/task-outputs
+      - ARTIFACT_HOST_ROOT=${ARTIFACT_HOST_ROOT:?ARTIFACT_HOST_ROOT is required for local artifact cleanup}
+    volumes:
+      - ${ARTIFACT_HOST_ROOT}:/workspace/task-outputs
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: python -m backend.code_agent.worker.reaper
 
 volumes:
   redis-data:

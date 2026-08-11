@@ -7,7 +7,15 @@ import pytest
 
 from backend.auth import Principal, create_session_cookie, principal_from_session_cookie
 from backend.resource_broker import EgressDenied, ResourceBroker, ResourceForbidden
-from backend.security import ArtifactCollector, SecurityBoundaryError, safe_relative_path, validate_outbound_url
+from backend.security import (
+    ArtifactCollector,
+    SecurityBoundaryError,
+    safe_relative_path,
+    validate_outbound_url,
+    validate_runtime_database_url,
+    validate_runtime_redis_url,
+)
+from backend.code_agent.worker.executor import _validated_control_plane_url
 from agent.tools.image_analyzer import ImageAnalysisTools
 
 
@@ -30,6 +38,37 @@ def test_ssrf_policy_rejects_loopback_and_credentials():
         validate_outbound_url("http://127.0.0.1/private", allow_http_local=True)
     with pytest.raises(SecurityBoundaryError):
         validate_outbound_url("https://user:password@example.com/data")
+
+
+def test_worker_control_plane_requires_https_outside_local_acceptance(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    with pytest.raises(SecurityBoundaryError):
+        _validated_control_plane_url("http://control.example.com")
+
+
+def test_worker_control_plane_allows_explicit_local_acceptance_http(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "acceptance")
+    assert _validated_control_plane_url("http://api:8008") == "http://api:8008"
+
+
+def test_remote_runtime_connections_require_verified_tls(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    with pytest.raises(SecurityBoundaryError):
+        validate_runtime_database_url("postgresql://user:pass@db.example.com/app")
+    with pytest.raises(SecurityBoundaryError):
+        validate_runtime_redis_url("redis://:pass@redis.example.com:6379/0")
+    assert validate_runtime_database_url(
+        "postgresql://user:pass@db.example.com/app?sslmode=verify-full"
+    )
+    assert validate_runtime_redis_url(
+        "rediss://:pass@redis.example.com:6380/0?ssl_cert_reqs=required"
+    )
+
+
+def test_runtime_transport_allows_compose_service_names(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "acceptance")
+    assert validate_runtime_database_url("postgresql://user:pass@postgres/app")
+    assert validate_runtime_redis_url("redis://:pass@redis:6379/0")
 
 
 def test_artifact_collector_rejects_symlink_and_hardlink(tmp_path: Path):

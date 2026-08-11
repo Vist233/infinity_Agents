@@ -6,14 +6,23 @@ import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
-import backend.app as backend_app_module
 from backend.code_agent.redis_client import RedisClient
 
 
 class TestSSEReconnection:
     """SSE reconnect restores persisted task state from last_event_id."""
+
+    def test_composite_resume_cursor_bridges_redis_to_database(self):
+        from backend.app import _decode_sse_resume_cursor
+
+        assert _decode_sse_resume_cursor("1710000000000-2|db:42") == (
+            "1710000000000-2",
+            42,
+        )
+        assert _decode_sse_resume_cursor("1710000000000-2") == (
+            "1710000000000-2",
+            None,
+        )
 
     def test_read_task_events_respects_last_event_id(self):
         """Redis read_task_events should skip events before last_event_id."""
@@ -21,7 +30,7 @@ class TestSSEReconnection:
         fake_redis._client = AsyncMock()
 
         events = [
-            ("2", {"event_type": "task_succeeded", "data": json.dumps({"status": "succeeded"})}),
+            ("2", {"task_id": "task-1", "event_type": "task_succeeded", "data": json.dumps({"status": "succeeded"})}),
         ]
         fake_redis._client.xread = AsyncMock(return_value=[("stream:task-events", events)])
 
@@ -34,6 +43,27 @@ class TestSSEReconnection:
             fake_redis._client.xread.assert_called_once()
 
         import asyncio
+        asyncio.run(run())
+
+    def test_read_task_events_filters_events_belonging_to_other_tasks(self):
+        """A shared Redis event stream must never cross task boundaries."""
+        fake_redis = RedisClient("redis://localhost:6379/0")
+        fake_redis._client = AsyncMock()
+        fake_redis._client.xread = AsyncMock(return_value=[(
+            "stream:task-events",
+            [
+                ("1-0", {"task_id": "task-other", "event_type": "task_running"}),
+                ("2-0", {"task_id": "task-1", "event_type": "task_succeeded"}),
+            ],
+        )])
+
+        import asyncio
+
+        async def run():
+            result = await fake_redis.read_task_events("task-1", count=20)
+            assert [item.get("task_id") for item in result if not item.get("_cursor_only")] == ["task-1"]
+            assert result[0]["_message_id"] == "2-0"
+
         asyncio.run(run())
 
     def test_persisted_events_survive_redis_restart(self):

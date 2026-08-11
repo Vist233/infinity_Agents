@@ -7,7 +7,7 @@ const trimTrailingSlash = (value: string) => value.replace(/\/+$/, "");
 
 export function getApiBase(): string {
   const envBase = process.env.NEXT_PUBLIC_API_BASE?.trim();
-  if (envBase) {
+  if (envBase && typeof window === "undefined") {
     return trimTrailingSlash(envBase);
   }
   // Same-origin: relative paths like `/api/...` resolve against the current
