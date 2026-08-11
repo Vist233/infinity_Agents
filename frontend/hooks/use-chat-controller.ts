@@ -19,11 +19,8 @@ import {
   createSession,
   deleteSession,
   listSessionMessages,
-  listSessionUploadedPapers,
   listSessions,
   updateSessionTitle,
-  uploadSessionPaper,
-  type UploadedPaperItem,
 } from "@/lib/api/sessions";
 import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
 import { startChatStream, toFriendlyChatError, type ChatDoneEvent, type ChatEvent, type ChatStreamHandle } from "@/lib/ws/chat-stream";
@@ -40,6 +37,13 @@ const toTokenInfo = (payload?: ChatDoneEvent["token_info"]) => ({
   total: Number(payload?.total) || 0,
 });
 
+const TASK_CONFIRMATION_TOOLS = new Set([
+  "create_task",
+  "create_analysis_task",
+  "request_task_confirmation",
+  "submit_task_bundle",
+]);
+
 export function useChatController() {
   const { language, t } = useLanguage();
   const apiBase = useMemo(() => getApiBase(), []);
@@ -53,9 +57,8 @@ export function useChatController() {
   const sessionMessagesMapRef = useRef<Record<string, Message[]>>({});
   const sessionLoadPromiseRef = useRef<Map<string, Promise<Message[]>>>(new Map());
   const sessionsRef = useRef<SessionItem[]>([]);
-  const [uploadedPapersMap, setUploadedPapersMap] = useState<Record<string, UploadedPaperItem[]>>({});
-  const [uploadingPdf, setUploadingPdf] = useState(false);
   const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated">("checking");
+  const [taskConfirmationRequested, setTaskConfirmationRequested] = useState(false);
 
   const sessionId = state.sessionId;
   const messages = useMemo(() => getMessagesForSession(state, sessionId), [state, sessionId]);
@@ -69,18 +72,6 @@ export function useChatController() {
   useEffect(() => {
     sessionsRef.current = state.sessions;
   }, [state.sessions]);
-
-  const loadUploadedPapers = useCallback(async (targetSessionId: string): Promise<UploadedPaperItem[]> => {
-    try {
-      const papers = await listSessionUploadedPapers(apiBase, targetSessionId);
-      setUploadedPapersMap((prev) => ({ ...prev, [targetSessionId]: papers }));
-      return papers;
-    } catch (error) {
-      console.error("Failed to load uploaded papers", error);
-      setUploadedPapersMap((prev) => ({ ...prev, [targetSessionId]: prev[targetSessionId] || [] }));
-      return [];
-    }
-  }, [apiBase]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -184,12 +175,11 @@ export function useChatController() {
     });
     void ensureSessionMessagesLoaded(sessionId).catch((error) => {
       console.error("Failed to load messages", error);
-      const message = error instanceof Error ? error.message : t("upload.unknown");
+      const message = error instanceof Error ? error.message : t("error.network");
       setError(t("error.loadMessages", { message }));
       toast.error(t("error.loadMessagesToast"));
     });
-    void loadUploadedPapers(sessionId);
-  }, [sessionId, ensureSessionMessagesLoaded, loadUploadedPapers, setError, t]);
+  }, [sessionId, ensureSessionMessagesLoaded, setError, t]);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -266,7 +256,6 @@ export function useChatController() {
       });
       dispatch({ type: "set_session_messages", sessionId: createdSessionId, messages: [] });
       dispatch({ type: "set_session_run_state", sessionId: createdSessionId, runState: DEFAULT_RUN_STATE });
-      setUploadedPapersMap((prev) => ({ ...prev, [createdSessionId]: [] }));
       loadedSessionIdsRef.current.add(createdSessionId);
       return createdSessionId;
     } catch (error) {
@@ -307,18 +296,19 @@ export function useChatController() {
   );
 
   const handleNewChat = useCallback(() => {
+    setTaskConfirmationRequested(false);
     dispatch({ type: "reset_new_chat" });
   }, []);
 
   const handleSwitchSession = useCallback(
     (id: string) => {
       if (state.editingSessionId) return;
+      setTaskConfirmationRequested(false);
       setSessionRunState(id, { unreadDone: false });
       dispatch({ type: "set_session_id", sessionId: id });
       dispatch({ type: "set_deleting_session", sessionId: null });
-      void loadUploadedPapers(id);
     },
-    [loadUploadedPapers, setSessionRunState, state.editingSessionId],
+    [setSessionRunState, state.editingSessionId],
   );
 
   const handleEditSessionTitle = useCallback((session: SessionItem) => {
@@ -427,6 +417,7 @@ export function useChatController() {
       }
 
       const userMessage: Message = { role: "user", content: value };
+      setTaskConfirmationRequested(false);
       const baseMessages = sessionMessagesMapRef.current[targetSessionId] || [];
       const messagesForRequest = [...baseMessages, userMessage];
       dispatch({
@@ -514,6 +505,7 @@ export function useChatController() {
         if (eventPayload.type === "tool_call") {
           const toolName = eventPayload.tool_name;
           if (!toolName) return;
+          if (TASK_CONFIRMATION_TOOLS.has(toolName)) setTaskConfirmationRequested(true);
           setSessionRunState(targetSessionId!, (prev) => ({
             ...prev,
             hasReceivedToolCall: true,
@@ -628,58 +620,6 @@ export function useChatController() {
     });
   }, [setSessionRunState, state.sessionId]);
 
-  const handleUploadPdf = useCallback(async (file: File) => {
-    if (!file) return;
-    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-    if (!isPdf) {
-      toast.error(t("upload.onlyPdf"));
-      return;
-    }
-
-    let targetSessionId = state.sessionId;
-    if (!targetSessionId) {
-      targetSessionId = await createSessionIfNeeded();
-      if (!targetSessionId) {
-        toast.error(t("upload.createSession"));
-        return;
-      }
-    }
-
-    setUploadingPdf(true);
-    try {
-      const uploaded = await uploadSessionPaper(apiBase, targetSessionId, file);
-      setUploadedPapersMap((prev) => {
-        const current = prev[targetSessionId!] || [];
-        const deduped = [uploaded, ...current.filter((item) => item.paper_id !== uploaded.paper_id)];
-        return { ...prev, [targetSessionId!]: deduped };
-      });
-      dispatch({
-        type: "update_session_messages",
-        sessionId: targetSessionId,
-        updater: (current) => [
-          ...current,
-          {
-            role: "assistant",
-            content: t("upload.message", { filename: uploaded.original_filename, paperId: uploaded.paper_id }),
-          },
-        ],
-      });
-      loadedSessionIdsRef.current.add(targetSessionId);
-      toast.success(t("upload.success", { filename: uploaded.original_filename }));
-    } catch (error) {
-      console.error("Failed to upload pdf", error);
-      const message = error instanceof Error ? error.message : t("upload.unknown");
-      toast.error(t("upload.failed", { message }));
-    } finally {
-      setUploadingPdf(false);
-    }
-  }, [apiBase, createSessionIfNeeded, state.sessionId, t]);
-
-  const handleExportPdf = useCallback(() => {
-    if (typeof window === "undefined") return;
-    window.print();
-  }, []);
-
   const statusText = useMemo(() => {
     const seconds = Math.max(0, Math.floor(currentRunState.elapsedMs / 1000));
     const attemptText = currentRunState.maxAttempts > 1 ? ` · ${currentRunState.attempt}/${currentRunState.maxAttempts}` : "";
@@ -699,11 +639,6 @@ export function useChatController() {
     const suffix = currentRunState.hasReceivedToolCall && !currentRunState.hasReceivedChunk ? t("run.toolTriggered") : "";
     return t("run.thinking", { seconds, attempt: attemptText, suffix });
   }, [currentRunState, language, t]);
-
-  const uploadedPapers = useMemo(() => {
-    if (!state.sessionId) return [];
-    return uploadedPapersMap[state.sessionId] || [];
-  }, [state.sessionId, uploadedPapersMap]);
 
   return {
     apiBase,
@@ -728,10 +663,8 @@ export function useChatController() {
     confirmDeleteSession,
     handleSubmit,
     handleStopGeneration,
-    handleUploadPdf,
-    handleExportPdf,
-    uploadedPapers,
-    uploadingPdf,
+    taskConfirmationRequested,
+    clearTaskConfirmation: () => setTaskConfirmationRequested(false),
     authStatus,
     setError,
     appendAssistantContent,

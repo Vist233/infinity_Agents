@@ -7,9 +7,7 @@ authorization callback and never become part of a model prompt or API URL.
 from __future__ import annotations
 
 import hashlib
-import json
 import mimetypes
-import os
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path

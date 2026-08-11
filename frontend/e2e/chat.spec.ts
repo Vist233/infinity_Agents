@@ -11,16 +11,15 @@ test("smoke routes render", async ({ page }) => {
 
   await page.goto("/");
   await expect(page.getByText("今天想让我帮你做什么？")).toBeVisible();
-  await page.getByTestId("language-toggle").click();
-  await expect(page.getByText("How can I help you today?")).toBeVisible();
-  await page.getByTestId("language-toggle").click();
+  await expect(page.getByText("导出 PDF")).toHaveCount(0);
 
-  await page.goto("/code-agent");
-  await expect(page.getByText("CodeAgent 安装教程")).toBeVisible();
+  await page.goto("/task-center");
+  await expect(page.getByText("新建任务")).toBeVisible();
+  await expect(page.getByText("添加 Worker")).toBeVisible();
 
   await page.goto("/image-judge");
-  await expect(page.getByRole("heading", { name: "ImageJudge" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "下载最新版本" }).first()).toBeVisible();
+  await expect(page.getByText("文件分析示例")).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载最新版本" })).toBeVisible();
 });
 
 test("home page shows retry banner when sessions endpoint fails", async ({ page }) => {
@@ -93,4 +92,43 @@ test("switches session and deletes selected session", async ({ page }) => {
   await page.getByTestId("delete-session-s2").click();
   await page.getByTestId("confirm-delete-s2").click();
   await expect(page.getByTestId("session-row-s2")).toHaveCount(0);
+});
+
+test("mobile drawer keeps workspace-specific actions available", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route("**/api/sessions", async (route) => {
+    await route.fulfill({ status: 200, body: "[]", contentType: "application/json" });
+  });
+  await page.route("**/api/tasks*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      body: JSON.stringify({ tasks: [{ task_id: "mobile-task", title: "移动端任务", status: "running", attempt_count: 1, max_attempts: 3, created_at: "", updated_at: "" }] }),
+      contentType: "application/json",
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open workspace menu" }).click();
+  const workspaceMenu = page.getByRole("dialog", { name: "Workspace menu" });
+  await expect(workspaceMenu.getByRole("button", { name: "新对话" })).toBeVisible();
+  await expect(workspaceMenu.getByText("最近对话", { exact: true })).toBeVisible();
+  await expect(workspaceMenu.getByText("暂无对话", { exact: true })).toBeVisible();
+  await workspaceMenu.getByRole("button", { name: "新对话" }).click();
+  await expect(workspaceMenu).toBeHidden();
+
+  await page.getByRole("button", { name: "Open workspace menu" }).click();
+
+  await page.getByRole("button", { name: "Image Judge", exact: true }).click();
+  await expect(page).toHaveURL(/\/image-judge\/?$/);
+  await page.getByRole("button", { name: "Open workspace menu" }).click();
+  const imageJudgeMenu = page.getByRole("dialog", { name: "Workspace menu" });
+  await expect(imageJudgeMenu.getByText("文件分析示例", { exact: true })).toBeVisible();
+  await expect(imageJudgeMenu.getByRole("button", { name: "下载最新版本" })).toBeVisible();
+  await expect(imageJudgeMenu.getByText("叶片病斑等级示例", { exact: true })).toBeVisible();
+
+  await page.goto("/task-center");
+  await expect(page.getByRole("button", { name: "Open workspace menu" })).toBeVisible();
+  await page.getByRole("button", { name: "Open workspace menu" }).click();
+  const taskMenu = page.getByRole("dialog", { name: "Workspace menu" });
+  await expect(taskMenu.getByText("移动端任务", { exact: true })).toBeVisible();
 });

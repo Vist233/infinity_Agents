@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" role="img" aria-labelledby="title desc">
+  <title id="title">Image sequence reference</title>
+  <desc id="desc">Three clean frames in a reference image sequence.</desc>
+  <rect width="800" height="450" rx="28" fill="#f5f3ff"/>
+  <g stroke="#7c3aed" stroke-width="5" fill="#ddd6fe"><rect x="74" y="95" width="190" height="235" rx="18"/><rect x="305" y="95" width="190" height="235" rx="18"/><rect x="536" y="95" width="190" height="235" rx="18"/></g>
+  <g fill="#8b5cf6" opacity=".85"><circle cx="169" cy="195" r="48"/><circle cx="400" cy="195" r="48"/><circle cx="631" cy="195" r="48"/></g>
+  <g fill="#fff" font-family="system-ui, sans-serif" font-size="26" font-weight="700" text-anchor="middle"><text x="169" y="204">01</text><text x="400" y="204">02</text><text x="631" y="204">03</text></g>
+  <text x="32" y="414" fill="#5b21b6" font-family="system-ui, sans-serif" font-size="22" font-weight="600">REFERENCE · SEQUENCE</text>
+</svg>

@@ -1,7 +1,13 @@
 # Isolated local acceptance stack.
-# Start with:
+# Start with the staged flow in docs/DB_SECURITY_RUNBOOK.md:
 #   cp .env.local.example .env.local
-#   docker compose --env-file .env.local -f docker-compose.acceptance.yml up -d --build
+#   docker compose --env-file .env.local -f docker-compose.acceptance.yml up -d postgres redis
+#   docker compose --env-file .env.local -f docker-compose.acceptance.yml run --rm migrate
+#   scripts/acceptance_prepare_db_logins.sh .env.local
+#   # apply scripts/rls_roles.sql as the acceptance administrator
+#   docker compose --env-file .env.local -f docker-compose.acceptance.yml up -d --build api frontend
+#   bash scripts/acceptance_preflight.sh .env.local
+#   docker compose --env-file .env.local -f docker-compose.acceptance.yml up -d --build outbox reaper worker-a worker-b
 # Stop with:
 #   docker compose --env-file .env.local -f docker-compose.acceptance.yml down
 #
@@ -75,17 +81,50 @@ services:
       timeout: 3s
       retries: 12
 
+  # Schema creation is an explicit bootstrap step. The protected API login
+  # never performs migrations with its runtime role.
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql://${ACCEPTANCE_ADMIN_USER}:${ACCEPTANCE_ADMIN_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      DB_MIGRATIONS_ENABLED: "1"
+      DB_RLS_ENABLED: "0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "-m", "backend.db_migrate"]
+
   api:
     build:
       context: .
       dockerfile: backend/Dockerfile.api
     environment:
-      DATABASE_URL: postgresql://${ACCEPTANCE_POSTGRES_USER}:${ACCEPTANCE_POSTGRES_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      DATABASE_URL: postgresql://${ACCEPTANCE_API_DB_USER}:${ACCEPTANCE_API_DB_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      WORKER_GATEWAY_DATABASE_URL: postgresql://${ACCEPTANCE_WORKER_GATEWAY_DB_USER}:${ACCEPTANCE_WORKER_GATEWAY_DB_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      TRUST_ISSUER_DATABASE_URL: postgresql://${ACCEPTANCE_TRUST_ISSUER_DB_USER}:${ACCEPTANCE_TRUST_ISSUER_DB_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      DB_MIGRATIONS_ENABLED: ${ACCEPTANCE_DB_MIGRATIONS_ENABLED:-0}
+      DB_RLS_ENABLED: "1"
+      DB_RLS_REQUIRE_CONTEXT: "1"
+      DB_RLS_API_ROLE: infinity_api
+      DB_RLS_WORKER_ROLE: infinity_worker
+      DB_RLS_USER_CONTEXT_SECRET: ${ACCEPTANCE_RLS_USER_CONTEXT_SECRET}
+      # Local acceptance keeps the gateway key in the ignored env file. The
+      # session secret is already a high-entropy bootstrap secret here; a
+      # production deployment must provide a distinct MODEL_GATEWAY_SIGNING_SECRET.
+      MODEL_GATEWAY_SIGNING_SECRET: ${ACCEPTANCE_SESSION_COOKIE_SECRET}
+      DB_RLS_SERVICE_ROLE: infinity_outbox
+      ENABLE_OUTBOX_PUBLISHER: "0"
       REDIS_URL: redis://api:${ACCEPTANCE_REDIS_PASSWORD}@redis:6379/0
       REDIS_NAMESPACE: ${ACCEPTANCE_REDIS_NAMESPACE}
       APP_ENV: acceptance
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://infinity.zhangyvjing.com,http://localhost:3000,http://127.0.0.1:3000,http://localhost:13000,http://127.0.0.1:13000,http://localhost:13001,http://127.0.0.1:13001}
       AUTH_REQUIRED_TASK_API: "1"
+      WORKER_ENROLLMENT_ADMIN_USER_IDS: ${WORKER_ENROLLMENT_ADMIN_USER_IDS:-}
+      SUPERUSER_USER_IDS: ${SUPERUSER_USER_IDS:-}
       AUTH_DEV_LOGIN_ENABLED: "1"
+      AUTH_DEV_LOGIN_USER_ID: ${AUTH_DEV_LOGIN_USER_ID:-acceptance_api}
       COOKIE_SECURE: "0"
       SESSION_COOKIE_SECRET: ${ACCEPTANCE_SESSION_COOKIE_SECRET}
       ARTIFACT_STORAGE_ROOT: ${ARTIFACT_STORAGE_ROOT}
@@ -101,7 +140,7 @@ services:
       # widening production egress rules.
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./workspace/${ACCEPTANCE_RUN_ID}:/workspace
+      - ./workspace/${ACCEPTANCE_RUN_ID}/api:/workspace
       # Read-only fixture input for explicit local acceptance commands. The
       # API never executes it; the controlled executor reads it by logical
       # analysis type only.
@@ -113,32 +152,64 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
-  frontend:
-    # Local acceptance only: serve the host-built Next bundle so private
-    # registry credentials never enter a container image.
+  frontend-build:
+    # A fresh acceptance checkout must build its own .next directory. The
+    # previous start-only service worked only when a stale host build happened
+    # to be present.
     image: node:22-alpine
     working_dir: /app
     volumes:
       - ./frontend:/app
-      - ./frontend/node_modules:/app/node_modules
+      # Do not mount host-native (for example macOS arm64) modules into the
+      # Linux container. The named volume is populated by npm ci below.
+      - frontend_node_modules:/app/node_modules
     environment:
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: "1"
       API_PROXY_TARGET: http://api:8008
       NEXT_PUBLIC_API_BASE: ""
-    command: ["npm", "run", "start", "--", "--hostname", "0.0.0.0", "--port", "3000"]
+      NPM_CONFIG_USERCONFIG: /run/secrets/frontend_npmrc
+    secrets:
+      - frontend_npmrc
+    command: ["sh", "-c", "npm ci --no-audit --no-fund && npm run build"]
+    depends_on:
+      api:
+        condition: service_started
+
+  frontend:
+    # The build step is explicit so this service also works on a clean
+    # checkout. Private registry credentials and host-native build modules
+    # never enter a production image or a Worker container.
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      API_PROXY_TARGET: http://api:8008
+      NEXT_PUBLIC_API_BASE: ""
+    command: ["sh", "-c", "npm run start -- --hostname 0.0.0.0 --port 3000"]
     ports:
       - "127.0.0.1:${ACCEPTANCE_FRONTEND_PORT}:3000"
     depends_on:
-      - api
+      frontend-build:
+        condition: service_completed_successfully
 
   outbox:
     build:
       context: .
       dockerfile: backend/Dockerfile.fixture-worker
     environment:
-      DATABASE_URL: postgresql://${ACCEPTANCE_POSTGRES_USER}:${ACCEPTANCE_POSTGRES_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      APP_ENV: acceptance
+      DATABASE_URL: postgresql://${ACCEPTANCE_OUTBOX_DB_USER}:${ACCEPTANCE_OUTBOX_DB_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      DB_RLS_ENABLED: "1"
+      DB_RLS_REQUIRE_CONTEXT: "1"
+      DB_RLS_SERVICE_ROLE: infinity_outbox
       REDIS_URL: redis://api:${ACCEPTANCE_REDIS_PASSWORD}@redis:6379/0
       REDIS_NAMESPACE: ${ACCEPTANCE_REDIS_NAMESPACE}
     depends_on:
@@ -146,6 +217,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     command: ["python", "-m", "backend.code_agent.outbox"]
 
   worker-a:
@@ -153,8 +226,12 @@ services:
       context: .
       dockerfile: backend/Dockerfile.fixture-worker
     environment:
+      APP_ENV: acceptance
       WORKER_ID: worker-a-${ACCEPTANCE_RUN_ID}
-      DATABASE_URL: postgresql://${ACCEPTANCE_POSTGRES_USER}:${ACCEPTANCE_POSTGRES_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      DATABASE_URL: postgresql://${ACCEPTANCE_WORKER_A_DB_USER}:${ACCEPTANCE_WORKER_A_DB_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      DB_RLS_ENABLED: "1"
+      DB_RLS_REQUIRE_CONTEXT: "1"
+      DB_RLS_WORKER_ROLE: infinity_worker
       REDIS_URL: redis://worker_a:${ACCEPTANCE_WORKER_A_REDIS_PASSWORD:-local-worker-a-redis-secret}@redis:6379/0
       REDIS_NAMESPACE: ${ACCEPTANCE_REDIS_NAMESPACE}
       CODE_AGENT_DOCKER_IMAGE: ${CODE_AGENT_DOCKER_IMAGE}
@@ -166,16 +243,21 @@ services:
       METHOD_SOURCE_UPLOAD_ROOT: ${METHOD_SOURCE_UPLOAD_ROOT}
       RESOURCE_STORAGE_ROOT: /workspace/resources
       GOAL_DRIVEN_FIXTURE_ROOT: /fixtures
-      WORKER_ENROLLMENT_REQUIRED: ${ACCEPTANCE_WORKER_ENROLLMENT_REQUIRED:-0}
+      WORKER_ENROLLMENT_REQUIRED: ${ACCEPTANCE_WORKER_ENROLLMENT_REQUIRED:-1}
+      ENABLE_LEASE_REAPER: "0"
+      WORKER_CREDENTIAL: ${ACCEPTANCE_WORKER_A_CREDENTIAL:-}
+      WORKER_CONTROL_PLANE_URL: http://api:8008
     volumes:
       # Controlled fixture Executor; no host Docker Socket is exposed.
       - ${ACCEPTANCE_FIXTURE_HOST_ROOT}:/fixtures:ro
-      - ./workspace/${ACCEPTANCE_RUN_ID}:/workspace
+      - ./workspace/${ACCEPTANCE_RUN_ID}/worker-a:/workspace
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     command: ["python", "-m", "backend.code_agent.worker.consumer", "worker-a-${ACCEPTANCE_RUN_ID}"]
 
   worker-b:
@@ -183,8 +265,12 @@ services:
       context: .
       dockerfile: backend/Dockerfile.fixture-worker
     environment:
+      APP_ENV: acceptance
       WORKER_ID: worker-b-${ACCEPTANCE_RUN_ID}
-      DATABASE_URL: postgresql://${ACCEPTANCE_POSTGRES_USER}:${ACCEPTANCE_POSTGRES_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      DATABASE_URL: postgresql://${ACCEPTANCE_WORKER_B_DB_USER}:${ACCEPTANCE_WORKER_B_DB_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      DB_RLS_ENABLED: "1"
+      DB_RLS_REQUIRE_CONTEXT: "1"
+      DB_RLS_WORKER_ROLE: infinity_worker
       REDIS_URL: redis://worker_b:${ACCEPTANCE_WORKER_B_REDIS_PASSWORD:-local-worker-b-redis-secret}@redis:6379/0
       REDIS_NAMESPACE: ${ACCEPTANCE_REDIS_NAMESPACE}
       CODE_AGENT_DOCKER_IMAGE: ${CODE_AGENT_DOCKER_IMAGE}
@@ -196,14 +282,51 @@ services:
       METHOD_SOURCE_UPLOAD_ROOT: ${METHOD_SOURCE_UPLOAD_ROOT}
       RESOURCE_STORAGE_ROOT: /workspace/resources
       GOAL_DRIVEN_FIXTURE_ROOT: /fixtures
-      WORKER_ENROLLMENT_REQUIRED: ${ACCEPTANCE_WORKER_ENROLLMENT_REQUIRED:-0}
+      WORKER_ENROLLMENT_REQUIRED: ${ACCEPTANCE_WORKER_ENROLLMENT_REQUIRED:-1}
+      ENABLE_LEASE_REAPER: "0"
+      WORKER_CREDENTIAL: ${ACCEPTANCE_WORKER_B_CREDENTIAL:-}
+      WORKER_CONTROL_PLANE_URL: http://api:8008
     volumes:
       # Controlled fixture Executor; no host Docker Socket is exposed.
       - ${ACCEPTANCE_FIXTURE_HOST_ROOT}:/fixtures:ro
-      - ./workspace/${ACCEPTANCE_RUN_ID}:/workspace
+      - ./workspace/${ACCEPTANCE_RUN_ID}/worker-b:/workspace
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     command: ["python", "-m", "backend.code_agent.worker.consumer", "worker-b-${ACCEPTANCE_RUN_ID}"]
+
+  reaper:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.fixture-worker
+    environment:
+      APP_ENV: acceptance
+      DATABASE_URL: postgresql://${ACCEPTANCE_REAPER_DB_USER}:${ACCEPTANCE_REAPER_DB_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
+      DB_RLS_ENABLED: "1"
+      DB_RLS_REQUIRE_CONTEXT: "1"
+      DB_RLS_REAPER_ROLE: infinity_reaper
+      REAPER_INTERVAL_SECONDS: ${REAPER_INTERVAL_SECONDS:-10}
+      REAPER_SCAN_LIMIT: ${REAPER_SCAN_LIMIT:-10}
+      ARTIFACT_DOWNLOAD_ROOT: ${ARTIFACT_DOWNLOAD_ROOT}
+      ARTIFACT_STORAGE_ROOT: ${ARTIFACT_STORAGE_ROOT}
+    volumes:
+      # Reaper removes only expired-result files inside this shared artifact
+      # root after its database transaction commits.
+      - ./workspace/${ACCEPTANCE_RUN_ID}/api:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "backend.code_agent.worker.reaper"]
+
+volumes:
+  frontend_node_modules:
+
+secrets:
+  frontend_npmrc:
+    file: ${ACCEPTANCE_NPMRC:?ACCEPTANCE_NPMRC must point to a read-only npm config for the local acceptance build}

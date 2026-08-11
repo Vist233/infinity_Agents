@@ -4,6 +4,7 @@ import { LanguageProvider } from "@/lib/i18n";
 import CodeAgentPage from "../page";
 
 function renderPage() {
+  window.localStorage.setItem("infinity-agents-language", "zh");
   return render(
     <LanguageProvider>
       <CodeAgentPage />
@@ -13,13 +14,8 @@ function renderPage() {
 
 // Mock the Task API client so the tests never hit the network.
 vi.mock("@/lib/api/tasks", () => ({
-  getDefaultProject: vi.fn(),
-  uploadMethodSource: vi.fn(),
-  uploadDataset: vi.fn(),
-  createTaskSpec: vi.fn(),
-  freezeTaskSpec: vi.fn(),
-  createDatasetSnapshot: vi.fn(),
-  createTask: vi.fn(),
+  submitTaskBundle: vi.fn(),
+  issueWorkerEnrollment: vi.fn(),
   listTasks: vi.fn(),
   cancelTask: vi.fn(),
 }));
@@ -29,7 +25,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
-import { createTask, listTasks } from "@/lib/api/tasks";
+import { submitTaskBundle, listTasks } from "@/lib/api/tasks";
 
 const MOCK_TASKS = [
   {
@@ -45,7 +41,7 @@ const MOCK_TASKS = [
   },
 ];
 
-describe("Task center (history-only surface)", () => {
+describe("Task Center workspace", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (listTasks as ReturnType<typeof vi.fn>).mockResolvedValue(MOCK_TASKS);
@@ -56,28 +52,29 @@ describe("Task center (history-only surface)", () => {
     vi.useRealTimers();
   });
 
-  it("renders the confirmation-only notice and the task list", async () => {
+  it("renders task creation, collapsed Worker management, and the task list", async () => {
     await act(async () => {
       renderPage();
     });
 
-    expect(screen.getByText("任务只能从 Analysis 确认卡提交")).toBeDefined();
-    expect(document.querySelectorAll('input[type="file"]').length).toBe(0);
+    expect(screen.getByText("新建任务")).toBeDefined();
+    expect(screen.getByText("添加 Worker")).toBeDefined();
+    expect(document.querySelectorAll('input[type="file"]').length).toBe(2);
 
     // Task list loaded from the API
     await waitFor(() => {
       expect(screen.getByText("DESeq2 Differential Expression")).toBeDefined();
     });
+    expect(document.querySelector("aside")?.textContent).toContain("DESeq2 Differential Expression");
     expect(screen.getByText("成功")).toBeDefined();
   });
 
-  it("does not expose a second direct task creation entry point", async () => {
+  it("exposes the direct task creation entry point in Task Center", async () => {
     await act(async () => {
       renderPage();
     });
-    expect(screen.queryByRole("button", { name: /创建任务/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /确认并提交/ })).toBeNull();
-    expect(createTask).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /确认并提交/ })).toBeDefined();
+    expect(submitTaskBundle).not.toHaveBeenCalled();
   });
 
   it("shows an error banner when the task list fails to load", async () => {

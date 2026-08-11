@@ -142,7 +142,7 @@ class TestRedisCrashOutbox:
         # Simulate Redis recovery: manually mark events as published
         # (what the real publisher would do after Redis comes back).
         for evt in task_pending:
-            await mark_outbox_published(pool, evt["outbox_event_id"])
+            await mark_outbox_published(pool, evt["outbox_event_id"], evt["claim_token"])
 
         pending_after = await get_pending_outbox_events(pool, 50)
         task_remaining = [e for e in pending_after

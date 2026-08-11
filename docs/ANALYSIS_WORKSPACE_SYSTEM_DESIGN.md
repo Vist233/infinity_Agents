@@ -1,8 +1,8 @@
 # Infinity Agents — Analysis Workspace 产品与系统设计
 
-> 版本：v0.5  
-> 日期：2026-08-09  
-> 设计依据：`HANDOFF.md`、当前仓库实现、`CodeExcuteGoalDriven/Infinity_Agent_产品设计与工程实施规范_v1.0.md` 与三组可行性实验。  
+> 版本：v0.5
+> 日期：2026-08-09
+> 设计依据：`HANDOFF.md`、当前仓库实现、`CodeExcuteGoalDriven/Infinity_Agent_产品设计与工程实施规范_v1.0.md` 与三组可行性实验。
 > 范围：先完成本地产品与安全闭环；Cloudflare 是独立的远程第二阶段，不与本地实施和验收混写。
 
 ## 0. 本版结论

@@ -12,7 +12,6 @@ Verifies task outputs at five levels:
 from __future__ import annotations
 
 import csv
-import io
 import json
 import logging
 import os
@@ -458,7 +457,6 @@ def validate_dataset_snapshot(
     required_files = requirements.get("required_files", [])
     required_columns = requirements.get("required_columns", {})
     sample_id_columns = requirements.get("sample_id_columns", [])
-    max_empty_fraction = requirements.get("max_empty_fraction", 0.5)
 
     # Check size limit
     if snapshot_path.is_file():

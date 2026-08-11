@@ -31,6 +31,8 @@ native runners and writes release artifacts under `package/`:
 
 - Windows: `ImageJudge-windows-x64.zip` containing `ImageJudge.exe`.
 - Linux: `ImageJudge_<version>_amd64.deb` with an `imagejudge` launcher.
+- macOS: `ImageJudge-macos.zip` containing the native `ImageJudge.app` bundle
+  (the local Apple Silicon build is also named `ImageJudge-macos-arm64.zip`).
 
 Push a tag such as `imagejudge-v0.2.0` to publish both files to a GitHub
 Release. The production Worker and static web application stay on the

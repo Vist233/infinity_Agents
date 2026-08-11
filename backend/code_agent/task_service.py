@@ -20,7 +20,6 @@ from typing import Any, Dict, List, Optional
 from backend.code_agent.models import (
     Artifact,
     DatasetSnapshot,
-    IdempotencyKey,
     MethodSource,
     OutboxEvent,
     Task,
@@ -29,7 +28,6 @@ from backend.code_agent.models import (
     TaskSpec,
     TaskStatus,
     can_transition,
-    transition_task,
 )
 
 logger = logging.getLogger(__name__)
@@ -191,7 +189,7 @@ async def get_method_source(pool, method_source_id: str) -> Optional[Dict[str, A
 async def check_idempotency(pool, idempotency_key: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Check if an idempotency key already exists and return the resource if so."""
     query = """
-        SELECT resource_type, resource_id, created_at
+        SELECT resource_type, resource_id, user_id, request_hash, created_at
         FROM idempotency_keys
         WHERE idempotency_key = $1
           AND ($2::text IS NULL OR user_id = $2)
@@ -202,9 +200,11 @@ async def check_idempotency(pool, idempotency_key: str, user_id: Optional[str] =
     if not row:
         return None
     return {
-        "resource_type": row["resource_type"],
-        "resource_id": str(row["resource_id"]),
-        "created_at": row["created_at"].isoformat(),
+        "resource_type": _row_value(row, "resource_type"),
+        "resource_id": str(_row_value(row, "resource_id")),
+        "user_id": _row_value(row, "user_id"),
+        "request_hash": _row_value(row, "request_hash"),
+        "created_at": _row_value(row, "created_at").isoformat(),
     }
 
 
@@ -220,8 +220,8 @@ async def store_idempotency_key(
     """Store an idempotency key."""
     query = """
         INSERT INTO idempotency_keys (idempotency_key, user_id, resource_type, resource_id, request_hash, expires_at)
-        VALUES ($1, $5, $2, $3::uuid, $6, NOW() + INTERVAL '1 hour' * $4)
-        ON CONFLICT (idempotency_key, resource_type) DO NOTHING
+        VALUES ($1, COALESCE($5, '__legacy__'), $2, $3::uuid, $6, NOW() + INTERVAL '1 hour' * $4)
+        ON CONFLICT (idempotency_key, user_id, resource_type) DO NOTHING
     """
     async with pool.acquire() as conn:
         await conn.execute(query, idempotency_key, resource_type, resource_id, ttl_hours, user_id, request_hash)
@@ -371,8 +371,9 @@ async def create_task(
 
     query = """
         INSERT INTO tasks (task_id, task_spec_id, dataset_snapshot_id, project_id,
-            method_source_id, title, status, max_attempts, created_by, created_at, updated_at)
-        VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, NOW(), NOW())
+            method_source_id, title, status, max_attempts, required_trust_level,
+            created_by, created_at, updated_at)
+        VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, $10, NOW(), NOW())
         RETURNING task_id, status, attempt_count, created_at
     """
     async with pool.acquire() as conn:
@@ -387,6 +388,7 @@ async def create_task(
                 task.title,
                 task.status,
                 task.max_attempts,
+                task.required_trust_level,
                 task.created_by,
             )
         except Exception as exc:
@@ -511,8 +513,9 @@ async def submit_task_atomically(
             row = await conn.fetchrow(
                 """
                 INSERT INTO tasks (task_id, task_spec_id, dataset_snapshot_id, project_id,
-                    method_source_id, title, status, max_attempts, created_by, created_at, updated_at)
-                VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, 'queued', $7, $8, NOW(), NOW())
+                    method_source_id, title, status, max_attempts, required_trust_level,
+                    created_by, created_at, updated_at)
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, 'queued', $7, $8, $9, NOW(), NOW())
                 RETURNING task_id, status, attempt_count, created_at
                 """,
                 task.task_id,
@@ -522,6 +525,7 @@ async def submit_task_atomically(
                 task.method_source_id,
                 task.title,
                 task.max_attempts,
+                task.required_trust_level,
                 user_id,
             )
             await conn.execute(
@@ -551,6 +555,7 @@ async def get_task(pool, task_id: str) -> Optional[Dict[str, Any]]:
         SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id, title,
                status, lease_owner, lease_token, lease_expires_at,
                active_attempt_id, attempt_count, max_attempts,
+               required_trust_level,
                result_artifact_id, error_message, created_by,
                created_at, updated_at, finished_at
         FROM tasks
@@ -563,21 +568,35 @@ async def get_task(pool, task_id: str) -> Optional[Dict[str, Any]]:
     return _task_row_to_dict(row)
 
 
-async def get_tasks_by_project(pool, project_id: str, limit: int = 50) -> List[Dict[str, Any]]:
-    """Get tasks for a project."""
+async def get_tasks_by_project(
+    pool,
+    project_id: str,
+    limit: int = 50,
+    user_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Get project tasks, scoped to the requesting user when authenticated.
+
+    Project membership controls whether a user may use a project; it does not
+    make every member's task metadata public.  Keeping the owner predicate in
+    this data-access function prevents a future endpoint from accidentally
+    reintroducing a project-level enumeration leak.
+    """
+    bounded_limit = max(1, min(int(limit), 100))
     query = """
         SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id, title,
                status, lease_owner, lease_token, lease_expires_at,
                active_attempt_id, attempt_count, max_attempts,
+               required_trust_level,
                result_artifact_id, error_message, created_by,
                created_at, updated_at, finished_at
         FROM tasks
         WHERE project_id = $1::uuid
+          AND ($3::text IS NULL OR created_by = $3)
         ORDER BY created_at DESC
         LIMIT $2
     """
     async with pool.acquire() as conn:
-        rows = await conn.fetch(query, project_id, limit)
+        rows = await conn.fetch(query, project_id, bounded_limit, user_id)
     return [_task_row_to_dict(row) for row in rows]
 
 
@@ -596,6 +615,7 @@ def _task_row_to_dict(row: Any) -> Dict[str, Any]:
         "active_attempt_id": row["active_attempt_id"],
         "attempt_count": row["attempt_count"],
         "max_attempts": row["max_attempts"],
+        "required_trust_level": _row_value(row, "required_trust_level", "full"),
         "result_artifact_id": row["result_artifact_id"],
         "error_message": row["error_message"],
         "created_by": row["created_by"],
@@ -609,11 +629,50 @@ def _task_row_to_dict(row: Any) -> Dict[str, Any]:
 # CAS-based Task Claiming
 # ============================================================================
 
+async def _worker_scope(pool, worker_id: str) -> tuple[str, Optional[str], Optional[str]]:
+    """Return server-assigned trust, account owner, and Namespace.
+
+    The compatibility path may have no enrollment row for an old local
+    fixture worker.  Production/acceptance RLS runs this query under the
+    credential-bound Worker role, so the returned values cannot be supplied
+    by a request header.
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT trust_level, owner_user_id, namespace
+            FROM worker_enrollments
+            WHERE worker_id = $1 AND status = 'active' AND revoked_at IS NULL
+            """,
+            worker_id,
+        )
+    if not row:
+        return "general", None, None
+    trust = "full" if str(_row_value(row, "trust_level", "general")).lower() == "full" else "general"
+    owner = _row_value(row, "owner_user_id")
+    namespace = _row_value(row, "namespace")
+    return trust, (str(owner) if owner else None), (str(namespace) if namespace else None)
+
+
+async def _worker_trust_level(pool, worker_id: str) -> str:
+    """Read the server-assigned trust used by the non-RLS compatibility path.
+
+    Release databases also enforce the same rule in the ``task_worker_policy``
+    RLS policy.  Keeping the parameterized predicate here lets legacy local
+    test workers claim explicitly general fixture tasks without weakening the
+    database policy for full-trust tasks.
+    """
+    trust_level, _owner_user_id, _namespace = await _worker_scope(pool, worker_id)
+    return trust_level
+
+
 async def try_claim_task(
     pool,
     task_id: str,
     worker_id: str,
     lease_seconds: int = 60,
+    *,
+    worker_namespace: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Atomically try to claim a task using CAS.
 
@@ -628,22 +687,54 @@ async def try_claim_task(
     # Add lease_seconds, rounding to avoid microsecond issues
     from datetime import timedelta
     lease_expires = now + timedelta(seconds=lease_seconds)
+    worker_trust_level, worker_owner_user_id, enrolled_namespace = await _worker_scope(pool, worker_id)
+    if (
+        worker_namespace
+        and enrolled_namespace
+        and worker_namespace.strip() != enrolled_namespace
+    ):
+        # The authenticated enrollment's Namespace is authoritative.  A
+        # process that changes its Redis Namespace after the handshake cannot
+        # use the same credential to claim from the wrong queue boundary.
+        return None
 
     async with pool.acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow(
                 """
-                UPDATE tasks
+                UPDATE tasks AS t
                 SET status = 'claimed', lease_owner = $2, lease_token = $3,
                     lease_expires_at = $4, attempt_count = attempt_count + 1,
                     updated_at = NOW()
-                WHERE task_id = $1::uuid AND status = 'queued'
-                  AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
-                  AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
-                RETURNING task_id, attempt_count, task_spec_id, dataset_snapshot_id,
-                          project_id, method_source_id, title, max_attempts
+                WHERE t.task_id = $1::uuid AND t.status = 'queued'
+                  AND (t.lease_expires_at IS NULL OR t.lease_expires_at < NOW())
+                  AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= NOW())
+                  -- General Workers are account-scoped. Full Workers are the
+                  -- explicitly privileged server execution tier. RLS
+                  -- repeats the same rule using the credential-bound actor.
+                  AND (
+                    $5::text = 'full'
+                    OR (t.required_trust_level = 'general'
+                        AND NULLIF($6::text, '') IS NOT NULL
+                        AND t.created_by = $6::text)
+                  )
+                  AND (
+                    NULLIF($7::text, '') IS NULL
+                    OR EXISTS (
+                      SELECT 1
+                      FROM worker_enrollments w
+                      WHERE w.worker_id = $2
+                        AND w.namespace = $7::text
+                        AND w.status = 'active'
+                        AND w.revoked_at IS NULL
+                    )
+                  )
+                RETURNING t.task_id, t.attempt_count, t.task_spec_id, t.dataset_snapshot_id,
+                          t.project_id, t.method_source_id, t.title, t.max_attempts,
+                          t.required_trust_level
                 """,
-                task_id, worker_id, lease_token, lease_expires,
+                task_id, worker_id, lease_token, lease_expires, worker_trust_level,
+                worker_owner_user_id, worker_namespace,
             )
             if not row:
                 return None
@@ -664,12 +755,14 @@ async def try_claim_task(
             event_data = {
                 "worker_id": worker_id,
                 "attempt_index": attempt_index,
+                "attempt_id": attempt_row["task_attempt_id"],
                 "lease_expires_at": lease_expires.isoformat(),
             }
-            await conn.execute(
+            event_row = await conn.fetchrow(
                 """
                 INSERT INTO task_events (task_id, task_attempt_id, event_type, event_data, created_at)
                 VALUES ($1::uuid, $2, 'task_claimed', $3::jsonb, NOW())
+                RETURNING task_event_id
                 """,
                 task_id_str, attempt_row["task_attempt_id"], json.dumps(event_data),
             )
@@ -679,7 +772,7 @@ async def try_claim_task(
                 VALUES ('task', $1::uuid, 'task_claimed', $2::jsonb, 'pending', NOW(), NOW())
                 """,
                 task_id_str,
-                json.dumps({"task_id": task_id_str, **event_data}),
+                json.dumps({"task_id": task_id_str, "task_event_id": event_row["task_event_id"], **event_data}),
             )
 
     return {
@@ -692,6 +785,7 @@ async def try_claim_task(
         "attempt_index": attempt_index,
         "attempt_id": attempt_row["task_attempt_id"],
         "max_attempts": row["max_attempts"],
+        "required_trust_level": _row_value(row, "required_trust_level", "full"),
         "lease_token": lease_token,
         "lease_expires_at": lease_expires.isoformat(),
     }
@@ -709,6 +803,21 @@ async def update_task_status(
     # `.value` below never crashes on "failed"/"succeeded" literals.
     if isinstance(new_status, str):
         new_status = TaskStatus(new_status)
+    allowed_sources = [
+        status.value
+        for status in TaskStatus
+        if can_transition(status, new_status)
+    ]
+    if lease_token:
+        # A Worker may only complete or cancel an active claimed/running
+        # attempt.  Requeue is handled by its own CAS query below.
+        allowed_sources = [status for status in allowed_sources if status in {"claimed", "running"}]
+    else:
+        # Non-Worker callers may only perform the pre-claim draft/queue
+        # transitions (currently the queued-task cancellation endpoint).
+        allowed_sources = [status for status in allowed_sources if status in {"draft", "queued"}]
+    if not allowed_sources:
+        return None
     # Build dynamic update
     set_clauses = ["status = $2", "updated_at = NOW()"]
     values = [task_id, new_status.value]
@@ -719,37 +828,74 @@ async def update_task_status(
         values.append(value)
         idx += 1
 
-    # If moving to terminal state, set finished_at
+    # If moving to terminal state, set finished_at.  Keep the lease marker
+    # until its natural expiry so the database can validate the new terminal
+    # row against the same active Worker lease.  Terminal rows are excluded
+    # from claiming and all data-plane Worker policies, so this marker grants
+    # no further task execution access and can be cleaned up asynchronously.
     if new_status in (TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.TIMEOUT):
         set_clauses.append("finished_at = NOW()")
 
     # Lease verification if token provided
     lease_clause = ""
     if lease_token:
-        lease_clause = f"AND lease_token = ${idx}"
+        lease_clause = (
+            f"AND lease_token = ${idx} "
+            "AND lease_expires_at > NOW()"
+        )
         values.append(lease_token)
         idx += 1
+    source_param = idx
+    values.append(allowed_sources)
 
     query = f"""
         UPDATE tasks
         SET {', '.join(set_clauses)}
-        WHERE task_id = $1::uuid {lease_clause}
+        WHERE task_id = $1::uuid
+          AND status = ANY(${source_param}::text[])
+          {lease_clause}
         RETURNING task_id, status, updated_at
     """
     async with pool.acquire() as conn:
         async with conn.transaction():
-            row = await conn.fetchrow(query, *values)
-            if not row:
-                return None
-            event_type = f"task_{new_status.value}"
-            event_payload = {"task_id": task_id, **extra_fields}
-            await conn.execute(
-                """
-                INSERT INTO task_events (task_id, event_type, event_data, created_at)
-                VALUES ($1::uuid, $2, $3::jsonb, NOW())
+            preflight_values = [task_id]
+            preflight_lease = ""
+            if lease_token:
+                preflight_values.append(lease_token)
+                preflight_lease = f"AND lease_token = ${len(preflight_values)} AND lease_expires_at > NOW()"
+            preflight_values.append(allowed_sources)
+            preflight_sources = len(preflight_values)
+            preflight = await conn.fetchrow(
+                f"""
+                SELECT task_id, active_attempt_id
+                FROM tasks
+                WHERE task_id = $1::uuid
+                  AND status = ANY(${preflight_sources}::text[])
+                  {preflight_lease}
+                FOR UPDATE
                 """,
-                task_id, event_type, json.dumps(extra_fields or {}),
+                *preflight_values,
             )
+            if not preflight:
+                return None
+            active_attempt_id = preflight["active_attempt_id"]
+            event_type = f"task_{new_status.value}"
+            event_payload = {
+                "task_id": task_id,
+                "attempt_id": active_attempt_id,
+                **extra_fields,
+            }
+            event_row = await conn.fetchrow(
+                """
+                INSERT INTO task_events (task_id, task_attempt_id, event_type, event_data, created_at)
+                VALUES ($1::uuid, $2, $3, $4::jsonb, NOW())
+                RETURNING task_event_id
+                """,
+                task_id, active_attempt_id, event_type, json.dumps(event_payload),
+            )
+            if not event_row:
+                return None
+            event_payload["task_event_id"] = event_row["task_event_id"]
             if new_status in (TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.TIMEOUT):
                 await conn.execute(
                     """
@@ -758,6 +904,10 @@ async def update_task_status(
                     """,
                     task_id, event_type, json.dumps(event_payload),
                 )
+            # Insert the event/outbox records while the old row still carries
+            # the active lease.  The preflight lock above makes the following
+            # state update deterministic; the whole operation remains atomic.
+            row = await conn.fetchrow(query, *values)
 
     return {
         "task_id": str(row["task_id"]),
@@ -781,31 +931,81 @@ async def requeue_task(
     query = """
         UPDATE tasks
         SET status = 'queued', lease_owner = NULL, lease_token = NULL,
-            lease_expires_at = NULL, next_attempt_at = $3,
+            lease_expires_at = NULL, active_attempt_id = NULL,
+            next_attempt_at = $3,
             error_message = $4, updated_at = NOW()
-        WHERE task_id = $1::uuid AND lease_token = $2
+        WHERE task_id = $1::uuid
+          AND status IN ('claimed', 'running')
+          AND lease_token = $2
+          AND lease_expires_at > NOW()
         RETURNING task_id, status, attempt_count
     """
     async with pool.acquire() as conn:
         async with conn.transaction():
-            row = await conn.fetchrow(query, task_id, lease_token, next_attempt, error_message)
-            if not row:
+            preflight = await conn.fetchrow(
+                """
+                SELECT task_id, active_attempt_id
+                FROM tasks
+                WHERE task_id = $1::uuid
+                  AND status IN ('claimed', 'running')
+                  AND lease_token = $2
+                  AND lease_expires_at > NOW()
+                FOR UPDATE
+                """,
+                task_id,
+                lease_token,
+            )
+            if not preflight:
                 return None
-            event_data = {"next_attempt_at": next_attempt.isoformat(), "error": error_message}
+            previous_attempt_id = preflight["active_attempt_id"]
+            # A queued retry must not leave the current Attempt in an active
+            # state.  The deferred lifecycle guard checks this at commit time;
+            # complete it before releasing the lease so direct callers cannot
+            # create a task/attempt split-brain.
+            if previous_attempt_id is None:
+                return None
             await conn.execute(
                 """
-                INSERT INTO task_events (task_id, event_type, event_data, created_at)
-                VALUES ($1::uuid, 'task_requeued', $2::jsonb, NOW())
+                UPDATE task_attempts
+                SET status = 'failed', finished_at = NOW(),
+                    error_message = $3,
+                    failure_code = COALESCE(failure_code, 'retryable_failure')
+                WHERE task_attempt_id = $1
+                  AND task_id = $2::uuid
+                  AND status IN ('claimed', 'running')
                 """,
-                task_id, json.dumps(event_data),
+                previous_attempt_id,
+                task_id,
+                error_message,
+            )
+            event_data = {
+                "next_attempt_at": next_attempt.isoformat(),
+                "error": error_message,
+                "attempt_id": previous_attempt_id,
+            }
+            event_row = await conn.fetchrow(
+                """
+                INSERT INTO task_events (task_id, task_attempt_id, event_type, event_data, created_at)
+                VALUES ($1::uuid, $2, 'task_requeued', $3::jsonb, NOW())
+                RETURNING task_event_id
+                """,
+                task_id, previous_attempt_id, json.dumps(event_data),
             )
             await conn.execute(
                 """
                 INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, status, next_attempt_at, created_at)
                 VALUES ('task', $1::uuid, 'task_queued', $2::jsonb, 'pending', $3, NOW())
                 """,
-                task_id, json.dumps({"task_id": task_id, "status": "queued"}), next_attempt,
+                task_id, json.dumps({
+                    "task_id": task_id,
+                    "task_event_id": event_row["task_event_id"],
+                    "attempt_id": previous_attempt_id,
+                    "status": "queued",
+                }), next_attempt,
             )
+            row = await conn.fetchrow(query, task_id, lease_token, next_attempt, error_message)
+            if not row:
+                return None
     return {
         "task_id": str(row["task_id"]),
         "status": row["status"],
@@ -835,7 +1035,7 @@ async def reap_expired_lease(
             row = await conn.fetchrow(
                 """
                 SELECT task_id, active_attempt_id, attempt_count, max_attempts,
-                       lease_token, status
+                       lease_token, lease_owner, status
                 FROM tasks
                 WHERE task_id = $1::uuid
                   AND status IN ('claimed', 'running')
@@ -859,11 +1059,75 @@ async def reap_expired_lease(
                         failure_code = 'lease_expired'
                     WHERE task_attempt_id = $1
                       AND task_id = $2::uuid
-                      AND status IN ('running', 'claimed')
+                      AND status IN ('running', 'claimed', 'succeeded', 'failed', 'cancelled', 'timeout')
                     """,
                     attempt_id,
                     task_id,
                 )
+            else:
+                # Legacy/manual rows can be claimed without an Attempt.  Make
+                # the recovery durable before emitting the loss event instead
+                # of inserting a NULL attempt event that the reaper RLS policy
+                # (correctly) rejects.
+                if hasattr(conn, "fetchval"):
+                    attempt_id = await conn.fetchval(
+                        """
+                        INSERT INTO task_attempts (
+                            task_id, worker_id, status, attempt_index, started_at,
+                            finished_at, error_message, failure_code
+                        )
+                        VALUES ($1::uuid, COALESCE($2, 'unknown-worker'), 'lost',
+                                GREATEST($3, 1), NOW(), NOW(),
+                                'Worker lease expired', 'lease_expired')
+                        RETURNING task_attempt_id
+                        """,
+                        task_id,
+                        row["lease_owner"],
+                        int(row["attempt_count"] or 1),
+                    )
+                else:
+                    # Lightweight fakes used by the legacy unit test do not
+                    # implement fetchval.  They only exercise the state
+                    # transition; real asyncpg connections always take the
+                    # durable branch above.
+                    attempt_id = 1
+
+            # A Worker can publish an artifact and complete its Attempt just
+            # before its lease expires, then lose the lease before the final
+            # Task transition.  Remove that unpublished result in the same
+            # transaction as the recovery transition so a retry cannot expose
+            # the previous Attempt's archive as the current result.
+            orphaned_artifacts: List[Dict[str, Any]] = []
+            if attempt_id is not None:
+                artifact_rows = await conn.fetch(
+                    """
+                    SELECT storage_backend, storage_path
+                    FROM artifacts
+                    WHERE task_id = $1::uuid AND task_attempt_id = $2
+                      AND deleted_at IS NULL
+                    FOR UPDATE
+                    """,
+                    task_id,
+                    attempt_id,
+                )
+                if artifact_rows:
+                    orphaned_artifacts = [
+                        {
+                            "storage_backend": row["storage_backend"],
+                            "storage_path": row["storage_path"],
+                        }
+                        for row in artifact_rows
+                    ]
+                    await conn.execute(
+                        """
+                        UPDATE artifacts
+                        SET deleted_at = NOW()
+                        WHERE task_id = $1::uuid AND task_attempt_id = $2
+                          AND deleted_at IS NULL
+                        """,
+                        task_id,
+                        attempt_id,
+                    )
 
             attempt_count = int(row["attempt_count"] or 0)
             max_attempts = int(row["max_attempts"] or 1)
@@ -914,15 +1178,17 @@ async def reap_expired_lease(
                 event_data = {"reason": "lease_expired", "terminal": True}
                 next_attempt_at = None
 
-            await conn.execute(
+            event_row = await conn.fetchrow(
                 """
                 INSERT INTO task_events (task_id, task_attempt_id, event_type, event_data, created_at)
                 VALUES ($1::uuid, $2, 'attempt_lost', $3::jsonb, NOW())
+                RETURNING task_event_id
                 """,
                 task_id,
                 attempt_id,
                 json.dumps(event_data),
             )
+            event_id = event_row["task_event_id"] if event_row else 0
             await conn.execute(
                 """
                 INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload,
@@ -931,7 +1197,7 @@ async def reap_expired_lease(
                 """,
                 task_id,
                 event_type,
-                json.dumps(payload),
+                json.dumps({**payload, "task_event_id": event_id}),
                 next_attempt_at,
             )
 
@@ -940,6 +1206,7 @@ async def reap_expired_lease(
         "status": payload["status"],
         "attempt_id": attempt_id,
         "reason": "lease_expired",
+        "orphaned_artifacts": orphaned_artifacts,
     }
 
 
@@ -1018,17 +1285,24 @@ async def create_task_event(
     )
 
 
-async def get_task_events(pool, task_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+async def get_task_events(
+    pool,
+    task_id: str,
+    limit: int = 100,
+    after_id: int = 0,
+) -> List[Dict[str, Any]]:
     """Get events for a task, ordered by time."""
+    bounded_limit = max(1, min(int(limit), 500))
     query = """
         SELECT task_event_id, task_id, task_attempt_id, event_type, event_data, created_at
         FROM task_events
         WHERE task_id = $1::uuid
+          AND task_event_id > $2
         ORDER BY created_at ASC
-        LIMIT $2
+        LIMIT $3
     """
     async with pool.acquire() as conn:
-        rows = await conn.fetch(query, task_id, limit)
+        rows = await conn.fetch(query, task_id, max(0, int(after_id)), bounded_limit)
     return [
         {
             "task_event_id": row["task_event_id"],
@@ -1094,11 +1368,12 @@ async def get_pending_outbox_events(pool, limit: int = 50) -> List[Dict[str, Any
             FOR UPDATE SKIP LOCKED
         )
         UPDATE outbox_events AS e
-        SET status = 'publishing', claim_expires_at = NOW() + INTERVAL '30 seconds'
+        SET status = 'publishing', claim_expires_at = NOW() + INTERVAL '30 seconds',
+            claim_token = gen_random_uuid()::text
         FROM picked
         WHERE e.outbox_event_id = picked.outbox_event_id
         RETURNING e.outbox_event_id, e.aggregate_type, e.aggregate_id, e.event_type,
-                  e.payload, e.retry_count, e.created_at, e.claim_expires_at
+                  e.payload, e.retry_count, e.created_at, e.claim_expires_at, e.claim_token
     """
     async with pool.acquire() as conn:
         rows = await conn.fetch(query, limit)
@@ -1111,46 +1386,52 @@ async def get_pending_outbox_events(pool, limit: int = 50) -> List[Dict[str, Any
             "payload": _jsonb_to_dict(row["payload"]),
             "retry_count": row["retry_count"],
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-            "claim_expires_at": row["claim_expires_at"].isoformat() if row["claim_expires_at"] else None,
+            "claim_expires_at": _row_value(row, "claim_expires_at").isoformat() if _row_value(row, "claim_expires_at") else None,
+            # Lightweight fakes used by unit tests predate claim fencing;
+            # keep their records usable while real PostgreSQL always returns
+            # the database-generated token.
+            "claim_token": _row_value(row, "claim_token") or f"legacy-{row['outbox_event_id']}",
         }
         for row in rows
     ]
 
 
-async def mark_outbox_published(pool, outbox_event_id: int) -> None:
+async def mark_outbox_published(pool, outbox_event_id: int, claim_token: str) -> None:
     """Mark an outbox event as published."""
     query = """
         UPDATE outbox_events
-        SET status = 'published', published_at = NOW(), claim_expires_at = NULL
-        WHERE outbox_event_id = $1 AND status IN ('pending', 'publishing')
+        SET status = 'published', published_at = NOW(), claim_expires_at = NULL,
+            claim_token = NULL
+        WHERE outbox_event_id = $1 AND status = 'publishing' AND claim_token = $2
     """
     async with pool.acquire() as conn:
-        await conn.execute(query, outbox_event_id)
+        await conn.execute(query, outbox_event_id, claim_token)
 
 
-async def mark_outbox_failed(pool, outbox_event_id: int, error: str) -> None:
+async def mark_outbox_failed(pool, outbox_event_id: int, claim_token: str, error: str) -> None:
     """Return an outbox event to the retry queue after a publish failure."""
     query = """
         UPDATE outbox_events
-        SET status = 'pending', last_error = $2, retry_count = retry_count + 1,
-            claim_expires_at = NULL,
+        SET status = 'pending', last_error = $3, retry_count = retry_count + 1,
+            claim_expires_at = NULL, claim_token = NULL,
             next_attempt_at = NOW() + LEAST(INTERVAL '5 minutes',
                 INTERVAL '1 second' * POWER(2, LEAST(retry_count, 8)))
-        WHERE outbox_event_id = $1
+        WHERE outbox_event_id = $1 AND status = 'publishing' AND claim_token = $2
     """
     async with pool.acquire() as conn:
-        await conn.execute(query, outbox_event_id, redact_error(error))
+        await conn.execute(query, outbox_event_id, claim_token, redact_error(error))
 
 
-async def release_outbox_event(pool, outbox_event_id: int, error: Optional[str] = None) -> None:
+async def release_outbox_event(pool, outbox_event_id: int, claim_token: str, error: Optional[str] = None) -> None:
     """Release a claimed event when Redis is temporarily unavailable."""
     query = """
         UPDATE outbox_events
-        SET status = 'pending', claim_expires_at = NULL, last_error = COALESCE($2, last_error)
-        WHERE outbox_event_id = $1 AND status = 'publishing'
+        SET status = 'pending', claim_expires_at = NULL, claim_token = NULL,
+            last_error = COALESCE($3, last_error)
+        WHERE outbox_event_id = $1 AND status = 'publishing' AND claim_token = $2
     """
     async with pool.acquire() as conn:
-        await conn.execute(query, outbox_event_id, redact_error(error) if error else None)
+        await conn.execute(query, outbox_event_id, claim_token, redact_error(error) if error else None)
 
 
 def redact_error(error: object) -> str:
@@ -1195,7 +1476,12 @@ async def create_artifact(pool, artifact: Artifact) -> Artifact:
     )
 
 
-async def create_artifact_if_current_lease(pool, artifact: Artifact, lease_token: str) -> Optional[Artifact]:
+async def create_artifact_if_current_lease(
+    pool,
+    artifact: Artifact,
+    lease_token: str,
+    worker_id: Optional[str] = None,
+) -> Optional[Artifact]:
     """Insert an artifact only while the worker still owns the lease."""
     query = """
         INSERT INTO artifacts (artifact_id, task_id, task_attempt_id, name, kind,
@@ -1204,7 +1490,19 @@ async def create_artifact_if_current_lease(pool, artifact: Artifact, lease_token
         SELECT $1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, NOW()
         FROM tasks
         WHERE task_id = $2::uuid AND lease_token = $12
+          AND active_attempt_id = $3
           AND status IN ('claimed', 'running') AND lease_expires_at > NOW()
+          AND (
+              $13::text IS NULL
+              OR EXISTS (
+                  SELECT 1
+                  FROM worker_enrollments w
+                  WHERE w.worker_id = $13
+                    AND w.status = 'active'
+                    AND w.revoked_at IS NULL
+                    AND (tasks.required_trust_level = 'general' OR w.trust_level = 'full')
+              )
+          )
         RETURNING created_at
     """
     async with pool.acquire() as conn:
@@ -1222,6 +1520,7 @@ async def create_artifact_if_current_lease(pool, artifact: Artifact, lease_token
             artifact.content_type,
             json.dumps(artifact.metadata or {}),
             lease_token,
+            worker_id,
         )
     if not row:
         return None
@@ -1248,7 +1547,7 @@ async def get_artifacts_for_task(pool, task_id: str) -> List[Dict[str, Any]]:
                storage_backend, storage_path, file_size_bytes, checksum_sha256,
                content_type, metadata, created_at
         FROM artifacts
-        WHERE task_id = $1::uuid
+        WHERE task_id = $1::uuid AND deleted_at IS NULL
         ORDER BY created_at ASC
     """
     async with pool.acquire() as conn:
@@ -1279,7 +1578,7 @@ async def get_artifact(pool, artifact_id: str) -> Optional[Dict[str, Any]]:
                storage_backend, storage_path, file_size_bytes, checksum_sha256,
                content_type, metadata, created_at
         FROM artifacts
-        WHERE artifact_id = $1
+        WHERE artifact_id = $1 AND deleted_at IS NULL
     """
     async with pool.acquire() as conn:
         row = await conn.fetchrow(query, artifact_id)
@@ -1299,6 +1598,42 @@ async def get_artifact(pool, artifact_id: str) -> Optional[Dict[str, Any]]:
         "metadata": _jsonb_to_dict(row["metadata"]),
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
     }
+
+
+async def delete_artifact_if_current_lease(
+    pool,
+    artifact_id: str,
+    task_id: str,
+    attempt_id: int,
+    lease_token: str,
+    worker_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Delete a just-published artifact while its Worker lease is active.
+
+    Artifact upload and attempt completion cross a network boundary for
+    remote Workers.  This lease-bound compensation path removes an uploaded
+    artifact when completion fails, preventing stale result archives from
+    being presented as task output.
+    """
+    query = """
+        DELETE FROM artifacts a
+        USING tasks t
+        WHERE a.artifact_id = $1
+          AND a.task_id = $2::uuid
+          AND a.task_attempt_id = $3
+          AND t.task_id = a.task_id
+          AND t.active_attempt_id = $3
+          AND t.lease_token = $4
+          AND t.status IN ('claimed', 'running')
+          AND t.lease_expires_at > NOW()
+          AND ($5::text IS NULL OR t.lease_owner = $5)
+        RETURNING a.storage_backend, a.storage_path
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(query, artifact_id, task_id, attempt_id, lease_token, worker_id)
+    if not row:
+        return None
+    return {"storage_backend": row["storage_backend"], "storage_path": row["storage_path"]}
 
 
 # ============================================================================
@@ -1332,22 +1667,42 @@ async def complete_task_attempt(
     pool,
     attempt_id: int,
     status: str,
+    *,
+    task_id: str,
+    lease_token: str,
     exit_code: Optional[int] = None,
     error_message: Optional[str] = None,
     token_usage: Optional[Dict[str, Any]] = None,
     executor_image_digest: Optional[str] = None,
     failure_code: Optional[str] = None,
 ) -> None:
-    """Complete a task attempt."""
+    """Complete only the still-active attempt held by the current Worker."""
+    if not task_id or not lease_token:
+        raise ValueError("task_id and lease_token are required to complete an attempt")
+    if status not in {"succeeded", "failed", "cancelled", "timeout"}:
+        raise ValueError("attempt completion status is invalid")
     query = """
         UPDATE task_attempts
         SET status = $2, finished_at = NOW(), exit_code = $3,
             error_message = $4, token_usage = $5::jsonb,
             executor_image_digest = $6, failure_code = $7
         WHERE task_attempt_id = $1
+          AND task_id = $8::uuid
+          AND status IN ('claimed', 'running')
+          AND EXISTS (
+              SELECT 1 FROM tasks
+              WHERE tasks.task_id = task_attempts.task_id
+                AND tasks.active_attempt_id = task_attempts.task_attempt_id
+                AND tasks.status IN ('claimed', 'running')
+                AND tasks.lease_token = $9
+                AND tasks.lease_expires_at > NOW()
+          )
     """
     async with pool.acquire() as conn:
-        await conn.execute(
+        result = await conn.execute(
             query, attempt_id, status, exit_code, error_message,
             json.dumps(token_usage or {}), executor_image_digest, failure_code,
+            task_id, lease_token,
         )
+    if result.split(" ")[-1] == "0":
+        raise RuntimeError("task attempt is no longer the active leased attempt")

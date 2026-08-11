@@ -1,24 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { LanguageToggle, useLanguage } from "@/lib/i18n";
+import { useLanguage } from "@/lib/i18n";
 import { AgentNav } from "@/components/chat/AgentNav";
+import { MobileWorkspaceMenu } from "@/components/chat/MobileWorkspaceMenu";
+import { TaskConfirmationCard } from "@/components/analysis/TaskConfirmationCard";
+import { WorkerManagementCard } from "@/components/analysis/WorkerManagementCard";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { ListTodo, RefreshCw } from "lucide-react";
+import { ListTodo, Plus, RefreshCw } from "lucide-react";
 import { listTasks, type TaskItem, type TaskStatus } from "@/lib/api/tasks";
-
-const STATUS_COLORS: Record<TaskStatus, string> = {
-  draft: "bg-zinc-200 text-zinc-600",
-  queued: "bg-blue-100 text-blue-700",
-  claimed: "bg-purple-100 text-purple-700",
-  running: "bg-amber-100 text-amber-700",
-  succeeded: "bg-emerald-100 text-emerald-700",
-  failed: "bg-red-100 text-red-700",
-  cancelled: "bg-zinc-200 text-zinc-500",
-  timeout: "bg-orange-100 text-orange-700",
-};
+import { WorkspaceUserFooter } from "@/components/chat/WorkspaceUserFooter";
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   draft: "tasks.statusDraft",
@@ -31,23 +24,77 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   timeout: "tasks.statusTimeout",
 };
 
-/** History/status surface only. Formal submission lives in Analysis confirmation. */
+interface TaskListProps {
+  tasks: TaskItem[];
+  loading: boolean;
+  listError: string | null;
+  emptyLabel: string;
+  processingLabel: string;
+  errorLabel: string;
+  statusLabel: (status: TaskStatus) => string;
+  onOpenTask: (taskId: string) => void;
+}
+
+function TaskList({
+  tasks,
+  loading,
+  listError,
+  emptyLabel,
+  processingLabel,
+  errorLabel,
+  statusLabel,
+  onOpenTask,
+}: TaskListProps) {
+  if (loading && tasks.length === 0) {
+    return <div className="px-2 py-4 text-center text-xs text-zinc-400">{processingLabel}...</div>;
+  }
+  if (listError) {
+    return <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-3 text-xs leading-5 text-red-700">{errorLabel}: {listError}</div>;
+  }
+  if (tasks.length === 0) {
+    return <div className="rounded-xl border border-dashed border-zinc-200 px-3 py-4 text-center text-xs text-zinc-400">{emptyLabel}</div>;
+  }
+  return (
+    <div className="space-y-1">
+      {tasks.map((task) => (
+        <button
+          key={task.task_id}
+          type="button"
+          className="w-full rounded-xl px-3 py-2 text-left transition-colors hover:bg-zinc-100"
+          onClick={() => onOpenTask(task.task_id)}
+        >
+          <div className="truncate text-xs font-medium text-zinc-700">{task.title}</div>
+          <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-zinc-400">
+            <span className="truncate">{statusLabel(task.status)}</span>
+            <span className="shrink-0">{task.attempt_count}/{task.max_attempts}</span>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Task Center owns task creation, worker enrollment, and task history. */
 export default function CodeAgentPage() {
   const router = useRouter();
   const { t } = useLanguage();
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
+  const requestSequenceRef = useRef(0);
 
   const loadTasks = useCallback(async () => {
+    const requestId = ++requestSequenceRef.current;
     try {
       const items = await listTasks();
+      if (requestId !== requestSequenceRef.current) return;
       setTasks(items);
       setListError(null);
     } catch (err) {
+      if (requestId !== requestSequenceRef.current) return;
       setListError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (requestId === requestSequenceRef.current) setLoading(false);
     }
   }, []);
 
@@ -57,81 +104,75 @@ export default function CodeAgentPage() {
     return () => clearInterval(timer);
   }, [loadTasks]);
 
-  const formatDate = useMemo(
-    () => (iso: string) => {
-      if (!iso) return "-";
-      try { return new Date(iso).toLocaleString(); } catch { return iso; }
-    },
-    [],
-  );
-
   return (
-    <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
-      <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
+    <div className="flex h-screen bg-transparent font-sans text-zinc-900">
+      <aside className="hidden w-[260px] shrink-0 flex-col border-r border-[var(--hairline)] bg-[var(--surface-1)] p-3 backdrop-blur-xl md:flex print:hidden">
         <AgentNav active="tasks" onNavigate={(path: string) => router.push(path)} />
-        <div className="flex-1" />
-        <div className="p-2 text-xs text-zinc-400 text-center tracking-tighter">v1.0.0 @ 2026</div>
+        <div className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+          <div className="px-2 text-[11px] uppercase tracking-[0.2em] text-zinc-400">{t("tasks.title")}</div>
+          <TaskList
+            tasks={tasks}
+            loading={loading}
+            listError={listError}
+            emptyLabel={t("tasks.empty")}
+            processingLabel={t("run.processing")}
+            errorLabel={t("tasks.listFailedToast")}
+            statusLabel={(status) => t(STATUS_LABEL[status] as never)}
+            onOpenTask={(taskId) => router.push(`/task-center/tasks/${taskId}`)}
+          />
+        </div>
+        <WorkspaceUserFooter />
+        <div className="p-2 text-center text-xs tracking-tighter text-zinc-400">v1.0.0 @ 2026</div>
       </aside>
 
-      <main className="flex-1 flex flex-col relative min-w-0">
-        <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between sticky top-0 bg-[var(--surface-1)] backdrop-blur-xl z-10 print:hidden">
+      <main className="relative flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-[var(--hairline)] bg-[var(--surface-1)] px-4 backdrop-blur-xl print:hidden">
           <div className="flex items-center gap-2">
+            <MobileWorkspaceMenu
+              active="tasks"
+              taskItems={tasks.map((task) => ({
+                task_id: task.task_id,
+                title: task.title,
+                statusLabel: t(STATUS_LABEL[task.status] as never),
+              }))}
+            />
             <ListTodo size={16} className="text-zinc-500" />
             <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("tasks.title")}</div>
           </div>
-          <LanguageToggle />
         </header>
 
         <ScrollArea className="flex-1">
-          <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-6">
-            <section className="rounded-2xl border border-blue-100 bg-blue-50/70 p-5">
-              <div className="text-sm font-semibold text-blue-900">{t("tasks.confirmationOnlyTitle")}</div>
-              <p className="text-xs text-blue-800/80 mt-1">{t("tasks.confirmationOnlyDescription")}</p>
-            </section>
-
-            <section className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold text-zinc-700">{t("tasks.subtitle")}</div>
-                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setLoading(true); void loadTasks(); }} disabled={loading}>
-                  <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-                  {t("composer.retry")}
-                </Button>
-              </div>
-
-              {listError && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{t("tasks.listFailedToast")}: {listError}</div>}
-              {!loading && tasks.length === 0 && !listError && (
-                <div className="flex flex-col items-center justify-center py-16 text-center rounded-2xl border border-dashed border-zinc-200 bg-white/60">
-                  <ListTodo size={36} className="text-zinc-300 mb-3" />
-                  <p className="text-sm text-zinc-500">{t("tasks.empty")}</p>
-                  <p className="text-xs text-zinc-400 mt-1">{t("tasks.emptyDescription")}</p>
+          <div className="mx-auto max-w-6xl p-4 md:p-6">
+            <div className="space-y-6">
+              <section className="space-y-3" id="new-task">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-zinc-700">{t("tasks.create")}</div>
+                    <p className="mt-1 text-xs text-zinc-500">{t("tasks.newTaskDescription")}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5"
+                      onClick={() => document.getElementById("new-task-form")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                    >
+                      <Plus size={14} />
+                      {t("tasks.newTask")}
+                    </Button>
+                    <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setLoading(true); void loadTasks(); }} disabled={loading}>
+                      <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+                      {t("tasks.refresh")}
+                    </Button>
+                  </div>
                 </div>
-              )}
-
-              {tasks.length > 0 && (
-                <div className="rounded-2xl border border-[var(--hairline)] bg-white/80 overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead><tr className="border-b border-[var(--hairline)] bg-zinc-50/60 text-left">
-                      <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.id")}</th>
-                      <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.titleColumn")}</th>
-                      <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.status")}</th>
-                      <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.attempts")}</th>
-                      <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.createdAt")}</th>
-                      <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.actions")}</th>
-                    </tr></thead>
-                    <tbody>{tasks.map((task) => (
-                      <tr key={task.task_id} className="border-b border-[var(--hairline)] last:border-b-0 hover:bg-zinc-50/60 transition-colors">
-                        <td className="px-4 py-3 font-mono text-xs text-zinc-500 max-w-[140px] truncate">{task.task_id}</td>
-                        <td className="px-4 py-3 text-sm font-medium">{task.title}</td>
-                        <td className="px-4 py-3"><span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATUS_COLORS[task.status] || "bg-zinc-200 text-zinc-600"}`}>{t(STATUS_LABEL[task.status] as never)}</span></td>
-                        <td className="px-4 py-3 text-xs text-zinc-600">{task.attempt_count}/{task.max_attempts}</td>
-                        <td className="px-4 py-3 text-xs text-zinc-500 whitespace-nowrap">{formatDate(task.created_at)}</td>
-                        <td className="px-4 py-3"><Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => router.push(`/code-agent/tasks/${task.task_id}`)}>{t("tasks.view")}</Button></td>
-                      </tr>
-                    ))}</tbody>
-                  </table>
+                <div id="new-task-form">
+                  <TaskConfirmationCard onCreated={() => { void loadTasks(); }} />
                 </div>
-              )}
-            </section>
+              </section>
+
+              <WorkerManagementCard />
+            </div>
           </div>
         </ScrollArea>
       </main>

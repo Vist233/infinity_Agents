@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" role="img" aria-labelledby="title desc">
+  <title id="title">Image sequence uploaded image</title>
+  <desc id="desc">Three frames in an uploaded image sequence.</desc>
+  <rect width="800" height="450" rx="28" fill="#faf5ff"/>
+  <g stroke="#9333ea" stroke-width="5" fill="#e9d5ff"><rect x="74" y="95" width="190" height="235" rx="18"/><rect x="305" y="95" width="190" height="235" rx="18"/><rect x="536" y="95" width="190" height="235" rx="18"/></g>
+  <g fill="#a855f7" opacity=".85"><circle cx="169" cy="195" r="48"/><circle cx="400" cy="195" r="48"/><circle cx="631" cy="195" r="48"/></g>
+  <g fill="#fff" font-family="system-ui, sans-serif" font-size="26" font-weight="700" text-anchor="middle"><text x="169" y="204">01</text><text x="400" y="204">02</text><text x="631" y="204">03</text></g>
+  <path d="M215 275h28M446 275h28M677 275h28" stroke="#6b21a8" stroke-width="8" stroke-linecap="round"/>
+  <text x="32" y="414" fill="#6b21a8" font-family="system-ui, sans-serif" font-size="22" font-weight="600">UPLOADED · SEQUENCE</text>
+</svg>

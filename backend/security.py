@@ -20,7 +20,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,25 @@ def reject_secret_content(data: bytes, *, label: str = "output") -> None:
     for pattern in _SECRET_PATTERNS:
         if pattern.search(sample):
             raise SecurityBoundaryError(f"{label} contains credential-like content")
+
+
+def reject_secret_file(path: Path, *, label: str = "output", chunk_size: int = 1024 * 1024) -> None:
+    """Scan an entire file for credential-like content without loading it all."""
+
+    overlap = b""
+    try:
+        with path.open("rb") as handle:
+            while True:
+                chunk = handle.read(chunk_size)
+                if not chunk:
+                    break
+                window = overlap + chunk
+                # The overlap catches tokens split at a chunk boundary; the
+                # regular function is bounded because ``window`` is bounded.
+                reject_secret_content(window, label=label)
+                overlap = window[-8192:]
+    except OSError as exc:
+        raise SecurityBoundaryError(f"unable to inspect artifact: {label}") from exc
 
 
 def ensure_within(root: Path, candidate: Path, *, resolve: bool = True) -> Path:
@@ -145,6 +164,60 @@ def validate_outbound_url(
     return parsed.geturl()
 
 
+_RUNTIME_INTERNAL_HOSTS = frozenset({
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "redis",
+    "postgres",
+})
+
+
+def _runtime_transport_is_strict() -> bool:
+    environment = os.getenv("APP_ENV", "development").lower()
+    return environment in {"acceptance", "production", "prod"}
+
+
+def validate_runtime_database_url(url: str) -> str:
+    """Require PostgreSQL TLS for remote runtime connections.
+
+    Compose service names are an explicit local-network exception. Any other
+    host in acceptance/production must opt into certificate-verified TLS so a
+    remote Worker cannot silently send database credentials and task data over
+    plaintext.
+    """
+    value = str(url or "").strip()
+    if not _runtime_transport_is_strict():
+        return value
+    parsed = urlparse(value)
+    if parsed.scheme not in {"postgres", "postgresql"} or not parsed.hostname:
+        raise SecurityBoundaryError("a valid PostgreSQL DSN is required")
+    if parsed.hostname.lower().rstrip(".") in _RUNTIME_INTERNAL_HOSTS:
+        return value
+    query = parse_qs(parsed.query)
+    if query.get("sslmode", [""])[-1].lower() != "verify-full":
+        raise SecurityBoundaryError("remote PostgreSQL connections require sslmode=verify-full")
+    return value
+
+
+def validate_runtime_redis_url(url: str) -> str:
+    """Require Redis TLS for remote runtime connections."""
+    value = str(url or "").strip()
+    if not _runtime_transport_is_strict():
+        return value
+    parsed = urlparse(value)
+    if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
+        raise SecurityBoundaryError("a valid Redis URL is required")
+    if parsed.hostname.lower().rstrip(".") in _RUNTIME_INTERNAL_HOSTS:
+        return value
+    if parsed.scheme != "rediss":
+        raise SecurityBoundaryError("remote Redis connections require rediss://")
+    query = parse_qs(parsed.query)
+    if query.get("ssl_cert_reqs", [""])[-1].lower() not in {"required", "cert_required"}:
+        raise SecurityBoundaryError("remote Redis connections require certificate verification")
+    return value
+
+
 @dataclass(frozen=True)
 class CollectedArtifact:
     archive_path: Path
@@ -205,14 +278,21 @@ class ArtifactCollector:
         try:
             with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 for path, relative in files:
-                    data = path.read_bytes()
-                    reject_secret_content(data, label=relative)
-                    digest = hashlib.sha256(data).hexdigest()
+                    reject_secret_file(path, label=relative)
+                    digest_hasher = hashlib.sha256()
+                    size = 0
                     info = zipfile.ZipInfo(relative)
                     info.date_time = (1980, 1, 1, 0, 0, 0)
                     info.compress_type = zipfile.ZIP_DEFLATED
-                    archive.writestr(info, data)
-                    manifest["files"].append({"path": relative, "size": len(data), "sha256": digest})
+                    with path.open("rb") as source, archive.open(info, "w") as destination:
+                        while True:
+                            chunk = source.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            size += len(chunk)
+                            digest_hasher.update(chunk)
+                            destination.write(chunk)
+                    manifest["files"].append({"path": relative, "size": size, "sha256": digest_hasher.hexdigest()})
                 manifest_data = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
                 manifest_info = zipfile.ZipInfo("manifest.json")
                 manifest_info.date_time = (1980, 1, 1, 0, 0, 0)
@@ -222,5 +302,9 @@ class ArtifactCollector:
         except Exception:
             temporary.unlink(missing_ok=True)
             raise
-        checksum = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+        checksum_hasher = hashlib.sha256()
+        with archive_path.open("rb") as archive_file:
+            for chunk in iter(lambda: archive_file.read(1024 * 1024), b""):
+                checksum_hasher.update(chunk)
+        checksum = checksum_hasher.hexdigest()
         return CollectedArtifact(archive_path, manifest, checksum, len(files), total)

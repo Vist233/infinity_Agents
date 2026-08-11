@@ -4,15 +4,7 @@ import { useState } from "react";
 import { CheckCircle2, FileArchive, FileSearch, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/lib/i18n";
-import {
-  createDatasetSnapshot,
-  createTask,
-  createTaskSpec,
-  freezeTaskSpec,
-  getDefaultProject,
-  uploadDataset,
-  uploadMethodSource,
-} from "@/lib/api/tasks";
+import { submitTaskBundle } from "@/lib/api/tasks";
 
 interface TaskConfirmationCardProps {
   onCreated?: (taskId: string) => void;
@@ -30,6 +22,9 @@ export function TaskConfirmationCard({ onCreated }: TaskConfirmationCardProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createdTaskId, setCreatedTaskId] = useState<string | null>(null);
+  // Keep the operation identity stable across a network failure and retry.
+  // Changing any input starts a new logical submission instead.
+  const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null);
 
   const submit = async () => {
     if (!methodFile || !datasetFile) {
@@ -39,38 +34,26 @@ export function TaskConfirmationCard({ onCreated }: TaskConfirmationCardProps) {
     setSubmitting(true);
     setError(null);
     setCreatedTaskId(null);
+    const submissionKey = idempotencyKey || (
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+    );
+    if (!idempotencyKey) setIdempotencyKey(submissionKey);
     try {
-      const project = await getDefaultProject();
-      const taskTitle = title.trim() || datasetFile.name.replace(/\.zip$/i, "");
-      const spec = await createTaskSpec({
-        project_id: project.project_id,
+      const taskTitle = title.trim() || methodFile.name.replace(/\.[^.]+$/, "");
+      const task = await submitTaskBundle({
+        methodFile,
+        datasetFile,
         title: taskTitle,
-        analysis_type: "generic",
-      });
-      await freezeTaskSpec(spec.task_spec_id);
-      const method = await uploadMethodSource(methodFile);
-      const upload = await uploadDataset(datasetFile, project.project_id);
-      const dataset = await createDatasetSnapshot({
-        project_id: project.project_id,
-        task_spec_id: spec.task_spec_id,
-        original_filename: datasetFile.name,
-        resource_id: upload.resource_id,
-        file_hash_sha256: upload.file_hash_sha256,
-        validation_passed: true,
-      });
-      const task = await createTask({
-        project_id: project.project_id,
-        task_spec_id: spec.task_spec_id,
-        dataset_snapshot_id: dataset.dataset_snapshot_id,
-        title: taskTitle,
-        method_source_id: method.method_source_id,
-        idempotency_key: crypto.randomUUID(),
+        idempotencyKey: submissionKey,
       });
       setCreatedTaskId(task.task_id);
       onCreated?.(task.task_id);
       setTitle("");
       setMethodFile(null);
       setDatasetFile(null);
+      setIdempotencyKey(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -92,7 +75,7 @@ export function TaskConfirmationCard({ onCreated }: TaskConfirmationCardProps) {
             {t("tasks.methodDoc")}
           </div>
           <div className="text-xs text-zinc-400">{t("tasks.methodDocHint")}</div>
-          <input type="file" accept={METHOD_DOC_ACCEPT} className="text-xs text-zinc-600" onChange={(event) => setMethodFile(event.target.files?.[0] || null)} />
+          <input type="file" accept={METHOD_DOC_ACCEPT} disabled={submitting} className="text-xs text-zinc-600" onChange={(event) => { setMethodFile(event.target.files?.[0] || null); setIdempotencyKey(null); }} />
           {methodFile && <span className="text-xs text-emerald-600 truncate">{methodFile.name}</span>}
         </label>
 
@@ -102,13 +85,13 @@ export function TaskConfirmationCard({ onCreated }: TaskConfirmationCardProps) {
             {t("tasks.dataset")}
           </div>
           <div className="text-xs text-zinc-400">{t("tasks.datasetHint")}</div>
-          <input type="file" accept={DATASET_ACCEPT} className="text-xs text-zinc-600" onChange={(event) => setDatasetFile(event.target.files?.[0] || null)} />
+          <input type="file" accept={DATASET_ACCEPT} disabled={submitting} className="text-xs text-zinc-600" onChange={(event) => { setDatasetFile(event.target.files?.[0] || null); setIdempotencyKey(null); }} />
           {datasetFile && <span className="text-xs text-emerald-600 truncate">{datasetFile.name} ({(datasetFile.size / 1024 / 1024).toFixed(1)} MB)</span>}
         </label>
       </div>
 
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <input type="text" value={title} onChange={(event) => setTitle(event.target.value)} placeholder={t("tasks.taskTitlePlaceholder")} className="flex-1 rounded-xl border border-[var(--hairline)] bg-white/90 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-300" />
+        <input type="text" value={title} disabled={submitting} onChange={(event) => { setTitle(event.target.value); setIdempotencyKey(null); }} placeholder={t("tasks.taskTitlePlaceholder")} className="flex-1 rounded-xl border border-[var(--hairline)] bg-white/90 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-zinc-300" />
         <Button className="gap-2 rounded-xl" disabled={!methodFile || !datasetFile || submitting} onClick={() => { void submit(); }}>
           {submitting ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
           {submitting ? t("tasks.creating") : t("tasks.confirmAndSubmit")}

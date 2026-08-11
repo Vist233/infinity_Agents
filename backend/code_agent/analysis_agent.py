@@ -8,7 +8,6 @@ import os
 import re
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from backend.code_agent.models import TaskSpec
 from backend.provider import ProviderProfile
 
 logger = logging.getLogger(__name__)

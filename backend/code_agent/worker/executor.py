@@ -6,19 +6,61 @@ artifact collection, verification, and result reporting.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import os
 import asyncio
 import shutil
 import uuid
+import re
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
+from urllib.parse import urlparse
 
-from backend.security import ArtifactCollector, SecurityBoundaryError, ensure_within
+from backend.security import ArtifactCollector, SecurityBoundaryError, validate_outbound_url
 
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _validated_control_plane_url(value: str) -> str:
+    """Validate the URL that receives Worker credentials and task data."""
+    candidate = str(value or "").strip().rstrip("/")
+    if not candidate:
+        raise SecurityBoundaryError("Worker control-plane URL is empty")
+    hostname = (urlparse(candidate).hostname or "").lower().rstrip(".")
+    local_hosts = {"localhost", "127.0.0.1", "::1", "api", "host.docker.internal"}
+    allow_http_local = (
+        hostname in local_hosts
+        and os.getenv("APP_ENV", "development").lower() in {"development", "dev", "test", "acceptance"}
+    )
+    if os.getenv("WORKER_ALLOW_HTTP_LOCAL", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        allow_http_local = hostname in local_hosts
+    return validate_outbound_url(
+        candidate,
+        allow_hosts=local_hosts,
+        allow_http_local=allow_http_local,
+    ).rstrip("/")
+
+
+def _worker_transfer_timeout():
+    """Use finite, configurable timeouts for large remote transfers."""
+    import httpx
+
+    seconds = max(30.0, min(_env_float("WORKER_TRANSFER_TIMEOUT_SECONDS", 600.0), 3600.0))
+    return httpx.Timeout(connect=15.0, read=seconds, write=seconds, pool=15.0)
 
 
 async def execute_task(
@@ -35,6 +77,9 @@ async def execute_task(
     method_source_id: Optional[str] = None,
     output_base_dir: Optional[str] = None,
     cancel_event: Optional[asyncio.Event] = None,
+    worker_namespace: Optional[str] = None,
+    worker_credential: Optional[str] = None,
+    control_plane_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute a task end-to-end.
 
@@ -51,7 +96,14 @@ async def execute_task(
         # written by the worker are downloadable from the host. The compose
         # stack mounts ./workspace at /workspace for exactly this reason.
         output_base_dir = os.getenv("ARTIFACT_STORAGE_ROOT", "/workspace/task-outputs")
-    task_work_dir = Path(output_base_dir) / task_id
+    raw_control_plane_url = control_plane_url or os.getenv("WORKER_CONTROL_PLANE_URL") or os.getenv("CONTROL_PLANE_URL") or ""
+    control_plane_url = _validated_control_plane_url(raw_control_plane_url) if raw_control_plane_url.strip() else None
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", str(task_id)):
+        raise ValueError("invalid task ID for worker workspace")
+    output_root = Path(output_base_dir).resolve()
+    task_work_dir = (output_root / str(task_id)).resolve()
+    if not task_work_dir.is_relative_to(output_root):
+        raise ValueError("task workspace escaped the output root")
     task_output_dir = task_work_dir / "output"
     task_output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -75,13 +127,13 @@ async def execute_task(
     error_message = None
     failure_code = None
     output_files = []
-    exit_code = None
     cancelled = False
     image_digest = await _get_image_digest(docker_image)
 
     try:
         async for event in _run_docker_execution(
             task_id=task_id,
+            attempt_id=attempt_id,
             task_spec=task_spec,
             dataset=dataset,
             method_source=method_source,
@@ -90,6 +142,11 @@ async def execute_task(
             output_dir=task_output_dir,
             redis_client=redis_client,
             cancel_event=cancel_event,
+            worker_id=worker_id,
+            worker_namespace=worker_namespace,
+            worker_credential=worker_credential,
+            control_plane_url=control_plane_url,
+            lease_token=lease_token,
         ):
             if event["type"] == "status":
                 await _report_status(redis_client, task_id, "running", {
@@ -107,7 +164,7 @@ async def execute_task(
                 output_files = await _collect_outputs(task_output_dir)
             elif event["type"] == "error":
                 error_message = event.get("message", "Unknown error")
-                failure_code = "execution_error"
+                failure_code = event.get("failure_code", "execution_error")
                 success = False
             elif event["type"] == "cancelled":
                 cancelled = True
@@ -131,11 +188,14 @@ async def execute_task(
             db_pool,
             attempt_id=attempt_id,
             status="cancelled" if cancelled else "failed",
+            task_id=task_id,
+            lease_token=lease_token,
             exit_code=1,
             error_message=error_message,
             executor_image_digest=image_digest,
             failure_code=failure_code,
         )
+        _cleanup_execution_workspace(task_work_dir)
 
     if cancelled:
         return {"success": False, "cancelled": True, "error": error_message}
@@ -151,18 +211,25 @@ async def execute_task(
 
     verification = await _verify_outputs(task_output_dir, task_spec)
     if not verification["passed"]:
+        failure_messages = ", ".join(
+            str(item.get("message", item)) if isinstance(item, dict) else str(item)
+            for item in verification.get("failures", [])
+        )
         await complete_task_attempt(
             db_pool,
             attempt_id=attempt_id,
             status="failed",
+            task_id=task_id,
+            lease_token=lease_token,
             exit_code=0,
-            error_message=f"Verification failed: {', '.join(f['message'] for f in verification['failures'])}",
+            error_message=f"Verification failed: {failure_messages}",
             executor_image_digest=image_digest,
             failure_code="verification_failed",
         )
+        _cleanup_execution_workspace(task_work_dir)
         return {
             "success": False,
-            "error": f"Verification failed: {', '.join(f['message'] for f in verification['failures'])}",
+            "error": f"Verification failed: {failure_messages}",
             # Verification failures are deterministic — retrying won't help
             # (design doc §35.2).
             "failure_code": "verification_failed",
@@ -174,6 +241,7 @@ async def execute_task(
         "worker_id": worker_id,
     })
 
+    artifact_id = ""
     try:
         artifact_id = await _create_artifacts(
             task_id=task_id,
@@ -182,28 +250,120 @@ async def execute_task(
             output_files=output_files,
             db_pool=db_pool,
             lease_token=lease_token,
+            worker_id=worker_id,
+            worker_namespace=worker_namespace,
+            worker_credential=worker_credential,
+            control_plane_url=control_plane_url,
         )
     except Exception as exc:
         await complete_task_attempt(
             db_pool,
             attempt_id=attempt_id,
             status="failed",
+            task_id=task_id,
+            lease_token=lease_token,
             exit_code=0,
             error_message=str(exc),
             executor_image_digest=image_digest,
             failure_code="artifact_publish_failed",
         )
+        _cleanup_execution_workspace(task_work_dir)
         raise
 
-    await complete_task_attempt(
-        db_pool,
-        attempt_id=attempt_id,
-        status="succeeded",
-        exit_code=0,
-        executor_image_digest=image_digest,
-    )
+    try:
+        await complete_task_attempt(
+            db_pool,
+            attempt_id=attempt_id,
+            status="succeeded",
+            task_id=task_id,
+            lease_token=lease_token,
+            exit_code=0,
+            executor_image_digest=image_digest,
+        )
+    except Exception:
+        await _compensate_published_artifact(
+            artifact_id=artifact_id,
+            task_id=task_id,
+            attempt_id=attempt_id,
+            lease_token=lease_token,
+            db_pool=db_pool,
+            control_plane_url=control_plane_url,
+            worker_id=worker_id,
+            worker_namespace=worker_namespace,
+            worker_credential=worker_credential,
+        )
+        _cleanup_execution_workspace(task_work_dir)
+        raise
+
+    # The result archive is the durable downloadable artifact.  Input files,
+    # unpacked datasets, and Claude's scratch output are disposable and must
+    # not accumulate across the long-lived Worker loop.
+    _cleanup_execution_workspace(task_work_dir, preserve_artifact=not bool(control_plane_url))
 
     return {"success": True, "artifact_id": artifact_id, "output_files": output_files}
+
+
+async def _compensate_published_artifact(
+    *,
+    artifact_id: str,
+    task_id: str,
+    attempt_id: int,
+    lease_token: str,
+    db_pool,
+    control_plane_url: Optional[str],
+    worker_id: Optional[str],
+    worker_namespace: Optional[str],
+    worker_credential: Optional[str],
+) -> None:
+    """Best-effort lease-bound cleanup for an artifact/result race."""
+    if not artifact_id:
+        return
+    try:
+        if control_plane_url and worker_id and worker_namespace and worker_credential:
+            import httpx
+            headers = {
+                "X-Worker-ID": worker_id,
+                "X-Worker-Namespace": worker_namespace,
+                "X-Worker-Credential": worker_credential,
+                "X-Worker-Lease-Token": lease_token,
+                "X-Worker-Attempt-ID": str(attempt_id),
+            }
+            async with httpx.AsyncClient(timeout=_worker_transfer_timeout(), follow_redirects=False) as client:
+                response = await client.delete(
+                    f"{control_plane_url}/api/worker/tasks/{task_id}/artifacts/{artifact_id}",
+                    headers=headers,
+                )
+            if response.status_code >= 400:
+                logger.warning("Artifact compensation was rejected (%s)", response.status_code)
+            return
+        from backend.code_agent.task_service import delete_artifact_if_current_lease
+        deleted = await delete_artifact_if_current_lease(
+            db_pool, artifact_id, task_id, attempt_id, lease_token, worker_id=worker_id
+        )
+        if deleted:
+            storage_path = Path(str(deleted.get("storage_path") or ""))
+            root = Path(os.getenv("ARTIFACT_STORAGE_ROOT", "/workspace/task-outputs")).resolve()
+            resolved = storage_path.resolve(strict=False)
+            if resolved.is_relative_to(root) and not storage_path.is_symlink():
+                resolved.unlink(missing_ok=True)
+    except Exception:
+        logger.exception("Artifact compensation failed for %s", artifact_id)
+
+
+def _cleanup_execution_workspace(task_work_dir: Path, *, preserve_artifact: bool = False) -> None:
+    """Remove task-local secrets and scratch data after publication.
+
+    A successful task keeps only ``result-*.zip`` for the API's download
+    path.  Failed/cancelled tasks remove the entire task directory.
+    """
+    if not task_work_dir.exists():
+        return
+    if not preserve_artifact:
+        shutil.rmtree(task_work_dir, ignore_errors=True)
+        return
+    for child in (task_work_dir / "input", task_work_dir / "output"):
+        if child.exists():
+            shutil.rmtree(child, ignore_errors=True)
 
 
 async def _get_task_spec(db_pool, task_spec_id: str) -> Dict[str, Any]:
@@ -237,8 +397,74 @@ async def _get_dataset(db_pool, dataset_snapshot_id: str) -> Dict[str, Any]:
     }
 
 
+async def _request_attempt_gateway(
+    *,
+    task_id: str,
+    attempt_id: int,
+    worker_id: Optional[str],
+    worker_namespace: Optional[str],
+    worker_credential: Optional[str],
+    lease_token: Optional[str],
+    control_plane_url: Optional[str],
+) -> Dict[str, str]:
+    """Acquire the current Attempt's short-lived model capability.
+
+    The Worker authenticates with its persistent machine credential, but only
+    receives a revocable Attempt token.  A preconfigured ``ATTEMPT_*`` tuple is
+    retained for isolated development runs; normal remote/local Workers must
+    use the control-plane endpoint so provider keys stay server-side.
+    """
+    if not control_plane_url:
+        if os.getenv("APP_ENV", "development").lower() not in {"development", "dev", "test"}:
+            raise SecurityBoundaryError(
+                "A control-plane Attempt gateway is required outside development/test"
+            )
+        values = {
+            "gateway_url": os.getenv("ATTEMPT_GATEWAY_URL", "").strip(),
+            "gateway_token": os.getenv("ATTEMPT_GATEWAY_TOKEN", "").strip(),
+            "model_id": os.getenv("ATTEMPT_MODEL_ID", "").strip(),
+        }
+        if all(values.values()):
+            return values
+        raise SecurityBoundaryError("Attempt model gateway is not configured")
+    if not worker_id or not worker_namespace or not worker_credential or not lease_token:
+        raise SecurityBoundaryError("Worker identity is required for an Attempt gateway grant")
+    import httpx
+
+    headers = {
+        "X-Worker-ID": worker_id,
+        "X-Worker-Namespace": worker_namespace,
+        "X-Worker-Credential": worker_credential,
+        "X-Worker-Lease-Token": lease_token,
+        "X-Worker-Attempt-ID": str(attempt_id),
+    }
+    url = f"{control_plane_url.rstrip('/')}/api/worker/tasks/{task_id}/attempts/{attempt_id}/gateway"
+    try:
+        async with httpx.AsyncClient(timeout=_worker_transfer_timeout(), follow_redirects=False) as client:
+            response = await client.post(url, headers=headers)
+    except Exception as exc:
+        raise SecurityBoundaryError("Attempt model gateway could not be reached") from exc
+    if response.status_code >= 400:
+        raise SecurityBoundaryError(
+            f"Attempt model gateway rejected the lease ({response.status_code})"
+        )
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise SecurityBoundaryError("Attempt model gateway returned invalid data") from exc
+    values = {
+        "gateway_url": str(payload.get("gateway_url") or "").strip(),
+        "gateway_token": str(payload.get("gateway_token") or "").strip(),
+        "model_id": str(payload.get("model_id") or "").strip(),
+    }
+    if not all(values.values()):
+        raise SecurityBoundaryError("Attempt model gateway response is incomplete")
+    return values
+
+
 async def _run_docker_execution(
     task_id: str,
+    attempt_id: int,
     task_spec: Dict[str, Any],
     dataset: Dict[str, Any],
     method_source: Optional[Dict[str, Any]],
@@ -247,13 +473,24 @@ async def _run_docker_execution(
     output_dir: Path,
     redis_client,
     cancel_event: Optional[asyncio.Event] = None,
+    worker_id: Optional[str] = None,
+    worker_namespace: Optional[str] = None,
+    worker_credential: Optional[str] = None,
+    control_plane_url: Optional[str] = None,
+    lease_token: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
-    """Run the actual Docker execution."""
+    """Run the configured execution mode.
+
+    ``direct`` runs Claude Code in this Worker container.  ``docker`` remains
+    available only for legacy installations that provide a separately
+    controlled executor; acceptance uses the fixture executor.
+    """
     from backend.code_agent.worker.docker_runtime import run_docker_task
 
     input_dir = None
+    executor_mode = os.getenv("CODE_AGENT_EXECUTOR_MODE", "docker").strip().lower()
 
-    if os.getenv("CODE_AGENT_EXECUTOR_MODE", "docker").strip().lower() == "fixture":
+    if executor_mode == "fixture":
         from backend.code_agent.worker.fixture_executor import run_fixture_executor
         async for event in run_fixture_executor(task_spec, output_dir):
             yield event
@@ -267,12 +504,43 @@ async def _run_docker_execution(
         input_dir = work_dir / "input"
         input_dir.mkdir(parents=True, exist_ok=True)
         if dataset and dataset.get("stored_path"):
-            _stage_dataset(Path(dataset["stored_path"]), input_dir / "data")
+            dataset_path = Path(dataset["stored_path"])
+            if dataset_path.is_file() and _inside_upload_roots(dataset_path):
+                _stage_dataset(dataset_path, input_dir / "data", logical_name=dataset.get("original_filename"))
+            elif control_plane_url and worker_id and worker_namespace and worker_credential:
+                downloaded = await _download_remote_input(
+                    control_plane_url,
+                    task_id,
+                    "dataset",
+                    worker_id=worker_id,
+                    worker_namespace=worker_namespace,
+                    worker_credential=worker_credential,
+                    lease_token=lease_token or "",
+                    destination=work_dir / "remote-input" / (Path(dataset.get("original_filename") or "dataset.zip").name),
+                )
+                _stage_dataset(downloaded, input_dir / "data", logical_name=dataset.get("original_filename"), trusted_local=True)
+            else:
+                raise SecurityBoundaryError("dataset input is not available to this Worker")
         if method_source and method_source.get("stored_path"):
             src = Path(method_source["stored_path"])
             # Same upload-root confinement as datasets (defense in depth).
             if src.exists() and _inside_upload_roots(src):
                 shutil.copy2(src, input_dir / src.name)
+            elif control_plane_url and worker_id and worker_namespace and worker_credential:
+                method_name = Path(method_source.get("original_filename") or "execution-document.bin").name
+                await _download_remote_input(
+                    control_plane_url,
+                    task_id,
+                    "method",
+                    worker_id=worker_id,
+                    worker_namespace=worker_namespace,
+                    worker_credential=worker_credential,
+                    lease_token=lease_token or "",
+                    destination=work_dir / "remote-input" / method_name,
+                )
+                shutil.copy2(work_dir / "remote-input" / method_name, input_dir / method_name)
+            else:
+                raise SecurityBoundaryError("execution document is not available to this Worker")
 
     # Fallback: pre-existing case directories from the validation phase.
     if input_dir is None:
@@ -287,6 +555,39 @@ async def _run_docker_execution(
         if case_num and (case_base / case_num).exists():
             input_dir = case_base / case_num
 
+    gateway: Optional[Dict[str, str]] = None
+    if executor_mode in {"direct", "docker"}:
+        gateway = await _request_attempt_gateway(
+            task_id=task_id,
+            attempt_id=attempt_id,
+            worker_id=worker_id,
+            worker_namespace=worker_namespace,
+            worker_credential=worker_credential,
+            lease_token=lease_token,
+            control_plane_url=control_plane_url,
+        )
+
+    if executor_mode == "direct":
+        from backend.code_agent.worker.direct_runtime import run_direct_task
+
+        if input_dir is None:
+            input_dir = work_dir / "input"
+            input_dir.mkdir(parents=True, exist_ok=True)
+        async for event in run_direct_task(
+            task_id,
+            task_spec.get("task_spec_id", ""),
+            dataset.get("dataset_snapshot_id", "") if dataset else "",
+            input_dir=input_dir,
+            output_dir=output_dir,
+            work_dir=work_dir,
+            cancel_event=cancel_event,
+            attempt_gateway_url=gateway["gateway_url"],
+            attempt_gateway_token=gateway["gateway_token"],
+            attempt_model_id=gateway["model_id"],
+        ):
+            yield event
+        return
+
     # Run Docker
     async for event in run_docker_task(
         task_id=task_id,
@@ -296,6 +597,9 @@ async def _run_docker_execution(
         case_dir=str(input_dir) if input_dir else None,
         output_dir=str(output_dir),
         cancel_event=cancel_event,
+        attempt_gateway_url=gateway["gateway_url"] if gateway else None,
+        attempt_gateway_token=gateway["gateway_token"] if gateway else None,
+        attempt_model_id=gateway["model_id"] if gateway else None,
     ):
         yield event
 
@@ -314,37 +618,109 @@ def _inside_upload_roots(path: Path) -> bool:
         return False
 
 
-def _stage_dataset(stored_path: Path, dest_dir: Path) -> None:
+def _stage_dataset(
+    stored_path: Path,
+    dest_dir: Path,
+    *,
+    logical_name: Optional[str] = None,
+    trusted_local: bool = False,
+) -> None:
     """Copy or safely extract the dataset snapshot into the input dir."""
     import zipfile
 
     # Defense in depth: even though the API validates stored_path against the
     # upload roots, the worker must never mount arbitrary filesystem paths.
-    if not _inside_upload_roots(stored_path):
+    if not trusted_local and not _inside_upload_roots(stored_path):
         logger.warning("Refusing to stage dataset outside upload roots: %s", stored_path)
-        return
+        raise SecurityBoundaryError("dataset path is outside the Worker upload roots")
 
     if not stored_path.exists():
         logger.warning("Dataset stored_path does not exist: %s", stored_path)
         return
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    if stored_path.suffix.lower() == ".zip":
+    if Path(logical_name or stored_path.name).suffix.lower() == ".zip":
         base = dest_dir.resolve()
         with zipfile.ZipFile(stored_path, "r") as zf:
-            for info in zf.infolist():
+            max_entries = _env_int("DATASET_ZIP_MAX_ENTRIES", 10000)
+            max_file_bytes = _env_int("DATASET_ZIP_MAX_FILE_BYTES", 5 * 1024**3)
+            max_total_bytes = _env_int("DATASET_ZIP_MAX_UNCOMPRESSED_BYTES", 10 * 1024**3)
+            max_ratio = _env_float("DATASET_ZIP_MAX_COMPRESSION_RATIO", 200.0)
+            infos = zf.infolist()
+            if not infos or len(infos) > max_entries:
+                raise SecurityBoundaryError("ZIP entry count exceeds the configured limit")
+            total_bytes = 0
+            for info in infos:
                 # Block path traversal inside the archive. is_relative_to
                 # avoids the classic startswith("...data") vs "...data2"
                 # prefix-match bypass.
-                target = (base / info.filename).resolve()
+                safe_name = info.filename.replace("\\", "/")
+                if safe_name.startswith("/") or any(part == ".." for part in safe_name.split("/")):
+                    raise SecurityBoundaryError(f"ZIP contains path traversal: {info.filename}")
+                mode = (info.external_attr >> 16) & 0o170000
+                if mode and mode != 0o100000 and not info.is_dir():
+                    raise SecurityBoundaryError(f"ZIP contains a special file: {info.filename}")
+                if not info.is_dir():
+                    if info.file_size > max_file_bytes:
+                        raise SecurityBoundaryError("ZIP contains an oversized file")
+                    total_bytes += info.file_size
+                    if total_bytes > max_total_bytes:
+                        raise SecurityBoundaryError("ZIP expands beyond the configured limit")
+                    compressed_size = max(info.compress_size, 1)
+                    if info.file_size and info.file_size / compressed_size > max_ratio:
+                        raise SecurityBoundaryError("ZIP compression ratio exceeds the configured limit")
+                target = (base / safe_name).resolve()
                 if not target.is_relative_to(base):
-                    logger.warning("Skipping unsafe archive entry: %s", info.filename)
-                    continue
+                    raise SecurityBoundaryError(f"ZIP entry escapes staging root: {info.filename}")
                 zf.extract(info, dest_dir)
     elif stored_path.is_file():
         shutil.copy2(stored_path, dest_dir / stored_path.name)
     elif stored_path.is_dir():
         shutil.copytree(stored_path, dest_dir / stored_path.name, dirs_exist_ok=True)
+
+
+async def _download_remote_input(
+    control_plane_url: str,
+    task_id: str,
+    kind: str,
+    *,
+    worker_id: str,
+    worker_namespace: str,
+    worker_credential: str,
+    lease_token: str,
+    destination: Path,
+) -> Path:
+    """Download one input through the authenticated control-plane transfer API."""
+    if not lease_token:
+        raise SecurityBoundaryError("Worker lease token is unavailable for input transfer")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.part")
+    headers = {
+        "X-Worker-ID": worker_id,
+        "X-Worker-Namespace": worker_namespace,
+        "X-Worker-Credential": worker_credential,
+        "X-Worker-Lease-Token": lease_token,
+    }
+    import httpx
+    try:
+        timeout = _worker_transfer_timeout()
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            async with client.stream("GET", f"{control_plane_url}/api/worker/tasks/{task_id}/inputs/{kind}", headers=headers) as response:
+                if response.status_code >= 400:
+                    raise SecurityBoundaryError(f"control-plane input transfer failed ({response.status_code})")
+                max_bytes = int(os.getenv("WORKER_INPUT_MAX_BYTES", str(10 * 1024**3)))
+                total = 0
+                with temporary.open("wb") as handle:
+                    async for chunk in response.aiter_bytes(1024 * 1024):
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise SecurityBoundaryError("remote input exceeds the Worker limit")
+                        handle.write(chunk)
+        temporary.replace(destination)
+        return destination
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 async def _get_image_digest(docker_image: str) -> Optional[str]:
@@ -374,33 +750,18 @@ async def _verify_outputs(output_dir: Path, task_spec: Dict[str, Any]) -> Dict[s
     """Verify that required deliverables exist and are valid.
 
     Uses the five-level verifier for comprehensive validation.
-    Falls back to basic checks if the verifier is unavailable.
+    Verification is fail-closed: a verifier outage must not turn into a
+    successful task based only on file existence.
     """
     try:
         from backend.code_agent.verifier import verify_outputs
         return verify_outputs(output_dir, task_spec)
     except Exception as exc:
-        logger.warning("Five-level verifier failed, using fallback: %s", exc)
-        # Fallback to basic file existence checks
-        failures = []
-        deliverables = task_spec.get("spec_json", {}).get("deliverables", [])
-
-        for deliverable in deliverables:
-            path = deliverable.get("path", "")
-            required = deliverable.get("required", True)
-            min_bytes = deliverable.get("min_bytes", 0)
-
-            if not path:
-                continue
-
-            file_path = output_dir / path
-            if not file_path.exists():
-                if required:
-                    failures.append(f"Missing required deliverable: {path}")
-            elif min_bytes and file_path.stat().st_size < min_bytes:
-                failures.append(f"Deliverable too small: {path} ({file_path.stat().st_size} < {min_bytes} bytes)")
-
-        return {"passed": len(failures) == 0, "failures": failures}
+        logger.error("Five-level verifier unavailable; refusing to publish output: %s", exc)
+        return {
+            "passed": False,
+            "failures": [{"message": "Output verification service unavailable"}],
+        }
 
 
 async def _create_artifacts(
@@ -410,6 +771,10 @@ async def _create_artifacts(
     output_files: list,
     db_pool,
     lease_token: Optional[str] = None,
+    worker_id: Optional[str] = None,
+    worker_namespace: Optional[str] = None,
+    worker_credential: Optional[str] = None,
+    control_plane_url: Optional[str] = None,
 ) -> str:
     """Create artifact records and manifest."""
     from backend.code_agent.task_service import create_artifact, create_artifact_if_current_lease
@@ -442,14 +807,73 @@ async def _create_artifacts(
         content_type="application/zip",
         metadata={"file_count": collected.file_count, "byte_count": collected.byte_count, "manifest": manifest},
     )
+    if control_plane_url and worker_id and worker_namespace and worker_credential:
+        return await _upload_remote_artifact(
+            control_plane_url,
+            task_id,
+            attempt_id,
+            artifact_id,
+            collected.archive_path,
+            worker_id=worker_id,
+            worker_namespace=worker_namespace,
+            worker_credential=worker_credential,
+            lease_token=lease_token or "",
+        )
     if lease_token:
-        artifact = await create_artifact_if_current_lease(db_pool, artifact_obj, lease_token)
+        artifact = await create_artifact_if_current_lease(
+            db_pool, artifact_obj, lease_token, worker_id=worker_id
+        )
         if artifact is None:
             raise RuntimeError("task lease was lost before artifact publication")
     else:
         artifact = await create_artifact(db_pool, artifact_obj)
 
     logger.info("Created artifact %s for task %s with %d files", artifact_id, task_id, collected.file_count)
+    return artifact_id
+
+
+async def _upload_remote_artifact(
+    control_plane_url: str,
+    task_id: str,
+    attempt_id: int,
+    artifact_id: str,
+    archive_path: Path,
+    *,
+    worker_id: str,
+    worker_namespace: str,
+    worker_credential: str,
+    lease_token: str,
+) -> str:
+    """Upload a result archive to the API before the Worker forgets its scratch path."""
+    if not lease_token:
+        raise SecurityBoundaryError("Worker lease token is unavailable for artifact transfer")
+    import httpx
+    headers = {
+        "X-Worker-ID": worker_id,
+        "X-Worker-Namespace": worker_namespace,
+        "X-Worker-Credential": worker_credential,
+        "X-Worker-Lease-Token": lease_token,
+        "X-Worker-Attempt-ID": str(attempt_id),
+        "X-Worker-Artifact-ID": artifact_id,
+        "Content-Type": "application/zip",
+        "Content-Length": str(archive_path.stat().st_size),
+    }
+    timeout = _worker_transfer_timeout()
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        with archive_path.open("rb") as handle:
+            response = await client.post(
+                f"{control_plane_url}/api/worker/tasks/{task_id}/artifacts",
+                headers=headers,
+                content=handle,
+            )
+    if response.status_code >= 400:
+        raise SecurityBoundaryError(f"control-plane artifact upload failed ({response.status_code})")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise SecurityBoundaryError("control-plane artifact response is invalid") from exc
+    if str(payload.get("artifact_id")) != artifact_id:
+        raise SecurityBoundaryError("control-plane artifact ID mismatch")
     return artifact_id
 
 

@@ -9,9 +9,32 @@ import asyncio
 import json
 import logging
 import os
+import signal
+import time
 from typing import Any, AsyncIterator, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _task_timeout_seconds() -> int:
+    try:
+        configured = int(os.getenv("TASK_EXECUTION_TIMEOUT_SECONDS", "43200"))
+    except (TypeError, ValueError):
+        configured = 43200
+    return max(60, min(configured, 7 * 24 * 60 * 60))
+
+
+def _signal_process_group(proc: asyncio.subprocess.Process, signal_number: int) -> None:
+    try:
+        os.killpg(proc.pid, signal_number)
+    except (ProcessLookupError, PermissionError):
+        try:
+            if signal_number == signal.SIGKILL:
+                proc.kill()
+            else:
+                proc.terminate()
+        except ProcessLookupError:
+            pass
 
 
 async def run_docker_task(
@@ -23,6 +46,9 @@ async def run_docker_task(
     case_dir: Optional[str] = None,
     output_dir: Optional[str] = None,
     cancel_event: Optional[asyncio.Event] = None,
+    attempt_gateway_url: Optional[str] = None,
+    attempt_gateway_token: Optional[str] = None,
+    attempt_model_id: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Run a task in a Docker container.
 
@@ -64,7 +90,7 @@ async def run_docker_task(
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
         "--pids-limit=512",
-        f"--cpus=2", "--memory=2g", "--memory-swap=2g",
+        "--cpus=2", "--memory=2g", "--memory-swap=2g",
         "--read-only",
         # A writable /tmp is mandatory under --read-only (design doc §24).
         "--tmpfs", "/tmp:size=512m",
@@ -92,7 +118,12 @@ async def run_docker_task(
         "ATTEMPT_MODEL_ID": "ANTHROPIC_MODEL",
     }
     for source_name, target_name in attempt_env.items():
-        value = os.getenv(source_name, "").strip()
+        explicit_values = {
+            "ATTEMPT_GATEWAY_URL": attempt_gateway_url,
+            "ATTEMPT_GATEWAY_TOKEN": attempt_gateway_token,
+            "ATTEMPT_MODEL_ID": attempt_model_id,
+        }
+        value = str(explicit_values.get(source_name) or os.getenv(source_name, "")).strip()
         if value:
             cmd += ["-e", f"{target_name}={value}"]
 
@@ -110,6 +141,7 @@ async def run_docker_task(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
         )
     except FileNotFoundError:
         yield {"type": "error", "message": "Docker not found. Ensure Docker is installed and running."}
@@ -119,23 +151,32 @@ async def run_docker_task(
         return
 
     output = ""
+    started_at = time.monotonic()
     try:
         while True:
+            if time.monotonic() - started_at >= _task_timeout_seconds():
+                logger.warning("Task %s exceeded the Docker execution time limit", task_id)
+                _signal_process_group(proc, signal.SIGTERM)
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=30)
+                except asyncio.TimeoutError:
+                    _signal_process_group(proc, signal.SIGKILL)
+                    await proc.wait()
+                yield {
+                    "type": "error",
+                    "message": "Docker execution exceeded the Worker time limit.",
+                    "failure_code": "timeout",
+                }
+                return
             if cancel_event and cancel_event.is_set():
                 logger.info("Cancellation requested for task %s, sending SIGTERM", task_id)
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
+                _signal_process_group(proc, signal.SIGTERM)
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=30)
                 except asyncio.TimeoutError:
                     logger.info("Task %s did not exit after SIGTERM, sending SIGKILL", task_id)
-                    try:
-                        proc.kill()
-                        await proc.wait()
-                    except Exception:
-                        pass
+                    _signal_process_group(proc, signal.SIGKILL)
+                    await proc.wait()
                 yield {"type": "cancelled", "message": "Task cancelled by user"}
                 return
 
@@ -150,11 +191,8 @@ async def run_docker_task(
             yield {"type": "chunk", "content": text}
         await proc.wait()
     except asyncio.CancelledError:
-        try:
-            proc.kill()
-            await proc.wait()
-        except Exception:
-            pass
+        _signal_process_group(proc, signal.SIGKILL)
+        await proc.wait()
         yield {"type": "error", "message": "Task cancelled"}
         return
     except Exception as exc:
@@ -162,11 +200,8 @@ async def run_docker_task(
         return
     finally:
         if proc.returncode is None:
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
+            _signal_process_group(proc, signal.SIGKILL)
+            await proc.wait()
 
     if proc.returncode == 0:
         yield {"type": "done", "output": output}

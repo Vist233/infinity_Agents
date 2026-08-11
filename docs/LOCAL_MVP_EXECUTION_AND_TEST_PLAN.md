@@ -1,9 +1,9 @@
 # Infinity Agents — 本地 MVP 实施与实时验收计划
 
-> 版本：v1.1  
-> 日期：2026-08-09  
-> 配套产品设计：[`ANALYSIS_WORKSPACE_SYSTEM_DESIGN.md`](./ANALYSIS_WORKSPACE_SYSTEM_DESIGN.md)  
-> 开发模型执行规则：[`MODEL_IMPLEMENTATION_EXECUTION_RUNBOOK.md`](./MODEL_IMPLEMENTATION_EXECUTION_RUNBOOK.md)  
+> 版本：v1.1
+> 日期：2026-08-09
+> 配套产品设计：[`ANALYSIS_WORKSPACE_SYSTEM_DESIGN.md`](./ANALYSIS_WORKSPACE_SYSTEM_DESIGN.md)
+> 开发模型执行规则：[`MODEL_IMPLEMENTATION_EXECUTION_RUNBOOK.md`](./MODEL_IMPLEMENTATION_EXECUTION_RUNBOOK.md)
 > 范围：只定义本地产品、实现顺序、实时测试和发布门槛；不包含 Cloudflare 部署步骤。
 
 ## 0. 交付目标与不可混淆的运行边界

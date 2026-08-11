@@ -1,9 +1,9 @@
 # Infinity Agents — Cloudflare 远程控制面与不可信学生 Worker 部署计划
 
-> 版本：v1.0  
-> 日期：2026-08-09  
-> 状态：架构决策与实施计划，不表示当前代码已具备这些能力  
-> 配套文档：`docs/ANALYSIS_WORKSPACE_SYSTEM_DESIGN.md`、`docs/LOCAL_MVP_EXECUTION_AND_TEST_PLAN.md`、`docs/MODEL_IMPLEMENTATION_EXECUTION_RUNBOOK.md`  
+> 版本：v1.0
+> 日期：2026-08-09
+> 状态：架构决策与实施计划，不表示当前代码已具备这些能力
+> 配套文档：`docs/ANALYSIS_WORKSPACE_SYSTEM_DESIGN.md`、`docs/LOCAL_MVP_EXECUTION_AND_TEST_PLAN.md`、`docs/MODEL_IMPLEMENTATION_EXECUTION_RUNBOOK.md`
 > 范围：本地 MVP 验收通过后的远程阶段；不替代本地阶段，也不把长时科研计算搬进 Cloudflare Worker。
 
 ## 0. 结论先行

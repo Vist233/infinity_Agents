@@ -1,12 +1,19 @@
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import MarkdownRenderer from "@/components/markdown-renderer";
-import { Bot, LogIn, User } from "lucide-react";
+import { LogIn, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Message, SessionRunState } from "@/lib/chat-state";
 import { RunStatus } from "@/components/chat/RunStatus";
 import type { RefObject } from "react";
 import { useLanguage } from "@/lib/i18n";
+
+function ProductLogo({ size = "h-6 w-6" }: { size?: string }) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src="/icon.png" alt="Infinity Agents" className={`${size} rounded-full object-cover`} />
+    );
+}
 
 interface MessagePaneProps {
   messages: Message[];
@@ -17,6 +24,7 @@ interface MessagePaneProps {
   scrollRef: RefObject<HTMLDivElement | null>;
   authStatus: "checking" | "authenticated" | "unauthenticated";
   onLogin: () => void;
+  agentMode?: "analysis" | "chat";
 }
 
 export function MessagePane({
@@ -28,19 +36,22 @@ export function MessagePane({
   scrollRef,
   authStatus,
   onLogin,
+  agentMode = "analysis",
 }: MessagePaneProps) {
   const { t } = useLanguage();
+  const signInTitle = agentMode === "chat" ? t("auth.chatSignInTitle") : t("auth.signInTitle");
+  const signInDescription = agentMode === "chat" ? t("auth.chatSignInDescription") : t("auth.signInDescription");
   return (
     <ScrollArea className="flex-1 overflow-y-auto" ref={scrollRef}>
-      <div id="chat-export-content" className="max-w-3xl mx-auto w-full px-4 pt-10 pb-32">
+      <div className="max-w-3xl mx-auto w-full px-4 pt-10 pb-32">
         {authStatus === "unauthenticated" ? (
           <div className="h-[60vh] flex flex-col items-center justify-center space-y-4 text-center">
             <div className="w-12 h-12 rounded-full border border-zinc-200 flex items-center justify-center shadow-sm bg-white">
-              <Bot size={24} />
+              <ProductLogo size="h-8 w-8" />
             </div>
             <div className="space-y-2">
-              <h2 className="text-2xl font-medium tracking-tight">{t("auth.signInTitle")}</h2>
-              <p className="text-sm text-zinc-500 max-w-md">{t("auth.signInDescription")}</p>
+              <h2 className="text-2xl font-medium tracking-tight">{signInTitle}</h2>
+              <p className="text-sm text-zinc-500 max-w-md">{signInDescription}</p>
             </div>
             <Button onClick={onLogin} className="gap-2 rounded-xl">
               <LogIn size={16} />
@@ -50,7 +61,7 @@ export function MessagePane({
         ) : messages.length === 0 ? (
           <div className="h-[60vh] flex flex-col items-center justify-center space-y-4">
             <div className="w-12 h-12 rounded-full border border-zinc-200 flex items-center justify-center shadow-sm">
-              <Bot size={24} />
+              <ProductLogo size="h-8 w-8" />
             </div>
             <h2 className="text-2xl font-medium tracking-tight">{t("home.emptyTitle")}</h2>
           </div>
@@ -67,7 +78,7 @@ export function MessagePane({
                       }`}
                     >
                       <AvatarFallback className="bg-transparent">
-                        {message.role === "user" ? <User size={16} /> : <Bot size={16} className="text-zinc-100" />}
+                        {message.role === "user" ? <User size={16} /> : <ProductLogo />}
                       </AvatarFallback>
                     </Avatar>
                     <div className="flex flex-col gap-1.5 grow">
