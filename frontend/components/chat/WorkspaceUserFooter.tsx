@@ -1,10 +1,9 @@
 "use client";
 
-import { LogIn, LogOut } from "lucide-react";
+import { LogOut } from "lucide-react";
 import { useEffect, useState } from "react";
 import { getCurrentUser, logout as logoutCurrentUser, type CurrentUser } from "@/lib/api/auth";
 import { useLanguage } from "@/lib/i18n";
-import { redirectToLogin } from "@/lib/runtime-config";
 
 /** Shared account strip for every desktop/mobile workspace drawer. */
 export function WorkspaceUserFooter() {
@@ -27,18 +26,7 @@ export function WorkspaceUserFooter() {
     return () => { cancelled = true; };
   }, []);
 
-  if (!loaded) return <div className="h-12" aria-hidden="true" />;
-
-  if (!user) {
-    return (
-      <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--hairline)] bg-white/60 px-2.5 py-2">
-        <span className="truncate text-xs text-zinc-500">{t("account.signedOut")}</span>
-        <button type="button" onClick={redirectToLogin} className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-zinc-700 hover:text-zinc-950">
-          <LogIn size={13} />{t("account.signIn")}
-        </button>
-      </div>
-    );
-  }
+  if (!loaded || !user) return null;
 
   const label = user.name || user.email || user.id || t("account.signedIn");
   const handleLogout = async () => {

@@ -32,4 +32,14 @@ describe("WorkspaceUserFooter", () => {
     expect(screen.queryByText("未登录")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "退出登录" })).toBeInTheDocument();
   });
+
+  it("renders nothing for an unauthenticated account", async () => {
+    vi.mocked(getCurrentUser).mockResolvedValueOnce(null);
+
+    render(<LanguageProvider><WorkspaceUserFooter /></LanguageProvider>);
+
+    await waitFor(() => expect(getCurrentUser).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("未登录")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "登录" })).not.toBeInTheDocument();
+  });
 });
