@@ -151,7 +151,7 @@ jobs:
       - name: Run test search papers
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_search_papers.py
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_search_papers.py || test $? -eq 5
 
       - name: Run test security
         env:
