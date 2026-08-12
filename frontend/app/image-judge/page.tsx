@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDownToLine, ExternalLink, FileImage, Microscope, Upload } from "lucide-react";
 import { AgentNav } from "@/components/chat/AgentNav";
@@ -36,15 +36,6 @@ const examples = [
     resultDescriptionKey: "image.exampleResultNormal",
   },
 ] as const;
-
-type DemoStatus = "idle" | "ready" | "running" | "succeeded" | "failed";
-
-const IMAGE_FILE_EXTENSION = /\.(avif|bmp|gif|jpe?g|png|svg|webp)$/i;
-
-function isUsableImageFile(file: File | null): file is File {
-  if (!file || file.size <= 0) return false;
-  return !file.type || file.type.startsWith("image/") || IMAGE_FILE_EXTENSION.test(file.name);
-}
 
 function FilePreview({ file, fallbackSrc, fallbackAlt, emptyLabel, accent }: { file: File | null; fallbackSrc: string; fallbackAlt: string; emptyLabel: string; accent: string }) {
   const [preview, setPreview] = useState<{ file: File; url: string } | null>(null);
@@ -83,56 +74,7 @@ export default function ImageJudgePage() {
   const [referenceFile, setReferenceFile] = useState<File | null>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [showDownload, setShowDownload] = useState(true);
-  const [demoStatus, setDemoStatus] = useState<DemoStatus>("idle");
-  const [demoError, setDemoError] = useState<string | null>(null);
-  const demoTimerRef = useRef<number | null>(null);
   const selected = examples.find((example) => example.id === selectedId) ?? examples[0];
-
-  useEffect(() => () => {
-    if (demoTimerRef.current) window.clearTimeout(demoTimerRef.current);
-  }, []);
-
-  const updateDemoInputs = (nextReferenceFile: File | null, nextUploadedFile: File | null) => {
-    if (demoTimerRef.current) {
-      window.clearTimeout(demoTimerRef.current);
-      demoTimerRef.current = null;
-    }
-    const hasInvalidFile = [nextReferenceFile, nextUploadedFile].some((file) => file !== null && !isUsableImageFile(file));
-    setDemoError(hasInvalidFile ? t("image.demoInvalidInput") : null);
-    if (hasInvalidFile) {
-      setDemoStatus("failed");
-    } else {
-      setDemoStatus(nextReferenceFile && nextUploadedFile ? "ready" : "idle");
-    }
-  };
-
-  const runLocalDemo = () => {
-    if (!referenceFile || !uploadedFile || !isUsableImageFile(referenceFile) || !isUsableImageFile(uploadedFile)) {
-      setDemoStatus("failed");
-      setDemoError(t("image.demoInvalidInput"));
-      return;
-    }
-    setDemoError(null);
-    setDemoStatus("running");
-    try {
-      demoTimerRef.current = window.setTimeout(() => {
-        demoTimerRef.current = null;
-        setDemoStatus("succeeded");
-      }, 240);
-    } catch {
-      demoTimerRef.current = null;
-      setDemoStatus("failed");
-      setDemoError(t("image.demoRunFailed"));
-    }
-  };
-
-  const demoStatusText: Record<DemoStatus, string> = {
-    idle: t("image.demoIdle"),
-    ready: t("image.demoReady"),
-    running: t("image.demoRunning"),
-    succeeded: t("image.demoSuccess"),
-    failed: demoError || t("image.demoRunFailed"),
-  };
 
   return (
     <div className="flex h-screen bg-transparent font-sans text-zinc-900">
@@ -191,7 +133,7 @@ export default function ImageJudgePage() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-base font-semibold">{t("image.downloadTitle")}</h2>
-                    <p className="mt-1 text-xs text-zinc-500">{t("image.downloadPanelDescription")}</p>
+                    <p className="mt-1 text-xs text-zinc-500">{t("image.description")}</p>
                   </div>
                   <a href={RELEASE_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-800"><ExternalLink className="h-3.5 w-3.5" />{t("image.releaseNotes")}</a>
                 </div>
@@ -223,7 +165,6 @@ export default function ImageJudgePage() {
                         <input type="file" accept="image/*" className="sr-only" onChange={(event) => {
                           const file = event.target.files?.[0] ?? null;
                           setReferenceFile(file);
-                          updateDemoInputs(file, uploadedFile);
                         }} />
                       </label>
                     </div>
@@ -238,7 +179,6 @@ export default function ImageJudgePage() {
                         <input type="file" accept="image/*" className="sr-only" onChange={(event) => {
                           const file = event.target.files?.[0] ?? null;
                           setUploadedFile(file);
-                          updateDemoInputs(referenceFile, file);
                         }} />
                       </label>
                     </div>
@@ -261,22 +201,6 @@ export default function ImageJudgePage() {
                     <div className="mt-2 inline-flex rounded-full bg-white px-3 py-1 text-xs font-semibold text-emerald-700">{selected.result}</div>
                     <p className="mt-2 text-xs leading-5 text-emerald-800">{t(selected.resultDescriptionKey)}</p>
                     <p className="mt-2 text-[11px] leading-4 text-emerald-700/70">{t("image.sampleFixture")}</p>
-                  </div>
-                  <div className="mt-5 rounded-xl border border-dashed border-zinc-200 bg-zinc-50 p-4 text-xs leading-5 text-zinc-600" aria-live="polite">
-                    <div className="font-semibold text-zinc-700">{t("image.demoStatusTitle")}</div>
-                    <div className="mt-1 text-zinc-500">{t("image.demoModeLabel")}</div>
-                    <div className={`mt-3 rounded-lg px-3 py-2 ${demoStatus === "failed" ? "bg-red-50 text-red-700" : demoStatus === "succeeded" ? "bg-emerald-50 text-emerald-700" : demoStatus === "running" ? "bg-amber-50 text-amber-700" : "bg-white text-zinc-600"}`}>
-                      {demoStatusText[demoStatus]}
-                    </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="mt-3 rounded-xl"
-                      disabled={!referenceFile || !uploadedFile || demoStatus === "running"}
-                      onClick={runLocalDemo}
-                    >
-                      {demoStatus === "running" ? t("image.demoRunningButton") : t("image.runDemo")}
-                    </Button>
                   </div>
                 </section>
               </aside>
