@@ -23,14 +23,13 @@ test("smoke routes render", async ({ page }) => {
 });
 
 test("home page shows retry banner when sessions endpoint fails", async ({ page }) => {
-  let callCount = 0;
+  let allowRecovery = false;
   await page.route("**/api/sessions", async (route) => {
     if (route.request().method() !== "GET") {
       await route.continue();
       return;
     }
-    callCount += 1;
-    if (callCount === 1) {
+    if (!allowRecovery) {
       await route.fulfill({ status: 500, body: JSON.stringify({ detail: "boom" }), contentType: "application/json" });
       return;
     }
@@ -39,6 +38,7 @@ test("home page shows retry banner when sessions endpoint fails", async ({ page 
 
   await page.goto("/");
   await expect(page.getByText(/^加载对话失败：/)).toBeVisible();
+  allowRecovery = true;
   await page.getByRole("button", { name: "重试" }).click();
   await expect(page.getByText(/^加载对话失败：/)).toHaveCount(0);
 });

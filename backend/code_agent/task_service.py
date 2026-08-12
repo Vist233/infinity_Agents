@@ -491,6 +491,7 @@ async def submit_task_atomically(
             inputs = await conn.fetchrow(
                 """
                 SELECT ts.project_id AS spec_project, ts.status AS spec_status,
+                       ts.created_by AS spec_created_by,
                        ds.project_id AS dataset_project, ds.validation_passed
                 FROM task_specs ts
                 JOIN dataset_snapshots ds ON ds.task_spec_id = ts.task_spec_id
@@ -499,7 +500,12 @@ async def submit_task_atomically(
                 task.task_spec_id,
                 task.dataset_snapshot_id,
             )
-            if not inputs or str(inputs["spec_project"]) != str(task.project_id) or str(inputs["dataset_project"]) != str(task.project_id):
+            if (
+                not inputs
+                or str(inputs["spec_project"]) != str(task.project_id)
+                or str(inputs["dataset_project"]) != str(task.project_id)
+                or str(inputs["spec_created_by"]) != str(user_id)
+            ):
                 raise ValueError("TaskSpec and Dataset must belong to the selected Project")
             if inputs["spec_status"] != "active" or not inputs["validation_passed"]:
                 raise ValueError("TaskSpec must be frozen and Dataset validation must pass")

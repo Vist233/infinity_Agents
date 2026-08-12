@@ -11,6 +11,7 @@ import logging
 import os
 import signal
 import time
+from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,43 @@ def _signal_process_group(proc: asyncio.subprocess.Process, signal_number: int) 
                 proc.terminate()
         except ProcessLookupError:
             pass
+
+
+def _named_volume_mount(
+    volume_env: str,
+    root_env: str,
+    requested_path: str,
+    task_id: str,
+    target: str,
+    *,
+    readonly: bool,
+) -> Optional[str]:
+    """Build a named-volume mount while keeping the requested subpath scoped.
+
+    The root variable is a host-side allow-list used to derive the path inside
+    the named volume. It is never exposed as a host bind mount.
+    """
+    volume_name = os.getenv(volume_env, "").strip()
+    if not volume_name:
+        return None
+    volume_root = os.getenv(root_env, "").strip()
+    if not volume_root:
+        raise ValueError(f"{root_env} is required when {volume_env} is configured")
+
+    root = Path(volume_root).resolve()
+    requested = Path(requested_path).resolve()
+    try:
+        relative = requested.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"{requested_path} must stay below {root_env}") from exc
+    if not relative.parts or relative == Path("."):
+        raise ValueError(f"{requested_path} must identify a task subpath")
+
+    suffix = ",readonly" if readonly else ""
+    return (
+        f"type=volume,source={volume_name},target={target},"
+        f"volume-subpath={relative.as_posix()}{suffix}"
+    )
 
 
 async def run_docker_task(
@@ -117,6 +155,29 @@ async def run_docker_task(
         "ATTEMPT_GATEWAY_TOKEN": "ANTHROPIC_AUTH_TOKEN",
         "ATTEMPT_MODEL_ID": "ANTHROPIC_MODEL",
     }
+    input_volume = _named_volume_mount(
+        "CODE_AGENT_INPUT_VOLUME",
+        "CODE_AGENT_INPUT_VOLUME_ROOT",
+        work_dir,
+        task_id,
+        input_mount,
+        readonly=True,
+    )
+    output_volume = _named_volume_mount(
+        "CODE_AGENT_OUTPUT_VOLUME",
+        "CODE_AGENT_OUTPUT_VOLUME_ROOT",
+        out_dir,
+        task_id,
+        output_mount,
+        readonly=False,
+    )
+    # Keep capability values in the subprocess environment and pass only the
+    # variable names to Docker. This prevents secrets from appearing in the
+    # host process argv while still allowing Docker to inherit them via `-e`.
+    process_env = os.environ.copy()
+    for variable in (*attempt_env.keys(), *attempt_env.values()):
+        process_env.pop(variable, None)
+    capability_flags: list[str] = []
     for source_name, target_name in attempt_env.items():
         explicit_values = {
             "ATTEMPT_GATEWAY_URL": attempt_gateway_url,
@@ -125,11 +186,12 @@ async def run_docker_task(
         }
         value = str(explicit_values.get(source_name) or os.getenv(source_name, "")).strip()
         if value:
-            cmd += ["-e", f"{target_name}={value}"]
+            process_env[target_name] = value
+            capability_flags.extend(["-e", target_name])
 
-    cmd += [
-        "-v", f"{work_dir}:{input_mount}:ro",
-        "-v", f"{out_dir}:{output_mount}",
+    cmd += capability_flags + [
+        "--mount", input_volume or f"type=bind,source={work_dir},target={input_mount},readonly",
+        "--mount", output_volume or f"type=bind,source={out_dir},target={output_mount}",
         docker_image,
         "claude", "--print", prompt,
     ]
@@ -142,6 +204,7 @@ async def run_docker_task(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             start_new_session=True,
+            env=process_env,
         )
     except FileNotFoundError:
         yield {"type": "error", "message": "Docker not found. Ensure Docker is installed and running."}

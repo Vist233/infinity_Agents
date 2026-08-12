@@ -17,7 +17,7 @@ mkdir -p "$dist_root" "$work_root" "$output_root/.pyinstaller"
 export PYINSTALLER_CONFIG_DIR="$output_root/.pyinstaller"
 cd "$desktop_dir"
 
-python -m PyInstaller imagejudge-macos.spec --noconfirm --clean \
+python -m PyInstaller imagejudge.spec --noconfirm --clean \
   --distpath "$dist_root" --workpath "$work_root"
 
 app_path="$dist_root/ImageJudge.app"
