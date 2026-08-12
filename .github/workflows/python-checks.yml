@@ -25,8 +25,6 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Run unit tests
-        env:
-          # Tests replace the pool with a fake before startup; this only keeps
-          # configuration importable without a production database secret.
-          DATABASE_URL: postgresql://test:test@127.0.0.1:5432/infinity_test
+        # Tests that require real PostgreSQL/Redis intentionally skip unless
+        # the corresponding service URLs are explicitly provided.
         run: pytest -q
