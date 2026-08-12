@@ -171,6 +171,9 @@ class TestDockerRuntimeCancellation:
         cancel_event = asyncio.Event()
 
         proc_mock = AsyncMock()
+        # AsyncMock's default pid coerces to 1 on Linux. Keep the test from
+        # ever signalling a real process group while exercising cancellation.
+        proc_mock.pid = 99999999
         proc_mock.stdout.readline = AsyncMock(side_effect=[b"line1\n", b""])
         proc_mock.wait = AsyncMock(return_value=None)
         proc_mock.returncode = 0
