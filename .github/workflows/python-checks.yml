@@ -39,4 +39,14 @@ jobs:
           # Load only the project-supported asyncio plugin for deterministic CI.
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
-          python -m pytest -p pytest_asyncio.plugin -q
+          set +e
+          python -m pytest -p pytest_asyncio.plugin -q &
+          pytest_pid=$!
+          while kill -0 "$pytest_pid" 2>/dev/null; do
+            echo "pytest is still finalizing (pid=$pytest_pid)"
+            sleep 2
+          done
+          wait "$pytest_pid"
+          pytest_status=$?
+          echo "pytest exit code: $pytest_status"
+          exit "$pytest_status"
