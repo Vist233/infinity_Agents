@@ -120,7 +120,11 @@ def client(monkeypatch):
     })()
 
     monkeypatch.setattr(backend_app_module, "get_redis_client", lambda: fake_redis)
-    yield TestClient(backend_app_module.app)
+    client = TestClient(backend_app_module.app)
+    try:
+        yield client
+    finally:
+        client.close()
 
 
 class TestCancelEndpoint:
