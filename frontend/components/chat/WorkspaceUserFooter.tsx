@@ -2,28 +2,19 @@
 
 import { LogIn, LogOut } from "lucide-react";
 import { useEffect, useState } from "react";
+import { getCurrentUser, logout as logoutCurrentUser, type CurrentUser } from "@/lib/api/auth";
 import { useLanguage } from "@/lib/i18n";
-import { getApiBase, redirectToLogin, withCsrfHeader } from "@/lib/runtime-config";
-
-interface CurrentUser {
-  user_id?: string;
-  email?: string | null;
-}
+import { redirectToLogin } from "@/lib/runtime-config";
 
 /** Shared account strip for every desktop/mobile workspace drawer. */
 export function WorkspaceUserFooter() {
   const { t } = useLanguage();
   const [user, setUser] = useState<CurrentUser | null>(null);
-  const [loaded, setLoaded] = useState(process.env.NODE_ENV === "test");
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (process.env.NODE_ENV === "test") return;
     let cancelled = false;
-    fetch(`${getApiBase()}/auth/me`, { credentials: "include" })
-      .then(async (response) => {
-        if (!response.ok) return null;
-        return (await response.json()) as CurrentUser;
-      })
+    getCurrentUser()
       .then((nextUser) => {
         if (!cancelled) {
           setUser(nextUser);
@@ -49,15 +40,11 @@ export function WorkspaceUserFooter() {
     );
   }
 
-  const label = user.email || user.user_id || t("account.signedIn");
-  const logout = async () => {
+  const label = user.name || user.email || user.id || t("account.signedIn");
+  const handleLogout = async () => {
     const returnTo = `${window.location.pathname}${window.location.search}`;
     try {
-      await fetch(`${getApiBase()}/auth/logout`, {
-        method: "POST",
-        credentials: "include",
-        headers: withCsrfHeader(),
-      });
+      await logoutCurrentUser();
     } finally {
       window.location.assign(`/auth/login?return_to=${encodeURIComponent(returnTo)}`);
     }
@@ -70,7 +57,7 @@ export function WorkspaceUserFooter() {
         type="button"
         aria-label={t("account.logout")}
         title={t("account.logout")}
-        onClick={() => { void logout(); }}
+        onClick={() => { void handleLogout(); }}
         className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-zinc-500 hover:text-zinc-900"
       >
         <LogOut size={13} />{t("account.logout")}
