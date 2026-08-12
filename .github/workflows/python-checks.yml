@@ -31,22 +31,31 @@ jobs:
           mkdir -p "$MPLCONFIGDIR"
           python -c 'import os; import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt; plt.figure(); plt.plot([0, 1], [0, 1]); plt.savefig(os.path.join(os.environ["MPLCONFIGDIR"], "warmup.png")); plt.close("all")'
 
-      - name: Run unit tests
-        # Tests that require real PostgreSQL/Redis intentionally skip unless
-        # the corresponding service URLs are explicitly provided.
+      # Keep each pytest process below the hosted runner's short command
+      # cancellation threshold while still running the complete test suite.
+      - name: Run core unit tests
         env:
-          # The hosted runner may provide unrelated global pytest plugins.
-          # Load only the project-supported asyncio plugin for deterministic CI.
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-        run: |
-          set +e
-          python -m pytest -p pytest_asyncio.plugin -q &
-          pytest_pid=$!
-          while kill -0 "$pytest_pid" 2>/dev/null; do
-            echo "pytest is still finalizing (pid=$pytest_pid)"
-            sleep 2
-          done
-          wait "$pytest_pid"
-          pytest_status=$?
-          echo "pytest exit code: $pytest_status"
-          exit "$pytest_status"
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_*.py
+
+      - name: Run search tool tests
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: >-
+          python -m pytest -p pytest_asyncio.plugin -q
+          tests/tools/test_arxiv_agno.py
+          tests/tools/test_file_tools.py
+          tests/tools/test_literature_search.py
+
+      - name: Run paper search tests
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/tools/test_paper_search.py
+
+      - name: Run plotting and image tool tests
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: >-
+          python -m pytest -p pytest_asyncio.plugin -q
+          tests/tools/test_plotly_and_image_tools.py
+          tests/tools/test_python_plotter.py
