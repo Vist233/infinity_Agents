@@ -14,15 +14,15 @@ import { TaskConfirmationCard } from "@/components/analysis/TaskConfirmationCard
 import { MobileWorkspaceMenu } from "@/components/chat/MobileWorkspaceMenu";
 import { WorkspaceUserFooter } from "@/components/chat/WorkspaceUserFooter";
 
-/** Shared workspace used by the Analysis Agent and Chat Agent routes. */
-export function ChatWorkspace({ mode = "analysis" }: { mode?: "analysis" | "chat" }) {
+/** Workspace for the Analysis Agent conversation. */
+export function ChatWorkspace() {
   const router = useRouter();
   const controller = useChatController();
   const { t } = useLanguage();
   return (
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
       <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
-        <AgentNav active={mode} onNavigate={(path) => router.push(path)} />
+        <AgentNav active="analysis" onNavigate={(path) => router.push(path)} />
         <Button
           variant="outline"
           className="justify-start gap-2 bg-white/90 border-[var(--hairline)] shadow-sm hover:bg-white mt-3 rounded-xl"
@@ -61,7 +61,7 @@ export function ChatWorkspace({ mode = "analysis" }: { mode?: "analysis" | "chat
         <header className="h-14 border-b border-[var(--hairline)] flex items-center px-4 justify-between sticky top-0 bg-[var(--surface-1)] backdrop-blur-xl z-10 print:hidden">
           <div className="flex items-center gap-2">
             <MobileWorkspaceMenu
-              active={mode}
+              active="analysis"
               sessions={controller.state.sessions}
               currentSessionId={controller.state.sessionId}
               editingSessionId={controller.state.editingSessionId}
@@ -78,7 +78,7 @@ export function ChatWorkspace({ mode = "analysis" }: { mode?: "analysis" | "chat
               onCancelDelete={controller.cancelDeleteSession}
               onConfirmDelete={(session) => { void controller.confirmDeleteSession(session); }}
             />
-            <div className="text-sm font-semibold tracking-tight text-zinc-700">{t(mode === "chat" ? "nav.chatAgent" : "nav.analysis")}</div>
+            <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("nav.analysis")}</div>
           </div>
           <div className="flex items-center gap-2">
             {controller.authStatus === "unauthenticated" ? (
@@ -92,7 +92,7 @@ export function ChatWorkspace({ mode = "analysis" }: { mode?: "analysis" | "chat
 
         <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="max-w-5xl mx-auto w-full p-4 md:p-6 space-y-4">
-            {mode === "analysis" && controller.taskConfirmationRequested && (
+            {controller.taskConfirmationRequested && (
               <TaskConfirmationCard onCreated={() => {
                 controller.clearTaskConfirmation();
                 void controller.retryLoadSessions();
@@ -107,7 +107,6 @@ export function ChatWorkspace({ mode = "analysis" }: { mode?: "analysis" | "chat
               scrollRef={controller.scrollRef}
               authStatus={controller.authStatus}
               onLogin={redirectToLogin}
-              agentMode={mode}
             />
           </div>
         </div>
@@ -127,7 +126,6 @@ export function ChatWorkspace({ mode = "analysis" }: { mode?: "analysis" | "chat
           }}
           onDismissError={controller.dismissError}
           unauthenticated={controller.authStatus === "unauthenticated"}
-          agentMode={mode}
         />
       </main>
     </div>

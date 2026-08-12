@@ -11,7 +11,7 @@ dependencies = [
     "claude-agent-sdk>=0.1.27",
     "fastapi>=0.128.0",
     "openai>=2.16.0",
-    "pypdf>=6.6.2",
+    "pypdf>=6.15.0",
     "typing>=3.10.0.0",
     "uvicorn>=0.40.0",
 ]
@@ -20,6 +20,7 @@ dependencies = [
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
     "integration: requires external services or live network access",
 ]

@@ -3719,7 +3719,11 @@ async def freeze_task_spec_endpoint(
 ):
     pool = app.state.db_pool
     spec = await get_task_spec(pool, task_spec_id)
-    if user and (not spec or not await user_can_access_project(pool, str(spec["project_id"]), user.user_id)):
+    if user and (
+        not spec
+        or str(spec.get("created_by")) != str(user.user_id)
+        or not await user_can_access_project(pool, str(spec["project_id"]), user.user_id)
+    ):
         raise HTTPException(status_code=404, detail="TaskSpec not found")
     frozen = await freeze_task_spec(pool, task_spec_id)
     if not frozen:
@@ -3793,11 +3797,15 @@ async def create_dataset_endpoint(
     if user and not await user_can_access_project(pool, request.project_id, user.user_id):
         raise HTTPException(status_code=404, detail="Project not found")
     async with pool.acquire() as conn:
-        spec_project = await conn.fetchval(
-            "SELECT project_id FROM task_specs WHERE task_spec_id = $1::uuid",
+        spec = await conn.fetchrow(
+            "SELECT project_id, created_by FROM task_specs WHERE task_spec_id = $1::uuid",
             request.task_spec_id,
         )
-    if spec_project is None or str(spec_project) != str(request.project_id):
+    if (
+        spec is None
+        or str(spec["project_id"]) != str(request.project_id)
+        or (user and str(spec["created_by"]) != str(user.user_id))
+    ):
         raise HTTPException(status_code=404, detail="TaskSpec not found")
     logical_dataset_name = FilePath(request.original_filename or "dataset.bin").name
     if user:
