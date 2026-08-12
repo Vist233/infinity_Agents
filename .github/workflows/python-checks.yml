@@ -33,62 +33,85 @@ jobs:
 
       # Keep each pytest process below the hosted runner's short command
       # cancellation threshold while still running the complete test suite.
-      - name: Run core tests 1
+      - name: Run core tests 01
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-        run: >-
-          python -m pytest -p pytest_asyncio.plugin -q
-          tests/test_analysis_agent.py
-          tests/test_analysis_contract.py
-          tests/test_app.py
-          tests/test_artifact_download.py
-          tests/test_auth_and_streaming.py
-          tests/test_auth_flow.py
-          tests/test_cancellation.py
-          tests/test_concurrency_recovery.py
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_analysis_agent.py tests/test_analysis_contract.py
 
-      - name: Run core tests 2
+      - name: Run core tests 02
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-        run: >-
-          python -m pytest -p pytest_asyncio.plugin -q
-          tests/test_dataset_safety.py
-          tests/test_db_rls.py
-          tests/test_direct_runtime.py
-          tests/test_fault_injection.py
-          tests/test_model_gateway.py
-          tests/test_paper_agent_runner.py
-          tests/test_paper_reader_workflow.py
-          tests/test_papers_repo_pg.py
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_app.py tests/test_artifact_download.py
 
-      - name: Run core tests 3
+      - name: Run core tests 03
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-        run: >-
-          python -m pytest -p pytest_asyncio.plugin -q
-          tests/test_provider.py
-          tests/test_pubmed_pmc.py
-          tests/test_pubmed_tools.py
-          tests/test_rate_limit.py
-          tests/test_redis_workers.py
-          tests/test_regression.py
-          tests/test_retry_and_recovery.py
-          tests/test_search_papers.py
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_auth_and_streaming.py tests/test_auth_flow.py
 
-      - name: Run core tests 4
+      - name: Run core tests 04
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-        run: >-
-          python -m pytest -p pytest_asyncio.plugin -q
-          tests/test_security.py
-          tests/test_security_boundaries.py
-          tests/test_sse_reconnection.py
-          tests/test_task_api.py
-          tests/test_task_integration_pg.py
-          tests/test_task_ownership.py
-          tests/test_task_state_machine.py
-          tests/test_verifier.py
-          tests/test_worker_enrollment.py
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_cancellation.py tests/test_concurrency_recovery.py
+
+      - name: Run core tests 05
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_dataset_safety.py tests/test_db_rls.py
+
+      - name: Run core tests 06
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_direct_runtime.py tests/test_fault_injection.py
+
+      - name: Run core tests 07
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_model_gateway.py tests/test_paper_agent_runner.py
+
+      - name: Run core tests 08
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_paper_reader_workflow.py tests/test_papers_repo_pg.py
+
+      - name: Run core tests 09
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_provider.py tests/test_pubmed_pmc.py
+
+      - name: Run core tests 10
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_pubmed_tools.py tests/test_rate_limit.py
+
+      - name: Run core tests 11
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_redis_workers.py tests/test_regression.py
+
+      - name: Run core tests 12
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_retry_and_recovery.py tests/test_search_papers.py
+
+      - name: Run core tests 13
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_security.py tests/test_security_boundaries.py
+
+      - name: Run core tests 14
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_sse_reconnection.py tests/test_task_api.py
+
+      - name: Run core tests 15
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_task_integration_pg.py tests/test_task_ownership.py
+
+      - name: Run core tests 16
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_task_state_machine.py tests/test_verifier.py tests/test_worker_enrollment.py
 
       - name: Run search tool tests
         env:
