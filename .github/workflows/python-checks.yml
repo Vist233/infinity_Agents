@@ -12,12 +12,15 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
         run: |
@@ -31,4 +34,4 @@ jobs:
           # The hosted runner may provide unrelated global pytest plugins.
           # Load only the project-supported asyncio plugin for deterministic CI.
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-        run: python -m pytest -p pytest_asyncio.plugin -vv -s
+        run: python -m pytest -p pytest_asyncio.plugin -q
