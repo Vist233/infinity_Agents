@@ -44,10 +44,12 @@ describe("ImageJudge example workspace", () => {
     expect(winLink.getAttribute("href")).toBe(WINDOWS_DOWNLOAD_URL);
     expect(linuxLink.getAttribute("href")).toBe(LINUX_DOWNLOAD_URL);
     expect(screen.getByRole("link", { name: "查看发行说明" }).getAttribute("href")).toBe("https://github.com/Vist233/infinity_Agents/releases/latest");
+    expect(screen.getByText("ImageJudge 是 Infinity Agents 的本地图像数据工具：用参考图和自然语言规则批量整理目标图片，生成可复核的结构化分类结果，并将结果作为后续科研分析的数据输入。")).toBeDefined();
+    expect(screen.queryByText("ImageJudge 桌面应用下载入口已收起到这里，不打断示例分析。")).toBeNull();
     expect(screen.queryByText("参考图片")).toBeNull();
   });
 
-  it("runs an explicit local preview demo without presenting a fake judgment", async () => {
+  it("keeps file previews without a local demo status or run action", async () => {
     renderPage();
     fireEvent.click(screen.getAllByRole("button", { name: /叶片病斑等级示例/ })[0]);
     const inputs = document.querySelectorAll('input[type="file"]');
@@ -56,13 +58,12 @@ describe("ImageJudge example workspace", () => {
 
     fireEvent.change(inputs[0], { target: { files: [reference] } });
     fireEvent.change(inputs[1], { target: { files: [target] } });
-    expect(screen.getByText("两张图片已准备好，可以运行本地演示。")).toBeDefined();
-
-    fireEvent.click(screen.getByRole("button", { name: "运行本地演示" }));
-    expect(screen.getByText("正在验证本地图片输入…")).toBeDefined();
     await waitFor(() => {
-      expect(screen.getByText(/本地演示完成：已读取两张图片/)).toBeDefined();
+      expect(screen.getByAltText("reference.png")).toBeDefined();
+      expect(screen.getByAltText("target.png")).toBeDefined();
     });
+    expect(screen.queryByText("本地演示状态")).toBeNull();
+    expect(screen.queryByRole("button", { name: "运行本地演示" })).toBeNull();
     expect(screen.queryByText("上传图片后，这里显示判断结果。")).toBeNull();
   });
 });
