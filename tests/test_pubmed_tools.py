@@ -103,8 +103,7 @@ def test_pubmed_pmc_pdf_url_resolution(monkeypatch, tmp_path: Path):
 
     tool = PubMedSearchTools(cache_dir=tmp_path / "cache", cache_ttl=60)
     # The true test of _batch_get_pubmed_pmc_pdf_urls since it runs elink
-    import Bio.Entrez as Entrez
-    urls = tool._batch_get_pubmed_pmc_pdf_urls(Entrez, ["12345678"])
+    urls = tool._batch_get_pubmed_pmc_pdf_urls(fake_entrez, ["12345678"])
     assert "12345678" in urls
     assert urls["12345678"] == "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9999999/pdf"
 
