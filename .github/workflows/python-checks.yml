@@ -27,4 +27,11 @@ jobs:
       - name: Run unit tests
         # Tests that require real PostgreSQL/Redis intentionally skip unless
         # the corresponding service URLs are explicitly provided.
-        run: pytest -q
+        run: |
+          pytest -q &
+          test_pid=$!
+          while kill -0 "$test_pid" 2>/dev/null; do
+            echo "pytest is still finishing..."
+            sleep 2
+          done
+          wait "$test_pid"
