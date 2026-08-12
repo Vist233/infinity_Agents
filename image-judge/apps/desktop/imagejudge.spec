@@ -1,10 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller onedir 规格（文档 §17.1、T026）。
+"""PyInstaller desktop packaging specification (T026).
 
 构建：在 apps/desktop 目录执行
     pyinstaller imagejudge.spec --noconfirm
-产物：apps/desktop/dist/ImageJudge/ImageJudge.exe
+产物：Windows/Linux 为 onedir，macOS 为 ImageJudge.app。
 """
+from PyInstaller.building.osx import BUNDLE
 from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
@@ -69,3 +70,20 @@ coll = COLLECT(
     upx_exclude=[],
     name="ImageJudge",
 )
+
+# PyInstaller's normal onedir output is correct for Windows and Linux. On
+# macOS, wrap the same collected files in a native application bundle so the
+# distribution script can sign and archive a real .app rather than a bare
+# executable directory.
+if __import__("sys").platform == "darwin":
+    app = BUNDLE(
+        coll,
+        name="ImageJudge.app",
+        bundle_identifier="com.zhangyvjing.imagejudge",
+        version="0.2.0",
+        info_plist={
+            "CFBundleDisplayName": "ImageJudge",
+            "LSMinimumSystemVersion": "13.0",
+            "NSHighResolutionCapable": True,
+        },
+    )
