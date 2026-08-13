@@ -31,6 +31,9 @@ Analysis/Coding task control uses the same authenticated browser session:
   generic `POST /api/tasks` requires an Agent confirmation; the authenticated
   Task Center uses the dedicated direct route)
 - `GET/POST /api/worker-enrollments` and `POST /api/worker-enrollments/:id/revoke`
+- `GET /api/admin/public-worker-pool` and `POST /api/admin/public-workers` (superuser only)
+- `GET /api/admin/public-workers/:id/credential`, `POST .../:id/rotate`, and
+  `POST .../:id/revoke` (superuser only)
 - `POST /api/tasks/:id/cancel`
 - `GET /api/tasks/:id/events` and `/events/stream`
 - `GET /api/tasks/:id/artifacts` and `GET /api/artifacts/:id`
@@ -48,13 +51,23 @@ Task API:
 
 ## Worker Control API
 
-The Task Center's collapsed “Add Worker” card creates a persistent machine
-registration through the authenticated `POST /api/worker-enrollments` endpoint.
-Only `namespace` is supplied by the browser. Namespace is reusable, so one
-user can create multiple Worker IDs in the same scope. The server assigns the
-trust level from the verified Zhang Auth role: only a superuser receives
-`owner_trusted`; ordinary users and students receive `institution_trusted`.
-The server returns a non-expiring opaque credential once for local setup:
+The Task Center's collapsed “Add Worker” card creates a persistent user-owned
+machine registration through the authenticated `POST /api/worker-enrollments`
+endpoint. Only `namespace` is supplied by the browser. Namespace is reusable,
+so one user can create multiple Worker IDs in the same scope. The server
+assigns the trust level from the verified Zhang Auth role: only a superuser
+receives `owner_trusted`; ordinary users and students receive
+`institution_trusted`. A user-owned Worker can only poll tasks created by its
+owner.
+
+The superuser-only Public Worker panel manages a platform-owned public pool.
+The first production setup creates two independent persistent registrations in
+the fixed `infinity-public` Namespace. Each receives a server-generated Worker
+ID and its own recoverable credential. Public Workers are the fallback for all
+users' queued tasks when the task owner's own Worker is busy or offline; they
+are not visible to ordinary users.
+
+Both registration types use a non-expiring opaque credential:
 
 ```text
 POST /api/worker-enrollments
@@ -63,13 +76,18 @@ POST /api/worker-enrollments
     "credential_expires_at": null, "persistent": true, "one_time": false }
 ```
 
-The raw credential is never stored as plaintext in D1 or returned by the list
-endpoint. `worker_registrations` stores its SHA-256 digest plus an AES-GCM
+The raw credential is never stored as plaintext in D1 or returned by a normal
+list endpoint. `worker_registrations` stores its SHA-256 digest plus an AES-GCM
 encrypted copy; the encryption key is the `WORKER_CREDENTIAL_ENCRYPTION_KEY`
 Cloudflare Secret and never enters D1, the browser bundle, or logs. The owner
-can explicitly retrieve or rotate the persistent credential through the
-authenticated Task Center API. It must not be committed or placed in a browser
-bundle.
+can explicitly retrieve or rotate a user credential, while only a verified
+superuser can retrieve or rotate a public credential. Credentials must not be
+committed or placed in a browser bundle.
+
+Every task uses the `owner_then_public` dispatch policy: an online idle Worker
+owned by the task creator gets the first offer; a public Worker can receive the
+task only when all owner Workers are busy/offline. The D1 offer and fencing
+checks remain authoritative under races.
 
 Before polling, a persistent Worker performs a reverse handshake. D1 keeps one
 short lease per `worker_id + namespace`; a second active instance using the same
@@ -140,11 +158,13 @@ one-time bootstrap path while pre-existing clients are migrated.
 
 ### Local Docker execution
 
-`docker-compose.cloudflare-workers.yml` starts two local Docker Workers without
+`docker-compose.cloudflare-workers.yml` starts two Docker Workers without
 PostgreSQL or a second Redis container. Each service uses a separate local env
 file with `CONTROL_BASE_URL`, one server-created Worker ID and credential, a
 unique `WORKER_INSTANCE_ID`, the existing remote `REDIS_URL`, and the provider
-variables inherited from the user's local shell. The Worker downloads exact
+variables inherited from the user's local shell. The same compose shape is
+used for the two platform public Workers; their credentials come from the
+superuser Public Worker panel. The Worker downloads exact
 Attempt resources over HTTPS, invokes the Claude Code CLI directly inside that
 same container with Goal-Driven instructions, and uploads results to R2
 quarantine. It never mounts the host Docker socket and never starts Docker
@@ -199,7 +219,7 @@ the Git repository:
 ```sh
 npx wrangler secret put STEPFUN_API_KEY
 npx wrangler secret put ZHANG_AUTH_CLIENT_SECRET
-npx wrangler secret put WORKER_ENROLLMENT_ADMIN_USER_IDS
+npx wrangler secret put WORKER_CREDENTIAL_ENCRYPTION_KEY
 npx wrangler secret put IMAGE_JUDGE_ZHANG_AUTH_CLIENT_SECRET
 npx wrangler secret put IMAGE_JUDGE_TOKEN_SIGNING_SECRET
 npx wrangler secret put IMAGE_JUDGE_DASHSCOPE_API_KEY
@@ -209,7 +229,10 @@ npx wrangler secret put IMAGE_JUDGE_DASHSCOPE_API_KEY
 running. The execution Workers never receive this secret: they finalize into
 `verification_pending`, while the verifier checks and publishes the result.
 If the verifier is stopped, the secret may remain configured but no new result
-is promoted. Redis on `zhangbot` is intentionally not a Worker binding: the
+is promoted. The two public execution containers are external to the
+Cloudflare Edge runtime; Cloudflare provides the HTTPS control plane, D1 and
+R2, while the containers execute Claude Code. Redis on `zhangbot` is
+intentionally not a Worker binding: the
 deployed Worker uses D1/R2 only, while the local execution Workers use the
 existing Redis service.
 

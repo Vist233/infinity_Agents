@@ -26,17 +26,8 @@ export interface TaskItem {
   created_at: string;
 }
 
-export interface WorkerEnrollmentInfo {
-  worker_id: string;
-  namespace: string;
-  credential: string;
-  persistent: boolean;
-  one_time: boolean;
-}
-
-// Compatibility contracts retained for the legacy Task Center cards that are
-// still shipped on the Cloudflare branch. The current direct bundle endpoint
-// remains the preferred path for the new Task Center UI.
+// Task input contracts shared by the Analysis confirmation card and the direct
+// Task Center submission path.
 export interface ProjectInfo {
   project_id: string;
   name: string;
@@ -83,6 +74,20 @@ export interface WorkerRegistration {
   created_at: string | null;
   revoked_at: string | null;
   credential_available?: boolean;
+  worker_kind?: "public" | "user" | string;
+  pool_id?: string | null;
+}
+
+export interface PublicWorkerPool {
+  pool_id: string;
+  kind: "public";
+  namespace: string;
+  worker_count: number;
+}
+
+export interface PublicWorkerPoolResponse {
+  pool: PublicWorkerPool;
+  workers: WorkerRegistration[];
 }
 
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
@@ -109,10 +114,15 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
       if (payload && typeof payload.detail === "string") {
         detail = payload.detail;
       }
+      if (payload?.error?.message && typeof payload.error.message === "string") {
+        detail = payload.error.message;
+      }
     } catch {
       // keep default detail
     }
-    throw new Error(detail);
+    const error = new Error(detail) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
   return response.json() as Promise<T>;
 }
@@ -217,6 +227,39 @@ export async function rotateWorkerCredential(workerId: string, namespace: string
   );
 }
 
+export async function getPublicWorkerPool(): Promise<PublicWorkerPoolResponse> {
+  return requestJson<PublicWorkerPoolResponse>(`${getApiBase()}/api/admin/public-worker-pool`);
+}
+
+export async function createPublicWorker(): Promise<WorkerEnrollmentResponse & {
+  worker_kind: "public";
+  pool_id: string;
+}> {
+  return requestJson(`${getApiBase()}/api/admin/public-workers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+}
+
+export async function getPublicWorkerCredential(workerId: string): Promise<WorkerEnrollmentResponse & {
+  worker_kind: "public";
+  pool_id: string;
+}> {
+  return requestJson(`${getApiBase()}/api/admin/public-workers/${encodeURIComponent(workerId)}/credential`);
+}
+
+export async function rotatePublicWorkerCredential(workerId: string): Promise<WorkerEnrollmentResponse & {
+  worker_kind: "public";
+  pool_id: string;
+}> {
+  return requestJson(`${getApiBase()}/api/admin/public-workers/${encodeURIComponent(workerId)}/rotate`, { method: "POST" });
+}
+
+export async function revokePublicWorker(workerId: string): Promise<{ worker_id: string; status: string }> {
+  return requestJson(`${getApiBase()}/api/admin/public-workers/${encodeURIComponent(workerId)}/revoke`, { method: "POST" });
+}
+
 export async function submitTaskBundle(input: {
   methodFile: File;
   datasetFile: File;
@@ -236,14 +279,6 @@ export async function submitTaskBundle(input: {
 export async function listTasks(limit = 50): Promise<TaskItem[]> {
   const data = await requestJson<{ tasks: TaskItem[] }>(`${getApiBase()}/api/tasks?limit=${limit}`);
   return data.tasks || [];
-}
-
-export async function issueWorkerEnrollment(input: { worker_id: string; namespace: string }): Promise<WorkerEnrollmentInfo> {
-  return requestJson(`${getApiBase()}/api/worker-enrollments`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
 }
 
 export async function cancelTask(taskId: string): Promise<{ status: string }> {

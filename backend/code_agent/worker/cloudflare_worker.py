@@ -99,8 +99,10 @@ class CloudflareWorkerConfig:
         redis_url = _optional("REDIS_URL")
         provider_key = _optional("ANTHROPIC_API_KEY")
         provider_token = _optional("ANTHROPIC_AUTH_TOKEN")
-        provider_base = _optional("ANTHROPIC_BASE_URL")
-        provider_model = _optional("ANTHROPIC_MODEL")
+        provider_base = _required("ANTHROPIC_BASE_URL")
+        provider_model = _required("ANTHROPIC_MODEL")
+        if not provider_key and not provider_token:
+            raise SystemExit("ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is required")
         capabilities = ["cloudflare-claude-worker-v1", os.name, "claude-code"]
         if redis_url:
             capabilities.append("redis-configured")

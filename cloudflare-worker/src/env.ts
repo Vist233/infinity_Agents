@@ -38,7 +38,8 @@ export interface Env {
   RESOURCE_BUCKET?: R2Bucket;
   TASK_UPLOAD_MAX_BYTES?: string;
   TASK_ARTIFACT_MAX_BYTES?: string;
-  WORKER_ENROLLMENT_ADMIN_USER_IDS?: string;
+  PUBLIC_WORKER_POOL_ID?: string;
+  PUBLIC_WORKER_NAMESPACE?: string;
   // AES-GCM key used to keep a recoverable copy of persistent Worker
   // credentials encrypted at rest. The raw key is configured as a secret.
   WORKER_CREDENTIAL_ENCRYPTION_KEY?: string;

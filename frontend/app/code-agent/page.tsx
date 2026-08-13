@@ -6,7 +6,8 @@ import { useLanguage } from "@/lib/i18n";
 import { AgentNav } from "@/components/chat/AgentNav";
 import { MobileWorkspaceMenu } from "@/components/chat/MobileWorkspaceMenu";
 import { TaskConfirmationCard } from "@/components/analysis/TaskConfirmationCard";
-import { WorkerManagementCard } from "@/components/analysis/WorkerManagementCard";
+import { WorkerEnrollmentPanel } from "@/components/tasks/WorkerEnrollmentPanel";
+import { PublicWorkerAdminPanel } from "@/components/tasks/PublicWorkerAdminPanel";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ListTodo, Plus, RefreshCw } from "lucide-react";
@@ -171,7 +172,8 @@ export default function CodeAgentPage() {
                 </div>
               </section>
 
-              <WorkerManagementCard />
+              <WorkerEnrollmentPanel />
+              <PublicWorkerAdminPanel />
             </div>
           </div>
         </ScrollArea>

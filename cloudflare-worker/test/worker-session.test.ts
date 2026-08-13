@@ -80,4 +80,37 @@ describe("persistent Worker reverse handshake", () => {
     expect(response.status).toBe(428);
     expect(await response.json()).toMatchObject({ error: { code: "WORKER_SESSION_REQUIRED" } });
   });
+
+  it("connects a platform public Worker without a browser user owner", async () => {
+    const { env, db } = makeEnv();
+    const credential = "wc-public-credential";
+    db.seedPersistentWorker({
+      worker_id: "public-worker-a",
+      namespace: "infinity-public",
+      user_id: "system:public-workers",
+      credential_hash: await sha256(credential),
+      status: "active",
+      revoked_at: null,
+      credential_expires_at: null,
+      trust_level: "owner_trusted",
+      worker_kind: "public",
+      pool_id: "public-default",
+      owner_user_id: null,
+    });
+    const response = await worker.fetch(
+      new Request("https://app.test/api/worker/v1/connect", {
+        method: "POST",
+        headers: { ...headers(credential), "content-type": "application/json" },
+        body: JSON.stringify({ worker_id: "public-worker-a", namespace: "infinity-public", instance_id: "public-instance-a-12345678" }),
+      }),
+      env,
+    );
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      worker_id: "public-worker-a",
+      namespace: "infinity-public",
+      trust_level: "owner_trusted",
+      connected: true,
+    });
+  });
 });

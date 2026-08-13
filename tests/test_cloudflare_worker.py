@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from unittest.mock import patch
+
+import pytest
 
 from backend.code_agent.worker.cloudflare_worker import (
     CloudflareControlClient,
@@ -49,6 +52,18 @@ def test_connect_does_not_send_provider_secret(monkeypatch, tmp_path):
     assert body["provider_model"] == "model-a"
     assert "anthropic_api_key" not in json.dumps(body)
     assert "local-provider-secret" not in json.dumps(body)
+
+
+def test_from_env_requires_provider_configuration(monkeypatch):
+    with patch.dict(os.environ, {}, clear=True):
+        monkeypatch.setenv("CONTROL_BASE_URL", "https://infinity.zhangyvjing.com")
+        monkeypatch.setenv("WORKER_ID", "public-worker-local")
+        monkeypatch.setenv("WORKER_NAMESPACE", "infinity-public")
+        monkeypatch.setenv("WORKER_CREDENTIAL", "local-credential")
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://provider.example/v1")
+        monkeypatch.setenv("ANTHROPIC_MODEL", "model-a")
+        with pytest.raises(SystemExit, match="ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN"):
+            CloudflareWorkerConfig.from_env()
 
 
 def test_zip_output_is_deterministic_enough_for_upload(tmp_path):

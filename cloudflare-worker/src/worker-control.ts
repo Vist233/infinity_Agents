@@ -26,11 +26,15 @@ const DEFAULT_ARTIFACT_LIMIT = 2 * 1024 * 1024 * 1024;
 const MULTIPART_PART_SIZE = 8 * 1024 * 1024;
 const MAX_ERROR_LENGTH = 500;
 const MAX_CAPABILITIES = 32;
+type WorkerKind = "public" | "user";
 
 interface WorkerContext {
   workerId: string;
   namespace: string;
   userId: string;
+  ownerUserId: string | null;
+  poolId: string | null;
+  workerKind: WorkerKind;
   trustLevel: string;
   status: string;
   persistent: boolean;
@@ -45,6 +49,9 @@ interface EnrollmentRow {
   status: string;
   credential_expires_at: number | null;
   current_role?: string | null;
+  worker_kind?: WorkerKind | null;
+  pool_id?: string | null;
+  owner_user_id?: string | null;
 }
 
 interface AttemptRow {
@@ -145,6 +152,7 @@ async function authenticateWorker(request: Request, env: Env): Promise<WorkerCon
   const hash = await sha256(token);
   const persistent = await env.DB.prepare(
     `SELECT worker_id, namespace, user_id, trust_level, status, credential_expires_at,
+            worker_kind, pool_id, owner_user_id,
             (SELECT role FROM user_access_roles WHERE user_id = worker_registrations.user_id) AS current_role
      FROM worker_registrations
      WHERE credential_hash = ?1
@@ -157,7 +165,10 @@ async function authenticateWorker(request: Request, env: Env): Promise<WorkerCon
       workerId: persistent.worker_id,
       namespace: persistent.namespace,
       userId: persistent.user_id,
-      trustLevel: workerTrustLevelFromRole(persistent.current_role),
+      ownerUserId: persistent.owner_user_id ?? (persistent.worker_kind === "public" ? null : persistent.user_id),
+      poolId: persistent.pool_id ?? null,
+      workerKind: persistent.worker_kind === "public" ? "public" : "user",
+      trustLevel: persistent.worker_kind === "public" ? "owner_trusted" : workerTrustLevelFromRole(persistent.current_role),
       status: persistent.status,
       persistent: true,
       sessionId: workerSessionId(request),
@@ -166,6 +177,7 @@ async function authenticateWorker(request: Request, env: Env): Promise<WorkerCon
 
   const legacy = await env.DB.prepare(
     `SELECT worker_id, namespace, user_id, trust_level, status, credential_expires_at,
+            'user' AS worker_kind, NULL AS pool_id, user_id AS owner_user_id,
             (SELECT role FROM user_access_roles WHERE user_id = worker_enrollments.user_id) AS current_role
      FROM worker_enrollments
      WHERE credential_hash = ?1
@@ -178,6 +190,9 @@ async function authenticateWorker(request: Request, env: Env): Promise<WorkerCon
     workerId: legacy.worker_id,
     namespace: legacy.namespace,
     userId: legacy.user_id,
+    ownerUserId: legacy.user_id,
+    poolId: null,
+    workerKind: "user",
     trustLevel: workerTrustLevelFromRole(legacy.current_role),
     status: legacy.status,
     persistent: false,
@@ -191,6 +206,9 @@ type WorkerSessionRow = {
   session_id: string;
   instance_id: string;
   user_id: string;
+  worker_kind: WorkerKind;
+  pool_id: string | null;
+  owner_user_id: string | null;
   version: string | null;
   capabilities_json: string;
   connected_at: number;
@@ -227,12 +245,16 @@ async function claimWorkerSession(
   const result = await env.DB.prepare(
     `INSERT INTO worker_sessions
       (worker_id, namespace, session_id, instance_id, user_id, version,
-       capabilities_json, connected_at, last_seen_at, lease_expires_at, disconnected_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, NULL)
+       capabilities_json, connected_at, last_seen_at, lease_expires_at, disconnected_at,
+       worker_kind, pool_id, owner_user_id)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, NULL, ?10, ?11, ?12)
      ON CONFLICT(worker_id, namespace) DO UPDATE SET
        session_id = excluded.session_id,
        instance_id = excluded.instance_id,
        user_id = excluded.user_id,
+       worker_kind = excluded.worker_kind,
+       pool_id = excluded.pool_id,
+       owner_user_id = excluded.owner_user_id,
        version = excluded.version,
        capabilities_json = excluded.capabilities_json,
        connected_at = excluded.connected_at,
@@ -251,6 +273,9 @@ async function claimWorkerSession(
     JSON.stringify(workerCapabilities),
     now,
     now + WORKER_SESSION_TTL_SECONDS,
+    context.workerKind,
+    context.poolId,
+    context.ownerUserId,
   ).run();
   if ((result.meta?.changes ?? 0) !== 1) {
     return sessionError(
@@ -506,17 +531,58 @@ async function handlePoll(request: Request, env: Env, context: WorkerContext): P
   ).bind(context.workerId, now).first<{ attempt_id: string }>();
   if (active) return json({ offers: [], poll_after_seconds: 15, active_attempt_id: active.attempt_id });
 
-  const task = await env.DB.prepare(
-    `SELECT t.task_id, t.title, t.task_class, t.attempt_count, t.max_attempts
-     FROM tasks t
-     WHERE t.status = 'queued' AND t.created_by = ?3
-       AND (?1 <> 'student_untrusted' OR t.task_class = 'public')
-       AND NOT EXISTS (
-         SELECT 1 FROM worker_offers o
-         WHERE o.task_id = t.task_id AND o.accepted_at IS NULL AND o.expires_at > ?2
-       )
-     ORDER BY t.created_at ASC LIMIT 1`
-  ).bind(context.trustLevel, now, context.userId).first<{
+  const taskQuery = context.workerKind === "public"
+    ? `SELECT t.task_id, t.title, t.task_class, t.attempt_count, t.max_attempts
+       FROM tasks t
+       WHERE t.status = 'queued' AND t.dispatch_policy = 'owner_then_public'
+         AND (?1 <> 'student_untrusted' OR t.task_class = 'public')
+         AND NOT EXISTS (
+           SELECT 1 FROM worker_offers o
+           WHERE o.task_id = t.task_id AND o.accepted_at IS NULL
+             AND o.superseded_at IS NULL AND o.expires_at > ?2
+         )
+         AND NOT EXISTS (
+           SELECT 1
+           FROM worker_registrations wr
+           JOIN worker_sessions ws
+             ON ws.worker_id = wr.worker_id AND ws.namespace = wr.namespace
+           WHERE wr.worker_kind = 'user'
+             AND wr.owner_user_id = t.created_by
+             AND wr.status = 'active' AND wr.revoked_at IS NULL
+             AND ws.worker_kind = 'user'
+             AND ws.lease_expires_at > ?2 AND ws.disconnected_at IS NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM worker_attempts a
+               WHERE a.worker_id = wr.worker_id AND a.namespace = wr.namespace
+                 AND a.status IN ('claimed', 'running') AND a.lease_expires_at > ?2
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM worker_offers own_offer
+               WHERE own_offer.worker_id = wr.worker_id
+                 AND own_offer.namespace = wr.namespace
+                 AND own_offer.worker_kind = 'user'
+                 AND own_offer.accepted_at IS NULL
+                 AND own_offer.superseded_at IS NULL
+                 AND own_offer.expires_at > ?2
+             )
+         )
+       ORDER BY t.created_at ASC LIMIT 1`
+    : `SELECT t.task_id, t.title, t.task_class, t.attempt_count, t.max_attempts
+       FROM tasks t
+       WHERE t.status = 'queued' AND t.dispatch_policy = 'owner_then_public'
+         AND t.created_by = ?3
+         AND (?1 <> 'student_untrusted' OR t.task_class = 'public')
+         AND NOT EXISTS (
+           SELECT 1 FROM worker_offers o
+           WHERE o.task_id = t.task_id AND o.worker_kind = 'user'
+             AND o.accepted_at IS NULL AND o.superseded_at IS NULL AND o.expires_at > ?2
+         )
+       ORDER BY t.created_at ASC LIMIT 1`;
+  const task = await env.DB.prepare(taskQuery)
+    .bind(...(context.workerKind === "public"
+      ? [context.trustLevel, now]
+      : [context.trustLevel, now, context.ownerUserId ?? ""]))
+    .first<{
     task_id: string;
     title: string;
     task_class: string;
@@ -528,10 +594,37 @@ async function handlePoll(request: Request, env: Env, context: WorkerContext): P
   const offerId = id();
   const expiresAt = now + OFFER_TTL_SECONDS;
   try {
-    await env.DB.prepare(
-      `INSERT INTO worker_offers (offer_id, task_id, worker_id, namespace, expires_at, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)`
-    ).bind(offerId, task.task_id, context.workerId, context.namespace, expiresAt, now).run();
+    const insert = env.DB.prepare(
+      `INSERT INTO worker_offers
+        (offer_id, task_id, worker_id, namespace, expires_at, created_at,
+         worker_kind, priority, superseded_at)
+       SELECT ?1, task_id, ?3, ?4, ?5, ?6, ?7, ?8, NULL
+       FROM tasks
+       WHERE task_id = ?2 AND status = 'queued' AND dispatch_policy = 'owner_then_public'`
+    ).bind(
+      offerId,
+      task.task_id,
+      context.workerId,
+      context.namespace,
+      expiresAt,
+      now,
+      context.workerKind,
+      context.workerKind === "user" ? 1 : 2,
+    );
+    if (context.workerKind === "user") {
+      const supersedePublic = env.DB.prepare(
+        `UPDATE worker_offers
+         SET superseded_at = ?2
+         WHERE task_id = ?1 AND worker_kind = 'public'
+           AND accepted_at IS NULL AND superseded_at IS NULL AND expires_at > ?2`
+      ).bind(task.task_id, now);
+      const results = await env.DB.batch([supersedePublic, insert]);
+      const inserted = (results[1] as { meta?: { changes?: number } })?.meta?.changes ?? 0;
+      if (inserted !== 1) return json({ offers: [], poll_after_seconds: 5 });
+    } else {
+      const inserted = await insert.run();
+      if ((inserted.meta?.changes ?? 0) !== 1) return json({ offers: [], poll_after_seconds: 5 });
+    }
   } catch {
     return json({ offers: [], poll_after_seconds: 5 });
   }
@@ -575,7 +668,8 @@ async function handleAcceptOffer(
   const now = nowSeconds();
   const offer = await env.DB.prepare(
     `SELECT o.offer_id, o.task_id, o.expires_at, o.accepted_at,
-            t.status, t.task_class, t.lease_epoch
+            o.worker_kind, o.priority, o.superseded_at,
+            t.status, t.task_class, t.dispatch_policy, t.created_by, t.lease_epoch
      FROM worker_offers o JOIN tasks t ON t.task_id = o.task_id
      WHERE o.offer_id = ?1 AND o.worker_id = ?2 AND o.namespace = ?3`
   ).bind(offerId, context.workerId, context.namespace).first<{
@@ -583,19 +677,64 @@ async function handleAcceptOffer(
     task_id: string;
     expires_at: number;
     accepted_at: number | null;
-    status: string;
-    task_class: string;
-    lease_epoch: number;
+  status: string;
+  task_class: string;
+  dispatch_policy: string;
+  created_by: string;
+  lease_epoch: number;
+  worker_kind: WorkerKind;
+  priority: number;
+  superseded_at: number | null;
   }>();
-  if (!offer || offer.accepted_at != null || offer.expires_at <= now || offer.status !== "queued") {
+  if (!offer || offer.accepted_at != null || offer.superseded_at != null || offer.expires_at <= now || offer.status !== "queued") {
     return errorJson("Worker offer is expired or unavailable", 409, "OFFER_UNAVAILABLE");
+  }
+  if (offer.worker_kind !== context.workerKind || offer.dispatch_policy !== "owner_then_public") {
+    return errorJson("Worker offer does not belong to this Worker scope", 403, "WORKER_SCOPE_MISMATCH");
+  }
+  if (context.workerKind === "user" && offer.created_by !== context.ownerUserId) {
+    return errorJson("Worker is not allowed to accept this task", 403, "WORKER_SCOPE_MISMATCH");
+  }
+  if (context.workerKind === "public") {
+    const idleOwner = await env.DB.prepare(
+      `SELECT wr.worker_id
+       FROM worker_registrations wr
+       JOIN worker_sessions ws ON ws.worker_id = wr.worker_id AND ws.namespace = wr.namespace
+       WHERE wr.worker_kind = 'user' AND wr.owner_user_id = ?1
+         AND wr.status = 'active' AND wr.revoked_at IS NULL
+         AND ws.worker_kind = 'user' AND ws.lease_expires_at > ?2 AND ws.disconnected_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM worker_attempts a
+           WHERE a.worker_id = wr.worker_id AND a.namespace = wr.namespace
+             AND a.status IN ('claimed', 'running') AND a.lease_expires_at > ?2
+           )
+         AND NOT EXISTS (
+           SELECT 1 FROM worker_offers own_offer
+           WHERE own_offer.task_id = ?3
+             AND own_offer.worker_id = wr.worker_id
+             AND own_offer.namespace = wr.namespace
+             AND own_offer.worker_kind = 'user'
+             AND own_offer.accepted_at IS NULL
+             AND own_offer.superseded_at IS NULL
+             AND own_offer.expires_at > ?2
+         )
+       LIMIT 1`
+    ).bind(offer.created_by, now, offer.task_id).first<{ worker_id: string }>();
+    if (idleOwner) {
+      await env.DB.prepare(
+        `UPDATE worker_offers SET superseded_at = ?2
+         WHERE offer_id = ?1 AND accepted_at IS NULL AND superseded_at IS NULL`
+      ).bind(offerId, now).run();
+      return errorJson("A user Worker has priority for this task", 409, "OFFER_SUPERSEDED");
+    }
   }
   if (context.trustLevel === "student_untrusted" && offer.task_class !== "public") {
     return errorJson("Worker is not trusted for this task", 403, "TASK_TRUST_MISMATCH");
   }
   const accepted = await env.DB.prepare(
     `UPDATE worker_offers SET accepted_at = ?3
-     WHERE offer_id = ?1 AND worker_id = ?2 AND accepted_at IS NULL AND expires_at > ?3`
+     WHERE offer_id = ?1 AND worker_id = ?2 AND accepted_at IS NULL
+       AND superseded_at IS NULL AND expires_at > ?3`
   ).bind(offerId, context.workerId, now).run();
   if ((accepted.meta?.changes ?? 0) !== 1) return errorJson("Offer was already accepted", 409, "OFFER_REPLAY");
 
@@ -610,7 +749,8 @@ async function handleAcceptOffer(
        SET status = 'claimed', attempt_count = attempt_count + 1,
            lease_worker_id = ?2, lease_namespace = ?3, lease_epoch = ?4,
            lease_expires_at = ?5, lease_claim_id = ?6, updated_at = ?7
-       WHERE task_id = ?1 AND status = 'queued' AND task_class = ?8`
+       WHERE task_id = ?1 AND status = 'queued' AND task_class = ?8
+         AND dispatch_policy = 'owner_then_public'`
     ).bind(offer.task_id, context.workerId, context.namespace, epoch, leaseExpiresAt, claimId, now, offer.task_class),
     env.DB.prepare(
       `INSERT INTO worker_attempts

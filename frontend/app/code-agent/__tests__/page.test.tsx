@@ -15,9 +15,10 @@ function renderPage() {
 // Mock the Task API client so the tests never hit the network.
 vi.mock("@/lib/api/tasks", () => ({
   submitTaskBundle: vi.fn(),
-  issueWorkerEnrollment: vi.fn(),
   listTasks: vi.fn(),
   cancelTask: vi.fn(),
+  listWorkerEnrollments: vi.fn().mockResolvedValue([]),
+  getPublicWorkerPool: vi.fn().mockRejectedValue(Object.assign(new Error("forbidden"), { status: 403 })),
 }));
 
 // useRouter is not under test here.

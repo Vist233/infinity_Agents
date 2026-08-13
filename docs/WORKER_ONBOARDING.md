@@ -17,6 +17,21 @@ Mac 或 Windows 上启动，并通过 HTTPS 反向握手加入集群。
 都是 `institution_trusted`。一个凭证只绑定一个 Worker ID；同一凭证同时只能
 有一个活动实例。停止机器后会话租约过期，凭证本身不会失效。
 
+## 公共执行池（超级用户）
+
+超级用户登录任务中心后会看到“公共执行 Workers”管理卡。公共池固定使用
+`infinity-public` Namespace，第一期补齐两个独立的公共 Worker。每个 Worker
+都有服务端生成的 Worker ID 和持久 credential；两个 credential 不能互换，
+也不能在普通用户的 Worker 列表中看到。
+
+公共 Worker 的任务优先级低于任务创建者自己的在线空闲 Worker；创建者的
+Worker 忙碌或离线时，公共 Worker 才会回退领取任务。浏览器任务列表仍然只
+按登录用户过滤，公共 Worker 只收到它已经领取的 Attempt。
+
+在公共 Worker 管理卡中复制两个 credential 后，分别写入公共执行服务器的
+`worker-a.cloudflare.env` 和 `worker-b.cloudflare.env`。不要把 credential 写入
+仓库、Wrangler 配置、浏览器 Local Storage 或聊天记录。
+
 ## macOS / Windows 的轻量客户端
 
 Node 18+ 客户端只用于连接、健康检查和控制面轮询：
@@ -70,8 +85,10 @@ zsh -ic 'bash scripts/run_local_cloudflare_workers.sh'
 
 - `CONTROL_BASE_URL` 是 Cloudflare Worker 控制/API 地址，不是 D1 的直接 SQL
   地址；本地 Worker 不直接连接 D1。
-- `REDIS_URL` 指向现有远程 Redis，`WORKER_REDIS_REQUIRED=1` 时 Redis 不通就
-  不会加入集群；这套 compose 不会再启动一个本地 Redis。
+- `REDIS_URL` 不是 Cloudflare 控制面必需项。公共 Worker 默认使用
+  `WORKER_REDIS_REQUIRED=0`，只通过 HTTPS 控制面访问 D1/R2；如果某个用户自有
+  Worker 确实需要现有远程 Redis，再在本地 env 文件中填写 `REDIS_URL` 并显式
+  设置 `WORKER_REDIS_REQUIRED=1`。这套 compose 不会再启动一个本地 Redis。
 - `WORKER_CREDENTIAL` 是 Worker API 凭证，不是 Cloudflare Account API Token。
 - `ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`、
   `ANTHROPIC_MODEL` 只从本机现有 shell 环境注入 Worker 容器；不会上传到
