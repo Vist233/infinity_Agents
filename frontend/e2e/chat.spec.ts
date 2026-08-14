@@ -14,7 +14,8 @@ test("smoke routes render", async ({ page }) => {
   await expect(page.getByText("导出 PDF")).toHaveCount(0);
 
   await page.goto("/task-center");
-  await expect(page.getByText("新建任务")).toBeVisible();
+  await expect(page.getByText("任务只能从 Analysis 确认卡提交", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "确认并提交" })).toHaveCount(0);
   await expect(page.getByText("添加 Worker")).toBeVisible();
 
   await page.goto("/image-judge");

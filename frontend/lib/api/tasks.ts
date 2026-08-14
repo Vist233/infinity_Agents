@@ -28,6 +28,42 @@ export interface TaskItem {
 
 // Task input contracts shared by the Analysis confirmation card and the direct
 // Task Center submission path.
+
+export interface TaskDraft {
+  draft_id: string;
+  session_id?: string;
+  project_id?: string;
+  revision: number;
+  status: "draft" | "awaiting_user_confirmation" | "revising" | "cancelled" | "confirmed" | string;
+  title: string;
+  goal_summary: string;
+  method: {
+    filename: string;
+    size_bytes: number;
+    sha256?: string | null;
+    preview: string;
+  } | null;
+  dataset: {
+    resource_id?: string | null;
+    filename?: string | null;
+    size_bytes?: number | null;
+    sha256?: string | null;
+  };
+  missing_inputs: string[];
+  task_spec?: Record<string, unknown>;
+}
+
+export interface WorkerEnrollmentInfo {
+  worker_id: string;
+  namespace: string;
+  credential: string;
+  persistent: boolean;
+  one_time: boolean;
+}
+
+// Compatibility contracts retained for the legacy Task Center cards that are
+// still shipped on the Cloudflare branch. The current direct bundle endpoint
+// remains the preferred path for the new Task Center UI.
 export interface ProjectInfo {
   project_id: string;
   name: string;
@@ -142,10 +178,11 @@ export async function uploadMethodSource(file: File): Promise<MethodSourceInfo> 
   return requestJson(`${getApiBase()}/api/method-sources/upload`, { method: "POST", body: form });
 }
 
-export async function uploadDataset(file: File, projectId: string): Promise<DatasetUploadInfo> {
+export async function uploadDataset(file: File, projectId: string, sessionId?: string): Promise<DatasetUploadInfo> {
   const form = new FormData();
   form.append("project_id", projectId);
   form.append("file", file);
+  if (sessionId) form.append("session_id", sessionId);
   return requestJson(`${getApiBase()}/api/dataset-snapshots/upload`, { method: "POST", body: form });
 }
 
@@ -274,6 +311,33 @@ export async function submitTaskBundle(input: {
   form.append("idempotency_key", input.idempotencyKey);
   if (input.projectId) form.append("project_id", input.projectId);
   return requestJson(`${getApiBase()}/api/tasks/submit-bundle`, { method: "POST", body: form });
+}
+
+export async function getTaskDraft(draftId: string): Promise<TaskDraft> {
+  return requestJson<TaskDraft>(`${getApiBase()}/api/task-drafts/${encodeURIComponent(draftId)}`);
+}
+
+export async function cancelTaskDraft(draftId: string): Promise<{ draft_id: string; status: string }> {
+  return requestJson(`${getApiBase()}/api/task-drafts/${encodeURIComponent(draftId)}/cancel`, { method: "POST" });
+}
+
+export async function confirmTaskDraft(input: {
+  draftId: string;
+  idempotencyKey: string;
+  datasetResourceId?: string;
+  methodContent?: string;
+  title?: string;
+}): Promise<{ task_id: string; status: string; attempt_count: number; duplicate?: boolean; event_type?: "task_confirmed" | string }> {
+  return requestJson(`${getApiBase()}/api/task-drafts/${encodeURIComponent(input.draftId)}/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      idempotency_key: input.idempotencyKey,
+      dataset_resource_id: input.datasetResourceId,
+      method_content: input.methodContent,
+      title: input.title,
+    }),
+  });
 }
 
 export async function listTasks(limit = 50): Promise<TaskItem[]> {

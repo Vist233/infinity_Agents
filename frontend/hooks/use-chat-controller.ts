@@ -25,6 +25,7 @@ import {
 import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
 import { startChatStream, toFriendlyChatError, type ChatDoneEvent, type ChatEvent, type ChatStreamHandle } from "@/lib/ws/chat-stream";
 import { useLanguage } from "@/lib/i18n";
+import type { TaskDraft } from "@/lib/api/tasks";
 
 const isSocketOpen = (socket?: ChatStreamHandle | null) => {
   if (!socket) return false;
@@ -36,13 +37,6 @@ const toTokenInfo = (payload?: ChatDoneEvent["token_info"]) => ({
   response: Number(payload?.response) || 0,
   total: Number(payload?.total) || 0,
 });
-
-const TASK_CONFIRMATION_TOOLS = new Set([
-  "create_task",
-  "create_analysis_task",
-  "request_task_confirmation",
-  "submit_task_bundle",
-]);
 
 export function useChatController() {
   const { language, t } = useLanguage();
@@ -58,7 +52,7 @@ export function useChatController() {
   const sessionLoadPromiseRef = useRef<Map<string, Promise<Message[]>>>(new Map());
   const sessionsRef = useRef<SessionItem[]>([]);
   const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated">("checking");
-  const [taskConfirmationRequested, setTaskConfirmationRequested] = useState(false);
+  const [taskDraft, setTaskDraft] = useState<TaskDraft | null>(null);
 
   const sessionId = state.sessionId;
   const messages = useMemo(() => getMessagesForSession(state, sessionId), [state, sessionId]);
@@ -296,14 +290,14 @@ export function useChatController() {
   );
 
   const handleNewChat = useCallback(() => {
-    setTaskConfirmationRequested(false);
+    setTaskDraft(null);
     dispatch({ type: "reset_new_chat" });
   }, []);
 
   const handleSwitchSession = useCallback(
     (id: string) => {
       if (state.editingSessionId) return;
-      setTaskConfirmationRequested(false);
+      setTaskDraft(null);
       setSessionRunState(id, { unreadDone: false });
       dispatch({ type: "set_session_id", sessionId: id });
       dispatch({ type: "set_deleting_session", sessionId: null });
@@ -417,7 +411,6 @@ export function useChatController() {
       }
 
       const userMessage: Message = { role: "user", content: value };
-      setTaskConfirmationRequested(false);
       const baseMessages = sessionMessagesMapRef.current[targetSessionId] || [];
       const messagesForRequest = [...baseMessages, userMessage];
       dispatch({
@@ -505,13 +498,20 @@ export function useChatController() {
         if (eventPayload.type === "tool_call") {
           const toolName = eventPayload.tool_name;
           if (!toolName) return;
-          if (TASK_CONFIRMATION_TOOLS.has(toolName)) setTaskConfirmationRequested(true);
           setSessionRunState(targetSessionId!, (prev) => ({
             ...prev,
             hasReceivedToolCall: true,
             toolName,
             activeTools: prev.activeTools.includes(toolName) ? prev.activeTools : [...prev.activeTools, toolName],
           }));
+          return;
+        }
+        if (eventPayload.type === "task_draft_created" || eventPayload.type === "task_draft_updated") {
+          setTaskDraft(eventPayload.draft);
+          return;
+        }
+        if (eventPayload.type === "task_draft_cancelled") {
+          setTaskDraft((current) => current?.draft_id === eventPayload.draft_id ? null : current);
           return;
         }
         if (eventPayload.type === "done") {
@@ -663,8 +663,8 @@ export function useChatController() {
     confirmDeleteSession,
     handleSubmit,
     handleStopGeneration,
-    taskConfirmationRequested,
-    clearTaskConfirmation: () => setTaskConfirmationRequested(false),
+    taskDraft,
+    clearTaskDraft: () => setTaskDraft(null),
     authStatus,
     setError,
     appendAssistantContent,

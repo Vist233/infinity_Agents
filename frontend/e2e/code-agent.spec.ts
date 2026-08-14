@@ -68,7 +68,7 @@ const MOCK_ARTIFACTS = [
   },
 ];
 
-test("Task Center shows the new-task form and task list", async ({ page }) => {
+test("Task Center shows task history without a permanent creation form", async ({ page }) => {
   await page.route("**/api/tasks*", async (route) => {
     await route.fulfill({
       status: 200,
@@ -78,9 +78,8 @@ test("Task Center shows the new-task form and task list", async ({ page }) => {
   });
 
   await page.goto("/task-center");
-  await expect(page.getByText("执行文档", { exact: true })).toBeVisible();
-  await expect(page.getByText("数据集", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "确认并提交" })).toBeVisible();
+  await expect(page.getByText("任务只能从 Analysis 确认卡提交", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "确认并提交" })).toHaveCount(0);
   await expect(page.getByText("添加 Worker")).toBeVisible();
   // Task list
   await expect(page.getByText("DESeq2 Differential Expression")).toBeVisible();
@@ -100,7 +99,7 @@ test("legacy /code-agent/tasks index redirects to Task Center", async ({ page })
 
   await page.goto("/code-agent/tasks");
   await expect(page).toHaveURL(/\/task-center\/?$/);
-  await expect(page.getByRole("button", { name: "确认并提交" })).toBeVisible();
+  await expect(page.getByText("任务只能从 Analysis 确认卡提交", { exact: true })).toBeVisible();
 });
 
 test("legacy task detail route loads with events and artifacts", async ({ page }) => {

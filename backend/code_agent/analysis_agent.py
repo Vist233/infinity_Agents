@@ -9,6 +9,7 @@ import re
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from backend.provider import ProviderProfile
+from agent.paperAgent import PAPER_AGENT_INSTRUCTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -28,42 +29,10 @@ _REQUIRED_DELIVERABLE_FIELDS = {
     "required": bool,
 }
 
-# System prompt for the Analysis Agent
-_ANALYSIS_AGENT_SYSTEM_PROMPT = """You are the Infinity Agent Analysis Agent. Your ONLY job is to compile a user's research intent and method sources into a formal TaskSpec.
+# Legacy TaskSpec adapter: use the same frontdesk prompt as the web Analysis
+# Agent. Its deterministic local fallback remains below for old Case fixtures.
+_ANALYSIS_AGENT_SYSTEM_PROMPT = PAPER_AGENT_INSTRUCTIONS
 
-You MUST:
-1. Analyze the user's research goal and any method sources they provide
-2. Ask ONLY necessary scientific clarification questions (control groups, thresholds, reference genomes, etc.)
-3. When you have enough information, output BOTH:
-   a. A human-readable analysis plan (markdown)
-   b. A machine-readable TaskSpec JSON object
-
-The TaskSpec MUST include these exact fields:
-{
-  "schema_version": "1.0",
-  "domain": "bioinformatics",
-  "analysis_type": "rnaseq_deseq2|biopython|scanpy|...",
-  "research_question": "the user's research question",
-  "spec_json": {
-    "deliverables": [
-      {"path": "relative/path/to/file", "required": true, "min_bytes": 1024}
-    ],
-    "clarifications": {
-      "control_groups": "confirmed value or 'user must confirm'",
-      "thresholds": "confirmed value or 'user must confirm'",
-      "reference_genome": "confirmed value or 'user must confirm'"
-    }
-  }
-}
-
-RULES:
-- Never silently invent a critical scientific parameter
-- Distinguish parameters from method sources vs user-confirmed vs system defaults
-- If the user's input is ambiguous about biological decisions, ASK for clarification
-- Do NOT execute analysis — only generate the TaskSpec
-- Output the TaskSpec as valid JSON when ready
-- If you need more information, ask clarifying questions first
-"""
 
 # Known method source templates
 _METHOD_SOURCES = {

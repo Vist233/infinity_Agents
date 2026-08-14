@@ -1,6 +1,7 @@
 import type { RunPhase, TokenInfo } from "@/lib/chat-state";
 import { translate, type Language } from "@/lib/i18n";
 import { redirectToLogin, withCsrfHeader } from "@/lib/runtime-config";
+import type { TaskDraft } from "@/lib/api/tasks";
 
 export interface ChatRequestPayload {
   session_id: string;
@@ -39,7 +40,27 @@ export interface ChatErrorEvent {
   message: string;
 }
 
-export type ChatEvent = ChatStatusEvent | ChatChunkEvent | ChatToolCallEvent | ChatDoneEvent | ChatErrorEvent;
+export interface ChatTaskDraftEvent {
+  type: "task_draft_created" | "task_draft_updated";
+  draft: TaskDraft;
+}
+
+export interface ChatTaskDraftCancelledEvent {
+  type: "task_draft_cancelled";
+  draft_id: string;
+  revision?: number;
+  status: "cancelled";
+}
+
+export interface ChatTaskConfirmedEvent {
+  type: "task_confirmed";
+  task_id: string;
+  status: string;
+  attempt_count?: number;
+  duplicate?: boolean;
+}
+
+export type ChatEvent = ChatStatusEvent | ChatChunkEvent | ChatToolCallEvent | ChatTaskDraftEvent | ChatTaskDraftCancelledEvent | ChatTaskConfirmedEvent | ChatDoneEvent | ChatErrorEvent;
 
 export interface StartChatStreamOptions {
   apiBase: string;
@@ -58,7 +79,7 @@ export interface ChatStreamHandle {
 const OPEN = 1;
 const CLOSED = 3;
 
-const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "done", "error"]);
+const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "task_draft_created", "task_draft_updated", "task_draft_cancelled", "task_confirmed", "done", "error"]);
 
 export function toFriendlyChatError(message: string, language: Language = "en"): string {
   if (message.includes("paper_not_authorized_for_session")) {
@@ -92,6 +113,29 @@ export function normalizeChatEvent(rawData: unknown): ChatEvent | null {
     if (payload.type === "tool_call") {
       if (typeof payload.tool_name !== "string") return null;
       return { type: "tool_call", tool_name: payload.tool_name };
+    }
+    if (payload.type === "task_draft_created" || payload.type === "task_draft_updated") {
+      if (!payload.draft || typeof payload.draft !== "object") return null;
+      return { type: payload.type, draft: payload.draft as TaskDraft } as ChatTaskDraftEvent;
+    }
+    if (payload.type === "task_draft_cancelled") {
+      if (typeof payload.draft_id !== "string") return null;
+      return {
+        type: "task_draft_cancelled",
+        draft_id: payload.draft_id,
+        revision: Number(payload.revision) || undefined,
+        status: "cancelled",
+      };
+    }
+    if (payload.type === "task_confirmed") {
+      if (typeof payload.task_id !== "string" || typeof payload.status !== "string") return null;
+      return {
+        type: "task_confirmed",
+        task_id: payload.task_id,
+        status: payload.status,
+        attempt_count: Number.isFinite(Number(payload.attempt_count)) ? Number(payload.attempt_count) : undefined,
+        duplicate: typeof payload.duplicate === "boolean" ? payload.duplicate : undefined,
+      };
     }
     if (payload.type === "done") {
       return { type: "done", token_info: (payload.token_info as Partial<TokenInfo> | undefined) ?? undefined };
