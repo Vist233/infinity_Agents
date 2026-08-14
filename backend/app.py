@@ -47,6 +47,10 @@ from backend.db import (
     get_tool_calls_for_compression,
     upsert_session_context_compression_state,
     update_session_context_compression_state,
+    upsert_task_draft,
+    get_task_draft,
+    update_task_draft_inputs,
+    cancel_task_draft,
 )
 from backend.auth import (
     CSRF_COOKIE_NAME,
@@ -58,7 +62,7 @@ from backend.auth import (
     require_user,
     verify_websocket_token,
 )
-from backend.security import redact_secrets, safe_relative_path
+from backend.security import redact_secrets, safe_relative_path, ensure_within
 from backend.security import validate_outbound_url, validate_runtime_database_url
 from backend.secrets import decrypt_secret, encrypt_secret, secret_fingerprint
 from backend.db_rls import clear_rls_context, rls_enabled_from_env, rls_user_context, set_rls_worker, wrap_runtime_pool
@@ -644,6 +648,45 @@ _PDF_MIME_TYPES = {"application/pdf", "application/x-pdf"}
 
 def _get_session_root(session_id: str) -> FilePath:
     return _SESSIONS_ROOT / session_id
+
+
+def _session_resource_catalog_path(session_id: str) -> FilePath:
+    return ensure_within(_SESSIONS_ROOT.resolve(), _get_session_root(session_id) / "resource-catalog.json")
+
+
+def _record_session_resource(session_id: str, resource: Dict[str, Any]) -> None:
+    """Persist a sanitized resource catalog for the synchronous Agent tools."""
+    path = _session_resource_catalog_path(session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing: Dict[str, Any] = {"session_id": str(session_id), "resources": []}
+    if path.is_file() and not path.is_symlink():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing.update(loaded)
+        except (OSError, ValueError):
+            pass
+    resources = [item for item in existing.get("resources", []) if isinstance(item, dict)]
+    resources = [item for item in resources if str(item.get("resource_id")) != str(resource.get("resource_id"))]
+    resources.append({
+        "resource_id": str(resource.get("resource_id")),
+        "project_id": str(resource.get("project_id")),
+        "kind": resource.get("kind", "dataset"),
+        "logical_name": FilePath(str(resource.get("logical_name") or "resource.bin")).name,
+        "storage_key": safe_relative_path(str(resource.get("storage_key") or "")),
+        "content_type": resource.get("content_type"),
+        "file_size_bytes": int(resource.get("file_size_bytes") or 0),
+        "checksum_sha256": resource.get("checksum_sha256"),
+        "validation_result": resource.get("validation_result"),
+        "status": resource.get("status", "ready"),
+    })
+    existing["resources"] = resources[-200:]
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(existing, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _normalize_uploaded_image_path(image_path: Any) -> str:
@@ -1504,6 +1547,160 @@ def _summarize_tool_result(result: Any, max_chars: int = 400) -> str:
     return _truncate_text(text, max_chars=max_chars)
 
 
+async def _persist_task_draft_tool_result(
+    *,
+    pool,
+    session_id: str,
+    user_id: str,
+    tool_result: str,
+) -> Optional[Dict[str, Any]]:
+    """Persist a real prepare/revise draft result into the user-scoped DB."""
+    try:
+        payload = json.loads(tool_result)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("type") not in {"task_draft", "task_draft_updated"}:
+        return None
+    if str(payload.get("session_id") or "") != str(session_id):
+        logger.warning("Ignoring task draft for a different session")
+        return None
+    try:
+        draft_id = str(uuid.UUID(str(payload.get("draft_id"))))
+        uuid.UUID(session_id)
+    except (ValueError, TypeError, AttributeError):
+        logger.warning("Ignoring task draft with invalid identity")
+        return None
+
+    session_root = _get_session_root(session_id).resolve()
+    method = payload.get("method") if isinstance(payload.get("method"), dict) else None
+    if method:
+        relative_path = safe_relative_path(str(method.get("relative_path") or ""))
+        method_path = ensure_within(session_root, session_root / relative_path)
+        if not method_path.is_file() or method_path.is_symlink():
+            logger.warning("Ignoring task draft whose execution document is missing")
+            return None
+        method_size = method_path.stat().st_size
+        if method_size > TASK_INPUT_MAX_BYTES:
+            logger.warning("Ignoring task draft whose execution document exceeds 25 MB")
+            return None
+        method_bytes = method_path.read_bytes()
+        method_hash = hashlib.sha256(method_bytes).hexdigest()
+        method["relative_path"] = relative_path
+        method["size_bytes"] = method_size
+        method["sha256"] = method_hash
+        method["preview"] = method_bytes.decode("utf-8", errors="replace")[:12000]
+
+    dataset = payload.get("dataset") if isinstance(payload.get("dataset"), dict) else {}
+    dataset_id = str(dataset.get("resource_id") or "").strip()
+    if dataset_id:
+        try:
+            resource = await _get_project_resource(pool, dataset_id, user_id)
+        except Exception:
+            resource = None
+        if resource and resource.get("kind") == "dataset" and int(resource.get("file_size_bytes") or 0) <= TASK_INPUT_MAX_BYTES:
+            try:
+                resource_path = _safe_storage_path(
+                    FilePath(os.getenv("RESOURCE_STORAGE_ROOT", "/workspace/resources")),
+                    str(resource["storage_key"]),
+                )
+                if resource_path.is_file() and not resource_path.is_symlink():
+                    resource_size = resource_path.stat().st_size
+                    if resource_size <= TASK_INPUT_MAX_BYTES:
+                        resource_hasher = hashlib.sha256()
+                        with resource_path.open("rb") as resource_handle:
+                            for chunk in iter(lambda: resource_handle.read(1024 * 1024), b""):
+                                resource_hasher.update(chunk)
+                        dataset.update({
+                            "resource_id": resource["resource_id"],
+                            "filename": resource["logical_name"],
+                            "size_bytes": resource_size,
+                            "sha256": resource_hasher.hexdigest(),
+                        })
+                    else:
+                        dataset = {"resource_id": None, "filename": None}
+                else:
+                    dataset = {"resource_id": None, "filename": None}
+            except (OSError, HTTPException):
+                dataset = {"resource_id": None, "filename": None}
+        else:
+            dataset = {"resource_id": None, "filename": None}
+    else:
+        dataset = {"resource_id": None, "filename": None}
+
+    project = await ensure_default_project(pool, user_id=user_id)
+    payload["draft_id"] = draft_id
+    payload["method"] = method
+    payload["dataset"] = dataset
+    payload["missing_inputs"] = [
+        item for item in (payload.get("missing_inputs") if isinstance(payload.get("missing_inputs"), list) else [])
+        if item != "dataset" or not dataset.get("resource_id")
+    ]
+    payload["missing_inputs"] = [
+        item for item in payload["missing_inputs"]
+        if item != "method" or method is None
+    ]
+    if method is None and "method" not in payload["missing_inputs"]:
+        payload["missing_inputs"].append("method")
+    if not dataset.get("resource_id") and "dataset" not in payload["missing_inputs"]:
+        payload["missing_inputs"].append("dataset")
+    draft = await upsert_task_draft(pool, payload, owner_user_id=user_id, project_id=project["project_id"])
+    return {
+        "draft_id": draft["draft_id"],
+        "session_id": draft["session_id"],
+        "project_id": draft["project_id"],
+        "revision": draft["revision"],
+        "status": draft["status"],
+        "title": draft["title"],
+        "goal_summary": draft["goal_summary"],
+        "session_id": draft["session_id"],
+        "method": ({
+            "filename": draft["method_filename"],
+            "size_bytes": draft["method_size_bytes"],
+            "sha256": draft["method_hash_sha256"],
+            "preview": draft["method_preview"],
+        } if draft["method_path"] else None),
+        "dataset": {
+            "resource_id": draft["dataset_resource_id"],
+            "filename": draft["dataset_filename"],
+            "size_bytes": draft["dataset_size_bytes"],
+            "sha256": draft["dataset_hash_sha256"],
+        },
+        "task_spec": draft["task_spec"],
+        "missing_inputs": draft["missing_inputs"],
+    }
+
+
+async def _persist_task_draft_tool_event(
+    *,
+    pool,
+    session_id: str,
+    user_id: str,
+    tool_result: str,
+) -> Optional[Dict[str, Any]]:
+    """Persist draft create/update/cancel events and return the browser event."""
+    try:
+        payload = json.loads(tool_result)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("type") != "task_draft_cancelled":
+        return await _persist_task_draft_tool_result(
+            pool=pool, session_id=session_id, user_id=user_id, tool_result=tool_result
+        )
+    if str(payload.get("session_id") or "") != str(session_id):
+        return None
+    try:
+        draft_id = str(uuid.UUID(str(payload.get("draft_id"))))
+        uuid.UUID(session_id)
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if not await cancel_task_draft(pool, draft_id, user_id):
+        return None
+    draft_root = ensure_within(_get_session_root(session_id).resolve(), _get_session_root(session_id) / "task-drafts" / draft_id)
+    if draft_root.exists() and draft_root.is_dir() and not draft_root.is_symlink():
+        shutil.rmtree(draft_root, ignore_errors=True)
+    return {"draft_id": draft_id, "revision": int(payload.get("revision") or 1), "status": "cancelled"}
+
+
 def _start_stream_worker(sync_iter: Any) -> Tuple[asyncio.Queue, threading.Event]:
     """Run a blocking stream iterator in a background thread and forward items to an asyncio queue."""
     loop = asyncio.get_running_loop()
@@ -2056,6 +2253,20 @@ async def chat_ws_endpoint(websocket: WebSocket):
                         tool_result_summary=_summarize_tool_result(result_text, max_chars=500),
                         retrieval_records=retrieval_records,
                     )
+                    task_draft = await _persist_task_draft_tool_event(
+                        pool=pool,
+                        session_id=session_id,
+                        user_id=principal.user_id,
+                        tool_result=result_text,
+                    )
+                    if task_draft:
+                        event_type = "task_draft_cancelled" if task_draft.get("status") == "cancelled" else (
+                            "task_draft_updated" if int(task_draft.get("revision") or 1) > 1 else "task_draft_created"
+                        )
+                        if event_type == "task_draft_cancelled":
+                            await websocket.send_json({"type": event_type, **task_draft})
+                        else:
+                            await websocket.send_json({"type": event_type, "draft": task_draft})
                 content = _extract_chunk_content(chunk)
                 if content:
                     has_chunk = True
@@ -2212,6 +2423,7 @@ async def chat_http_endpoint(payload: HttpChatRequest, request: Request, user: P
         pool = app.state.db_pool
         session_id = payload.session_id
         assistant_text = ""
+        persisted_tool_exec_keys: set[str] = set()
         try:
             meta = await get_session(pool, session_id, user.user_id)
             if not meta:
@@ -2254,6 +2466,23 @@ async def chat_http_endpoint(payload: HttpChatRequest, request: Request, user: P
                     continue
                 for tool_name in _extract_tool_names(item):
                     yield {"data": json.dumps({"type": "tool_call", "tool_name": tool_name})}
+                for tool_exec in _extract_completed_tool_executions(item):
+                    exec_key = _tool_execution_identity_key(tool_exec)
+                    if exec_key in persisted_tool_exec_keys:
+                        continue
+                    persisted_tool_exec_keys.add(exec_key)
+                    task_draft = await _persist_task_draft_tool_event(
+                        pool=pool,
+                        session_id=session_id,
+                        user_id=user.user_id,
+                        tool_result=str(tool_exec.get("result") or ""),
+                    )
+                    if task_draft:
+                        event_type = "task_draft_cancelled" if task_draft.get("status") == "cancelled" else (
+                            "task_draft_updated" if int(task_draft.get("revision") or 1) > 1 else "task_draft_created"
+                        )
+                        event = {"type": event_type, **task_draft} if event_type == "task_draft_cancelled" else {"type": event_type, "draft": task_draft}
+                        yield {"data": json.dumps(event, ensure_ascii=False)}
                 content = _extract_chunk_content(item)
                 if content:
                     assistant_text += content
@@ -2346,6 +2575,14 @@ class SubmitTaskBundleResponse(BaseModel):
     status: str
     attempt_count: int
     duplicate: bool = False
+    event_type: str = "task_confirmed"
+
+
+class TaskDraftConfirmRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    dataset_resource_id: Optional[str] = None
+    method_content: Optional[str] = None
+    title: Optional[str] = None
 
 
 class DatasetUploadResponse(BaseModel):
@@ -3065,8 +3302,15 @@ async def delete_worker_artifact_endpoint(task_id: str, artifact_id: str, reques
 # ---- Task API endpoints ----
 
 # Upload limits (design doc §40): streamed to disk, never held in memory.
-MAX_DATASET_UPLOAD_BYTES = int(os.getenv("DATASET_UPLOAD_MAX_BYTES", str(5 * 1024**3)))
-MAX_METHOD_SOURCE_BYTES = int(os.getenv("METHOD_SOURCE_MAX_BYTES", str(200 * 1024**2)))
+TASK_INPUT_MAX_BYTES = 25 * 1024 * 1024
+MAX_DATASET_UPLOAD_BYTES = min(
+    int(os.getenv("DATASET_UPLOAD_MAX_BYTES", str(TASK_INPUT_MAX_BYTES))),
+    TASK_INPUT_MAX_BYTES,
+)
+MAX_METHOD_SOURCE_BYTES = min(
+    int(os.getenv("METHOD_SOURCE_MAX_BYTES", str(TASK_INPUT_MAX_BYTES))),
+    TASK_INPUT_MAX_BYTES,
+)
 MAX_DATASET_VALIDATION_SAMPLE_BYTES = int(os.getenv("DATASET_VALIDATION_SAMPLE_BYTES", str(2 * 1024**2)))
 MAX_DATASET_ZIP_ENTRIES = int(os.getenv("DATASET_ZIP_MAX_ENTRIES", "10000"))
 MAX_DATASET_ZIP_FILE_BYTES = int(os.getenv("DATASET_ZIP_MAX_FILE_BYTES", str(5 * 1024**3)))
@@ -3350,6 +3594,7 @@ def _safe_storage_path(root: FilePath, storage_key: str) -> FilePath:
 @app.post("/api/resources/upload")
 async def upload_resource_endpoint(
     project_id: str = Form(...),
+    session_id: Optional[str] = Form(None),
     file: UploadFile = File(...),
     user: Principal = Depends(require_user),
 ):
@@ -3357,6 +3602,13 @@ async def upload_resource_endpoint(
     pool = app.state.db_pool
     if not await user_can_access_project(pool, project_id, user.user_id):
         raise HTTPException(status_code=404, detail="Project not found")
+    if session_id:
+        try:
+            uuid.UUID(session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid session ID") from exc
+        if not await get_session(pool, session_id, user.user_id):
+            raise HTTPException(status_code=404, detail="Session not found")
     resource_id = str(uuid.uuid4())
     root = FilePath(os.getenv("RESOURCE_STORAGE_ROOT", "/workspace/resources")).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -3389,9 +3641,30 @@ async def upload_resource_endpoint(
                 temporary["file_size_bytes"],
                 temporary["file_hash_sha256"],
             )
+            if session_id:
+                await conn.execute(
+                    """
+                    INSERT INTO session_resource_links (session_id, resource_id)
+                    VALUES ($1::uuid, $2::uuid)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    session_id,
+                    resource_id,
+                )
     except Exception as exc:
         destination.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Resource metadata storage failed") from exc
+    if session_id:
+        _record_session_resource(session_id, {
+            "resource_id": resource_id,
+            "project_id": project_id,
+            "kind": "uploaded_file",
+            "logical_name": file.filename or "resource.bin",
+            "storage_key": storage_key,
+            "content_type": file.content_type or "application/octet-stream",
+            "file_size_bytes": temporary["file_size_bytes"],
+            "checksum_sha256": temporary["file_hash_sha256"],
+        })
     return {
         "resource_id": resource_id,
         "project_id": project_id,
@@ -3734,6 +4007,7 @@ async def freeze_task_spec_endpoint(
 @app.post("/api/dataset-snapshots/upload", response_model=Dict[str, Any])
 async def upload_dataset_endpoint(
     project_id: str = Form(...),
+    session_id: Optional[str] = Form(None),
     file: UploadFile = File(...),
     user: Optional[Principal] = Depends(_require_task_api_key),
 ):
@@ -3745,6 +4019,15 @@ async def upload_dataset_endpoint(
     pool = app.state.db_pool
     if user and not await user_can_access_project(pool, project_id, user.user_id):
         raise HTTPException(status_code=404, detail="Project not found")
+    if session_id:
+        if user is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        try:
+            uuid.UUID(session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid session ID") from exc
+        if not await get_session(pool, session_id, user.user_id):
+            raise HTTPException(status_code=404, detail="Session not found")
     upload_root = FilePath(os.getenv("RESOURCE_STORAGE_ROOT", "/workspace/resources")).resolve()
     resource_id = str(uuid.uuid4())
     staging_root = upload_root / ".staging"
@@ -3774,10 +4057,32 @@ async def upload_dataset_endpoint(
                 upload["file_size_bytes"],
                 upload["file_hash_sha256"],
             )
+            if session_id:
+                await conn.execute(
+                    """
+                    INSERT INTO session_resource_links (session_id, resource_id)
+                    VALUES ($1::uuid, $2::uuid)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    session_id,
+                    resource_id,
+                )
     except Exception as exc:
         source.unlink(missing_ok=True)
         destination.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Dataset resource storage failed") from exc
+    if session_id:
+        _record_session_resource(session_id, {
+            "resource_id": resource_id,
+            "project_id": project_id,
+            "kind": "dataset",
+            "logical_name": safe_name,
+            "storage_key": f"datasets/{resource_id}",
+            "content_type": file.content_type or "application/octet-stream",
+            "file_size_bytes": upload["file_size_bytes"],
+            "checksum_sha256": upload["file_hash_sha256"],
+            "validation_result": None,
+        })
     return {
         "resource_id": resource_id,
         "project_id": project_id,
@@ -4090,6 +4395,289 @@ async def submit_task_bundle_endpoint(
             pass
         logger.exception("Atomic task bundle submission failed")
         raise HTTPException(status_code=500, detail="Task bundle submission failed") from exc
+
+
+@app.get("/api/task-drafts/{draft_id}")
+async def get_task_draft_endpoint(draft_id: str, user: Principal = Depends(require_user)):
+    try:
+        uuid.UUID(draft_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Task draft not found") from exc
+    draft = await get_task_draft(app.state.db_pool, draft_id, user.user_id)
+    if not draft:
+        raise HTTPException(status_code=404, detail="Task draft not found")
+    return {
+        "draft_id": draft["draft_id"],
+        "project_id": draft["project_id"],
+        "revision": draft["revision"],
+        "status": draft["status"],
+        "title": draft["title"],
+        "goal_summary": draft["goal_summary"],
+        "method": ({
+            "filename": draft["method_filename"],
+            "size_bytes": draft["method_size_bytes"],
+            "sha256": draft["method_hash_sha256"],
+            "preview": draft["method_preview"],
+        } if draft["method_path"] else None),
+        "dataset": {
+            "resource_id": draft["dataset_resource_id"],
+            "filename": draft["dataset_filename"],
+            "size_bytes": draft["dataset_size_bytes"],
+            "sha256": draft["dataset_hash_sha256"],
+        },
+        "missing_inputs": draft["missing_inputs"],
+        "task_spec": draft["task_spec"],
+    }
+
+
+@app.post("/api/task-drafts/{draft_id}/cancel")
+async def cancel_task_draft_endpoint(draft_id: str, user: Principal = Depends(require_user)):
+    draft = await get_task_draft(app.state.db_pool, draft_id, user.user_id)
+    if not await cancel_task_draft(app.state.db_pool, draft_id, user.user_id):
+        raise HTTPException(status_code=404, detail="Active task draft not found")
+    if draft:
+        root = _get_session_root(str(draft["session_id"])).resolve()
+        draft_root = ensure_within(root, root / "task-drafts" / draft_id)
+        if draft_root.exists() and draft_root.is_dir() and not draft_root.is_symlink():
+            shutil.rmtree(draft_root, ignore_errors=True)
+    return {"draft_id": draft_id, "status": "cancelled"}
+
+
+@app.post("/api/task-drafts/{draft_id}/confirm", response_model=SubmitTaskBundleResponse)
+async def confirm_task_draft_endpoint(
+    draft_id: str,
+    request: TaskDraftConfirmRequest,
+    user: Principal = Depends(require_user),
+):
+    """Freeze a reviewed Agent draft and create exactly one Worker Task."""
+    pool = app.state.db_pool
+    draft = await get_task_draft(pool, draft_id, user.user_id)
+    if not draft:
+        raise HTTPException(status_code=409, detail="Task draft is no longer available")
+    if draft["status"] == "confirmed":
+        async with pool.acquire() as conn:
+            existing = await conn.fetchrow(
+                """
+                SELECT resource_id
+                FROM idempotency_keys
+                WHERE idempotency_key = $1 AND user_id = $2 AND resource_type = 'task'
+                  AND expires_at > NOW()
+                """,
+                request.idempotency_key.strip(), user.user_id,
+            )
+            if existing:
+                existing_task = await conn.fetchrow(
+                    "SELECT task_id, status, attempt_count FROM tasks WHERE task_id = $1::uuid AND created_by = $2",
+                    str(existing["resource_id"]), user.user_id,
+                )
+                if existing_task:
+                    return SubmitTaskBundleResponse(
+                        task_id=str(existing_task["task_id"]),
+                        status=existing_task["status"],
+                        attempt_count=int(existing_task["attempt_count"] or 0),
+                        duplicate=True,
+                    )
+        raise HTTPException(status_code=409, detail="Task draft is no longer available")
+    if draft["status"] not in {"draft", "awaiting_user_confirmation", "revising"}:
+        raise HTTPException(status_code=409, detail="Task draft is no longer available")
+
+    session_root = _get_session_root(str(draft["session_id"])).resolve()
+    method_filename = str(draft.get("method_filename") or "execution-document.md")
+    method_filename = FilePath(method_filename).name
+    method_path: Optional[FilePath] = None
+    if draft.get("method_path"):
+        method_relative = safe_relative_path(str(draft["method_path"]))
+        method_path = ensure_within(session_root, session_root / method_relative)
+        if not method_path.is_file() or method_path.is_symlink():
+            raise HTTPException(status_code=409, detail="Execution document is no longer available")
+
+    if request.method_content is not None:
+        method_content = request.method_content.replace("\x00", "")
+        method_bytes = method_content.encode("utf-8")
+        if not method_bytes.strip():
+            raise HTTPException(status_code=400, detail="Execution document cannot be empty")
+        if len(method_bytes) > TASK_INPUT_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Execution document exceeds the 25 MB limit")
+        if method_path is None:
+            method_path = ensure_within(
+                session_root,
+                session_root / "task-drafts" / draft_id / "revisions" / "confirmed" / method_filename,
+            )
+            method_path.parent.mkdir(parents=True, exist_ok=True)
+        method_path.write_bytes(method_bytes)
+    if method_path is None:
+        raise HTTPException(status_code=400, detail="Execution document is required before confirming")
+    method_bytes = method_path.read_bytes()
+    if len(method_bytes) > TASK_INPUT_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Execution document exceeds the 25 MB limit")
+    method_hash = hashlib.sha256(method_bytes).hexdigest()
+    method_preview = method_bytes.decode("utf-8", errors="replace")[:12000]
+    if FilePath(method_filename).suffix.lower() not in {".md", ".txt"}:
+        raise HTTPException(status_code=400, detail="Execution document must be Markdown or text")
+    dataset_resource_id = str(request.dataset_resource_id or draft.get("dataset_resource_id") or "").strip()
+    if not dataset_resource_id:
+        raise HTTPException(status_code=400, detail="Please provide a dataset before confirming")
+    try:
+        resource = await _get_project_resource(pool, dataset_resource_id, user.user_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Dataset resource not found") from exc
+    if not resource or resource["project_id"] != draft["project_id"] or resource["kind"] != "dataset":
+        raise HTTPException(status_code=404, detail="Dataset resource not found")
+    if int(resource.get("file_size_bytes") or 0) > TASK_INPUT_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Dataset exceeds the 25 MB limit")
+    resource_path = _safe_storage_path(
+        FilePath(os.getenv("RESOURCE_STORAGE_ROOT", "/workspace/resources")),
+        str(resource["storage_key"]),
+    )
+    if not resource_path.is_file() or resource_path.is_symlink():
+        raise HTTPException(status_code=404, detail="Dataset resource not found")
+    dataset_size_bytes = resource_path.stat().st_size
+    if dataset_size_bytes > TASK_INPUT_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Dataset exceeds the 25 MB limit")
+    dataset_hasher = hashlib.sha256()
+    with resource_path.open("rb") as dataset_handle:
+        for chunk in iter(lambda: dataset_handle.read(1024 * 1024), b""):
+            dataset_hasher.update(chunk)
+    dataset_hash = dataset_hasher.hexdigest()
+    validation_result = _validate_dataset_file(resource_path, resource["logical_name"])
+    if not validation_result.get("passed"):
+        raise HTTPException(status_code=400, detail="Dataset validation failed")
+
+    title = (request.title or draft["title"] or FilePath(method_filename).stem).strip()[:255]
+    request_hash = hashlib.sha256(json.dumps({
+        "draft_id": draft_id,
+        "revision": draft["revision"],
+        "title": title,
+        "method_hash": method_hash,
+        "dataset_resource_id": dataset_resource_id,
+        "dataset_hash": dataset_hash,
+    }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    task_spec_id = str(uuid.uuid4())
+    method_source_id = str(uuid.uuid4())
+    dataset_snapshot_id = str(uuid.uuid4())
+    task_id = str(uuid.uuid4())
+    required_trust = _worker_trust_for_user(user)
+    method_upload_root = FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", "/tmp/uploaded-method-sources")).resolve()
+    method_final_path = method_upload_root / "documents" / f"{draft_id}-{FilePath(method_filename).name}"
+    method_final_created = False
+
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                existing = await conn.fetchrow(
+                    """
+                    SELECT resource_id, request_hash
+                    FROM idempotency_keys
+                    WHERE idempotency_key = $1 AND user_id = $2 AND resource_type = 'task'
+                      AND expires_at > NOW()
+                    FOR UPDATE
+                    """,
+                    request.idempotency_key.strip(), user.user_id,
+                )
+                if existing:
+                    if existing["request_hash"] and existing["request_hash"] != request_hash:
+                        raise HTTPException(status_code=409, detail="Idempotency key was reused with a different draft")
+                    existing_task = await conn.fetchrow(
+                        "SELECT task_id, status, attempt_count FROM tasks WHERE task_id = $1::uuid AND created_by = $2",
+                        str(existing["resource_id"]), user.user_id,
+                    )
+                    if existing_task:
+                        return SubmitTaskBundleResponse(
+                            task_id=str(existing_task["task_id"]),
+                            status=existing_task["status"],
+                            attempt_count=int(existing_task["attempt_count"] or 0),
+                            duplicate=True,
+                        )
+                    raise HTTPException(status_code=409, detail="Idempotency record points to a missing task")
+
+                method_final_path.parent.mkdir(parents=True, exist_ok=True)
+                method_final_path.write_bytes(method_bytes)
+                method_final_created = True
+
+                task_spec_json = draft["task_spec"] if isinstance(draft["task_spec"], dict) else {}
+                task_spec_json = {**task_spec_json, "goal_summary": draft["goal_summary"], "draft_id": draft_id}
+                await conn.execute(
+                    """
+                    INSERT INTO task_specs (
+                        task_spec_id, project_id, revision, title, domain, analysis_type,
+                        research_question, spec_json, schema_version, status, created_by, frozen_at
+                    ) VALUES ($1::uuid, $2::uuid, 1, $3, 'bioinformatics', 'goal_driven', $4,
+                              $5::jsonb, '1.0', 'active', $6, NOW())
+                    """,
+                    task_spec_id, str(draft["project_id"]), title, draft["goal_summary"],
+                    json.dumps(task_spec_json, ensure_ascii=False), user.user_id,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO method_sources (
+                        method_source_id, project_id, task_spec_id, original_filename,
+                        stored_path, content_type, file_size_bytes, file_hash_sha256
+                    ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'text/markdown', $6, $7)
+                    """,
+                    method_source_id, str(draft["project_id"]), task_spec_id, method_filename,
+                    str(method_final_path), len(method_bytes), method_hash,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO dataset_snapshots (
+                        dataset_snapshot_id, task_spec_id, project_id, original_filename,
+                        stored_path, file_size_bytes, file_hash_sha256, validation_result,
+                        validation_passed, version
+                    ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8::jsonb, TRUE, 1)
+                    """,
+                    dataset_snapshot_id, task_spec_id, str(draft["project_id"]), resource["logical_name"],
+                    str(resource_path), dataset_size_bytes, dataset_hash,
+                    json.dumps(validation_result, ensure_ascii=False),
+                )
+                task_row = await conn.fetchrow(
+                    """
+                    INSERT INTO tasks (
+                        task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
+                        title, status, max_attempts, required_trust_level, created_by
+                    ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, 'queued', 3, $7, $8)
+                    RETURNING task_id, status, attempt_count
+                    """,
+                    task_id, task_spec_id, dataset_snapshot_id, str(draft["project_id"]),
+                    method_source_id, title, required_trust, user.user_id,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO idempotency_keys (idempotency_key, user_id, resource_type, resource_id, request_hash, expires_at)
+                    VALUES ($1, $2, 'task', $3::uuid, $4, NOW() + INTERVAL '24 hours')
+                    """,
+                    request.idempotency_key.strip(), user.user_id, task_id, request_hash,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, status)
+                    VALUES ('task', $1::uuid, 'task_queued', $2::jsonb, 'pending')
+                    """,
+                    task_id, json.dumps({"task_id": task_id, "status": "queued"}),
+                )
+                await conn.execute(
+                    """
+                    UPDATE task_drafts
+                    SET status = 'confirmed', confirmed_task_id = $2::uuid, revision = revision + 1,
+                        method_path = $4, method_filename = $5, method_preview = $6,
+                        method_size_bytes = $7, method_hash_sha256 = $8,
+                        dataset_resource_id = $9::uuid, dataset_filename = $10,
+                        dataset_size_bytes = $11, dataset_hash_sha256 = $12,
+                        missing_inputs = '[]'::jsonb, updated_at = NOW()
+                    WHERE draft_id = $1::uuid AND owner_user_id = $3
+                    """,
+                    draft_id, task_id, user.user_id, str(draft.get("method_path") or ""),
+                    method_filename, method_preview, len(method_bytes), method_hash,
+                    dataset_resource_id, resource["logical_name"], dataset_size_bytes, dataset_hash,
+                )
+    except Exception:
+        if method_final_created:
+            method_final_path.unlink(missing_ok=True)
+        raise
+    return SubmitTaskBundleResponse(
+        task_id=str(task_row["task_id"]),
+        status=task_row["status"],
+        attempt_count=int(task_row["attempt_count"] or 0),
+    )
 
 
 @app.post("/api/tasks", response_model=Dict[str, Any])

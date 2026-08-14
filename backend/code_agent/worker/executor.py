@@ -12,6 +12,7 @@ import asyncio
 import shutil
 import uuid
 import re
+import hashlib
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
 from urllib.parse import urlparse
@@ -490,12 +491,6 @@ async def _run_docker_execution(
     input_dir = None
     executor_mode = os.getenv("CODE_AGENT_EXECUTOR_MODE", "docker").strip().lower()
 
-    if executor_mode == "fixture":
-        from backend.code_agent.worker.fixture_executor import run_fixture_executor
-        async for event in run_fixture_executor(task_spec, output_dir):
-            yield event
-        return
-
     # Preferred path: assemble the task input directory from the uploaded
     # method source document + dataset snapshot (design doc §8.5).
     if (dataset and dataset.get("stored_path")) or (
@@ -506,6 +501,7 @@ async def _run_docker_execution(
         if dataset and dataset.get("stored_path"):
             dataset_path = Path(dataset["stored_path"])
             if dataset_path.is_file() and _inside_upload_roots(dataset_path):
+                _assert_frozen_input(dataset_path, dataset, "dataset")
                 _stage_dataset(dataset_path, input_dir / "data", logical_name=dataset.get("original_filename"))
             elif control_plane_url and worker_id and worker_namespace and worker_credential:
                 downloaded = await _download_remote_input(
@@ -518,6 +514,7 @@ async def _run_docker_execution(
                     lease_token=lease_token or "",
                     destination=work_dir / "remote-input" / (Path(dataset.get("original_filename") or "dataset.zip").name),
                 )
+                _assert_frozen_input(downloaded, dataset, "dataset")
                 _stage_dataset(downloaded, input_dir / "data", logical_name=dataset.get("original_filename"), trusted_local=True)
             else:
                 raise SecurityBoundaryError("dataset input is not available to this Worker")
@@ -525,6 +522,7 @@ async def _run_docker_execution(
             src = Path(method_source["stored_path"])
             # Same upload-root confinement as datasets (defense in depth).
             if src.exists() and _inside_upload_roots(src):
+                _assert_frozen_input(src, method_source, "execution document")
                 shutil.copy2(src, input_dir / src.name)
             elif control_plane_url and worker_id and worker_namespace and worker_credential:
                 method_name = Path(method_source.get("original_filename") or "execution-document.bin").name
@@ -538,7 +536,9 @@ async def _run_docker_execution(
                     lease_token=lease_token or "",
                     destination=work_dir / "remote-input" / method_name,
                 )
-                shutil.copy2(work_dir / "remote-input" / method_name, input_dir / method_name)
+                downloaded_method = work_dir / "remote-input" / method_name
+                _assert_frozen_input(downloaded_method, method_source, "execution document")
+                shutil.copy2(downloaded_method, input_dir / method_name)
             else:
                 raise SecurityBoundaryError("execution document is not available to this Worker")
 
@@ -554,6 +554,12 @@ async def _run_docker_execution(
         case_base = Path(os.getenv("CODE_AGENT_CASE_DIR", "/workspace/case"))
         if case_num and (case_base / case_num).exists():
             input_dir = case_base / case_num
+
+    if executor_mode == "fixture":
+        from backend.code_agent.worker.fixture_executor import run_fixture_executor
+        async for event in run_fixture_executor(task_spec, output_dir, input_dir=input_dir):
+            yield event
+        return
 
     gateway: Optional[Dict[str, str]] = None
     if executor_mode in {"direct", "docker"}:
@@ -616,6 +622,23 @@ def _inside_upload_roots(path: Path) -> bool:
         return any(resolved.is_relative_to(root) for root in allowed_roots)
     except OSError:
         return False
+
+
+def _assert_frozen_input(path: Path, metadata: Dict[str, Any], label: str) -> None:
+    """Fail closed if a Worker input differs from its frozen DB snapshot."""
+    if path.is_symlink() or not path.is_file():
+        raise SecurityBoundaryError(f"{label} input is not a regular file")
+    expected_size = metadata.get("file_size_bytes")
+    expected_hash = metadata.get("file_hash_sha256")
+    actual_size = path.stat().st_size
+    if expected_size is not None and int(expected_size) != actual_size:
+        raise SecurityBoundaryError(f"{label} input size does not match the frozen snapshot")
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if expected_hash and digest.hexdigest() != str(expected_hash):
+        raise SecurityBoundaryError(f"{label} input hash does not match the frozen snapshot")
 
 
 def _stage_dataset(
@@ -860,12 +883,32 @@ async def _upload_remote_artifact(
     }
     timeout = _worker_transfer_timeout()
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-        with archive_path.open("rb") as handle:
-            response = await client.post(
-                f"{control_plane_url}/api/worker/tasks/{task_id}/artifacts",
-                headers=headers,
-                content=handle,
-            )
+        class _ArchiveStream(httpx.AsyncByteStream):
+            """Stream the archive without handing a synchronous file to httpx."""
+
+            def __init__(self, path: Path, chunk_size: int = 1024 * 1024):
+                self.path = path
+                self.chunk_size = chunk_size
+
+            async def __aiter__(self):
+                handle = await asyncio.to_thread(self.path.open, "rb")
+                try:
+                    while True:
+                        chunk = await asyncio.to_thread(handle.read, self.chunk_size)
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    await asyncio.to_thread(handle.close)
+
+            async def aclose(self) -> None:
+                return None
+
+        response = await client.post(
+            f"{control_plane_url}/api/worker/tasks/{task_id}/artifacts",
+            headers=headers,
+            content=_ArchiveStream(archive_path),
+        )
     if response.status_code >= 400:
         raise SecurityBoundaryError(f"control-plane artifact upload failed ({response.status_code})")
     try:
