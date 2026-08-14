@@ -24,7 +24,7 @@ interface MobileImageJudgeExample {
 }
 
 interface MobileWorkspaceMenuProps {
-  active: "analysis" | "tasks" | "traits";
+  active: "analysis" | "chat" | "tasks" | "traits";
   taskItems?: MobileTaskItem[];
   activeTaskId?: string;
   sessions?: SessionItem[];
