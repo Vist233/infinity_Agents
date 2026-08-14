@@ -66,13 +66,13 @@ describe("PublicWorkerAdminPanel", () => {
     render(<LanguageProvider><PublicWorkerAdminPanel /></LanguageProvider>);
 
     await waitFor(() => expect(screen.getByText("公共 Worker 3")).toBeInTheDocument());
-    const createButton = screen.getByRole("button", { name: "创建一个公共 Worker" });
+    const createButton = screen.getByRole("button", { name: "创建" });
     expect(createButton).toBeEnabled();
 
     await user.click(createButton);
 
     await waitFor(() => expect(createPublicWorker).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByText("公共 Worker 4")).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "创建一个公共 Worker" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "创建" })).toBeEnabled();
   });
 });

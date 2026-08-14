@@ -68,7 +68,20 @@ const MOCK_ARTIFACTS = [
   },
 ];
 
-test("Task Center shows task history without a permanent creation form", async ({ page }) => {
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/me", async (route) => {
+    await route.fulfill({
+      status: 200,
+      body: JSON.stringify({ user: { id: "user-1", email: "tester@example.com", name: "Tester" } }),
+      contentType: "application/json",
+    });
+  });
+  await page.route("**/api/admin/public-worker-pool", async (route) => {
+    await route.fulfill({ status: 403, body: JSON.stringify({ error: "forbidden" }), contentType: "application/json" });
+  });
+});
+
+test("Task Center shows task history and direct creation form", async ({ page }) => {
   await page.route("**/api/tasks*", async (route) => {
     await route.fulfill({
       status: 200,
@@ -78,9 +91,9 @@ test("Task Center shows task history without a permanent creation form", async (
   });
 
   await page.goto("/task-center");
-  await expect(page.getByText("任务只能从 Analysis 确认卡提交", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "确认并提交" })).toHaveCount(0);
-  await expect(page.getByText("添加 Worker")).toBeVisible();
+  await expect(page.getByTestId("task-creation-card")).toBeVisible();
+  await expect(page.getByRole("button", { name: "创建任务", exact: true })).toBeVisible();
+  await expect(page.getByTestId("worker-enrollment-toggle")).toBeVisible();
   // Task list
   await expect(page.getByText("DESeq2 Differential Expression")).toBeVisible();
   await expect(page.getByText("Biopython Sequence Analysis")).toBeVisible();
@@ -99,7 +112,7 @@ test("legacy /code-agent/tasks index redirects to Task Center", async ({ page })
 
   await page.goto("/code-agent/tasks");
   await expect(page).toHaveURL(/\/task-center\/?$/);
-  await expect(page.getByText("任务只能从 Analysis 确认卡提交", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("task-creation-card")).toBeVisible();
 });
 
 test("legacy task detail route loads with events and artifacts", async ({ page }) => {

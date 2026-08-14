@@ -57,8 +57,12 @@ export function UserFooter({ compact = false }: UserFooterProps) {
     }
   }
 
-  const label = loading ? "…" : name || fallbackName(email, userId, t("auth.accountFallback"));
   const canLogout = Boolean(email || name || userId);
+  // Keep the signed-out sidebar completely empty. In particular, do not show
+  // an account placeholder while /api/me is still resolving or unavailable.
+  if (loading || !canLogout) return null;
+
+  const label = name || fallbackName(email, userId, t("auth.accountFallback"));
   return (
     <div className="border-t border-[var(--hairline)] px-1 pt-3">
       <div className="flex min-w-0 items-center justify-between gap-2">

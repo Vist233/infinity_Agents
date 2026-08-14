@@ -85,6 +85,17 @@ def test_zip_output_rejects_empty_result_directory(tmp_path):
         _zip_output(output, "task-empty")
 
 
+def test_zip_output_rejects_symbolic_links(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must not escape", encoding="utf-8")
+    (output / "escaped.txt").symlink_to(outside)
+
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        _zip_output(output, "task-symlink")
+
+
 def test_large_artifact_uses_multipart_upload(tmp_path):
     archive = tmp_path / "large-artifacts.zip"
     archive.write_bytes(b"x" * (20 * 1024 * 1024 + 1))

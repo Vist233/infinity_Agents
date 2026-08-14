@@ -16,6 +16,7 @@ import platform
 import re
 import signal
 import shutil
+import stat
 import uuid
 import zipfile
 from dataclasses import dataclass, field
@@ -401,8 +402,22 @@ def _safe_filename(value: str, fallback: str) -> str:
 
 
 def _zip_output(output_dir: Path, task_id: str) -> tuple[Path, str]:
+    if output_dir.is_symlink():
+        raise RuntimeError("Output directory cannot be a symbolic link")
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_files = [path for path in sorted(output_dir.rglob("*")) if path.is_file()]
+    root = output_dir.resolve()
+    output_files = []
+    for path in sorted(output_dir.rglob("*")):
+        if path.is_symlink():
+            raise RuntimeError(f"Output contains an unsupported symbolic link: {path.name}")
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
+            continue
+        try:
+            path.resolve().relative_to(root)
+        except ValueError as exc:
+            raise RuntimeError("Output file resolves outside the task directory") from exc
+        output_files.append(path)
     if not output_files:
         raise RuntimeError("Claude Code produced no output artifacts")
     archive = output_dir.parent / f"{task_id}-artifacts.zip"

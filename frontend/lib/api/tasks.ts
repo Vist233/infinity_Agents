@@ -319,6 +319,9 @@ export async function submitTaskBundle(input: {
   idempotencyKey: string;
   projectId?: string;
 }): Promise<{ task_id: string; status: string; attempt_count: number; duplicate?: boolean }> {
+  if (input.methodFile.size > MAX_TASK_INPUT_BYTES || input.datasetFile.size > MAX_TASK_INPUT_BYTES) {
+    throw new Error("Each task input file must be 25 MB or smaller");
+  }
   const form = new FormData();
   form.append("method_file", input.methodFile);
   form.append("dataset_file", input.datasetFile);

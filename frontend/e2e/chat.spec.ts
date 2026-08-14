@@ -1,5 +1,18 @@
 import { expect, test } from "@playwright/test";
 
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/me", async (route) => {
+    await route.fulfill({
+      status: 200,
+      body: JSON.stringify({ user: { id: "user-1", email: "tester@example.com", name: "Tester" } }),
+      contentType: "application/json",
+    });
+  });
+  await page.route("**/api/admin/public-worker-pool", async (route) => {
+    await route.fulfill({ status: 403, body: JSON.stringify({ error: "forbidden" }), contentType: "application/json" });
+  });
+});
+
 test("smoke routes render", async ({ page }) => {
   await page.route("**/api/sessions", async (route) => {
     if (route.request().method() === "GET") {
@@ -14,9 +27,9 @@ test("smoke routes render", async ({ page }) => {
   await expect(page.getByText("导出 PDF")).toHaveCount(0);
 
   await page.goto("/task-center");
-  await expect(page.getByText("任务只能从 Analysis 确认卡提交", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "确认并提交" })).toHaveCount(0);
-  await expect(page.getByText("添加 Worker")).toBeVisible();
+  await expect(page.getByTestId("task-creation-card")).toBeVisible();
+  await expect(page.getByRole("button", { name: "创建任务", exact: true })).toBeVisible();
+  await expect(page.getByTestId("worker-enrollment-toggle")).toBeVisible();
 
   await page.goto("/image-judge");
   await expect(page.getByText("文件分析示例")).toBeVisible();
