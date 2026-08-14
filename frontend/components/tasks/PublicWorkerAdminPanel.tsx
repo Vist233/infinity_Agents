@@ -172,9 +172,12 @@ export function PublicWorkerAdminPanel() {
                 <div key={`${worker.worker_id}:${worker.namespace}`} className="rounded-xl border border-violet-200/80 bg-white/70 px-3 py-3 text-xs">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="truncate text-zinc-700">
-                        {slotIndex >= 0 && <span className="mr-2 font-medium text-violet-800">{t("tasks.publicWorkersSlot", { slot: String.fromCharCode(65 + slotIndex) })}</span>}
-                        <code>{worker.worker_id}</code>
+                      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-zinc-700">
+                        {slotIndex >= 0 && <span className="font-medium text-violet-800">{t("tasks.publicWorkersSlot", { slot: String.fromCharCode(65 + slotIndex) })}</span>}
+                        <span className="min-w-0 truncate">
+                          <span className="mr-1 text-zinc-500">{t("tasks.publicWorkersWorkerId")}:</span>
+                          <code>{worker.worker_id}</code>
+                        </span>
                       </div>
                       <div className="mt-1 text-violet-900/70">{worker.namespace} · {worker.status === "revoked" ? t("tasks.publicWorkersRevoked") : t("tasks.publicWorkersActive")}</div>
                     </div>
