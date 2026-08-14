@@ -27,8 +27,6 @@ function statusClass(worker: WorkerRegistration): string {
   return "bg-amber-100 text-amber-700";
 }
 
-type CredentialResponse = { worker_id: string; worker_credential: string };
-
 /** Superuser-only management for the platform-owned public execution pool. */
 export function PublicWorkerAdminPanel() {
   const { t } = useLanguage();
@@ -69,21 +67,15 @@ export function PublicWorkerAdminPanel() {
   // card to ordinary users, including during the initial request.
   if (!visible) return null;
 
-  async function provisionTwo() {
+  async function createOne() {
     if (!pool) return;
-    const missing = Math.max(0, 2 - pool.workers.filter((worker) => worker.status !== "revoked").length);
-    if (missing === 0) return;
+    const activeCount = pool.workers.filter((worker) => worker.status !== "revoked").length;
+    if (activeCount >= 2) return;
     setSubmitting(true);
     setError(null);
     try {
-      const created: CredentialResponse[] = [];
-      for (let index = 0; index < missing; index += 1) {
-        created.push(await createPublicWorker());
-      }
-      setCredentials((current) => ({
-        ...current,
-        ...Object.fromEntries(created.map((item) => [item.worker_id, item.worker_credential])),
-      }));
+      const created = await createPublicWorker();
+      setCredentials((current) => ({ ...current, [created.worker_id]: created.worker_credential }));
       await loadPool();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -166,9 +158,9 @@ export function PublicWorkerAdminPanel() {
               <div><span className="font-medium">{t("tasks.publicWorkersNamespace")}:</span> <code>{pool.pool.namespace}</code></div>
               <div><span className="font-medium">{t("tasks.publicWorkersCount")}:</span> {activeCount}</div>
             </div>
-            <Button type="button" size="sm" className="gap-2" onClick={() => { void provisionTwo(); }} disabled={submitting || activeCount >= 2}>
+            <Button type="button" size="sm" className="gap-2" onClick={() => { void createOne(); }} disabled={submitting || activeCount >= 2}>
               <KeyRound size={14} />
-              {submitting ? t("tasks.publicWorkersProvisioning") : activeCount >= 2 ? t("tasks.publicWorkersReady") : t("tasks.publicWorkersProvisionTwo")}
+              {submitting ? t("tasks.publicWorkersProvisioning") : activeCount >= 2 ? t("tasks.publicWorkersReady") : t("tasks.publicWorkersCreate")}
             </Button>
           </div>
 
