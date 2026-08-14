@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleChat } from "../src/chat";
+import { handleCancelChatTaskConfirmation, handleChat } from "../src/chat";
 import { makeEnv } from "./fake-d1";
 import type { AuthedUser } from "../src/auth";
 
@@ -217,7 +217,7 @@ describe("handleChat", () => {
       if (stepfunCall === 1) {
         return sseResponse([
           JSON.stringify({ choices: [{ delta: { content: "我先准备任务确认卡。" }, finish_reason: null }] }),
-          JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "task_call_1", function: { name: "request_task_creation", arguments: JSON.stringify({ title: "Trait extraction", analysis_type: "trait_extraction" }) } }] }, finish_reason: "tool_calls" }] }),
+          JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "task_call_1", function: { name: "request_task_creation", arguments: JSON.stringify({ title: "Trait extraction", analysis_type: "trait_extraction", method_document_content: "# Extract traits\n\n1. Read the input.\n2. Write a report." }) } }] }, finish_reason: "tool_calls" }] }),
         ]);
       }
       const requestBody = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ role: string; content: string | null }> };
@@ -238,6 +238,9 @@ describe("handleChat", () => {
       "task_confirmation",
     ]);
     expect(firstEvents.map((event) => event.type)).not.toContain("done");
+    expect(firstEvents.find((event) => event.type === "task_confirmation")).toMatchObject({
+      method_document_content: "# Extract traits\n\n1. Read the input.\n2. Write a report.",
+    });
     const confirmation = [...db.chatTaskConfirmations.values()][0];
     expect(confirmation?.status).toBe("pending");
     expect([...db.dailyUsage.values()][0]).toBe(1);
@@ -251,6 +254,29 @@ describe("handleChat", () => {
     expect(confirmation.status).toBe("completed");
     expect(stepfunCall).toBe(2);
     expect([...db.dailyUsage.values()][0]).toBe(1);
+  });
+
+  it("lets the user dismiss a pending confirmation without creating a task", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("s1", "user-1");
+    installStepFunMock();
+    const first = await handleChat(makeRequest("s1", "我要创建一个异步分析任务"), env, USER);
+    await readSse(first);
+    const confirmation = [...db.chatTaskConfirmations.values()][0];
+    expect(confirmation?.status).toBe("pending");
+
+    const response = await handleCancelChatTaskConfirmation(
+      new Request("https://app.test/api/chat/task-confirmation/cancel", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirmation_id: confirmation.confirmation_id }),
+      }),
+      env,
+      USER,
+    );
+    expect(response.status).toBe(200);
+    expect(confirmation.status).toBe("expired");
+    expect(db.tasks.size).toBe(0);
   });
 
   it("forces a confirmation card for explicit task intent when the model only asks questions", async () => {

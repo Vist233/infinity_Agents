@@ -1,13 +1,15 @@
 import type { RunPhase, TokenInfo } from "@/lib/chat-state";
 import { translate, type Language } from "@/lib/i18n";
 import { redirectToLogin, withCsrfHeader } from "@/lib/runtime-config";
-import type { TaskDraft } from "@/lib/api/tasks";
+import type { ChatTaskConfirmation, TaskDraft } from "@/lib/api/tasks";
 
 export interface ChatRequestPayload {
   session_id: string;
   messages: Array<{ role: "user" | "assistant"; content: string }>;
   retry_attempt: number;
   client_request_id: string;
+  task_confirmation_id?: string;
+  task_id?: string;
 }
 
 export interface ChatStatusEvent {
@@ -52,6 +54,10 @@ export interface ChatTaskDraftCancelledEvent {
   status: "cancelled";
 }
 
+export interface ChatTaskConfirmationEvent extends ChatTaskConfirmation {
+  type: "task_confirmation";
+}
+
 export interface ChatTaskConfirmedEvent {
   type: "task_confirmed";
   task_id: string;
@@ -60,7 +66,7 @@ export interface ChatTaskConfirmedEvent {
   duplicate?: boolean;
 }
 
-export type ChatEvent = ChatStatusEvent | ChatChunkEvent | ChatToolCallEvent | ChatTaskDraftEvent | ChatTaskDraftCancelledEvent | ChatTaskConfirmedEvent | ChatDoneEvent | ChatErrorEvent;
+export type ChatEvent = ChatStatusEvent | ChatChunkEvent | ChatToolCallEvent | ChatTaskDraftEvent | ChatTaskDraftCancelledEvent | ChatTaskConfirmationEvent | ChatTaskConfirmedEvent | ChatDoneEvent | ChatErrorEvent;
 
 export interface StartChatStreamOptions {
   apiBase: string;
@@ -79,7 +85,7 @@ export interface ChatStreamHandle {
 const OPEN = 1;
 const CLOSED = 3;
 
-const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "task_draft_created", "task_draft_updated", "task_draft_cancelled", "task_confirmed", "done", "error"]);
+const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "task_draft_created", "task_draft_updated", "task_draft_cancelled", "task_confirmation", "task_confirmed", "done", "error"]);
 
 export function toFriendlyChatError(message: string, language: Language = "en"): string {
   if (message.includes("paper_not_authorized_for_session")) {
@@ -125,6 +131,20 @@ export function normalizeChatEvent(rawData: unknown): ChatEvent | null {
         draft_id: payload.draft_id,
         revision: Number(payload.revision) || undefined,
         status: "cancelled",
+      };
+    }
+    if (payload.type === "task_confirmation") {
+      if (typeof payload.confirmation_id !== "string" || typeof payload.title !== "string") return null;
+      return {
+        type: "task_confirmation",
+        confirmation_id: payload.confirmation_id,
+        tool_name: typeof payload.tool_name === "string" ? payload.tool_name : "request_task_creation",
+        title: payload.title,
+        analysis_type: typeof payload.analysis_type === "string" ? payload.analysis_type : "generic",
+        research_question: typeof payload.research_question === "string" ? payload.research_question : "",
+        method_document_name: typeof payload.method_document_name === "string" ? payload.method_document_name : "",
+        method_document_content: typeof payload.method_document_content === "string" ? payload.method_document_content : "",
+        dataset_name: typeof payload.dataset_name === "string" ? payload.dataset_name : "",
       };
     }
     if (payload.type === "task_confirmed") {

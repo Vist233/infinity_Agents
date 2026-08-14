@@ -26,6 +26,7 @@ interface MobileImageJudgeExample {
 interface MobileWorkspaceMenuProps {
   active: "analysis" | "tasks" | "traits";
   taskItems?: MobileTaskItem[];
+  onNewTask?: () => void;
   activeTaskId?: string;
   sessions?: SessionItem[];
   currentSessionId?: string | null;
@@ -53,6 +54,7 @@ interface MobileWorkspaceMenuProps {
 export function MobileWorkspaceMenu({
   active,
   taskItems,
+  onNewTask,
   activeTaskId,
   sessions,
   currentSessionId,
@@ -158,6 +160,16 @@ export function MobileWorkspaceMenu({
 
           {taskItems ? (
             <section>
+              {onNewTask ? (
+                <Button
+                  variant="outline"
+                  className="w-full justify-start gap-2 rounded-xl bg-white/90"
+                  onClick={() => { onNewTask(); setOpen(false); }}
+                >
+                  <Plus size={16} />
+                  {t("tasks.newTask")}
+                </Button>
+              ) : null}
               <div className="px-2 text-[11px] uppercase tracking-[0.2em] text-zinc-400">{t("tasks.title")}</div>
               <div className="mt-2 space-y-1">
                 {taskItems.length === 0 ? (

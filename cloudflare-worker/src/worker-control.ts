@@ -21,8 +21,8 @@ const LEASE_TTL_SECONDS = 120;
 export const WORKER_SESSION_TTL_SECONDS = 90;
 export const WORKER_HEARTBEAT_INTERVAL_SECONDS = 30;
 const CREDENTIAL_TTL_SECONDS = 30 * 24 * 60 * 60;
-const DEFAULT_UPLOAD_LIMIT = 25 * 1024 * 1024;
 const DEFAULT_ARTIFACT_LIMIT = 2 * 1024 * 1024 * 1024;
+const SINGLE_ARTIFACT_UPLOAD_LIMIT = 20 * 1024 * 1024;
 const MULTIPART_PART_SIZE = 8 * 1024 * 1024;
 const MAX_ERROR_LENGTH = 500;
 const MAX_CAPABILITIES = 32;
@@ -69,11 +69,17 @@ interface AttemptRow {
   max_attempts: number;
   task_spec_id: string;
   dataset_snapshot_id: string;
+  analysis_type: string;
+  research_question: string;
   method_source_id: string | null;
   method_resource_id: string | null;
   method_filename: string | null;
+  method_sha256: string | null;
+  method_size_bytes: number | null;
   dataset_resource_id: string | null;
   dataset_filename: string | null;
+  dataset_sha256: string | null;
+  dataset_size_bytes: number | null;
 }
 
 function id(): string {
@@ -87,11 +93,6 @@ function safeText(value: unknown, maxLength: number): string {
 function safeFilename(value: unknown, fallback: string): string {
   const name = safeText(value, 240).split(/[\\/]/).pop()?.trim() || fallback;
   return name.slice(0, 240);
-}
-
-function uploadLimit(env: Env): number {
-  const configured = Number(env.TASK_UPLOAD_MAX_BYTES);
-  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_UPLOAD_LIMIT;
 }
 
 function artifactLimit(env: Env): number {
@@ -353,14 +354,16 @@ function publicAttempt(row: AttemptRow, origin: string): Record<string, unknown>
       resource_id: row.method_resource_id,
       kind: "method",
       logical_name: row.method_filename,
-      sha256: null,
+      sha256: row.method_sha256,
+      size_bytes: row.method_size_bytes,
       url: `${origin}/api/worker/v1/attempts/${encodeURIComponent(row.attempt_id)}/resources/${encodeURIComponent(row.method_resource_id)}`,
     },
     row.dataset_resource_id && {
       resource_id: row.dataset_resource_id,
       kind: "dataset",
       logical_name: row.dataset_filename,
-      sha256: null,
+      sha256: row.dataset_sha256,
+      size_bytes: row.dataset_size_bytes,
       url: `${origin}/api/worker/v1/attempts/${encodeURIComponent(row.attempt_id)}/resources/${encodeURIComponent(row.dataset_resource_id)}`,
     },
   ].filter(Boolean);
@@ -377,6 +380,8 @@ function publicAttempt(row: AttemptRow, origin: string): Record<string, unknown>
     max_attempts: row.max_attempts,
     task_spec_id: row.task_spec_id,
     dataset_snapshot_id: row.dataset_snapshot_id,
+    analysis_type: row.analysis_type,
+    research_question: row.research_question,
     method_source_id: row.method_source_id,
     resources,
     heartbeat_interval_seconds: 30,
@@ -406,15 +411,23 @@ async function loadAttempt(
             a.fencing_epoch, a.lease_expires_at, a.status AS attempt_status,
             t.status AS task_status, t.title, t.task_class, t.attempt_count,
             t.max_attempts, t.task_spec_id, t.dataset_snapshot_id,
+            ts.analysis_type, ts.research_question,
             t.method_source_id,
             ms.resource_id AS method_resource_id,
             ms.original_filename AS method_filename,
+            msr.file_hash_sha256 AS method_sha256,
+            msr.file_size_bytes AS method_size_bytes,
             ds.resource_id AS dataset_resource_id,
-            ds.original_filename AS dataset_filename
+            ds.original_filename AS dataset_filename,
+            dsr.file_hash_sha256 AS dataset_sha256,
+            dsr.file_size_bytes AS dataset_size_bytes
      FROM worker_attempts a
      JOIN tasks t ON t.task_id = a.task_id
+     JOIN task_specs ts ON ts.task_spec_id = t.task_spec_id
      LEFT JOIN method_sources ms ON ms.method_source_id = t.method_source_id
+     LEFT JOIN task_resources msr ON msr.resource_id = ms.resource_id
      LEFT JOIN dataset_snapshots ds ON ds.dataset_snapshot_id = t.dataset_snapshot_id
+     LEFT JOIN task_resources dsr ON dsr.resource_id = ds.resource_id
      WHERE a.attempt_id = ?1
        AND a.worker_id = ?2
        AND a.namespace = ?3
@@ -916,7 +929,11 @@ async function handleArtifactUpload(
     return errorJson("fencing_epoch and file are required", 400, "INVALID_UPLOAD");
   }
   const file = fileEntry;
-  if (file.size <= 0 || file.size > uploadLimit(env)) return errorJson("Artifact exceeds the configured limit", 413, "UPLOAD_TOO_LARGE");
+  if (file.size <= 0) return errorJson("Artifact exceeds the configured limit", 413, "UPLOAD_TOO_LARGE");
+  if (file.size > SINGLE_ARTIFACT_UPLOAD_LIMIT) {
+    return errorJson("Artifacts larger than 20 MB must use multipart upload", 413, "MULTIPART_REQUIRED");
+  }
+  if (file.size > artifactLimit(env)) return errorJson("Artifact exceeds the configured limit", 413, "UPLOAD_TOO_LARGE");
   const attempt = await loadAttempt(env, context, attemptId, epoch, true);
   if (!attempt) return errorJson("Attempt lease is expired or fenced", 409, "LEASE_FENCED");
   const bytes = await file.arrayBuffer();
@@ -1196,11 +1213,13 @@ async function handleFinalize(
   const now = nowSeconds();
   const eventId = id();
   const results = await env.DB.batch([
-    // A Worker can only move its Attempt into verification_pending. It cannot
-    // publish a user-visible result merely by self-reporting success.
+    // The Worker may publish only the artifact that is already bound to its
+    // live lease, task, namespace, and fencing epoch. The checksum/object
+    // checks above remain the basic integrity boundary; no second verifier is
+    // required for a result to become user-visible.
     env.DB.prepare(
-      `UPDATE tasks SET status = 'running', result_artifact_id = NULL,
-           finished_at = NULL, updated_at = ?3,
+      `UPDATE tasks SET status = 'succeeded', result_artifact_id = ?2,
+           finished_at = ?3, updated_at = ?3,
            lease_worker_id = NULL, lease_namespace = NULL, lease_expires_at = NULL, lease_claim_id = NULL
        WHERE task_id = ?1 AND lease_worker_id = ?4 AND lease_namespace = ?5 AND lease_epoch = ?6
          AND status IN ('claimed', 'running') AND lease_expires_at > ?3`
@@ -1208,183 +1227,23 @@ async function handleFinalize(
     env.DB.prepare(
       `UPDATE worker_attempts SET status = 'succeeded', updated_at = ?4, finished_at = ?4
        WHERE attempt_id = ?1 AND worker_id = ?2 AND namespace = ?3 AND fencing_epoch = ?5
-         AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?6 AND status = 'running' AND result_artifact_id IS NULL AND lease_worker_id IS NULL)`
-    ).bind(attemptId, context.workerId, context.namespace, now, epoch, attempt.task_id),
+         AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?6 AND status = 'succeeded' AND result_artifact_id = ?7)`
+    ).bind(attemptId, context.workerId, context.namespace, now, epoch, attempt.task_id, artifactId),
     env.DB.prepare(
-      `UPDATE artifacts SET manifest_json = ?4
-       WHERE artifact_id = ?1 AND task_id = ?2 AND attempt_id = ?3 AND status = 'quarantine'`
+      `UPDATE artifacts SET kind = 'result', status = 'published', manifest_json = ?4
+       WHERE artifact_id = ?1 AND task_id = ?2 AND attempt_id = ?3 AND status = 'quarantine'
+         AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND status = 'succeeded' AND result_artifact_id = ?1)`
     ).bind(artifactId, attempt.task_id, attemptId, manifestText),
     env.DB.prepare(
       `INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
-       SELECT ?1, ?2, 'artifact_quarantined', ?3, ?4 FROM tasks
-       WHERE task_id = ?2 AND status = 'running' AND result_artifact_id IS NULL
-         AND EXISTS (SELECT 1 FROM worker_attempts WHERE attempt_id = ?5 AND status = 'succeeded')`
-    ).bind(eventId, attempt.task_id, JSON.stringify({ attempt_id: attemptId, artifact_id: artifactId, status: "verification_pending" }), now, attemptId),
+       SELECT ?1, ?2, 'task_succeeded', ?3, ?4 FROM tasks
+       WHERE task_id = ?2 AND status = 'succeeded' AND result_artifact_id = ?5
+         AND EXISTS (SELECT 1 FROM worker_attempts WHERE attempt_id = ?6 AND status = 'succeeded')`
+    ).bind(eventId, attempt.task_id, JSON.stringify({ attempt_id: attemptId, artifact_id: artifactId, status: "succeeded", published: true }), now, artifactId, attemptId),
   ]);
   const taskChanged = (results[0] as { meta?: { changes?: number } })?.meta?.changes ?? 0;
   if (taskChanged !== 1) return errorJson("Attempt lease is expired or fenced", 409, "LEASE_FENCED");
-  return json({ task_id: attempt.task_id, attempt_id: attemptId, artifact_id: artifactId, status: "verification_pending", verifier_required: true }, 202);
-}
-
-async function verifierAuthorized(request: Request, env: Env): Promise<boolean> {
-  const configured = env.WORKER_VERIFIER_TOKEN?.trim();
-  const supplied = request.headers.get("x-worker-verifier-token")?.trim();
-  if (!configured || !supplied || supplied.length > 512) return false;
-  return (await sha256(configured)) === (await sha256(supplied));
-}
-
-function verifierUnavailable(env: Env): Response | null {
-  return env.WORKER_VERIFIER_TOKEN?.trim()
-    ? null
-    : errorJson("Trusted verifier is not configured", 503, "VERIFIER_NOT_CONFIGURED");
-}
-
-async function handleVerifierPending(request: Request, env: Env): Promise<Response> {
-  const unavailable = verifierUnavailable(env);
-  if (unavailable) return unavailable;
-  if (!(await verifierAuthorized(request, env))) {
-    return errorJson("Trusted verifier authentication required", 401, "VERIFIER_UNAUTHENTICATED");
-  }
-  const url = new URL(request.url);
-  const requestedLimit = Number(url.searchParams.get("limit") ?? "10");
-  const limit = Number.isFinite(requestedLimit)
-    ? Math.min(20, Math.max(1, Math.floor(requestedLimit)))
-    : 10;
-  const result = await env.DB.prepare(
-    `SELECT a.artifact_id, a.task_id, a.name, a.file_size_bytes,
-            a.checksum_sha256, a.content_type, a.created_at,
-            a.attempt_id, wa.fencing_epoch
-     FROM artifacts a
-     JOIN tasks t ON t.task_id = a.task_id
-     JOIN worker_attempts wa ON wa.attempt_id = a.attempt_id AND wa.task_id = a.task_id
-     WHERE a.status = 'quarantine'
-       AND a.manifest_json IS NOT NULL
-       AND t.status = 'running'
-       AND wa.status = 'succeeded'
-     ORDER BY a.created_at ASC
-     LIMIT ?1`
-  ).bind(limit).all<{
-    artifact_id: string;
-    task_id: string;
-    name: string;
-    file_size_bytes: number;
-    checksum_sha256: string;
-    content_type: string | null;
-    created_at: number;
-    attempt_id: string;
-    fencing_epoch: number;
-  }>();
-  return json({
-    artifacts: (result.results ?? []).map((artifact) => ({
-      ...artifact,
-      created_at: new Date(Number(artifact.created_at) * 1000).toISOString(),
-      download_url: `${url.origin}/api/worker/v1/verifier/artifacts/${encodeURIComponent(artifact.artifact_id)}`,
-      publish_url: `${url.origin}/api/worker/v1/verifier/attempts/${encodeURIComponent(artifact.attempt_id)}/publish`,
-    })),
-  });
-}
-
-async function handleVerifierArtifact(request: Request, env: Env, artifactId: string): Promise<Response> {
-  const unavailable = verifierUnavailable(env);
-  if (unavailable) return unavailable;
-  if (!(await verifierAuthorized(request, env))) {
-    return errorJson("Trusted verifier authentication required", 401, "VERIFIER_UNAUTHENTICATED");
-  }
-  if (!env.RESOURCE_BUCKET) return errorJson("Task resource storage is not configured", 503, "RESOURCE_STORAGE_UNAVAILABLE");
-  const artifact = await env.DB.prepare(
-    `SELECT a.artifact_id, a.name, a.object_key, a.file_size_bytes,
-            a.checksum_sha256, a.content_type
-     FROM artifacts a
-     JOIN tasks t ON t.task_id = a.task_id
-     JOIN worker_attempts wa ON wa.attempt_id = a.attempt_id AND wa.task_id = a.task_id
-     WHERE a.artifact_id = ?1
-       AND a.status = 'quarantine'
-       AND a.manifest_json IS NOT NULL
-       AND t.status = 'running'
-       AND wa.status = 'succeeded'`
-  ).bind(artifactId).first<{
-    artifact_id: string;
-    name: string;
-    object_key: string;
-    file_size_bytes: number;
-    checksum_sha256: string;
-    content_type: string | null;
-  }>();
-  if (!artifact) return errorJson("Quarantine artifact is not ready for verification", 404, "ARTIFACT_NOT_FOUND");
-  const object = await env.RESOURCE_BUCKET.get(artifact.object_key);
-  if (!object) return errorJson("Quarantine artifact is missing", 404, "ARTIFACT_NOT_FOUND");
-  const headers = new Headers({
-    "cache-control": "no-store",
-    "content-type": artifact.content_type || "application/zip",
-    "content-length": String(object.size),
-    "x-artifact-id": artifact.artifact_id,
-    "x-artifact-size": String(artifact.file_size_bytes),
-    "x-artifact-sha256": artifact.checksum_sha256,
-  });
-  object.writeHttpMetadata(headers);
-  return new Response(object.body, { headers });
-}
-
-async function handleVerifiedPublish(request: Request, env: Env, attemptId: string): Promise<Response> {
-  const unavailable = verifierUnavailable(env);
-  if (unavailable) return unavailable;
-  if (!(await verifierAuthorized(request, env))) return errorJson("Trusted verifier authentication required", 401, "VERIFIER_UNAUTHENTICATED");
-  const body = await bodyJson(request);
-  const artifactId = safeText(body?.artifact_id, 120);
-  if (!artifactId || body?.passed !== true) return errorJson("A passing verifier result is required", 400, "VERIFICATION_REQUIRED");
-  const row = await env.DB.prepare(
-    `SELECT a.artifact_id, a.task_id, a.attempt_id, a.checksum_sha256, a.manifest_json,
-            t.status AS task_status, wa.fencing_epoch, wa.status AS attempt_status
-     FROM artifacts a
-     JOIN tasks t ON t.task_id = a.task_id
-     JOIN worker_attempts wa ON wa.attempt_id = a.attempt_id AND wa.task_id = a.task_id
-     WHERE a.artifact_id = ?1 AND a.attempt_id = ?2 AND a.status = 'quarantine'
-       AND t.status = 'running' AND wa.status = 'succeeded'`
-  ).bind(artifactId, attemptId).first<{
-    artifact_id: string;
-    task_id: string;
-    attempt_id: string;
-    checksum_sha256: string;
-    manifest_json: string | null;
-    task_status: string;
-    fencing_epoch: number;
-    attempt_status: string;
-  }>();
-  if (!row || !row.manifest_json) return errorJson("Quarantine artifact is not ready for verification", 409, "VERIFICATION_NOT_READY");
-  let manifest: Record<string, unknown>;
-  try {
-    const parsed = JSON.parse(row.manifest_json);
-    if (!parsed || typeof parsed !== "object") throw new Error("manifest");
-    manifest = parsed as Record<string, unknown>;
-  } catch {
-    return errorJson("Quarantine manifest is invalid", 422, "MANIFEST_INVALID");
-  }
-  if (safeText(manifest.task_id, 120) !== row.task_id || safeText(manifest.attempt_id, 120) !== attemptId || Number(manifest.fencing_epoch) !== row.fencing_epoch) {
-    return errorJson("Quarantine manifest is not bound to the Attempt", 422, "MANIFEST_MISMATCH");
-  }
-  if (safeText(manifest.checksum_sha256, 128) !== row.checksum_sha256) return errorJson("Quarantine checksum is invalid", 422, "CHECKSUM_MISMATCH");
-  const now = nowSeconds();
-  const eventId = id();
-  const results = await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE tasks SET status = 'succeeded', result_artifact_id = ?2,
-           finished_at = ?3, updated_at = ?3
-       WHERE task_id = ?1 AND status = 'running' AND result_artifact_id IS NULL`
-    ).bind(row.task_id, artifactId, now),
-    env.DB.prepare(
-      `UPDATE artifacts SET kind = 'result', status = 'published'
-       WHERE artifact_id = ?1 AND task_id = ?2 AND attempt_id = ?3 AND status = 'quarantine'
-         AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND status = 'succeeded' AND result_artifact_id = ?1)`
-    ).bind(artifactId, row.task_id, attemptId),
-    env.DB.prepare(
-      `INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
-       SELECT ?1, ?2, 'task_succeeded', ?3, ?4 FROM tasks
-       WHERE task_id = ?2 AND status = 'succeeded' AND result_artifact_id = ?5`
-    ).bind(eventId, row.task_id, JSON.stringify({ attempt_id: attemptId, artifact_id: artifactId, verified: true }), now, artifactId),
-  ]);
-  const changed = (results[0] as { meta?: { changes?: number } })?.meta?.changes ?? 0;
-  if (changed !== 1) return errorJson("Task is no longer awaiting verification", 409, "VERIFICATION_REPLAY");
-  return json({ task_id: row.task_id, attempt_id: attemptId, artifact_id: artifactId, status: "succeeded", verified: true });
+  return json({ task_id: attempt.task_id, attempt_id: attemptId, artifact_id: artifactId, status: "succeeded", published: true });
 }
 
 async function workerHealth(env: Env, context: WorkerContext): Promise<Response> {
@@ -1415,17 +1274,6 @@ export async function handleWorkerControlApi(request: Request, env: Env): Promis
   }
   const { pathname } = url;
   if (request.method === "POST" && pathname === "/api/worker/v1/enroll") return handleEnroll(request, env);
-
-  const verifierPendingPath = "/api/worker/v1/verifier/pending";
-  if (verifierPendingPath === pathname && request.method === "GET") return handleVerifierPending(request, env);
-
-  const verifierArtifactMatch = pathname.match(/^\/api\/worker\/v1\/verifier\/artifacts\/([^/]+)$/);
-  if (verifierArtifactMatch && request.method === "GET") {
-    return handleVerifierArtifact(request, env, decodeURIComponent(verifierArtifactMatch[1]));
-  }
-
-  const verifierMatch = pathname.match(/^\/api\/worker\/v1\/verifier\/attempts\/([^/]+)\/publish$/);
-  if (verifierMatch && request.method === "POST") return handleVerifiedPublish(request, env, decodeURIComponent(verifierMatch[1]));
 
   const context = await authenticateWorker(request, env);
   if (!context) return unauthorized();

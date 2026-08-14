@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Start the two local Claude Code Workers without copying Redis or provider
-# secrets into the repository. The caller should run this from an interactive
-# zsh so the provider variables exported by the user's .zshrc are inherited.
+# Start the new local Worker B without copying Redis or provider secrets into
+# the repository. The caller should run this from an interactive zsh so the
+# provider variables exported by the user's .zshrc are inherited.
 
 if ! lsof -nP -iTCP:16379 -sTCP:LISTEN >/dev/null 2>&1; then
   ssh -o BatchMode=yes -o ConnectTimeout=10 -o ExitOnForwardFailure=yes \
@@ -12,27 +12,14 @@ if ! lsof -nP -iTCP:16379 -sTCP:LISTEN >/dev/null 2>&1; then
 fi
 
 redis_values="$(ssh -o BatchMode=yes -o ConnectTimeout=10 zhangbot \
-  'set -a; . /home/zhangyvjing/.config/infinity-redis/redis.env; printf "%s\\n%s\\n%s\\n%s\\n" "$REDIS_WORKER_A_USERNAME" "$REDIS_WORKER_A_PASSWORD" "$REDIS_WORKER_B_USERNAME" "$REDIS_WORKER_B_PASSWORD"')"
+  'set -a; . /home/zhangyvjing/.config/infinity-redis/redis.env; printf "%s\\n%s\\n" "$REDIS_WORKER_B_USERNAME" "$REDIS_WORKER_B_PASSWORD"')"
 
-export WORKER_A_REDIS_USERNAME="$(printf '%s\n' "$redis_values" | sed -n '1p')"
-export WORKER_A_REDIS_PASSWORD="$(printf '%s\n' "$redis_values" | sed -n '2p')"
-export WORKER_B_REDIS_USERNAME="$(printf '%s\n' "$redis_values" | sed -n '3p')"
-export WORKER_B_REDIS_PASSWORD="$(printf '%s\n' "$redis_values" | sed -n '4p')"
+export WORKER_B_REDIS_USERNAME="$(printf '%s\n' "$redis_values" | sed -n '1p')"
+export WORKER_B_REDIS_PASSWORD="$(printf '%s\n' "$redis_values" | sed -n '2p')"
 
-export WORKER_A_REDIS_URL="$(node -e 'console.log("redis://" + encodeURIComponent(process.env.WORKER_A_REDIS_USERNAME) + ":" + encodeURIComponent(process.env.WORKER_A_REDIS_PASSWORD) + "@host.docker.internal:16379/0")')"
 export WORKER_B_REDIS_URL="$(node -e 'console.log("redis://" + encodeURIComponent(process.env.WORKER_B_REDIS_USERNAME) + ":" + encodeURIComponent(process.env.WORKER_B_REDIS_PASSWORD) + "@host.docker.internal:16379/0")')"
 
-docker rm -f infinity-cf-merge-2-worker-a-1 infinity-cf-merge-2-worker-b-1 infinity-cf-merge-2-verifier-1 >/dev/null 2>&1 || true
-
-compose_services=(worker-a worker-b)
-verifier_env_file="${VERIFIER_ENV_FILE:-verifier.cloudflare.env}"
-if [[ -f "$verifier_env_file" ]]; then
-  # The verifier token is local-only. It is passed to the verifier container
-  # through the process environment and never printed or committed.
-  set -a
-  . "$verifier_env_file"
-  set +a
-  compose_services+=(verifier)
-fi
-
-docker compose -f docker-compose.cloudflare-workers.yml up -d --no-build "${compose_services[@]}"
+docker compose \
+  -f docker-compose.cloudflare-workers.yml \
+  -f docker-compose.cloudflare-workers.remote-redis.yml \
+  up -d --build worker-b

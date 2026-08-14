@@ -82,7 +82,10 @@ class CloudflareWorkerConfig:
     redis_required: bool = True
     session_id: Optional[str] = None
     heartbeat_interval: float = 30.0
-    recycle_after_task: bool = True
+    task_timeout_seconds: float = 12 * 60 * 60
+    # A persistent machine stays connected after each task. Set this to true
+    # only for a deliberately one-shot acceptance container.
+    recycle_after_task: bool = False
     capabilities: list[str] = field(default_factory=list)
 
     @classmethod
@@ -125,7 +128,8 @@ class CloudflareWorkerConfig:
             poll_interval=max(1.0, float(os.getenv("WORKER_POLL_INTERVAL", "5"))),
             version=os.getenv("WORKER_VERSION", "cloudflare-claude-worker/1").strip(),
             redis_required=_bool_env("WORKER_REDIS_REQUIRED", True),
-            recycle_after_task=_bool_env("WORKER_RECYCLE_AFTER_TASK", True),
+            task_timeout_seconds=max(60.0, float(os.getenv("WORKER_TASK_TIMEOUT_SECONDS", str(12 * 60 * 60)))),
+            recycle_after_task=_bool_env("WORKER_RECYCLE_AFTER_TASK", False),
             capabilities=capabilities,
         )
 
@@ -238,7 +242,15 @@ class CloudflareControlClient:
             },
         )
 
-    async def download_resource(self, url: str, destination: Path, epoch: int) -> None:
+    async def download_resource(
+        self,
+        url: str,
+        destination: Path,
+        epoch: int,
+        *,
+        expected_sha256: str | None = None,
+        expected_size: int | None = None,
+    ) -> None:
         parsed_url = urlparse(url)
         control_origin = urlparse(self.config.control_url)
         if (parsed_url.scheme, parsed_url.netloc) != (control_origin.scheme, control_origin.netloc):
@@ -246,13 +258,38 @@ class CloudflareControlClient:
 
         def _download() -> None:
             destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = destination.with_name(f".{destination.name}.part")
+            digest = hashlib.sha256()
+            total_size = 0
             with self.session.get(url, headers=self._headers(epoch=epoch), timeout=60, stream=True) as response:
                 if not response.ok:
                     raise ControlPlaneError(f"Resource download failed: HTTP {response.status_code}", response.status_code)
-                with destination.open("wb") as handle:
-                    for chunk in response.iter_content(chunk_size=1024 * 1024):
-                        if chunk:
-                            handle.write(chunk)
+                try:
+                    with temporary.open("wb") as handle:
+                        for chunk in response.iter_content(chunk_size=1024 * 1024):
+                            if chunk:
+                                total_size += len(chunk)
+                                digest.update(chunk)
+                                handle.write(chunk)
+                    if expected_size is not None and total_size != expected_size:
+                        raise ControlPlaneError(
+                            f"Resource size mismatch: expected {expected_size}, received {total_size}",
+                            409,
+                            "RESOURCE_SIZE_MISMATCH",
+                        )
+                    actual_sha256 = digest.hexdigest()
+                    if expected_sha256 and actual_sha256 != expected_sha256.lower():
+                        raise ControlPlaneError(
+                            "Resource checksum mismatch",
+                            409,
+                            "RESOURCE_CHECKSUM_MISMATCH",
+                        )
+                    temporary.replace(destination)
+                finally:
+                    try:
+                        temporary.unlink()
+                    except FileNotFoundError:
+                        pass
 
         await asyncio.to_thread(_download)
 
@@ -365,11 +402,13 @@ def _safe_filename(value: str, fallback: str) -> str:
 
 def _zip_output(output_dir: Path, task_id: str) -> tuple[Path, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    output_files = [path for path in sorted(output_dir.rglob("*")) if path.is_file()]
+    if not output_files:
+        raise RuntimeError("Claude Code produced no output artifacts")
     archive = output_dir.parent / f"{task_id}-artifacts.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
-        for path in sorted(output_dir.rglob("*")):
-            if path.is_file():
-                bundle.write(path, path.relative_to(output_dir).as_posix())
+        for path in output_files:
+            bundle.write(path, path.relative_to(output_dir).as_posix())
     digest_context = hashlib.sha256()
     with archive.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -420,6 +459,7 @@ class CloudflareClaudeWorker:
         redis_connected = await _redis_ping(self.config)
         if redis_connected:
             self.config.capabilities.append("redis-online")
+        redis_check_due = asyncio.get_running_loop().time() + 30.0
         logger.info("Connecting Worker %s in namespace %s", self.config.worker_id, self.config.namespace)
         if not await self._connect_until_available():
             return
@@ -427,6 +467,11 @@ class CloudflareClaudeWorker:
         try:
             while not self.stop_event.is_set():
                 try:
+                    if self.config.redis_required and self.config.redis_url:
+                        now = asyncio.get_running_loop().time()
+                        if now >= redis_check_due:
+                            await _redis_ping(self.config)
+                            redis_check_due = now + 30.0
                     await self.control.heartbeat()
                     payload = await self.control.poll()
                     offers = payload.get("offers", []) if isinstance(payload, dict) else []
@@ -474,13 +519,22 @@ class CloudflareClaudeWorker:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         cancel_event = asyncio.Event()
+        cancellation_reason: str | None = None
 
         async def heartbeat_loop() -> None:
             while not cancel_event.is_set():
                 try:
                     await asyncio.wait_for(cancel_event.wait(), timeout=max(5.0, self.config.heartbeat_interval / 2))
                 except asyncio.TimeoutError:
-                    await self.control.heartbeat_attempt(attempt_id, epoch, "executing")
+                    try:
+                        heartbeat = await self.control.heartbeat_attempt(attempt_id, epoch, "executing")
+                        if heartbeat.get("task_status") == "cancelled":
+                            cancel_event.set()
+                    except ControlPlaneError as exc:
+                        if exc.code in {"LEASE_FENCED", "WORKER_SESSION_LOST", "WORKER_SESSION_REQUIRED"}:
+                            cancel_event.set()
+                            return
+                        logger.warning("Attempt heartbeat failed: %s", _safe_error(exc))
 
         heartbeat_task = asyncio.create_task(heartbeat_loop())
         try:
@@ -489,20 +543,42 @@ class CloudflareClaudeWorker:
                 kind = _safe_filename(str(resource.get("kind", "input")), "input")
                 logical_name = _safe_filename(str(resource.get("logical_name", resource_id)), resource_id)
                 destination = input_dir / f"{kind}-{logical_name}"
-                await self.control.download_resource(str(resource["url"]), destination, epoch)
+                expected_size_value = resource.get("size_bytes")
+                expected_size = int(expected_size_value) if isinstance(expected_size_value, (int, float)) else None
+                expected_sha256 = str(resource.get("sha256") or "").strip().lower() or None
+                await self.control.download_resource(
+                    str(resource["url"]),
+                    destination,
+                    epoch,
+                    expected_sha256=expected_sha256,
+                    expected_size=expected_size,
+                )
 
             async for event in run_claude_task(
                 task_id=task_id,
                 task_spec_id=task_spec_id,
                 dataset_snapshot_id=dataset_snapshot_id,
                 title=str(attempt.get("title", "")),
-                goal=str(attempt.get("goal", "")),
+                goal=str(attempt.get("goal") or attempt.get("research_question") or ""),
+                analysis_type=str(attempt.get("analysis_type", "generic")),
                 case_dir=input_dir,
                 output_dir=output_dir,
                 cancel_event=cancel_event,
+                timeout_seconds=self.config.task_timeout_seconds,
             ):
                 if event.get("type") == "error":
                     raise RuntimeError(str(event.get("message", "Claude Code execution failed")))
+                if event.get("type") == "cancelled":
+                    cancellation_reason = str(event.get("message", "Task cancelled by user"))
+                    break
+
+            if cancellation_reason or cancel_event.is_set():
+                logger.info(
+                    "Attempt %s stopped before artifact publication: %s",
+                    attempt_id,
+                    cancellation_reason or "lease lost",
+                )
+                return
 
             archive, checksum = _zip_output(output_dir, task_id)
             uploaded = await self.control.upload_artifact(attempt_id, epoch, archive, checksum)

@@ -277,15 +277,16 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: "request_task_creation",
       description:
-        "Request an inline confirmation card when the user wants to create a background Analysis/Coding task. This does not create the task; wait for the user to submit the requested files before claiming it is queued.",
+        "Prepare a readable task draft and open the inline confirmation card only when the user explicitly asks to create, submit, run, or queue a background analysis. Do not use this for a paper-method question. Draft the execution document yourself when the method is known, so the user can review/edit it in the card; the user still supplies or confirms the ZIP dataset. The tool does not create a task until the card is submitted.",
       parameters: {
         type: "object",
         properties: {
-          title: { type: "string", description: "Suggested task title." },
-          analysis_type: { type: "string", description: "Suggested analysis type, for example generic or trait_extraction." },
-          research_question: { type: "string", description: "The question or goal the task should answer." },
-          method_document_name: { type: "string", description: "Optional expected execution-document filename." },
-          dataset_name: { type: "string", description: "Optional expected dataset filename." }
+          title: { type: "string", description: "A concise, user-readable task title. Default it from the execution document or research goal, not an internal ID." },
+          analysis_type: { type: "string", description: "The proposed analysis type, for example generic, biopython, scanpy, or trait_extraction." },
+          research_question: { type: "string", description: "The scientific question, expected comparison, and concrete output the task should answer." },
+          method_document_name: { type: "string", description: "Optional suggested execution-document filename. The document itself is reviewed in the card." },
+          method_document_content: { type: "string", description: "A concise, reproducible Markdown execution document drafted from the user's goal and known method. Include inputs, steps, deliverables, and acceptance checks; never include secrets." },
+          dataset_name: { type: "string", description: "Optional suggested ZIP dataset filename or dataset description." }
         },
         required: ["title"]
       }
@@ -333,7 +334,7 @@ export async function runTool(
   if (name === "request_task_creation") {
     return JSON.stringify({
       status: "confirmation_required",
-      message: "The inline task confirmation card must be completed before this task can be created."
+      message: "A task draft is ready for the user to review. The task will be created only after the execution document and ZIP dataset are submitted through the confirmation card."
     });
   }
   if (name === "search_paper") {

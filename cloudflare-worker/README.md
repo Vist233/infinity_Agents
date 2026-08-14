@@ -61,11 +61,12 @@ receives `owner_trusted`; ordinary users and students receive
 owner.
 
 The superuser-only Public Worker panel manages a platform-owned public pool.
-The first production setup creates two independent persistent registrations in
-the fixed `infinity-public` Namespace. Each receives a server-generated Worker
-ID and its own recoverable credential. Public Workers are the fallback for all
-users' queued tasks when the task owner's own Worker is busy or offline; they
-are not visible to ordinary users.
+The public pool uses the fixed `infinity-public` Namespace. Each click in the
+superuser panel creates another independent persistent registration with a
+server-generated Worker ID and its own recoverable credential; there is no
+two-Worker cap. Public Workers are the fallback for all users' queued tasks when
+the task owner's own Worker is busy or offline; they are not visible to ordinary
+users.
 
 Both registration types use a non-expiring opaque credential:
 
@@ -107,28 +108,16 @@ POST /api/worker/v1/attempts/:attempt_id/artifacts/multipart/init
 PUT  /api/worker/v1/attempts/:attempt_id/artifacts/:artifact_id/parts/:part_number
 POST /api/worker/v1/attempts/:attempt_id/artifacts/:artifact_id/multipart/complete
 POST /api/worker/v1/attempts/:attempt_id/finalize
-GET  /api/worker/v1/verifier/pending                         (trusted verifier only)
-GET  /api/worker/v1/verifier/artifacts/:artifact_id          (trusted verifier only)
-POST /api/worker/v1/verifier/attempts/:attempt_id/publish  (trusted verifier only)
 ```
 
 Every Attempt is bound to `worker_id + task_id + fencing_epoch`; expired or
 revoked Workers cannot renew a lease or finalize an Artifact. Inputs are read
-through exact Attempt-scoped URLs, and uploaded results remain in R2
-quarantine after Worker finalize. Worker finalize returns
-`verification_pending`; only a separately authenticated verifier holding the
-private `WORKER_VERIFIER_TOKEN` can independently validate and publish a
-user-visible Artifact. If that verifier secret is not configured, no Worker
-can self-promote an arbitrary result to `succeeded`. The Worker receives no D1
-or R2 parent credential. Redis and provider settings are local Worker settings;
-only non-secret capability flags and the provider model name cross the handshake.
-
-The local verifier is a separate Docker service. It polls the two verifier-only
-endpoints, streams each quarantine ZIP to its own temporary volume, validates
-the SHA-256, size, ZIP CRCs, duplicate/path-traversal entries, and symlinks,
-then calls the publish endpoint. The execution Workers never receive the
-verifier token. Once published, the ordinary authenticated task artifact API
-and the Task Center download action can read the result from R2.
+through exact Attempt-scoped URLs. Worker finalize checks object existence,
+size, checksum and manifest binding, then atomically marks the Task, Attempt and
+Artifact succeeded/published. There is no verifier container or
+`verification_pending` runtime state. The Worker receives no D1 or R2 parent
+credential. Redis and provider settings are local Worker settings; only
+non-secret capability flags and the provider model name cross the handshake.
 
 ### macOS / Windows bootstrap client
 
@@ -158,28 +147,21 @@ one-time bootstrap path while pre-existing clients are migrated.
 
 ### Local Docker execution
 
-`docker-compose.cloudflare-workers.yml` starts two Docker Workers without
-PostgreSQL or a second Redis container. Each service uses a separate local env
-file with `CONTROL_BASE_URL`, one server-created Worker ID and credential, a
-unique `WORKER_INSTANCE_ID`, the existing remote `REDIS_URL`, and the provider
-variables inherited from the user's local shell. The same compose shape is
-used for the two platform public Workers; their credentials come from the
-superuser Public Worker panel. The Worker downloads exact
+`docker-compose.cloudflare-workers.yml` starts one new local Worker B without
+PostgreSQL or a second Redis container. It uses one local env file with
+`CONTROL_BASE_URL`, one server-created Worker ID and credential, a unique
+`WORKER_INSTANCE_ID`, the existing remote `REDIS_URL`, and the provider
+variables supplied only from that local env file. The Mac SSH bootstrap script
+can overlay the tunneled Redis URL without rewriting the file. Additional public Workers can
+use the same image and compose pattern with their own credentials. The Worker downloads exact
 Attempt resources over HTTPS, invokes the Claude Code CLI directly inside that
 same container with Goal-Driven instructions, and uploads results to R2
 quarantine. It never mounts the host Docker socket and never starts Docker
 inside Docker. None of the Redis or provider secrets are sent to Cloudflare.
-Each Worker has isolated input/output named volumes; after one Attempt the
-task-local files are removed and Compose restarts the container for the next
-cycle. Results up to 20 MB use the single upload endpoint; larger results use
-8 MB R2 Multipart parts and are checked for contiguous parts, total size, and
-object size before finalize.
-
-When `verifier.cloudflare.env` exists, the same bootstrap also starts the
-separate `verifier` service. It is the only local process that uses
-`WORKER_VERIFIER_TOKEN`; it has no Docker socket and does not execute Claude
-Code. Without that file, execution Workers can still run and submit quarantine
-artifacts, but the web download remains intentionally gated.
+The Worker has isolated input/output named volumes, clears task-local files
+after each Attempt, and remains online for the next task. Results up to 20 MB
+use the single upload endpoint; larger results use 8 MB R2 Multipart parts and
+are checked for contiguous parts, total size, and object size before finalize.
 
 ImageJudge uses the same Worker under an isolated `/image-judge/*` namespace:
 
@@ -225,13 +207,9 @@ npx wrangler secret put IMAGE_JUDGE_TOKEN_SIGNING_SECRET
 npx wrangler secret put IMAGE_JUDGE_DASHSCOPE_API_KEY
 ```
 
-`WORKER_VERIFIER_TOKEN` is configured only when the separate Docker verifier is
-running. The execution Workers never receive this secret: they finalize into
-`verification_pending`, while the verifier checks and publishes the result.
-If the verifier is stopped, the secret may remain configured but no new result
-is promoted. The two public execution containers are external to the
-Cloudflare Edge runtime; Cloudflare provides the HTTPS control plane, D1 and
-R2, while the containers execute Claude Code. Redis on `zhangbot` is
+The execution container is external to the Cloudflare Edge runtime; Cloudflare
+provides the HTTPS control plane, D1 and R2, while the container executes
+Claude Code. Redis on `zhangbot` is
 intentionally not a Worker binding: the
 deployed Worker uses D1/R2 only, while the local execution Workers use the
 existing Redis service.

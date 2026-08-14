@@ -77,6 +77,14 @@ def test_zip_output_is_deterministic_enough_for_upload(tmp_path):
     assert len(checksum) == 64
 
 
+def test_zip_output_rejects_empty_result_directory(tmp_path):
+    output = tmp_path / "empty-output"
+    output.mkdir()
+
+    with pytest.raises(RuntimeError, match="no output artifacts"):
+        _zip_output(output, "task-empty")
+
+
 def test_large_artifact_uses_multipart_upload(tmp_path):
     archive = tmp_path / "large-artifacts.zip"
     archive.write_bytes(b"x" * (20 * 1024 * 1024 + 1))

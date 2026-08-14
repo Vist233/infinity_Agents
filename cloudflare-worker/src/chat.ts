@@ -5,6 +5,7 @@ import { errorJson, nowSeconds } from "./http";
 import {
   bindChatTaskConfirmation,
   claimChatTaskConfirmation,
+  cancelChatTaskConfirmation,
   completeChatRequestIdempotency,
   completeChatTaskConfirmation,
   createChatTaskConfirmation,
@@ -52,6 +53,7 @@ interface TaskConfirmationArgs {
   analysis_type: string;
   research_question: string;
   method_document_name: string;
+  method_document_content: string;
   dataset_name: string;
 }
 
@@ -237,6 +239,22 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
   );
 }
 
+export async function handleCancelChatTaskConfirmation(request: Request, env: Env, user: AuthedUser): Promise<Response> {
+  let body: { confirmation_id?: string };
+  try {
+    body = await request.json() as { confirmation_id?: string };
+  } catch {
+    return errorJson("Body must be JSON", 400, "BAD_JSON");
+  }
+  const confirmationId = String(body.confirmation_id ?? "").trim();
+  if (!confirmationId) return errorJson("confirmation_id is required", 400, "INVALID_TASK_CONFIRMATION");
+  const cancelled = await cancelChatTaskConfirmation(env, confirmationId, user.userId);
+  if (!cancelled) return errorJson("Task confirmation is no longer pending", 409, "TASK_CONFIRMATION_USED");
+  return new Response(JSON.stringify({ confirmation_id: confirmationId, status: "cancelled" }), {
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
 /**
  * Resume a paused request_task_creation tool call after the inline card has
  * created a queued Task. The task itself is verified server-side; the client
@@ -278,6 +296,7 @@ async function handleTaskConfirmation(
     analysis_type: "generic",
     research_question: "",
     method_document_name: "",
+    method_document_content: "",
     dataset_name: "",
   };
   try {
@@ -287,6 +306,7 @@ async function handleTaskConfirmation(
       analysis_type: String(parsed.analysis_type ?? "generic"),
       research_question: String(parsed.research_question ?? ""),
       method_document_name: String(parsed.method_document_name ?? ""),
+      method_document_content: String(parsed.method_document_content ?? ""),
       dataset_name: String(parsed.dataset_name ?? ""),
     };
   } catch {
@@ -492,6 +512,7 @@ function normalizeTaskConfirmationArgs(args: Record<string, unknown>): TaskConfi
     analysis_type: bounded(args.analysis_type, "generic", 80),
     research_question: bounded(args.research_question, "", 2000),
     method_document_name: bounded(args.method_document_name, "", 255),
+    method_document_content: bounded(args.method_document_content, "", 32_000),
     dataset_name: bounded(args.dataset_name, "", 255),
   };
 }

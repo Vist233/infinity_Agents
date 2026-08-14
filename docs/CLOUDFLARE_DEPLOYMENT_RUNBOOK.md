@@ -21,8 +21,8 @@
   只有 superuser 映射到 `owner_trusted`，普通用户和学生映射到
   `institution_trusted`。每个 Worker 凭证同时只能占用一个反向握手会话。
 - 公共执行池固定为 `public-default` / `infinity-public`，由超级用户页面创建
-  两个独立持久 Worker；任务采用“创建者自有 Worker 优先，公共 Worker 回退”。
-  两个 Docker 执行实例在 Cloudflare Edge 外部运行，Edge 只提供控制面。
+  可按需创建的独立持久 Worker；任务采用“创建者自有 Worker 优先，公共 Worker 回退”。
+  Docker 执行实例在 Cloudflare Edge 外部运行，Edge 只提供控制面。
 - 公共池的两 Worker 配置和验收步骤见 [`CLOUDFLARE_PUBLIC_WORKER_POOL.md`](./CLOUDFLARE_PUBLIC_WORKER_POOL.md)。
 
 ## 每次发布
@@ -63,10 +63,9 @@ npx wrangler secret put IMAGE_JUDGE_DASHSCOPE_API_KEY
 ```
 
 公共 Worker 管理权限只根据服务端验证出的 Zhang Auth superuser 角色判断，
-不从浏览器字段或可配置的用户 ID 列表推导。`WORKER_VERIFIER_TOKEN` 只配置在独立
-验证器已启动的情况下；执行 Worker 不会收到这个 Secret，只能把结果放入
-R2 quarantine，验证器校验后才提升为用户可见的 `published` Artifact。验证器
-未运行时，不应把执行 Worker 直接配置成发布者。
+不从浏览器字段或可配置的用户 ID 列表推导。当前不部署 verifier；执行 Worker
+只能发布自己持有有效租约、fencing epoch、checksum 和 manifest 绑定的 Artifact，
+控制面在同一 D1 batch 中将 Task、Attempt 和 Artifact 原子地标记为 succeeded/published。
 
 ## 发布后验收
 
@@ -91,7 +90,7 @@ curl -fsSI https://infinity.zhangyvjing.com/image-judge/
    `connect`、`heartbeat`、`health`、`poll` 和 revoke 验证生命周期。同一
    Namespace 下应能创建第二个不同 Worker ID；同一凭证的第二个活动实例必须
    返回 `WORKER_ALREADY_CONNECTED`；旧版一次性 enrollment 仅做兼容回归。
-5. 超级用户公共 Worker 卡能补齐两个公共注册并显示各自在线状态；普通用户
+5. 超级用户公共 Worker 卡每次点击“创建”都能新增一个注册，没有两台上限；普通用户
    看不到公共 Worker ID、credential 或其他用户任务。用户 Worker 空闲时优先
    领取自己的任务，忙碌/离线时公共 Worker 才能回退领取。
 6. `ss -ltn` 在 `zhangbot` 上只允许 Redis loopback 监听；Cloudflare Worker

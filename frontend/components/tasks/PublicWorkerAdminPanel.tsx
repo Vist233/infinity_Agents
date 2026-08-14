@@ -69,8 +69,6 @@ export function PublicWorkerAdminPanel() {
 
   async function createOne() {
     if (!pool) return;
-    const activeCount = pool.workers.filter((worker) => worker.status !== "revoked").length;
-    if (activeCount >= 2) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -130,8 +128,6 @@ export function PublicWorkerAdminPanel() {
   }
 
   const activeCount = pool?.workers.filter((worker) => worker.status !== "revoked").length ?? 0;
-  const activeWorkers = pool?.workers.filter((worker) => worker.status !== "revoked") ?? [];
-
   return (
     <section data-testid="public-worker-admin-panel" className="rounded-2xl border border-violet-200 bg-violet-50/70 overflow-hidden">
       <div className="flex items-center justify-between gap-3 p-5">
@@ -158,22 +154,22 @@ export function PublicWorkerAdminPanel() {
               <div><span className="font-medium">{t("tasks.publicWorkersNamespace")}:</span> <code>{pool.pool.namespace}</code></div>
               <div><span className="font-medium">{t("tasks.publicWorkersCount")}:</span> {activeCount}</div>
             </div>
-            <Button type="button" size="sm" className="gap-2" onClick={() => { void createOne(); }} disabled={submitting || activeCount >= 2}>
+            <Button type="button" size="sm" className="gap-2" onClick={() => { void createOne(); }} disabled={submitting}>
               <KeyRound size={14} />
-              {submitting ? t("tasks.publicWorkersProvisioning") : activeCount >= 2 ? t("tasks.publicWorkersReady") : t("tasks.publicWorkersCreate")}
+              {submitting ? t("tasks.publicWorkersProvisioning") : t("tasks.publicWorkersCreate")}
             </Button>
           </div>
 
           <div className="space-y-2">
             {pool.workers.map((worker) => {
               const credentialReady = Boolean(credentials[worker.worker_id]);
-              const slotIndex = activeWorkers.findIndex((item) => item.worker_id === worker.worker_id);
+              const workerNumber = pool.workers.findIndex((item) => item.worker_id === worker.worker_id) + 1;
               return (
                 <div key={`${worker.worker_id}:${worker.namespace}`} className="rounded-xl border border-violet-200/80 bg-white/70 px-3 py-3 text-xs">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-zinc-700">
-                        {slotIndex >= 0 && <span className="font-medium text-violet-800">{t("tasks.publicWorkersSlot", { slot: String.fromCharCode(65 + slotIndex) })}</span>}
+                        {workerNumber > 0 && <span className="font-medium text-violet-800">{t("tasks.publicWorkersNumber", { number: workerNumber })}</span>}
                         <span className="min-w-0 truncate">
                           <span className="mr-1 text-zinc-500">{t("tasks.publicWorkersWorkerId")}:</span>
                           <code>{worker.worker_id}</code>

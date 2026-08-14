@@ -565,6 +565,13 @@ class FakeStatement {
       row.status = "pending";
       return { meta: { changes: 1 } };
     }
+    if (sql.includes("UPDATE chat_task_confirmations SET status = 'expired'")) {
+      const [confirmationId, userId] = this.args as [string, string];
+      const row = this.db.chatTaskConfirmations.get(confirmationId);
+      if (!row || row.user_id !== userId || row.status !== "pending") return { meta: { changes: 0 } };
+      row.status = "expired";
+      return { meta: { changes: 1 } };
+    }
     if (sql.includes("UPDATE chat_request_idempotency")) {
       const [userId, clientRequestId, status, confirmationId, responseText, now] = this.args as [string, string, "confirmation" | "completed", string | null, string, number];
       const row = this.db.chatRequestIdempotency.get(`${userId}|${clientRequestId}`);

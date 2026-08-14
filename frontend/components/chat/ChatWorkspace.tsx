@@ -92,12 +92,19 @@ export function ChatWorkspace() {
 
         <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="max-w-5xl mx-auto w-full p-4 md:p-6 space-y-4">
-            {controller.taskDraft && (
+            {(controller.taskDraft || controller.taskConfirmation) && (
               <TaskConfirmationCard
-                draft={controller.taskDraft}
-                onCreated={({ taskId, status, eventType }) => {
-                  controller.clearTaskDraft();
-                  if (controller.state.sessionId) {
+                key={controller.taskConfirmation?.confirmation_id ?? controller.taskDraft?.draft_id}
+                draft={controller.taskDraft ?? undefined}
+                confirmation={controller.taskConfirmation ?? undefined}
+                onCreated={({ taskId, status, eventType, confirmationId }) => {
+                  if (confirmationId) {
+                    controller.clearTaskConfirmation();
+                    void controller.resumeTaskConfirmation({ confirmationId, taskId });
+                  } else {
+                    controller.clearTaskDraft();
+                  }
+                  if (controller.state.sessionId && !confirmationId) {
                     controller.appendAssistantContent(
                       controller.state.sessionId,
                       `\n\n[${eventType === "task_confirmed" ? "已创建后台任务" : "任务已更新"}] [${taskId}](/task-center/tasks/${taskId})，当前状态为 **${status}**，Worker 将在后台继续执行。`,
@@ -105,7 +112,10 @@ export function ChatWorkspace() {
                   }
                   void controller.retryLoadSessions();
                 }}
-                onCancelled={() => controller.clearTaskDraft()}
+                onCancelled={() => {
+                  controller.clearTaskDraft();
+                  controller.clearTaskConfirmation();
+                }}
               />
             )}
             <MessagePane

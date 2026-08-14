@@ -8,7 +8,7 @@ import {
   updateSessionTitle,
   removeSession,
 } from "./sessions";
-import { handleChat } from "./chat";
+import { handleCancelChatTaskConfirmation, handleChat } from "./chat";
 import { currentDailyUsage } from "./quota";
 import { handleImageJudge } from "./image-judge";
 import { handleTaskApi } from "./tasks";
@@ -141,6 +141,9 @@ export default {
 
       if (pathname === "/api/chat" && method === "POST") {
         return withCookies(await handleChat(request, env, user), setCookies);
+      }
+      if (pathname === "/api/chat/task-confirmation/cancel" && method === "POST") {
+        return withCookies(await handleCancelChatTaskConfirmation(request, env, user), setCookies);
       }
 
       return withCookies(errorJson("Not found", 404, "NOT_FOUND"), setCookies);

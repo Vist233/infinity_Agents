@@ -12,6 +12,7 @@ import {
   getDefaultProject,
   uploadDataset,
   uploadMethodSource,
+  MAX_TASK_INPUT_BYTES,
 } from "@/lib/api/tasks";
 
 const METHOD_DOC_ACCEPT = ".html,.htm,.pdf,.md,.txt,.doc,.docx";
@@ -52,6 +53,8 @@ export function TaskCreationCard({ resetKey = 0, onCreated, onDirtyChange }: Tas
   const [createdTaskId, setCreatedTaskId] = useState<string | null>(null);
   const [titleEdited, setTitleEdited] = useState(false);
   const requestKeyRef = useRef(idempotencyKey());
+  const methodInputRef = useRef<HTMLInputElement>(null);
+  const datasetInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (resetKey === 0) return;
@@ -62,6 +65,8 @@ export function TaskCreationCard({ resetKey = 0, onCreated, onDirtyChange }: Tas
     setError(null);
     setCreatedTaskId(null);
     setTitleEdited(false);
+    if (methodInputRef.current) methodInputRef.current.value = "";
+    if (datasetInputRef.current) datasetInputRef.current.value = "";
     requestKeyRef.current = idempotencyKey();
     onDirtyChange?.(false);
   }, [onDirtyChange, resetKey]);
@@ -75,6 +80,10 @@ export function TaskCreationCard({ resetKey = 0, onCreated, onDirtyChange }: Tas
   const submit = async () => {
     if (!methodFile || !datasetFile) {
       setError(t("tasks.requireBoth"));
+      return;
+    }
+    if (methodFile.size > MAX_TASK_INPUT_BYTES || datasetFile.size > MAX_TASK_INPUT_BYTES) {
+      setError(t("tasks.inputTooLarge"));
       return;
     }
     setSubmitting(true);
@@ -150,12 +159,20 @@ export function TaskCreationCard({ resetKey = 0, onCreated, onDirtyChange }: Tas
           <div className="flex items-center gap-2 text-sm font-medium text-zinc-700"><FileSearch size={16} className="text-zinc-500" />{t("tasks.methodDoc")}</div>
           <div className="text-xs text-zinc-400">{t("tasks.methodDocHint")}</div>
           <input
+            ref={methodInputRef}
             type="file"
             accept={METHOD_DOC_ACCEPT}
             disabled={submitting || Boolean(createdTaskId)}
             className="text-xs text-zinc-600"
             onChange={(event) => {
               const file = event.target.files?.[0] || null;
+              if (file && file.size > MAX_TASK_INPUT_BYTES) {
+                event.currentTarget.value = "";
+                setMethodFile(null);
+                setPrepared(null);
+                setError(t("tasks.inputTooLarge"));
+                return;
+              }
               setMethodFile(file);
               setPrepared(null);
               markDirty();
@@ -169,12 +186,21 @@ export function TaskCreationCard({ resetKey = 0, onCreated, onDirtyChange }: Tas
           <div className="flex items-center gap-2 text-sm font-medium text-zinc-700"><FileArchive size={16} className="text-zinc-500" />{t("tasks.dataset")}</div>
           <div className="text-xs text-zinc-400">{t("tasks.datasetHint")}</div>
           <input
+            ref={datasetInputRef}
             type="file"
             accept={DATASET_ACCEPT}
             disabled={submitting || Boolean(createdTaskId)}
             className="text-xs text-zinc-600"
             onChange={(event) => {
-              setDatasetFile(event.target.files?.[0] || null);
+              const file = event.target.files?.[0] || null;
+              if (file && file.size > MAX_TASK_INPUT_BYTES) {
+                event.currentTarget.value = "";
+                setDatasetFile(null);
+                setPrepared(null);
+                setError(t("tasks.inputTooLarge"));
+                return;
+              }
+              setDatasetFile(file);
               setPrepared(null);
               markDirty();
             }}

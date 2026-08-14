@@ -28,6 +28,7 @@ weasyprint
 matplotlib
 plotly
 kaleido
+scanpy>=1.10,<2
 
 # Tests
 httpx>=0.27.2

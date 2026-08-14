@@ -5,13 +5,17 @@ import { useRouter } from "next/navigation";
 import { useLanguage } from "@/lib/i18n";
 import { AgentNav } from "@/components/chat/AgentNav";
 import { MobileWorkspaceMenu } from "@/components/chat/MobileWorkspaceMenu";
+import { TaskCreationCard } from "@/components/tasks/TaskCreationCard";
+import { TaskListPanel } from "@/components/tasks/TaskListPanel";
 import { WorkerEnrollmentPanel } from "@/components/tasks/WorkerEnrollmentPanel";
 import { PublicWorkerAdminPanel } from "@/components/tasks/PublicWorkerAdminPanel";
-import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { ListTodo, RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { ListTodo, LogIn } from "lucide-react";
 import { listTasks, type TaskItem, type TaskStatus } from "@/lib/api/tasks";
 import { WorkspaceUserFooter } from "@/components/chat/WorkspaceUserFooter";
+import { getCurrentUser } from "@/lib/api/auth";
+import { redirectToLogin } from "@/lib/runtime-config";
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   draft: "tasks.statusDraft",
@@ -24,56 +28,6 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   timeout: "tasks.statusTimeout",
 };
 
-interface TaskListProps {
-  tasks: TaskItem[];
-  loading: boolean;
-  listError: string | null;
-  emptyLabel: string;
-  processingLabel: string;
-  errorLabel: string;
-  statusLabel: (status: TaskStatus) => string;
-  onOpenTask: (taskId: string) => void;
-}
-
-function TaskList({
-  tasks,
-  loading,
-  listError,
-  emptyLabel,
-  processingLabel,
-  errorLabel,
-  statusLabel,
-  onOpenTask,
-}: TaskListProps) {
-  if (loading && tasks.length === 0) {
-    return <div className="px-2 py-4 text-center text-xs text-zinc-400">{processingLabel}...</div>;
-  }
-  if (listError) {
-    return <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-3 text-xs leading-5 text-red-700">{errorLabel}: {listError}</div>;
-  }
-  if (tasks.length === 0) {
-    return <div className="rounded-xl border border-dashed border-zinc-200 px-3 py-4 text-center text-xs text-zinc-400">{emptyLabel}</div>;
-  }
-  return (
-    <div className="space-y-1">
-      {tasks.map((task) => (
-        <button
-          key={task.task_id}
-          type="button"
-          className="w-full rounded-xl px-3 py-2 text-left transition-colors hover:bg-zinc-100"
-          onClick={() => onOpenTask(task.task_id)}
-        >
-          <div className="truncate text-xs font-medium text-zinc-700">{task.title}</div>
-          <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-zinc-400">
-            <span className="truncate">{statusLabel(task.status)}</span>
-            <span className="shrink-0">{task.attempt_count}/{task.max_attempts}</span>
-          </div>
-        </button>
-      ))}
-    </div>
-  );
-}
-
 /** Task Center owns task creation, worker enrollment, and task history. */
 export default function CodeAgentPage() {
   const router = useRouter();
@@ -81,6 +35,10 @@ export default function CodeAgentPage() {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [creationResetKey, setCreationResetKey] = useState(0);
+  const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated" | "error">("checking");
+  const [authError, setAuthError] = useState<string | null>(null);
   const requestSequenceRef = useRef(0);
 
   const loadTasks = useCallback(async () => {
@@ -99,29 +57,73 @@ export default function CodeAgentPage() {
   }, []);
 
   useEffect(() => {
-    void loadTasks();
+    let cancelled = false;
+    void getCurrentUser()
+      .then((user) => {
+        if (cancelled) return;
+        if (!user) {
+          setAuthStatus("unauthenticated");
+          setAuthError(null);
+          setTasks([]);
+          setLoading(false);
+          return;
+        }
+        setAuthStatus("authenticated");
+        setAuthError(null);
+        void loadTasks();
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setAuthStatus("error");
+          setAuthError(error instanceof Error ? error.message : t("error.backendUnavailable"));
+          setTasks([]);
+          setLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [loadTasks, t]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") return;
     const timer = setInterval(() => { void loadTasks(); }, 5000);
     return () => clearInterval(timer);
-  }, [loadTasks]);
+  }, [authStatus, loadTasks]);
+
+  const formatDate = (iso: string) => {
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString();
+  };
+
+  const handleNewTask = () => {
+    setSelectedTaskId(null);
+    setCreationResetKey((value) => value + 1);
+  };
+
+  const handleCreated = (taskId: string) => {
+    void loadTasks();
+    router.push(`/task-center/tasks/${taskId}`);
+  };
 
   return (
     <div className="flex h-screen bg-transparent font-sans text-zinc-900">
       <aside className="hidden w-[260px] shrink-0 flex-col border-r border-[var(--hairline)] bg-[var(--surface-1)] p-3 backdrop-blur-xl md:flex print:hidden">
         <AgentNav active="tasks" onNavigate={(path: string) => router.push(path)} />
-        <div className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
-          <div className="px-2 text-[11px] uppercase tracking-[0.2em] text-zinc-400">{t("tasks.title")}</div>
-          <TaskList
+        {authStatus === "authenticated" && <div className="mt-4 min-h-0 flex-1 pr-1">
+          <TaskListPanel
             tasks={tasks}
             loading={loading}
-            listError={listError}
-            emptyLabel={t("tasks.empty")}
-            processingLabel={t("run.processing")}
-            errorLabel={t("tasks.listFailedToast")}
-            statusLabel={(status) => t(STATUS_LABEL[status] as never)}
-            onOpenTask={(taskId) => router.push(`/task-center/tasks/${taskId}`)}
+            error={listError}
+            selectedTaskId={selectedTaskId}
+            onNewTask={handleNewTask}
+            onRetry={() => { setLoading(true); void loadTasks(); }}
+            onSelect={(task) => {
+              setSelectedTaskId(task.task_id);
+              router.push(`/task-center/tasks/${task.task_id}`);
+            }}
+            formatDate={formatDate}
           />
-        </div>
-        <WorkspaceUserFooter />
+        </div>}
+        {authStatus === "authenticated" && <WorkspaceUserFooter />}
         <div className="p-2 text-center text-xs tracking-tighter text-zinc-400">v1.0.0 @ 2026</div>
       </aside>
 
@@ -130,34 +132,42 @@ export default function CodeAgentPage() {
           <div className="flex items-center gap-2">
             <MobileWorkspaceMenu
               active="tasks"
-              taskItems={tasks.map((task) => ({
+              onNewTask={authStatus === "authenticated" ? handleNewTask : undefined}
+              taskItems={authStatus === "authenticated" ? tasks.map((task) => ({
                 task_id: task.task_id,
                 title: task.title,
                 statusLabel: t(STATUS_LABEL[task.status] as never),
-              }))}
+              })) : undefined}
             />
             <ListTodo size={16} className="text-zinc-500" />
             <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("tasks.title")}</div>
           </div>
+          {authStatus === "unauthenticated" && <Button type="button" size="sm" className="gap-2" onClick={redirectToLogin}>
+            <LogIn size={15} />
+            {t("home.signInRegister")}
+          </Button>}
         </header>
 
         <ScrollArea className="flex-1">
           <div className="mx-auto max-w-6xl p-4 md:p-6">
-            <div className="space-y-6">
-              <section className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-zinc-700">{t("tasks.confirmationOnlyTitle")}</div>
-                  <p className="mt-1 text-xs text-zinc-500">{t("tasks.confirmationOnlyDescription")}</p>
-                </div>
-                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setLoading(true); void loadTasks(); }} disabled={loading}>
-                  <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-                  {t("tasks.refresh")}
-                </Button>
-              </section>
-
+            {authStatus === "authenticated" ? <div className="space-y-6">
+              <TaskCreationCard resetKey={creationResetKey} onCreated={handleCreated} />
               <WorkerEnrollmentPanel />
               <PublicWorkerAdminPanel />
-            </div>
+            </div> : authStatus === "unauthenticated" ? <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full border border-zinc-200 bg-white shadow-sm"><LogIn size={20} className="text-zinc-500" /></div>
+              <div className="space-y-2">
+                <h2 className="text-2xl font-medium tracking-tight">{t("auth.signInTitle")}</h2>
+                <p className="max-w-md text-sm text-zinc-500">{t("auth.signInDescription")}</p>
+              </div>
+              <Button type="button" className="gap-2 rounded-xl" onClick={redirectToLogin}>
+                <LogIn size={16} />
+                {t("auth.signIn")}
+              </Button>
+            </div> : authStatus === "error" ? <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 text-center">
+              <p className="max-w-md text-sm text-red-600">{t("error.backendUnavailable")}: {authError}</p>
+              <Button type="button" variant="outline" onClick={() => window.location.reload()}>{t("composer.retry")}</Button>
+            </div> : null}
           </div>
         </ScrollArea>
       </main>

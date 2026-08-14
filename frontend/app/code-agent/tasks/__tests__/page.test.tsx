@@ -23,11 +23,13 @@ vi.mock("@/lib/api/tasks", () => ({
   listTasks: vi.fn(),
 }));
 
+import { getCurrentUser } from "@/lib/api/auth";
 import { downloadArtifact, getJson, listTasks } from "@/lib/api/tasks";
 
 describe("Task detail downloads", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    (getCurrentUser as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "user-1", email: "tester@example.com", name: "Tester" });
     window.localStorage.setItem("infinity-agents-language", "zh");
     window.history.replaceState({}, "", "/code-agent/tasks/?task_id=task-1");
     (listTasks as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -72,5 +74,30 @@ describe("Task detail downloads", () => {
       fireEvent.click(download);
     });
     expect(downloadArtifact).toHaveBeenCalledWith("artifact-1", "case-2-artifacts.zip");
+  });
+
+  it("shows only login actions and no task creation to unauthenticated users", async () => {
+    (getCurrentUser as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    await act(async () => {
+      render(<LanguageProvider><TaskDetailPage /></LanguageProvider>);
+    });
+
+    expect(await screen.findAllByRole("button", { name: "登录 / 注册" })).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Open workspace menu" }));
+    expect(screen.queryByText("新建任务")).toBeNull();
+    expect(getJson).not.toHaveBeenCalled();
+  });
+
+  it("keeps authentication failures separate from the signed-out state", async () => {
+    (getCurrentUser as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("offline"));
+
+    await act(async () => {
+      render(<LanguageProvider><TaskDetailPage /></LanguageProvider>);
+    });
+
+    expect(await screen.findByText(/后端服务不可用/)).toBeDefined();
+    expect(screen.queryByRole("button", { name: "登录 / 注册" })).toBeNull();
+    expect(getJson).not.toHaveBeenCalled();
   });
 });

@@ -25,7 +25,7 @@ import {
 import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
 import { startChatStream, toFriendlyChatError, type ChatDoneEvent, type ChatEvent, type ChatStreamHandle } from "@/lib/ws/chat-stream";
 import { useLanguage } from "@/lib/i18n";
-import type { TaskDraft } from "@/lib/api/tasks";
+import type { ChatTaskConfirmation, TaskDraft } from "@/lib/api/tasks";
 
 const isSocketOpen = (socket?: ChatStreamHandle | null) => {
   if (!socket) return false;
@@ -53,6 +53,7 @@ export function useChatController() {
   const sessionsRef = useRef<SessionItem[]>([]);
   const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated">("checking");
   const [taskDraft, setTaskDraft] = useState<TaskDraft | null>(null);
+  const [taskConfirmation, setTaskConfirmation] = useState<ChatTaskConfirmation | null>(null);
 
   const sessionId = state.sessionId;
   const messages = useMemo(() => getMessagesForSession(state, sessionId), [state, sessionId]);
@@ -291,6 +292,7 @@ export function useChatController() {
 
   const handleNewChat = useCallback(() => {
     setTaskDraft(null);
+    setTaskConfirmation(null);
     dispatch({ type: "reset_new_chat" });
   }, []);
 
@@ -298,6 +300,7 @@ export function useChatController() {
     (id: string) => {
       if (state.editingSessionId) return;
       setTaskDraft(null);
+      setTaskConfirmation(null);
       setSessionRunState(id, { unreadDone: false });
       dispatch({ type: "set_session_id", sessionId: id });
       dispatch({ type: "set_deleting_session", sessionId: null });
@@ -470,6 +473,22 @@ export function useChatController() {
           tokenInfo: tokenInfo ?? prev.tokenInfo,
         }));
       };
+      const finalizeForConfirmation = () => {
+        if (completed) return;
+        completed = true;
+        if (isCurrentRequest()) runningRequestBySessionRef.current.delete(targetSessionId!);
+        wsByRequestRef.current.delete(clientRequestId);
+        setSessionRunState(targetSessionId!, (prev) => ({
+          ...prev,
+          running: false,
+          phase: null,
+          toolName: null,
+          unreadDone: false,
+          terminal: null,
+          requestId: null,
+          activeTools: [],
+        }));
+      };
 
       const onEvent = (eventPayload: ChatEvent) => {
         if (!isCurrentRequest()) return;
@@ -507,7 +526,14 @@ export function useChatController() {
           return;
         }
         if (eventPayload.type === "task_draft_created" || eventPayload.type === "task_draft_updated") {
+          setTaskConfirmation(null);
           setTaskDraft(eventPayload.draft);
+          return;
+        }
+        if (eventPayload.type === "task_confirmation") {
+          setTaskDraft(null);
+          setTaskConfirmation(eventPayload);
+          finalizeForConfirmation();
           return;
         }
         if (eventPayload.type === "task_draft_cancelled") {
@@ -583,6 +609,163 @@ export function useChatController() {
       language,
       t,
     ],
+  );
+
+  /** Resume the same Analysis turn after the user submits its confirmation card. */
+  const resumeTaskConfirmation = useCallback(
+    async ({ confirmationId, taskId }: { confirmationId: string; taskId: string }) => {
+      const targetSessionId = state.sessionId;
+      if (!targetSessionId) return;
+      if (runningRequestBySessionRef.current.has(targetSessionId)) {
+        toast.info(t("error.runningWait"));
+        return;
+      }
+      if (!loadedSessionIdsRef.current.has(targetSessionId)) {
+        try {
+          await ensureSessionMessagesLoaded(targetSessionId);
+        } catch {
+          toast.error(t("error.loadHistory"));
+          return;
+        }
+      }
+
+      const baseMessages = sessionMessagesMapRef.current[targetSessionId] || [];
+      dispatch({
+        type: "set_session_messages",
+        sessionId: targetSessionId,
+        messages: [...baseMessages, { role: "assistant", content: "" }],
+      });
+      setTaskConfirmation(null);
+      const clientRequestId = typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      runningRequestBySessionRef.current.set(targetSessionId, clientRequestId);
+      setSessionRunState(targetSessionId, {
+        running: true,
+        phase: "thinking",
+        toolName: null,
+        unreadDone: false,
+        terminal: null,
+        requestId: clientRequestId,
+        elapsedMs: 0,
+        attempt: 1,
+        maxAttempts: 1,
+        reason: null,
+        hasReceivedChunk: false,
+        hasReceivedToolCall: false,
+        activeTools: [],
+        tokenInfo: null,
+      });
+
+      let accumulatedResponse = "";
+      let completed = false;
+      const isCurrentRequest = () => runningRequestBySessionRef.current.get(targetSessionId) === clientRequestId;
+      const finalize = (terminal: TerminalState, tokenInfo?: { prompt: number; response: number; total: number } | null) => {
+        if (completed) return;
+        completed = true;
+        if (isCurrentRequest()) runningRequestBySessionRef.current.delete(targetSessionId);
+        wsByRequestRef.current.delete(clientRequestId);
+        setSessionRunState(targetSessionId, (prev) => ({
+          ...prev,
+          running: false,
+          phase: null,
+          toolName: null,
+          unreadDone: true,
+          terminal,
+          requestId: null,
+          activeTools: [],
+          tokenInfo: tokenInfo ?? prev.tokenInfo,
+        }));
+      };
+      const finalizeForConfirmation = () => {
+        if (completed) return;
+        completed = true;
+        if (isCurrentRequest()) runningRequestBySessionRef.current.delete(targetSessionId);
+        wsByRequestRef.current.delete(clientRequestId);
+        setSessionRunState(targetSessionId, (prev) => ({
+          ...prev,
+          running: false,
+          phase: null,
+          toolName: null,
+          unreadDone: false,
+          terminal: null,
+          requestId: null,
+          activeTools: [],
+        }));
+      };
+
+      const onEvent = (eventPayload: ChatEvent) => {
+        if (!isCurrentRequest()) return;
+        if (eventPayload.type === "status") {
+          setSessionRunState(targetSessionId, (prev) => ({
+            ...prev,
+            phase: eventPayload.phase,
+            elapsedMs: Math.max(0, Number(eventPayload.elapsed_ms) || prev.elapsedMs),
+            toolName: eventPayload.tool_name ?? prev.toolName,
+          }));
+          return;
+        }
+        if (eventPayload.type === "chunk") {
+          accumulatedResponse += eventPayload.content;
+          setAssistantContent(targetSessionId, accumulatedResponse);
+          setSessionRunState(targetSessionId, { hasReceivedChunk: true });
+          return;
+        }
+        if (eventPayload.type === "tool_call") {
+          setSessionRunState(targetSessionId, (prev) => ({
+            ...prev,
+            hasReceivedToolCall: true,
+            toolName: eventPayload.tool_name,
+            activeTools: prev.activeTools.includes(eventPayload.tool_name)
+              ? prev.activeTools
+              : [...prev.activeTools, eventPayload.tool_name],
+          }));
+          return;
+        }
+        if (eventPayload.type === "task_confirmation") {
+          setTaskConfirmation(eventPayload);
+          finalizeForConfirmation();
+          return;
+        }
+        if (eventPayload.type === "done") {
+          finalize("success", toTokenInfo(eventPayload.token_info));
+          void refreshSessions();
+          wsByRequestRef.current.get(clientRequestId)?.close(1000, "completed");
+          return;
+        }
+        if (eventPayload.type === "error") {
+          const friendly = toFriendlyChatError(eventPayload.message || t("error.connection"), language);
+          appendAssistantContent(targetSessionId, accumulatedResponse ? `\n\n[Error] ${friendly}` : `[Error] ${friendly}`);
+          finalize("error");
+          wsByRequestRef.current.get(clientRequestId)?.close(1000, "error");
+        }
+      };
+
+      const stream = startChatStream({
+        apiBase,
+        payload: {
+          session_id: targetSessionId,
+          messages: baseMessages,
+          retry_attempt: 0,
+          client_request_id: clientRequestId,
+          task_confirmation_id: confirmationId,
+          task_id: taskId,
+        },
+        onEvent,
+        onSocketError: () => {
+          if (!isCurrentRequest()) return;
+          appendAssistantContent(targetSessionId, accumulatedResponse ? `\n\n[Error] ${t("error.network")}` : `[Error] ${t("error.network")}`);
+          finalize("error");
+          toast.error(t("error.networkToast"));
+        },
+        onClose: () => {
+          if (!isCurrentRequest() || completed) return;
+          finalize("error");
+        },
+      });
+      wsByRequestRef.current.set(clientRequestId, stream);
+    },
+    [apiBase, appendAssistantContent, ensureSessionMessagesLoaded, language, refreshSessions, setAssistantContent, setSessionRunState, state.sessionId, t],
   );
 
   const handleStopGeneration = useCallback(() => {
@@ -664,7 +847,10 @@ export function useChatController() {
     handleSubmit,
     handleStopGeneration,
     taskDraft,
+    taskConfirmation,
     clearTaskDraft: () => setTaskDraft(null),
+    clearTaskConfirmation: () => setTaskConfirmation(null),
+    resumeTaskConfirmation,
     authStatus,
     setError,
     appendAssistantContent,

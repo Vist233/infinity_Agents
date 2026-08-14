@@ -12,6 +12,9 @@ export type TaskStatus =
   | "cancelled"
   | "timeout";
 
+/** Hard per-file input cap shared by direct Task Center and Agent confirmation. */
+export const MAX_TASK_INPUT_BYTES = 25 * 1024 * 1024;
+
 export interface TaskItem {
   task_id: string;
   task_spec_id: string;
@@ -51,6 +54,18 @@ export interface TaskDraft {
   };
   missing_inputs: string[];
   task_spec?: Record<string, unknown>;
+}
+
+/** The Cloudflare Analysis confirmation card emitted by request_task_creation. */
+export interface ChatTaskConfirmation {
+  confirmation_id: string;
+  tool_name: string;
+  title: string;
+  analysis_type: string;
+  research_question: string;
+  method_document_name: string;
+  method_document_content: string;
+  dataset_name: string;
 }
 
 export interface WorkerEnrollmentInfo {
@@ -319,6 +334,14 @@ export async function getTaskDraft(draftId: string): Promise<TaskDraft> {
 
 export async function cancelTaskDraft(draftId: string): Promise<{ draft_id: string; status: string }> {
   return requestJson(`${getApiBase()}/api/task-drafts/${encodeURIComponent(draftId)}/cancel`, { method: "POST" });
+}
+
+export async function cancelChatTaskConfirmation(confirmationId: string): Promise<{ confirmation_id: string; status: string }> {
+  return requestJson(`${getApiBase()}/api/chat/task-confirmation/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmation_id: confirmationId }),
+  });
 }
 
 export async function confirmTaskDraft(input: {

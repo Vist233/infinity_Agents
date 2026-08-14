@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WORKER_ONLINE_WINDOW_SECONDS, taskSubmissionSourceError, workerPresence, workerTrustLevel } from "../src/tasks";
+import { configuredTaskUploadLimit, DEFAULT_TASK_UPLOAD_LIMIT_BYTES, WORKER_ONLINE_WINDOW_SECONDS, taskSubmissionSourceError, workerPresence, workerTrustLevel } from "../src/tasks";
 import type { AuthedUser } from "../src/auth";
 
 const user: AuthedUser = { userId: "user-1", email: null, sid: "sid-1" };
@@ -43,5 +43,17 @@ describe("task submission source contract", () => {
   it("allows direct submission only through the dedicated route", () => {
     expect(taskSubmissionSourceError({ chat_confirmation_id: false, submission_source: "task_center" }, true)).toBeNull();
     expect(taskSubmissionSourceError({ chat_confirmation_id: "confirmation-1" }, true)).toBe("TASK_CONFIRMATION_CONFLICT");
+  });
+});
+
+describe("task input size contract", () => {
+  it("keeps the default per-file input limit at 25 MB", () => {
+    expect(DEFAULT_TASK_UPLOAD_LIMIT_BYTES).toBe(25 * 1024 * 1024);
+  });
+
+  it("never allows configuration to raise the hard 25 MB input cap", () => {
+    expect(configuredTaskUploadLimit(100 * 1024 * 1024)).toBe(25 * 1024 * 1024);
+    expect(configuredTaskUploadLimit(5 * 1024 * 1024)).toBe(5 * 1024 * 1024);
+    expect(configuredTaskUploadLimit("invalid")).toBe(25 * 1024 * 1024);
   });
 });

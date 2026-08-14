@@ -6,7 +6,8 @@ import { bindChatTaskConfirmation, getChatTaskConfirmationForUser } from "./db";
 const DEFAULT_PROJECT_NAME = "Default Project";
 const MAX_TITLE_LENGTH = 200;
 const MAX_FILENAME_LENGTH = 240;
-const DEFAULT_UPLOAD_LIMIT = 25 * 1024 * 1024;
+export const DEFAULT_TASK_UPLOAD_LIMIT_BYTES = 25 * 1024 * 1024;
+export const MAX_TASK_INPUT_BYTES = DEFAULT_TASK_UPLOAD_LIMIT_BYTES;
 const METHOD_EXTENSIONS = new Set([".html", ".htm", ".pdf", ".md", ".txt", ".doc", ".docx"]);
 export const WORKER_ONLINE_WINDOW_SECONDS = 90;
 
@@ -54,9 +55,15 @@ function safeName(value: string, fallback: string): string {
   return name.slice(0, MAX_FILENAME_LENGTH);
 }
 
+export function configuredTaskUploadLimit(value: unknown): number {
+  const configured = Number(value);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.min(configured, MAX_TASK_INPUT_BYTES)
+    : MAX_TASK_INPUT_BYTES;
+}
+
 function uploadLimit(env: Env): number {
-  const configured = Number(env.TASK_UPLOAD_MAX_BYTES);
-  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_UPLOAD_LIMIT;
+  return configuredTaskUploadLimit(env.TASK_UPLOAD_MAX_BYTES);
 }
 
 function taskId(): string {

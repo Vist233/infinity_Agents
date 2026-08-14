@@ -7,9 +7,10 @@ import { MobileWorkspaceMenu } from "@/components/chat/MobileWorkspaceMenu";
 import { WorkspaceUserFooter } from "@/components/chat/WorkspaceUserFooter";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, RefreshCw, Download, PlayCircle, CheckCircle2, XCircle, Clock, AlertTriangle } from "lucide-react";
+import { ArrowLeft, RefreshCw, Download, PlayCircle, CheckCircle2, XCircle, Clock, AlertTriangle, LogIn } from "lucide-react";
 import { useRouter, useParams } from "next/navigation";
-import { getApiBase } from "@/lib/runtime-config";
+import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
+import { getCurrentUser } from "@/lib/api/auth";
 import { getJson, cancelTask, downloadArtifact, listTasks, taskEventStreamUrl, type TaskItem } from "@/lib/api/tasks";
 
 type TaskStatus = "draft" | "queued" | "claimed" | "running" | "succeeded" | "failed" | "cancelled" | "timeout";
@@ -124,6 +125,8 @@ export default function TaskDetailPage() {
   const [artifactsError, setArtifactsError] = useState<string | null>(null);
   const [taskListError, setTaskListError] = useState<string | null>(null);
   const [downloadingArtifactId, setDownloadingArtifactId] = useState<string | null>(null);
+  const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated" | "error">("checking");
+  const [authError, setAuthError] = useState<string | null>(null);
   const detailRequestRef = useRef(0);
 
   const loadDetail = useCallback(async () => {
@@ -169,7 +172,32 @@ export default function TaskDetailPage() {
     }
   }, [taskId]);
 
-  useEffect(() => { if (taskId) void loadDetail(); }, [taskId, loadDetail]);
+  useEffect(() => {
+    let cancelled = false;
+    void getCurrentUser()
+      .then((user) => {
+        if (cancelled) return;
+        if (!user) {
+          setAuthStatus("unauthenticated");
+          setAuthError(null);
+          setLoading(false);
+          return;
+        }
+        setAuthStatus("authenticated");
+        setAuthError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setAuthStatus("error");
+        setAuthError(err instanceof Error ? err.message : t("error.backendUnavailable"));
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [t]);
+
+  useEffect(() => {
+    if (authStatus === "authenticated" && taskId) void loadDetail();
+  }, [authStatus, taskId, loadDetail]);
 
   useEffect(() => {
     setLiveEvents([]);
@@ -179,7 +207,7 @@ export default function TaskDetailPage() {
   }, [taskId]);
 
   useEffect(() => {
-    if (!taskId) return;
+    if (authStatus !== "authenticated" || !taskId) return;
     let active = true;
     let es: EventSource | null = null;
     let timer: ReturnType<typeof setInterval> | null = null;
@@ -233,7 +261,7 @@ export default function TaskDetailPage() {
       es?.close();
       if (timer) clearInterval(timer);
     };
-  }, [taskId, loadDetail]);
+  }, [authStatus, taskId, loadDetail]);
 
   const handleDownload = async (artifact: Artifact) => {
     setDownloadError(null);
@@ -272,7 +300,7 @@ export default function TaskDetailPage() {
       <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
         <AgentNav active="tasks" onNavigate={(path) => router.push(path)} />
         <div className="mt-3 px-2 text-xs font-semibold uppercase tracking-widest text-zinc-400">{t("tasks.title")}</div>
-        <ScrollArea className="mt-2 min-h-0 flex-1">
+        {authStatus === "authenticated" && <ScrollArea className="mt-2 min-h-0 flex-1">
           <div className="space-y-1 pr-1">
             {taskList.length === 0 ? (
               <div className="rounded-xl border border-dashed border-zinc-200 px-3 py-4 text-center text-xs text-zinc-400">
@@ -290,8 +318,8 @@ export default function TaskDetailPage() {
               </button>
             ))}
           </div>
-        </ScrollArea>
-        <WorkspaceUserFooter />
+        </ScrollArea>}
+        {authStatus === "authenticated" && <WorkspaceUserFooter />}
         <div className="p-2 text-center text-xs tracking-tighter text-zinc-400">v1.0.0 @ 2026</div>
       </aside>
       <main className="flex-1 flex flex-col relative min-w-0">
@@ -300,11 +328,11 @@ export default function TaskDetailPage() {
               <MobileWorkspaceMenu
                 active="tasks"
                 activeTaskId={taskId}
-                taskItems={taskList.map((item) => ({
+                taskItems={authStatus === "authenticated" ? taskList.map((item) => ({
                   task_id: item.task_id,
                   title: item.title,
                   statusLabel: t(STATUS_LABELS[item.status]),
-                }))}
+                })) : undefined}
               />
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.push("/task-center")}>
               <ArrowLeft size={16} />
@@ -312,7 +340,10 @@ export default function TaskDetailPage() {
             <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("tasks.detailTitle")}</div>
             {sseConnected && <span className="text-[10px] text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5">LIVE</span>}
           </div>
-          <div className="flex gap-2">
+          {authStatus === "unauthenticated" ? <Button type="button" size="sm" className="gap-2" onClick={redirectToLogin}>
+            <LogIn size={15} />
+            {t("home.signInRegister")}
+          </Button> : authStatus === "authenticated" ? <div className="flex gap-2">
             {task && !isTerminal && (
               <Button variant="destructive" size="sm" onClick={handleCancel} disabled={cancelling}>
                 <XCircle size={14} className="mr-1" />
@@ -323,11 +354,28 @@ export default function TaskDetailPage() {
               <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
               {t("composer.retry")}
             </Button>
-          </div>
+          </div> : null}
         </header>
 
         <ScrollArea className="flex-1">
-          {cancelSuccess && (
+          {authStatus === "unauthenticated" ? (
+            <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-6 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full border border-zinc-200 bg-white shadow-sm"><LogIn size={20} className="text-zinc-500" /></div>
+              <div className="space-y-2">
+                <h2 className="text-2xl font-medium tracking-tight">{t("auth.signInTitle")}</h2>
+                <p className="max-w-md text-sm text-zinc-500">{t("auth.signInDescription")}</p>
+              </div>
+              <Button type="button" className="gap-2 rounded-xl" onClick={redirectToLogin}>
+                <LogIn size={16} />
+                {t("auth.signIn")}
+              </Button>
+            </div>
+          ) : authStatus === "error" ? (
+            <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-6 text-center">
+              <p className="max-w-md text-sm text-red-600">{t("error.backendUnavailable")}: {authError}</p>
+              <Button type="button" variant="outline" onClick={() => window.location.reload()}>{t("composer.retry")}</Button>
+            </div>
+          ) : cancelSuccess && (
             <div className="mx-4 mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
               {t("tasks.cancelSuccess")}
             </div>

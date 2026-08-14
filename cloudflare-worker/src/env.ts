@@ -43,10 +43,6 @@ export interface Env {
   // AES-GCM key used to keep a recoverable copy of persistent Worker
   // credentials encrypted at rest. The raw key is configured as a secret.
   WORKER_CREDENTIAL_ENCRYPTION_KEY?: string;
-  // Kept out of the Worker source. A trusted verifier service uses this
-  // capability to publish a quarantined result after independent checks.
-  WORKER_VERIFIER_TOKEN?: string;
-
   // Secrets
   STEPFUN_API_KEY: string;
   ZHANG_AUTH_CLIENT_SECRET: string;

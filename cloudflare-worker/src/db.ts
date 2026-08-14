@@ -275,6 +275,14 @@ export async function reopenChatTaskConfirmation(env: Env, confirmationId: strin
     .run();
 }
 
+export async function cancelChatTaskConfirmation(env: Env, confirmationId: string, userId: string): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `UPDATE chat_task_confirmations SET status = 'expired'
+     WHERE confirmation_id = ?1 AND user_id = ?2 AND status = 'pending'`,
+  ).bind(confirmationId, userId).run();
+  return (result.meta?.changes ?? 0) === 1;
+}
+
 export async function getOwnedTask(env: Env, taskId: string, userId: string): Promise<OwnedTaskRow | null> {
   return env.DB.prepare(
     `SELECT task_id, title, status, created_by, chat_confirmation_id

@@ -53,6 +53,25 @@ describe("chat stream event normalization", () => {
     }))).toMatchObject({ type: "task_confirmed", task_id: "task-1", status: "queued" });
   });
 
+  it("normalizes the Cloudflare task confirmation card event", () => {
+    expect(normalizeChatEvent(JSON.stringify({
+      type: "task_confirmation",
+      confirmation_id: "confirmation-1",
+      tool_name: "request_task_creation",
+      title: "Case 2",
+      analysis_type: "biopython",
+      research_question: "Calculate GC and length statistics",
+      method_document_name: "case-2.md",
+      method_document_content: "# Case 2\n\nCalculate GC and length statistics.",
+      dataset_name: "case-2.zip",
+    }))).toMatchObject({
+      type: "task_confirmation",
+      confirmation_id: "confirmation-1",
+      title: "Case 2",
+      method_document_content: "# Case 2\n\nCalculate GC and length statistics.",
+    });
+  });
+
   it("falls back to chunk when payload is plain text", () => {
     const event = normalizeChatEvent("raw text output");
     expect(event).toEqual({ type: "chunk", content: "raw text output" });

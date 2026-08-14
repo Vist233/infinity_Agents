@@ -21,12 +21,18 @@ vi.mock("@/lib/api/tasks", () => ({
   getPublicWorkerPool: vi.fn().mockRejectedValue(Object.assign(new Error("forbidden"), { status: 403 })),
 }));
 
+vi.mock("@/lib/api/auth", () => ({
+  getCurrentUser: vi.fn(),
+  logout: vi.fn(),
+}));
+
 // useRouter is not under test here.
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
-import { submitTaskBundle, listTasks } from "@/lib/api/tasks";
+import { listTasks } from "@/lib/api/tasks";
+import { getCurrentUser } from "@/lib/api/auth";
 
 const MOCK_TASKS = [
   {
@@ -46,6 +52,11 @@ describe("Task Center workspace", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (listTasks as ReturnType<typeof vi.fn>).mockResolvedValue(MOCK_TASKS);
+    (getCurrentUser as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "user-1",
+      email: "user@example.com",
+      name: "User One",
+    });
   });
 
   afterEach(() => {
@@ -53,14 +64,17 @@ describe("Task Center workspace", () => {
     vi.useRealTimers();
   });
 
-  it("renders task history, the confirmation-only notice, and collapsed Worker management", async () => {
+  it("renders task history, direct task creation, and Worker management", async () => {
     await act(async () => {
       renderPage();
     });
 
-    expect(screen.getByText("任务只能从 Analysis 确认卡提交")).toBeDefined();
+    expect(screen.getByTestId("task-creation-card")).toBeDefined();
+    expect(screen.getByText("任务管理")).toBeDefined();
+    expect(screen.getByRole("button", { name: "新建任务" })).toBeDefined();
     expect(screen.getByText("添加 Worker")).toBeDefined();
-    expect(document.querySelectorAll('input[type="file"]').length).toBe(0);
+    expect(document.querySelectorAll('input[type="file"]').length).toBe(2);
+    expect(screen.queryByText("任务只能从 Analysis 确认卡提交")).toBeNull();
 
     // Task list loaded from the API
     await waitFor(() => {
@@ -70,12 +84,11 @@ describe("Task Center workspace", () => {
     expect(screen.getByText("成功")).toBeDefined();
   });
 
-  it("does not expose a direct task creation form in Task Center", async () => {
+  it("exposes the direct task creation form without submitting it automatically", async () => {
     await act(async () => {
       renderPage();
     });
-    expect(screen.queryByRole("button", { name: /确认并提交/ })).toBeNull();
-    expect(submitTaskBundle).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "创建任务" })).toBeDefined();
   });
 
   it("shows an error banner when the task list fails to load", async () => {
@@ -88,5 +101,19 @@ describe("Task Center workspace", () => {
     await waitFor(() => {
       expect(screen.getByText(/boom/)).toBeDefined();
     });
+  });
+
+  it("shows only the login entry points when unauthenticated", async () => {
+    (getCurrentUser as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    await act(async () => {
+      renderPage();
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "登录 / 注册" })).toHaveLength(2);
+    });
+    expect(screen.queryByTestId("task-creation-card")).toBeNull();
+    expect(screen.queryByText("未登录")).toBeNull();
   });
 });

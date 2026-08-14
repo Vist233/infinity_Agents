@@ -9,8 +9,8 @@
 - Mac/Windows 上的 Docker Worker 才执行 Claude Code；它只拿自己的长期 Worker credential 和本机 Provider 配置。
 - zhangbot 上的 Redis 保持现有服务，通过本地 SSH 隧道给本地 Worker 使用；Cloudflare Edge 不把 Redis 暴露成公网 binding。
 - 一个 Namespace 可以对应多个不同 Worker ID；一个 Worker credential 同时只允许一个活动机器实例。
-- 结果上传后先进入 quarantine；当前分支的结果发布服务完成 ZIP 完整性检查后才变成网页可下载的 published Artifact。
-- 本轮“verify 部分不用”指不启动额外验收 Subagent；它不改变上述已部署的 Artifact 发布边界。
+- 结果上传后先进入 quarantine；同一个持有有效 Attempt 租约的 Worker 在完成对象存在、大小、checksum 和 manifest 绑定检查后直接发布为网页可下载的 Artifact。
+- 当前运行链路放弃 verifier 容器和 `verification_pending` 状态；保留 Worker 控制面的租约、fencing、checksum、对象存在和基础 ZIP 完整性边界。
 
 ## 2. 总体拓扑
 
@@ -21,20 +21,12 @@ flowchart LR
   E --> R[(Cloudflare R2)]
   E -->|SSE / JSON| U
 
-  E -->|HTTPS Worker Control API| A[Mac Docker Worker A]
-  E -->|HTTPS Worker Control API| B[Mac Docker Worker B]
+  E -->|HTTPS Worker Control API| B[本地 Docker Worker B]
 
-  A --> C1[Claude Code CLI]
-  B --> C2[Claude Code CLI]
-  A -->|SSH 隧道 16379| Z[zhangbot Redis]
   B -->|SSH 隧道 16379| Z
 
-  A -->|上传结果| R
   B -->|上传结果| R
-  R --> Q[quarantine Artifact]
-  Q --> V[结果发布服务]
-  V -->|发布成功| D
-  V -->|状态 published| R
+  R --> Q[quarantine → published Artifact]
   U -->|鉴权下载| E
   E -->|流式读取| R
 ~~~
@@ -115,23 +107,17 @@ R2 key 不直接暴露给浏览器。下载路径必须先根据当前用户查�
 - 在同一容器中直接运行 Claude Code；
 - 打包、计算 SHA-256、上传 Artifact；
 - 完成 Attempt 后清空任务目录；
-- 默认将自身置为退出状态，Compose 按 restart: unless-stopped 开启下一轮生命周期。
+- 默认保持进程在线，继续等待下一个任务；只有一次性验收才显式设置 `WORKER_RECYCLE_AFTER_TASK=1`。
 
 本地容器只挂载两个 named volume：/worker-inputs 和 /worker-outputs。没有宿主 Docker socket，因此执行模型不是 Docker-in-Docker，也不是 Docker-outside-of-Docker。
 
-### 3.6 结果发布服务
+### 3.6 Finalize / Artifact 发布
 
-backend/code_agent/verifier_service.py 是当前分支中独立的结果发布服务：
-
-- 没有 Worker credential；
-- 没有 Provider key；
-- 没有 Redis credential；
-- 没有 Docker socket；
-- 只读取待发布的 quarantine ZIP；
-- 只在本地临时 volume 中做完整性检查；
-- 通过独立控制接口将合法 Artifact 发布。
-
-它不是 Agent，也不是 Subagent。它是当前版本“执行容器不能自我把结果标成网页成功”的权限边界。
+Worker 不能凭文字自报成功；它只能提交自己租约、Attempt、Namespace、fencing
+epoch 绑定的对象。控制面在 `finalize` 中检查对象存在、大小、checksum、manifest
+绑定和租约，然后在一个 D1 batch 中同时写入 Task succeeded、Attempt succeeded、
+Artifact published 和成功事件。当前不启动 verifier 容器，也不保留
+`verification_pending` 运行状态。
 
 ## 4. 端到端时序
 
@@ -141,9 +127,8 @@ sequenceDiagram
   participant Edge as Cloudflare Edge
   participant D1 as D1
   participant R2 as R2
-  participant Worker as 本地 Worker
+  participant Worker as 本地 Worker B
   participant Claude as Claude Code
-  participant Publisher as 结果发布服务
 
   Browser->>Edge: 登录/创建任务/上传 method + dataset
   Edge->>R2: 写入输入对象
@@ -164,12 +149,8 @@ sequenceDiagram
   end
   Edge->>R2: 写入 quarantine object
   Worker->>Edge: finalize(manifest, epoch)
-  Edge->>D1: 记录 Attempt succeeded + Artifact quarantine
-  Publisher->>Edge: 读取待发布队列
-  Edge->>R2: 流式读取 quarantine ZIP
-  Publisher->>Publisher: SHA/大小/ZIP/路径安全检查
-  Publisher->>Edge: publish
-  Edge->>D1: Task succeeded + Artifact published
+  Worker->>Edge: finalize(manifest, epoch, checksum)
+  Edge->>D1: 原子写入 Task succeeded + Attempt succeeded + Artifact published
   Browser->>Edge: 查询任务和 Artifact
   Edge->>R2: 流式返回结果 ZIP
 ~~~
@@ -181,7 +162,7 @@ Task、Attempt、Artifact 的正常路径：
 ~~~text
 Task:     queued -> claimed -> running -> succeeded
 Attempt:  claimed -> running -> succeeded
-Artifact: uploading -> quarantine -> published
+Artifact: uploading -> quarantine -> published（同一 finalize 原子发布）
 ~~~
 
 每次认领都会生成新的 fencing_epoch。后续 heartbeat、资源下载、Artifact 上传、multipart 完成和 finalize 都带 epoch，并在 D1 中同时检查 Worker ID、Namespace、Attempt ID、Task ID、epoch、lease 未过期和当前状态。因此旧容器即使在网络恢复后继续运行，也不能覆盖新 Worker 已经接管的任务。
@@ -220,7 +201,8 @@ ordinary/student -> institution_trusted
 
 当前本地 Worker 使用：
 
-- 单请求阈值：20 MB；
+- Task Method/Dataset 输入上限：每个文件 25 MB；
+- Artifact 单请求阈值：20 MB；
 - Multipart part：8 MB；
 - Artifact 总上限：默认 2 GB，可由 Cloudflare 变量限制；
 - 全量 ZIP SHA-256；
@@ -240,13 +222,9 @@ Case 3 的线上结果约 30.7 MB，已经覆盖 Multipart 入口；Case 2 覆�
         └─ scripts/run_local_cloudflare_workers.sh
               ├─ SSH local forward: localhost:16379 -> zhangbot:6379
               ├─ 读取 Redis ACL（不打印）
-              ├─ worker-a 容器
-              │    ├─ /worker-inputs
-              │    └─ /worker-outputs
               ├─ worker-b 容器
               │    ├─ /worker-inputs
               │    └─ /worker-outputs
-              └─ verifier 容器（当前分支有本机 verifier env 时）
 ~~~
 
 本地 Worker 配置中的 CONTROL_BASE_URL 是 Cloudflare Worker URL，不是 D1 SQL 地址。不要把 Cloudflare account token、D1 token、Redis password 或 Anthropic token 放入前端。
@@ -259,7 +237,7 @@ Case 3 的线上结果约 30.7 MB，已经覆盖 Multipart 入口；Case 2 覆�
 - 本地执行 Worker：自己的长期 Worker credential。
 - Provider：只在本机环境和执行容器中存在。
 - Redis：只在本机/SSH 隧道一侧使用。
-- 结果发布服务：独立 verifier token，仅用于发布接口。
+- 不存在 verifier 运行时、verifier token 或 `verification_pending` 依赖。
 
 恢复边界：
 
@@ -269,7 +247,7 @@ Case 3 的线上结果约 30.7 MB，已经覆盖 Multipart 入口；Case 2 覆�
 - lease 过期：D1 回收 Attempt，按策略重试或 timeout。
 - Claude Code 失败：Worker 报告失败，服务端保留错误码。
 - R2 上传失败：不允许 finalize 成功。
-- 发布服务停止：Artifact 保持 quarantine，恢复后再发布。
+- finalize 前的 Artifact 保持 quarantine；校验失败或租约失效时不能发布。
 - 浏览器断线：任务继续执行；重新打开 Task Center 后从 D1/SSE 读取状态。
 
 不做的事情：
@@ -290,8 +268,7 @@ Case 3 的线上结果约 30.7 MB，已经覆盖 Multipart 入口；Case 2 覆�
 | cloudflare-worker/src/env.ts | D1/R2/认证/Provider 绑定声明 |
 | backend/code_agent/worker/cloudflare_worker.py | 本地 Docker Worker 主循环 |
 | backend/code_agent/worker/claude_runtime.py | 直接启动 Claude Code CLI |
-| backend/code_agent/verifier_service.py | 当前分支的 quarantine ZIP 发布服务 |
-| docker-compose.cloudflare-workers.yml | Worker A/B 和发布服务 |
+| docker-compose.cloudflare-workers.yml | 本地 Worker B、输入/输出 named volume |
 | scripts/run_local_cloudflare_workers.sh | SSH 隧道、Redis ACL、容器启动 |
 | cloudflare-worker/worker-client.mjs | Mac/Windows 的轻量连接、health、poll 客户端 |
 

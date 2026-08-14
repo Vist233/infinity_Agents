@@ -53,11 +53,19 @@ describe("public Worker pool administration", () => {
     expect(secondPayload.worker_id).not.toBe(firstPayload.worker_id);
     expect(secondPayload.worker_credential).not.toBe(firstPayload.worker_credential);
 
+    const third = await call("/api/admin/public-workers", env, admin, { method: "POST" });
+    const thirdPayload = await third.json() as { worker_id: string; namespace: string; worker_credential: string };
+    expect(third.status).toBe(201);
+    expect(thirdPayload.worker_id).not.toBe(firstPayload.worker_id);
+    expect(thirdPayload.worker_id).not.toBe(secondPayload.worker_id);
+    expect(thirdPayload.namespace).toBe(firstPayload.namespace);
+    expect(thirdPayload.worker_credential).not.toBe(firstPayload.worker_credential);
+
     const listed = await call("/api/admin/public-worker-pool", env, admin);
     const listedPayload = await listed.json() as { workers: Array<Record<string, unknown>> };
-    expect(listedPayload.workers).toHaveLength(2);
+    expect(listedPayload.workers).toHaveLength(3);
     expect(listedPayload.workers[0]).not.toHaveProperty("worker_credential");
-    expect(db.workerRegistrations.size).toBe(2);
+    expect(db.workerRegistrations.size).toBe(3);
 
     const recovered = await call(`/api/admin/public-workers/${encodeURIComponent(firstPayload.worker_id)}/credential`, env, admin);
     expect(recovered.status).toBe(200);
@@ -72,6 +80,7 @@ describe("public Worker pool administration", () => {
     const recoveredAfterRevoke = await call(`/api/admin/public-workers/${encodeURIComponent(firstPayload.worker_id)}/credential`, env, admin);
     expect(recoveredAfterRevoke.status).toBe(404);
     expect(db.workerAdminEvents.map((event) => event.action)).toEqual([
+      "created",
       "created",
       "created",
       "credential_recovered",

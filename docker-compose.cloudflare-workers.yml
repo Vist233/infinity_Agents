@@ -1,75 +1,33 @@
-# Two local Docker Workers connected to the Cloudflare control plane.
-#
-# This file intentionally does not start PostgreSQL or Redis. Redis is the
-# existing remote service, and Cloudflare D1 is reached through
-# CONTROL_BASE_URL. Each Worker has its own persistent Worker credential and
-# instance id.
+# One local acceptance/persistent Worker connected to the Cloudflare control
+# plane. The image can be built locally or pulled from GHCR by setting
+# WORKER_IMAGE=ghcr.io/<org-or-user>/infinity-agent-worker:v1.
+# This file intentionally does not start PostgreSQL, Redis, or a verifier.
 
 x-cloudflare-worker: &cloudflare-worker
-  image: infinity-agent-worker:cloudflare
+  image: ${WORKER_IMAGE:-infinity-agent-worker:cloudflare}
   build:
     context: .
     dockerfile: backend/Dockerfile.worker
   restart: unless-stopped
-  command: python3 -m backend.code_agent.worker.cloudflare_worker
+  command: python -m backend.code_agent.worker.cloudflare_worker
 
 services:
-  worker-a:
-    <<: *cloudflare-worker
-    env_file:
-      - path: ${WORKER_A_ENV_FILE:-worker-a.cloudflare.env}
-        required: false
-    environment:
-      WORKER_WORK_ROOT: /worker-inputs
-      WORKER_OUTPUT_ROOT: /worker-outputs
-      CODE_AGENT_INPUT_VOLUME: infinity-agents-worker-a-inputs
-      CODE_AGENT_OUTPUT_VOLUME: infinity-agents-worker-a-outputs
-      CODE_AGENT_INPUT_VOLUME_ROOT: /worker-inputs
-      CODE_AGENT_OUTPUT_VOLUME_ROOT: /worker-outputs
-    volumes:
-      - worker_a_inputs:/worker-inputs
-      - worker_a_outputs:/worker-outputs
-
   worker-b:
     <<: *cloudflare-worker
     env_file:
-      - path: ${WORKER_B_ENV_FILE:-worker-b.cloudflare.env}
+      - path: ${WORKER_ENV_FILE:-worker-b.cloudflare.env}
         required: false
     environment:
       WORKER_WORK_ROOT: /worker-inputs
       WORKER_OUTPUT_ROOT: /worker-outputs
-      CODE_AGENT_INPUT_VOLUME: infinity-agents-worker-b-inputs
-      CODE_AGENT_OUTPUT_VOLUME: infinity-agents-worker-b-outputs
-      CODE_AGENT_INPUT_VOLUME_ROOT: /worker-inputs
-      CODE_AGENT_OUTPUT_VOLUME_ROOT: /worker-outputs
+      WORKER_REDIS_REQUIRED: ${WORKER_REDIS_REQUIRED:-1}
+      WORKER_RECYCLE_AFTER_TASK: ${WORKER_RECYCLE_AFTER_TASK:-0}
     volumes:
       - worker_b_inputs:/worker-inputs
       - worker_b_outputs:/worker-outputs
 
-  # This service is deliberately separate from the execution Workers. It is
-  # started only when WORKER_VERIFIER_TOKEN is loaded by the local bootstrap
-  # script, and it has no Worker credential, provider key, Redis credential, or
-  # Docker socket.
-  verifier:
-    <<: *cloudflare-worker
-    profiles: [verifier]
-    command: python3 -m backend.code_agent.verifier_service
-    environment:
-      CONTROL_BASE_URL: ${CONTROL_BASE_URL:-https://infinity.zhangyvjing.com}
-      WORKER_VERIFIER_TOKEN: ${WORKER_VERIFIER_TOKEN:-}
-      VERIFIER_POLL_INTERVAL: ${VERIFIER_POLL_INTERVAL:-5}
-      VERIFIER_WORK_ROOT: /verifier-work
-    volumes:
-      - verifier_work:/verifier-work
-
 volumes:
-  worker_a_inputs:
-    name: infinity-agents-worker-a-inputs
-  worker_a_outputs:
-    name: infinity-agents-worker-a-outputs
   worker_b_inputs:
     name: infinity-agents-worker-b-inputs
   worker_b_outputs:
     name: infinity-agents-worker-b-outputs
-  verifier_work:
-    name: infinity-agents-verifier-work
