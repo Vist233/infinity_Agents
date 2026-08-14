@@ -557,7 +557,8 @@ class CloudflareClaudeWorker:
                 resource_id = str(resource.get("resource_id", "resource"))
                 kind = _safe_filename(str(resource.get("kind", "input")), "input")
                 logical_name = _safe_filename(str(resource.get("logical_name", resource_id)), resource_id)
-                destination = input_dir / f"{kind}-{logical_name}"
+                destination_root = task_root / "spec" / "method_sources" if kind == "method" else input_dir
+                destination = destination_root / logical_name
                 expected_size_value = resource.get("size_bytes")
                 expected_size = int(expected_size_value) if isinstance(expected_size_value, (int, float)) else None
                 expected_sha256 = str(resource.get("sha256") or "").strip().lower() or None
@@ -574,7 +575,7 @@ class CloudflareClaudeWorker:
                 task_spec_id=task_spec_id,
                 dataset_snapshot_id=dataset_snapshot_id,
                 title=str(attempt.get("title", "")),
-                goal=str(attempt.get("goal") or attempt.get("research_question") or ""),
+                task_prompt=str(attempt.get("task_prompt") or attempt.get("goal") or attempt.get("research_question") or ""),
                 analysis_type=str(attempt.get("analysis_type", "generic")),
                 case_dir=input_dir,
                 output_dir=output_dir,

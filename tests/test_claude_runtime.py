@@ -48,8 +48,14 @@ def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch)
     assert f"--add-dir={input_dir.resolve()}" in args
     prompt = args[-1]
     assert str(input_dir.resolve()) in prompt
-    assert "Goal-Driven execution protocol" in prompt
-    assert "Do not copy the" in prompt
+    assert "SYSTEM ROLE" in prompt
+    assert "PHASE PROTOCOL" in prompt
+    assert "Maximum retries per command: 3." in prompt
+    assert "completion message is not proof of success" in prompt
+    assert (input_dir.parent / "spec" / "task_spec.json").is_file()
+    assert '"goal": "Produce a reproducible result"' in (input_dir.parent / "spec" / "task_spec.json").read_text()
+    assert "MISSION" in prompt
+    assert "Save every deliverable" in prompt
     assert "local-token" not in args
     assert kwargs["env"]["ANTHROPIC_AUTH_TOKEN"] == "local-token"
     assert kwargs["env"]["ANTHROPIC_BASE_URL"] == "local-base"
@@ -59,7 +65,7 @@ def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch)
     assert kwargs["env"]["HOME"] == "/home/claude"
     assert kwargs["user"] == 10001
     assert kwargs["group"] == 10001
-    assert kwargs["cwd"] == str(output_dir.resolve())
+    assert kwargs["cwd"] == str(input_dir.parent / "work")
     assert os.stat(input_dir).st_mode & 0o222 == 0
     assert os.stat(input_dir / "method.md").st_mode & 0o222 == 0
     assert events[-1]["type"] == "done"
