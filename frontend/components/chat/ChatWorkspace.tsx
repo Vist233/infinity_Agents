@@ -92,7 +92,7 @@ export function ChatWorkspace() {
 
         <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="max-w-5xl mx-auto w-full p-4 md:p-6 space-y-4">
-            {mode === "analysis" && controller.taskDraft && (
+            {controller.taskDraft && (
               <TaskConfirmationCard
                 draft={controller.taskDraft}
                 onCreated={({ taskId, status, eventType }) => {
