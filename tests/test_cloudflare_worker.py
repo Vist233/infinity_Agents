@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -64,6 +65,13 @@ def test_from_env_requires_provider_configuration(monkeypatch):
         monkeypatch.setenv("ANTHROPIC_MODEL", "model-a")
         with pytest.raises(SystemExit, match="ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN"):
             CloudflareWorkerConfig.from_env()
+
+
+def test_cloudflare_worker_passes_frozen_task_goal_to_runtime():
+    source = (Path(__file__).resolve().parents[1] / "backend/code_agent/worker/cloudflare_worker.py").read_text(encoding="utf-8")
+
+    assert 'goal=str(attempt.get("goal") or attempt.get("research_question") or "")' in source
+    assert "task_prompt=" not in source
 
 
 def test_zip_output_is_deterministic_enough_for_upload(tmp_path):

@@ -575,7 +575,7 @@ class CloudflareClaudeWorker:
                 task_spec_id=task_spec_id,
                 dataset_snapshot_id=dataset_snapshot_id,
                 title=str(attempt.get("title", "")),
-                task_prompt=str(attempt.get("task_prompt") or attempt.get("goal") or attempt.get("research_question") or ""),
+                goal=str(attempt.get("goal") or attempt.get("research_question") or ""),
                 analysis_type=str(attempt.get("analysis_type", "generic")),
                 case_dir=input_dir,
                 output_dir=output_dir,
