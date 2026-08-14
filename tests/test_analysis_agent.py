@@ -83,3 +83,14 @@ class TestAnalysisStream:
         spec = draft_events[0]["task_spec"]
         assert spec["analysis_type"] == "biopython"
         assert validate_task_spec(spec) == []
+
+    @pytest.mark.asyncio
+    async def test_case3_generates_valid_taskspec(self):
+        events = []
+        async for event in run_analysis_stream("case3 Scanpy single cell"):
+            events.append(event)
+        draft_events = [e for e in events if e.get("type") == "task_spec_draft"]
+        assert len(draft_events) == 1
+        spec = draft_events[0]["task_spec"]
+        assert spec["analysis_type"] == "scanpy"
+        assert validate_task_spec(spec) == []

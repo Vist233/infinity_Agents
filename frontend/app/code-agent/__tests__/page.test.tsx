@@ -52,14 +52,14 @@ describe("Task Center workspace", () => {
     vi.useRealTimers();
   });
 
-  it("renders task creation, collapsed Worker management, and the task list", async () => {
+  it("renders task history, the confirmation-only notice, and collapsed Worker management", async () => {
     await act(async () => {
       renderPage();
     });
 
-    expect(screen.getByText("新建任务")).toBeDefined();
+    expect(screen.getByText("任务只能从 Analysis 确认卡提交")).toBeDefined();
     expect(screen.getByText("添加 Worker")).toBeDefined();
-    expect(document.querySelectorAll('input[type="file"]').length).toBe(2);
+    expect(document.querySelectorAll('input[type="file"]').length).toBe(0);
 
     // Task list loaded from the API
     await waitFor(() => {
@@ -69,11 +69,11 @@ describe("Task Center workspace", () => {
     expect(screen.getByText("成功")).toBeDefined();
   });
 
-  it("exposes the direct task creation entry point in Task Center", async () => {
+  it("does not expose a direct task creation form in Task Center", async () => {
     await act(async () => {
       renderPage();
     });
-    expect(screen.getByRole("button", { name: /确认并提交/ })).toBeDefined();
+    expect(screen.queryByRole("button", { name: /确认并提交/ })).toBeNull();
     expect(submitTaskBundle).not.toHaveBeenCalled();
   });
 

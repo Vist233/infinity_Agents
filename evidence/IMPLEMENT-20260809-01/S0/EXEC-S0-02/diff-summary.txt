@@ -1,0 +1,6 @@
+Changed only:
+
+- tests/test_regression.py: environment-based fixture resolver; strict done/output assertions
+- backend/code_agent/service.py: remove machine-specific fixture fallback
+
+No database, Docker, Redis, provider, or user data was changed.

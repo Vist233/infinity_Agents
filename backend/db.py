@@ -489,6 +489,39 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     PRIMARY KEY (session_id, resource_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS task_drafts (
+                    draft_id UUID PRIMARY KEY,
+                    session_id UUID NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+                    project_id UUID NOT NULL,
+                    owner_user_id TEXT NOT NULL,
+                    revision INT NOT NULL DEFAULT 1,
+                    title TEXT NOT NULL,
+                    goal_summary TEXT NOT NULL DEFAULT '',
+                    method_path TEXT,
+                    method_filename TEXT,
+                    method_preview TEXT,
+                    method_size_bytes BIGINT NOT NULL DEFAULT 0,
+                    method_hash_sha256 CHAR(64),
+                    dataset_resource_id UUID,
+                    dataset_filename TEXT,
+                    dataset_size_bytes BIGINT,
+                    dataset_hash_sha256 CHAR(64),
+                    task_spec JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    missing_inputs JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    status VARCHAR(32) NOT NULL DEFAULT 'awaiting_user_confirmation',
+                    confirmed_task_id UUID,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '24 hours',
+                    CONSTRAINT chk_task_draft_status CHECK (status IN (
+                        'draft', 'awaiting_user_confirmation', 'revising', 'cancelled', 'confirmed', 'expired'
+                    ))
+                );
+                CREATE INDEX IF NOT EXISTS idx_task_drafts_owner_session
+                    ON task_drafts (owner_user_id, session_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_task_drafts_status
+                    ON task_drafts (status, expires_at);
+
                 CREATE TABLE IF NOT EXISTS provider_profiles (
                     provider_profile_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                     project_id UUID NOT NULL,
@@ -1300,3 +1333,203 @@ async def update_session_context_compression_state(
     except Exception as e:
         logging.error(f"Error updating compression state for session {session_id}: {e}")
         return False
+
+
+async def upsert_task_draft(pool, payload: Dict[str, Any], *, owner_user_id: str, project_id: str) -> Dict[str, Any]:
+    """Persist a session-scoped Agent task draft returned by a real tool call."""
+    method = payload.get("method") if isinstance(payload.get("method"), dict) else {}
+    dataset = payload.get("dataset") if isinstance(payload.get("dataset"), dict) else {}
+    missing_inputs = payload.get("missing_inputs") if isinstance(payload.get("missing_inputs"), list) else []
+    task_spec = payload.get("task_spec") if isinstance(payload.get("task_spec"), dict) else {}
+    draft_status = "revising" if payload.get("type") == "task_draft_updated" else "awaiting_user_confirmation"
+    query = """
+        INSERT INTO task_drafts (
+            draft_id, session_id, project_id, owner_user_id, revision, title,
+            goal_summary, method_path, method_filename, method_preview,
+            method_size_bytes, method_hash_sha256, dataset_resource_id,
+            dataset_filename, dataset_size_bytes, dataset_hash_sha256,
+            task_spec, missing_inputs, status, updated_at
+        ) VALUES (
+            $1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, NULLIF($13, '')::uuid, NULLIF($14, ''), $15, $16,
+            $17::jsonb, $18::jsonb, $19, NOW()
+        )
+        ON CONFLICT (draft_id) DO UPDATE SET
+            revision = GREATEST(task_drafts.revision + 1, EXCLUDED.revision),
+            title = EXCLUDED.title,
+            goal_summary = EXCLUDED.goal_summary,
+            method_path = EXCLUDED.method_path,
+            method_filename = EXCLUDED.method_filename,
+            method_preview = EXCLUDED.method_preview,
+            method_size_bytes = EXCLUDED.method_size_bytes,
+            method_hash_sha256 = EXCLUDED.method_hash_sha256,
+            dataset_resource_id = EXCLUDED.dataset_resource_id,
+            dataset_filename = EXCLUDED.dataset_filename,
+            dataset_size_bytes = EXCLUDED.dataset_size_bytes,
+            dataset_hash_sha256 = EXCLUDED.dataset_hash_sha256,
+            task_spec = EXCLUDED.task_spec,
+            missing_inputs = EXCLUDED.missing_inputs,
+            status = CASE WHEN task_drafts.status = 'confirmed' THEN task_drafts.status ELSE EXCLUDED.status END,
+            updated_at = NOW()
+        RETURNING draft_id, session_id, project_id, owner_user_id, revision, title,
+                  goal_summary, method_path, method_filename, method_preview,
+                  method_size_bytes, method_hash_sha256, dataset_resource_id,
+                  dataset_filename, dataset_size_bytes, dataset_hash_sha256,
+                  task_spec, missing_inputs, status, confirmed_task_id,
+                  created_at, updated_at, expires_at
+    """
+    args = (
+        str(payload["draft_id"]),
+        str(payload["session_id"]),
+        project_id,
+        owner_user_id,
+        int(payload.get("revision") or 1),
+        str(payload.get("title") or "execution-document")[:255],
+        str(payload.get("goal_summary") or "")[:4000],
+        str(method.get("relative_path") or "") or None,
+        str(method.get("filename") or "")[:255] or None,
+        str(method.get("preview") or "")[:12000],
+        int(method.get("size_bytes") or 0),
+        str(method.get("sha256") or "")[:64],
+        str(dataset.get("resource_id") or ""),
+        str(dataset.get("filename") or "")[:255],
+        int(dataset.get("size_bytes") or 0) or None,
+        str(dataset.get("sha256") or "")[:64] or None,
+        json.dumps(task_spec, ensure_ascii=False),
+        json.dumps([str(item) for item in missing_inputs][:20], ensure_ascii=False),
+        draft_status,
+    )
+    async with pool.acquire() as conn:
+        # A follow-up conversation may produce a revised draft with a new
+        # draft id. Keep only the newest active draft for this session so the
+        # browser never presents an obsolete confirmation card.
+        await conn.execute(
+            """
+            UPDATE task_drafts
+            SET status = 'revising', updated_at = NOW()
+            WHERE session_id = $1::uuid AND owner_user_id = $2
+              AND draft_id <> $3::uuid
+              AND status IN ('draft', 'awaiting_user_confirmation', 'revising')
+            """,
+            str(payload["session_id"]), owner_user_id, str(payload["draft_id"]),
+        )
+        row = await conn.fetchrow(query, *args)
+    return _task_draft_row(row)
+
+
+def _task_draft_row(row: Any) -> Dict[str, Any]:
+    def iso(name: str) -> Optional[str]:
+        value = _row_value(row, name)
+        return value.isoformat() if value else None
+
+    def json_value(name: str, default: Any) -> Any:
+        value = _row_value(row, name, default)
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return default
+        return value if value is not None else default
+
+    return {
+        "draft_id": str(_row_value(row, "draft_id")),
+        "session_id": str(_row_value(row, "session_id")),
+        "project_id": str(_row_value(row, "project_id")),
+        "owner_user_id": str(_row_value(row, "owner_user_id") or ""),
+        "revision": int(_row_value(row, "revision", 1)),
+        "title": _row_value(row, "title", ""),
+        "goal_summary": _row_value(row, "goal_summary", ""),
+        "method_path": _row_value(row, "method_path"),
+        "method_filename": _row_value(row, "method_filename"),
+        "method_preview": _row_value(row, "method_preview", ""),
+        "method_size_bytes": int(_row_value(row, "method_size_bytes", 0) or 0),
+        "method_hash_sha256": _row_value(row, "method_hash_sha256"),
+        "dataset_resource_id": str(_row_value(row, "dataset_resource_id")) if _row_value(row, "dataset_resource_id") else None,
+        "dataset_filename": _row_value(row, "dataset_filename"),
+        "dataset_size_bytes": _row_value(row, "dataset_size_bytes"),
+        "dataset_hash_sha256": _row_value(row, "dataset_hash_sha256"),
+        "task_spec": json_value("task_spec", {}),
+        "missing_inputs": json_value("missing_inputs", []),
+        "status": _row_value(row, "status", "awaiting_user_confirmation"),
+        "confirmed_task_id": str(_row_value(row, "confirmed_task_id")) if _row_value(row, "confirmed_task_id") else None,
+        "created_at": iso("created_at"),
+        "updated_at": iso("updated_at"),
+        "expires_at": iso("expires_at"),
+    }
+
+
+async def get_task_draft(pool, draft_id: str, owner_user_id: str) -> Optional[Dict[str, Any]]:
+    query = """
+        SELECT draft_id, session_id, project_id, owner_user_id, revision, title,
+               goal_summary, method_path, method_filename, method_preview,
+               method_size_bytes, method_hash_sha256, dataset_resource_id,
+               dataset_filename, dataset_size_bytes, dataset_hash_sha256,
+               task_spec, missing_inputs, status, confirmed_task_id,
+               created_at, updated_at, expires_at
+        FROM task_drafts
+        WHERE draft_id = $1::uuid AND owner_user_id = $2 AND expires_at > NOW()
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(query, draft_id, owner_user_id)
+    return _task_draft_row(row) if row else None
+
+
+async def update_task_draft_inputs(
+    pool,
+    draft_id: str,
+    owner_user_id: str,
+    *,
+    method_path: Optional[str] = None,
+    method_filename: Optional[str] = None,
+    method_preview: Optional[str] = None,
+    method_size_bytes: Optional[int] = None,
+    method_hash_sha256: Optional[str] = None,
+    dataset_resource_id: Optional[str] = None,
+    dataset_filename: Optional[str] = None,
+    dataset_size_bytes: Optional[int] = None,
+    dataset_hash_sha256: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    query = """
+        UPDATE task_drafts
+        SET revision = revision + 1,
+            method_path = COALESCE($3, method_path),
+            method_filename = COALESCE($4, method_filename),
+            method_preview = COALESCE($5, method_preview),
+            method_size_bytes = COALESCE($6, method_size_bytes),
+            method_hash_sha256 = COALESCE($7, method_hash_sha256),
+            dataset_resource_id = COALESCE(NULLIF($8, '')::uuid, dataset_resource_id),
+            dataset_filename = COALESCE($9, dataset_filename),
+            dataset_size_bytes = COALESCE($10, dataset_size_bytes),
+            dataset_hash_sha256 = COALESCE($11, dataset_hash_sha256),
+            status = 'awaiting_user_confirmation',
+            updated_at = NOW()
+        WHERE draft_id = $1::uuid AND owner_user_id = $2
+          AND status IN ('draft', 'awaiting_user_confirmation', 'revising')
+          AND expires_at > NOW()
+        RETURNING draft_id, session_id, project_id, owner_user_id, revision, title,
+                  goal_summary, method_path, method_filename, method_preview,
+                  method_size_bytes, method_hash_sha256, dataset_resource_id,
+                  dataset_filename, dataset_size_bytes, dataset_hash_sha256,
+                  task_spec, missing_inputs, status, confirmed_task_id,
+                  created_at, updated_at, expires_at
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            query, draft_id, owner_user_id, method_path, method_filename,
+            method_preview, method_size_bytes, method_hash_sha256,
+            dataset_resource_id or "", dataset_filename, dataset_size_bytes,
+            dataset_hash_sha256,
+        )
+    return _task_draft_row(row) if row else None
+
+
+async def cancel_task_draft(pool, draft_id: str, owner_user_id: str) -> bool:
+    query = """
+        UPDATE task_drafts
+        SET status = 'cancelled', updated_at = NOW()
+        WHERE draft_id = $1::uuid AND owner_user_id = $2
+          AND status IN ('draft', 'awaiting_user_confirmation', 'revising')
+    """
+    async with pool.acquire() as conn:
+        result = await conn.execute(query, draft_id, owner_user_id)
+    return result.endswith("1")

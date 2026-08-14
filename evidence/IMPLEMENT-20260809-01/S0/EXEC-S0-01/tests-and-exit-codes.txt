@@ -1,0 +1,16 @@
+Frontend baseline after EXEC-S0-01:
+
+  npm run lint       exit 0 (7 pre-existing warnings, 0 errors)
+  npm run typecheck  exit 0
+  npm run test:unit  exit 0 (5 files, 28 tests passed)
+  npm run build      exit 0 (Next.js production build)
+
+Other local baseline checks:
+
+  backend pytest -q -m "not integration"  exit 0 (267 passed, 1 skipped, 3 deselected)
+  image-judge pytest tests -q              exit 0 (50 passed)
+  image-judge compileall                   exit 0
+
+The backend and build commands were rerun with approved local-service access
+because the default sandbox blocks localhost Docker networking and Turbopack
+child-process port binding.

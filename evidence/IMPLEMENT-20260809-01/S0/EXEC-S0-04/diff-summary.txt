@@ -1,0 +1,8 @@
+Added only:
+
+- .env.local.example: placeholder-only acceptance variables
+- docker-compose.acceptance.yml: isolated local services and RUN_ID paths
+- backend/Dockerfile.api: API container build entrypoint
+- frontend/Dockerfile.acceptance: frontend acceptance container entrypoint
+
+The existing docker-compose.local.yml was not modified.

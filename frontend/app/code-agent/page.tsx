@@ -5,11 +5,10 @@ import { useRouter } from "next/navigation";
 import { useLanguage } from "@/lib/i18n";
 import { AgentNav } from "@/components/chat/AgentNav";
 import { MobileWorkspaceMenu } from "@/components/chat/MobileWorkspaceMenu";
-import { TaskConfirmationCard } from "@/components/analysis/TaskConfirmationCard";
 import { WorkerManagementCard } from "@/components/analysis/WorkerManagementCard";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { ListTodo, Plus, RefreshCw } from "lucide-react";
+import { ListTodo, RefreshCw } from "lucide-react";
 import { listTasks, type TaskItem, type TaskStatus } from "@/lib/api/tasks";
 import { WorkspaceUserFooter } from "@/components/chat/WorkspaceUserFooter";
 
@@ -144,31 +143,15 @@ export default function CodeAgentPage() {
         <ScrollArea className="flex-1">
           <div className="mx-auto max-w-6xl p-4 md:p-6">
             <div className="space-y-6">
-              <section className="space-y-3" id="new-task">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-zinc-700">{t("tasks.create")}</div>
-                    <p className="mt-1 text-xs text-zinc-500">{t("tasks.newTaskDescription")}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5"
-                      onClick={() => document.getElementById("new-task-form")?.scrollIntoView({ behavior: "smooth", block: "start" })}
-                    >
-                      <Plus size={14} />
-                      {t("tasks.newTask")}
-                    </Button>
-                    <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setLoading(true); void loadTasks(); }} disabled={loading}>
-                      <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-                      {t("tasks.refresh")}
-                    </Button>
-                  </div>
+              <section className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-zinc-700">{t("tasks.confirmationOnlyTitle")}</div>
+                  <p className="mt-1 text-xs text-zinc-500">{t("tasks.confirmationOnlyDescription")}</p>
                 </div>
-                <div id="new-task-form">
-                  <TaskConfirmationCard onCreated={() => { void loadTasks(); }} />
-                </div>
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setLoading(true); void loadTasks(); }} disabled={loading}>
+                  <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+                  {t("tasks.refresh")}
+                </Button>
               </section>
 
               <WorkerManagementCard />

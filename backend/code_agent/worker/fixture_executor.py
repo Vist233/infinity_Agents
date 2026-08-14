@@ -8,6 +8,8 @@ never presented as a model execution result.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 import shutil
 from pathlib import Path
@@ -20,7 +22,12 @@ def fixture_case_number(analysis_type: str) -> str | None:
     return {"rnaseq_deseq2": "1", "biopython": "2", "scanpy": "3"}.get(str(analysis_type or ""))
 
 
-async def run_fixture_executor(task_spec: Dict[str, Any], output_dir: Path) -> AsyncIterator[Dict[str, Any]]:
+async def run_fixture_executor(
+    task_spec: Dict[str, Any],
+    output_dir: Path,
+    *,
+    input_dir: Path | None = None,
+) -> AsyncIterator[Dict[str, Any]]:
     if os.getenv("APP_ENV", "development").lower() not in {"development", "acceptance", "test"}:
         yield {"type": "error", "message": "Fixture Executor is disabled outside local environments"}
         return
@@ -39,6 +46,25 @@ async def run_fixture_executor(task_spec: Dict[str, Any], output_dir: Path) -> A
         return
     output_dir.mkdir(parents=True, exist_ok=True)
     yield {"type": "status", "phase": "executing", "executor": "controlled-fixture", "case": case_number}
+    if input_dir is not None and task_spec.get("record_frozen_input_manifest"):
+        if not input_dir.is_dir() or input_dir.is_symlink():
+            yield {"type": "error", "message": "Frozen Worker input directory is unavailable"}
+            return
+        manifest = []
+        for source in sorted(input_dir.rglob("*")):
+            if source.is_symlink():
+                yield {"type": "error", "message": "Frozen Worker input contains an unsupported link"}
+                return
+            if not source.is_file():
+                continue
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            manifest.append({
+                "relative_path": source.relative_to(input_dir).as_posix(),
+                "size_bytes": source.stat().st_size,
+                "sha256": digest,
+            })
+        manifest_path = ensure_within(output_dir, output_dir / "frozen-input-manifest.json")
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     count = 0
     for source in sorted(source_root.rglob("*")):
         if not source.is_file() or source.is_symlink():

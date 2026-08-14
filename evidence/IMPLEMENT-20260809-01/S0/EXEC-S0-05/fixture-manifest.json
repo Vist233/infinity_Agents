@@ -1,0 +1,51 @@
+{
+  "manifest_version": "1",
+  "source_env": "GOAL_DRIVEN_FIXTURE_ROOT",
+  "path_policy": "fixture root is supplied at runtime; only relative paths are recorded",
+  "tree_hash_algorithm": "sha256(sorted relative-file sha256 lines)",
+  "cases": {
+    "1": {
+      "name": "DESeq2",
+      "file_count": 68,
+      "tree_sha256": "a12c0823a63fb9c51592ea5200f512f094cc2d5119cee23b970721283a6cbada",
+      "required_input_kinds": ["method HTML", "R package/data directory"],
+      "required_outputs": [
+        "output/DESeq2_results.csv",
+        "output/PCA_plot.png",
+        "output/sample_distance_heatmap.png",
+        "output/MA_plot.png",
+        "output/volcano_plot.png",
+        "output/run_analysis.R",
+        "output/analysis_summary.txt"
+      ],
+      "verifier_contract": "design matrix and requested comparison; parseable differential table; four plots; script, dependency/version record, log/report; no byte-identical requirement"
+    },
+    "2": {
+      "name": "Biopython",
+      "file_count": 33,
+      "tree_sha256": "842945a35471c09170d2cd8a9403caae308d9e61563102e67dbb1e81a609a03f",
+      "required_input_kinds": ["method HTML", "FASTA"],
+      "required_outputs": [
+        "output/sequence_statistics.csv",
+        "output/summary_statistics.csv",
+        "output/phylogenetic_tree.nwk",
+        "output/phylogenetic_tree.png",
+        "output/analyze_orchids.py",
+        "output/summary_report.txt"
+      ],
+      "verifier_contract": "94 input sequences; parseable statistics with valid GC/length ranges; parseable Newick; non-empty images; script, dependencies, log/report; manifest and ZIP agree"
+    },
+    "3": {
+      "name": "Scanpy",
+      "file_count": 51,
+      "tree_sha256": "0977c9ed7bcb03dcb263531070d49d6f6d00129582bfc0b454d8591d45e6dfb7",
+      "required_input_kinds": ["method HTML", "PBMC workflow assets"],
+      "required_outputs": [
+        "output/analysis_results.zip",
+        "output/analysis_summary.txt"
+      ],
+      "verifier_contract": "matrix/barcode/gene alignment; reasonable post-QC cell count; cluster row count; marker table, UMAP and h5ad parseability; downloaded Artifact hash agrees"
+    }
+  },
+  "privacy": "fixture contents and absolute source paths are not copied into evidence"
+}

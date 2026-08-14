@@ -1,0 +1,4 @@
+  pytest -q tests/test_regression.py -m "not integration"  exit 0 (3 passed, 3 deselected)
+  pytest -q tests/test_regression.py -m integration       exit 0 (3 skipped, 3 deselected; fixture root intentionally unset)
+  changed-file secret-pattern scan                         CLEAN
+  git diff --check                                          CLEAN

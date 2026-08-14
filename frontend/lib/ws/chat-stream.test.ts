@@ -14,6 +14,45 @@ describe("chat stream event normalization", () => {
     expect(event).toEqual({ type: "chunk", content: "hello" });
   });
 
+  it("normalizes only a structured task draft event for the To-Do card", () => {
+    const event = normalizeChatEvent(JSON.stringify({
+      type: "task_draft_created",
+      draft: {
+        draft_id: "draft-1",
+        revision: 1,
+        status: "awaiting_user_confirmation",
+        title: "Method",
+        goal_summary: "Run the workflow",
+        method: { filename: "method.md", size_bytes: 10, preview: "# Method" },
+        dataset: { resource_id: null },
+        missing_inputs: ["dataset"],
+      },
+    }));
+    expect(event).toMatchObject({ type: "task_draft_created", draft: { draft_id: "draft-1" } });
+  });
+
+  it("normalizes draft updates and cancellations", () => {
+    expect(normalizeChatEvent(JSON.stringify({
+      type: "task_draft_updated",
+      draft: { draft_id: "draft-1", revision: 2 },
+    }))?.type).toBe("task_draft_updated");
+    expect(normalizeChatEvent(JSON.stringify({
+      type: "task_draft_cancelled",
+      draft_id: "draft-1",
+      revision: 2,
+      status: "cancelled",
+    }))?.type).toBe("task_draft_cancelled");
+  });
+
+  it("normalizes the explicit confirmation event", () => {
+    expect(normalizeChatEvent(JSON.stringify({
+      type: "task_confirmed",
+      task_id: "task-1",
+      status: "queued",
+      attempt_count: 0,
+    }))).toMatchObject({ type: "task_confirmed", task_id: "task-1", status: "queued" });
+  });
+
   it("falls back to chunk when payload is plain text", () => {
     const event = normalizeChatEvent("raw text output");
     expect(event).toEqual({ type: "chunk", content: "raw text output" });
