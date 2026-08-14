@@ -24,7 +24,6 @@ interface MessagePaneProps {
   scrollRef: RefObject<HTMLDivElement | null>;
   authStatus: "checking" | "authenticated" | "unauthenticated";
   onLogin: () => void;
-  agentMode?: "analysis" | "chat";
 }
 
 export function MessagePane({
@@ -36,11 +35,8 @@ export function MessagePane({
   scrollRef,
   authStatus,
   onLogin,
-  agentMode = "analysis",
 }: MessagePaneProps) {
   const { t } = useLanguage();
-  const signInTitle = agentMode === "chat" ? t("auth.chatSignInTitle") : t("auth.signInTitle");
-  const signInDescription = agentMode === "chat" ? t("auth.chatSignInDescription") : t("auth.signInDescription");
   return (
     <ScrollArea className="flex-1 overflow-y-auto" ref={scrollRef}>
       <div className="max-w-3xl mx-auto w-full px-4 pt-10 pb-32">
@@ -50,8 +46,8 @@ export function MessagePane({
               <ProductLogo size="h-8 w-8" />
             </div>
             <div className="space-y-2">
-              <h2 className="text-2xl font-medium tracking-tight">{signInTitle}</h2>
-              <p className="text-sm text-zinc-500 max-w-md">{signInDescription}</p>
+              <h2 className="text-2xl font-medium tracking-tight">{t("auth.signInTitle")}</h2>
+              <p className="text-sm text-zinc-500 max-w-md">{t("auth.signInDescription")}</p>
             </div>
             <Button onClick={onLogin} className="gap-2 rounded-xl">
               <LogIn size={16} />
