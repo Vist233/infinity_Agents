@@ -21,7 +21,7 @@ Windows Docker Worker B
 
 ## 需要从任务中心取得的值
 
-登录任务中心，展开“添加 Worker”，只填写 Namespace。每次创建都会得到新的
+登录任务中心，展开 Worker 管理并点击“创建”，只填写 Namespace。每次创建都会得到新的
 Worker ID 和新的持久 credential；同一 Namespace 可以创建任意数量 Worker。
 
 ```text
