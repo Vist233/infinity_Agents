@@ -34,6 +34,16 @@ class RedisClient:
         self._url = url
         self._client = None
 
+    async def _mark_unavailable(self) -> None:
+        """Drop a broken connection so callers must reconnect before work."""
+        client = self._client
+        self._client = None
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+
     @property
     def namespace(self) -> str:
         """Return the process-scoped Redis key Namespace used by this client."""
@@ -63,7 +73,7 @@ class RedisClient:
             self._client = None
         except Exception as exc:
             logger.warning("Redis connection failed: %s", exc)
-            self._client = None
+            await self._mark_unavailable()
 
     async def disconnect(self) -> None:
         """Close Redis connection."""
@@ -109,6 +119,7 @@ class RedisClient:
             return message_id
         except Exception as exc:
             logger.error("Failed to publish task to Redis: %s", exc)
+            await self._mark_unavailable()
             return None
 
     async def consume_tasks(
@@ -148,6 +159,7 @@ class RedisClient:
             return results
         except Exception as exc:
             logger.error("Failed to consume tasks from Redis: %s", exc)
+            await self._mark_unavailable()
             return []
 
     @staticmethod
@@ -265,6 +277,7 @@ class RedisClient:
             return self._decode_task_messages(claimed)
         except Exception as exc:
             logger.error("Failed to recover pending messages: %s", exc)
+            await self._mark_unavailable()
             return []
 
     # ========================================================================
@@ -284,6 +297,7 @@ class RedisClient:
             return message_id
         except Exception as exc:
             logger.error("Failed to publish task event: %s", exc)
+            await self._mark_unavailable()
             return None
 
     async def read_task_events(
@@ -349,6 +363,7 @@ class RedisClient:
             return results
         except Exception as exc:
             logger.error("Failed to read task events: %s", exc)
+            await self._mark_unavailable()
             return []
 
     # ========================================================================
@@ -395,6 +410,7 @@ class RedisClient:
             return True
         except Exception as exc:
             logger.error("Failed to set heartbeat: %s", exc)
+            await self._mark_unavailable()
             return False
 
     async def get_worker_heartbeat(self, worker_id: str) -> Optional[str]:
@@ -406,6 +422,7 @@ class RedisClient:
             return await self._client.get(key)
         except Exception as exc:
             logger.error("Failed to get heartbeat: %s", exc)
+            await self._mark_unavailable()
             return None
 
     async def get_alive_workers(self) -> List[str]:
@@ -431,6 +448,7 @@ class RedisClient:
             return [k.replace(WORKER_HEARTBEAT_PREFIX, "", 1) for k in keys[:1000]]
         except Exception as exc:
             logger.error("Failed to get alive workers: %s", exc)
+            await self._mark_unavailable()
             return []
 
     # ========================================================================

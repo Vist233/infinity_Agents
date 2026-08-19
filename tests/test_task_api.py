@@ -205,7 +205,8 @@ class TestTaskAPIEndpoints:
         r = client.get("/api/worker/health")
         assert r.status_code == 200
         d = r.json()
-        assert "status" in d
+        assert d["status"] == "degraded"
+        assert d["ready"] is False
         assert "redis_connected" in d
 
     def test_worker_poll(self, client):

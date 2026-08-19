@@ -5233,9 +5233,14 @@ async def worker_health_endpoint(user: Optional[Principal] = Depends(_require_ta
     workers = []
     if redis and redis.is_connected:
         workers = await redis.get_alive_workers()
+    redis_connected = bool(redis and redis.is_connected)
     return {
-        "status": "healthy",
-        "redis_connected": redis.is_connected if redis else False,
+        # A Worker control-plane health response must not claim readiness when
+        # Redis dispatch is unavailable. PostgreSQL remains the source of truth
+        # and pending Outbox rows will recover after Redis reconnects.
+        "status": "ready" if redis_connected else "degraded",
+        "ready": redis_connected,
+        "redis_connected": redis_connected,
         "active_workers": workers,
     }
 

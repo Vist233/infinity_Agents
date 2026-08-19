@@ -426,6 +426,19 @@ class TestRedisClientResilience:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_broken_redis_connection_is_marked_not_ready(self):
+        from backend.code_agent.redis_client import RedisClient
+
+        client = RedisClient("redis://mock/0")
+        broken = AsyncMock()
+        broken.xadd.side_effect = ConnectionError("connection reset")
+        client._client = broken
+
+        assert await client.publish_task({"task_id": "test"}) is None
+        assert client.is_connected is False
+        broken.aclose.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_consume_tasks_returns_empty_when_disconnected(self):
         from backend.code_agent.redis_client import RedisClient
         client = RedisClient("redis://nonexistent:9999/0")

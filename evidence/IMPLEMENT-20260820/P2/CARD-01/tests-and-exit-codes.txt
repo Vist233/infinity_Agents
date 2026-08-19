@@ -1,0 +1,16 @@
+Baseline: 547fded
+
+Command:
+eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q tests/test_fault_injection.py tests/test_task_api.py tests/test_redis_workers.py
+Exit: 0
+Result: 34 passed, 35 skipped. The skipped cases require the optional real PostgreSQL fixture; no test was changed to turn a required integration case into a pass.
+
+Command:
+git diff --check
+Exit: 0
+
+Command:
+git diff --unified=0 | rg -n -i 'api[_-]?key|secret|token|password|credential|anthropic'
+Exit: 1 (no matches).
+
+Docker/PostgreSQL/Redis: no external service was started or modified in this card.

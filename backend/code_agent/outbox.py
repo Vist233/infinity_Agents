@@ -39,6 +39,9 @@ class OutboxPublisher:
         self._running = True
         if not self._redis.is_connected:
             await self._redis.connect()
+        if not self._redis.is_connected:
+            self._running = False
+            raise RuntimeError("Redis is unavailable; Outbox publisher is not ready")
         await self._redis.ensure_consumer_group(STREAM_TASKS_EXECUTE, CONSUMER_GROUP)
         self._task = asyncio.create_task(self._publish_loop())
         logger.info("Outbox Publisher started")
