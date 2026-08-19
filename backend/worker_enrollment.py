@@ -19,6 +19,8 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from backend.secrets import encrypt_secret
+
 
 TRUST_GENERAL = "general"
 TRUST_FULL = "full"
@@ -212,14 +214,18 @@ async def _persist_worker_enrollment(
     retain the legacy direct path so local smoke tests remain usable.
     """
     digest = credential_digest(credential)
+    credential_ciphertext = encrypt_secret(
+        credential,
+        aad=f"worker:{worker_id}:{namespace}",
+    )
     if _rls_is_expected():
         if execution_pool == WORKER_EXECUTION_POOL and trust_level != TRUST_FULL:
             # Public-pool issuance is a distinct database capability. It keeps
             # the human audit owner while deliberately not binding scheduling
             # to that owner or to a user-selected Namespace.
             await conn.execute(
-                "SELECT app.issue_public_worker_enrollment($1, $2, $3, $4)",
-                worker_id, digest, namespace, owner_user_id,
+                "SELECT app.issue_public_worker_enrollment($1, $2, $3, $4, $5)",
+                worker_id, digest, credential_ciphertext, namespace, owner_user_id,
             )
             return
         if trust_level == TRUST_FULL:
@@ -242,11 +248,12 @@ async def _persist_worker_enrollment(
     await conn.execute(
         """
         INSERT INTO worker_enrollments (
-            worker_id, credential_hash, namespace, owner_user_id, execution_pool, trust_level,
+            worker_id, credential_hash, credential_ciphertext, namespace, owner_user_id, execution_pool, trust_level,
             status, last_seen_at
-        ) VALUES ($1, $2, $3, $4, COALESCE($6, 'public-default'), $5, 'active', NOW())
+        ) VALUES ($1, $2, $3, $4, $5, COALESCE($7, 'public-default'), $6, 'active', NOW())
         ON CONFLICT (worker_id) DO UPDATE SET
             credential_hash = EXCLUDED.credential_hash,
+            credential_ciphertext = EXCLUDED.credential_ciphertext,
             namespace = EXCLUDED.namespace,
             owner_user_id = COALESCE(EXCLUDED.owner_user_id, worker_enrollments.owner_user_id),
             execution_pool = EXCLUDED.execution_pool,
@@ -256,7 +263,7 @@ async def _persist_worker_enrollment(
             revoked_at = NULL,
             last_seen_at = NOW()
         """,
-        worker_id, digest, namespace, owner_user_id, trust_level, execution_pool,
+        worker_id, digest, credential_ciphertext, namespace, owner_user_id, trust_level, execution_pool,
     )
 
 

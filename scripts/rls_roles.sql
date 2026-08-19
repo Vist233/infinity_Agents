@@ -38,6 +38,7 @@ ALTER TABLE IF EXISTS tasks ADD COLUMN IF NOT EXISTS execution_pool TEXT NOT NUL
 UPDATE tasks SET execution_pool = 'public-default'
 WHERE execution_pool IS NULL OR btrim(execution_pool) = '';
 ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS execution_pool TEXT NOT NULL DEFAULT 'public-default';
+ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS credential_ciphertext TEXT;
 ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS protocol_version TEXT NOT NULL DEFAULT 'legacy-v0';
 ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS runtime_capability TEXT NOT NULL DEFAULT 'legacy';
 ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS image_digest TEXT;
@@ -786,9 +787,11 @@ GRANT EXECUTE ON FUNCTION app.issue_worker_enrollment(text, text, text, text) TO
 -- separate server-owned execution_pool decision; this function only creates
 -- one unique credential and starts it in the incompatible/not-ready state
 -- until the new Worker protocol handshake completes.
+DROP FUNCTION IF EXISTS app.issue_public_worker_enrollment(text, text, text, text);
 CREATE OR REPLACE FUNCTION app.issue_public_worker_enrollment(
   p_worker_id text,
   p_credential_hash text,
+  p_credential_ciphertext text,
   p_namespace text,
   p_owner_user_id text
 ) RETURNS void
@@ -815,6 +818,7 @@ BEGIN
   END IF;
   UPDATE worker_enrollments
   SET credential_hash = p_credential_hash,
+      credential_ciphertext = p_credential_ciphertext,
       namespace = p_namespace,
       owner_user_id = p_owner_user_id,
       execution_pool = 'public-default',
@@ -835,17 +839,17 @@ BEGIN
   WHERE worker_id = p_worker_id;
   IF NOT FOUND THEN
     INSERT INTO worker_enrollments (
-      worker_id, credential_hash, namespace, owner_user_id, execution_pool,
+      worker_id, credential_hash, credential_ciphertext, namespace, owner_user_id, execution_pool,
       trust_level, protocol_version, runtime_capability, ready, status, last_seen_at
     ) VALUES (
-      p_worker_id, p_credential_hash, p_namespace, p_owner_user_id,
+      p_worker_id, p_credential_hash, p_credential_ciphertext, p_namespace, p_owner_user_id,
       'public-default', 'general', 'legacy-v0', 'legacy', FALSE, 'active', NOW()
     );
   END IF;
 END
 $$;
-REVOKE ALL ON FUNCTION app.issue_public_worker_enrollment(text, text, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.issue_public_worker_enrollment(text, text, text, text) TO infinity_api;
+REVOKE ALL ON FUNCTION app.issue_public_worker_enrollment(text, text, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.issue_public_worker_enrollment(text, text, text, text, text) TO infinity_api;
 
 CREATE OR REPLACE FUNCTION app.issue_full_worker_enrollment(
   p_worker_id text,
@@ -1026,11 +1030,11 @@ TO infinity_api;
 -- writes that column.
 GRANT SELECT, DELETE ON worker_enrollments TO infinity_api;
 GRANT INSERT (
-  worker_id, credential_hash, namespace, owner_user_id, status,
+  worker_id, credential_hash, credential_ciphertext, namespace, owner_user_id, status,
   enrolled_at, revoked_at, last_seen_at
 ) ON worker_enrollments TO infinity_api;
 GRANT UPDATE (
-  credential_hash, namespace, owner_user_id, status, enrolled_at,
+  credential_hash, credential_ciphertext, namespace, owner_user_id, status, enrolled_at,
   revoked_at, last_seen_at
 ) ON worker_enrollments TO infinity_api;
 GRANT SELECT, DELETE ON worker_enrollment_tokens TO infinity_api;

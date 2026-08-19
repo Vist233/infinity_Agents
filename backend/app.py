@@ -20,6 +20,7 @@ import hashlib
 import secrets
 import time
 import shutil
+from datetime import datetime, timezone
 from agent.util import estimate_tokens
 import uuid
 import asyncpg
@@ -2747,7 +2748,105 @@ async def issue_worker_enrollment_endpoint(
     return {
         "worker_id": credential.worker_id,
         "namespace": credential.namespace,
-        "credential": credential.credential,
+        "worker_credential": credential.credential,
+        "execution_pool": credential.execution_pool,
+        # Kept as a server-derived legacy label for older clients. It is not
+        # an execution capability and is never accepted from the browser.
+        "trust_level": "general",
+        "credential_expires_at": None,
+        "persistent": True,
+        "one_time": False,
+    }
+
+
+def _worker_status_payload(row: Any) -> Dict[str, Any]:
+    """Expose status metadata without exposing hashes or provider secrets."""
+    status = str(row["status"] or "active")
+    last_seen = row["last_seen_at"]
+    active_expiry = row["active_instance_expires_at"]
+    now = datetime.now(timezone.utc)
+    if status == "revoked":
+        presence = "offline"
+    elif last_seen is None:
+        presence = "never_seen"
+    elif bool(row["ready"]) and active_expiry is not None and active_expiry > now:
+        presence = "online"
+    else:
+        presence = "offline"
+    return {
+        "worker_id": str(row["worker_id"]),
+        "namespace": str(row["namespace"]),
+        "execution_pool": str(row["execution_pool"] or "public-default"),
+        "trust_level": "general",
+        "status": status,
+        "presence": presence,
+        "ready": bool(row["ready"]),
+        "protocol_version": str(row["protocol_version"] or "legacy-v0"),
+        "runtime_capability": str(row["runtime_capability"] or "legacy"),
+        "image_digest": row["image_digest"],
+        "last_error": row["last_error"],
+        "credential_available": bool(row["credential_ciphertext"]),
+        "credential_expires_at": None,
+        "last_seen_at": last_seen.isoformat() if last_seen else None,
+        "created_at": row["enrolled_at"].isoformat() if row["enrolled_at"] else None,
+        "revoked_at": row["revoked_at"].isoformat() if row["revoked_at"] else None,
+        "worker_kind": "public",
+        "pool_id": str(row["execution_pool"] or "public-default"),
+    }
+
+
+@app.get("/api/worker-enrollments")
+async def list_worker_enrollments_endpoint(user: Principal = Depends(require_user)):
+    """List only the public-pool Worker credentials issued for this user."""
+    query = """
+        SELECT worker_id, namespace, execution_pool, status, ready,
+               protocol_version, runtime_capability, image_digest, last_error,
+               credential_ciphertext, active_instance_expires_at,
+               last_seen_at, enrolled_at, revoked_at
+        FROM worker_enrollments
+        WHERE owner_user_id = $1
+          AND execution_pool = 'public-default'
+        ORDER BY enrolled_at DESC
+        LIMIT 200
+    """
+    async with app.state.db_pool.acquire() as conn:
+        rows = await conn.fetch(query, user.user_id)
+    return {"workers": [_worker_status_payload(row) for row in rows]}
+
+
+@app.get("/api/worker-enrollments/{worker_id}/credential")
+async def get_worker_credential_endpoint(
+    worker_id: str,
+    namespace: str,
+    user: Principal = Depends(require_user),
+):
+    """Recover the encrypted persistent credential for its audit owner."""
+    query = """
+        SELECT credential_ciphertext
+        FROM worker_enrollments
+        WHERE worker_id = $1 AND namespace = $2
+          AND owner_user_id = $3
+          AND execution_pool = 'public-default'
+          AND status = 'active' AND revoked_at IS NULL
+    """
+    async with app.state.db_pool.acquire() as conn:
+        row = await conn.fetchrow(query, worker_id, namespace, user.user_id)
+    if not row or not row["credential_ciphertext"]:
+        raise HTTPException(status_code=404, detail="Worker credential not found")
+    try:
+        credential = decrypt_secret(
+            row["credential_ciphertext"],
+            aad=f"worker:{worker_id}:{namespace}",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Worker credential is unavailable") from exc
+    return {
+        "worker_id": worker_id,
+        "namespace": namespace,
+        "worker_credential": credential,
+        "execution_pool": "public-default",
+        "trust_level": "general",
+        "credential_expires_at": None,
         "persistent": True,
         "one_time": False,
     }

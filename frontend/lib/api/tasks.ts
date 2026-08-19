@@ -106,8 +106,9 @@ export interface DatasetUploadInfo {
 export interface WorkerEnrollmentResponse {
   worker_id: string;
   namespace: string;
-  trust_level: "owner_trusted" | "institution_trusted" | "student_untrusted";
+  trust_level: "general" | "full" | "owner_trusted" | "institution_trusted" | "student_untrusted";
   worker_credential: string;
+  execution_pool?: string;
   credential_expires_at: string | null;
   control_base_url: string;
   persistent: boolean;
@@ -127,6 +128,12 @@ export interface WorkerRegistration {
   credential_available?: boolean;
   worker_kind?: "public" | "user" | string;
   pool_id?: string | null;
+  execution_pool?: string;
+  ready?: boolean;
+  protocol_version?: string;
+  runtime_capability?: string;
+  image_digest?: string | null;
+  last_error?: string | null;
 }
 
 export interface PublicWorkerPool {
@@ -253,11 +260,11 @@ export async function createTask(input: {
   });
 }
 
-export async function createWorkerEnrollment(input: { namespace: string }): Promise<WorkerEnrollmentResponse> {
+export async function createWorkerEnrollment(): Promise<WorkerEnrollmentResponse> {
   return requestJson(`${getApiBase()}/api/worker-enrollments`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
+    body: JSON.stringify({}),
   });
 }
 

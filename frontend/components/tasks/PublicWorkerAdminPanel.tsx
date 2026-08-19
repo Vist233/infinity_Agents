@@ -47,7 +47,10 @@ export function PublicWorkerAdminPanel() {
       setError(null);
     } catch (err) {
       const status = (err as Error & { status?: number }).status;
-      if (status === 401 || status === 403) {
+      // The PostgreSQL-backed branch exposes the self-service enrollment
+      // panel; do not render a broken Cloudflare-only admin card when the
+      // optional administrator route is not installed.
+      if (status === 401 || status === 403 || status === 404) {
         setVisible(false);
         setPool(null);
         return;

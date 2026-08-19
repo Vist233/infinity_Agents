@@ -560,6 +560,7 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 CREATE TABLE IF NOT EXISTS worker_enrollments (
                     worker_id TEXT PRIMARY KEY,
                     credential_hash CHAR(64) NOT NULL,
+                    credential_ciphertext TEXT,
                     namespace TEXT NOT NULL,
                     owner_user_id TEXT,
                     execution_pool TEXT NOT NULL DEFAULT 'public-default',
@@ -579,6 +580,7 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     last_seen_at TIMESTAMPTZ
                 );
                 ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS credential_ciphertext TEXT;
                 ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS execution_pool TEXT NOT NULL DEFAULT 'public-default';
                 UPDATE worker_enrollments SET execution_pool = 'public-default'
                 WHERE execution_pool IS NULL OR btrim(execution_pool) = '';

@@ -13,12 +13,6 @@ import {
   type WorkerRegistration,
 } from "@/lib/api/tasks";
 
-function trustLabelKey(value: WorkerRegistration["trust_level"] | WorkerEnrollmentResponse["trust_level"]): string {
-  if (value === "owner_trusted") return "tasks.enrollmentTrustOwner";
-  if (value === "student_untrusted") return "tasks.enrollmentTrustStudent";
-  return "tasks.enrollmentTrustInstitution";
-}
-
 function presenceLabelKey(value: WorkerRegistration["presence"]): string {
   if (value === "online") return "tasks.enrollmentPresenceOnline";
   if (value === "never_seen") return "tasks.enrollmentPresenceNeverSeen";
@@ -34,7 +28,6 @@ function registrationStatusLabelKey(value: WorkerRegistration["status"]): string
 export function WorkerEnrollmentPanel() {
   const { t } = useLanguage();
   const [expanded, setExpanded] = useState(false);
-  const [namespace, setNamespace] = useState("infinity");
   const [result, setResult] = useState<WorkerEnrollmentResponse | null>(null);
   const [workers, setWorkers] = useState<WorkerRegistration[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -68,7 +61,8 @@ export function WorkerEnrollmentPanel() {
     setResult(null);
     setCopied(false);
     try {
-      const response = await createWorkerEnrollment({ namespace: namespace.trim() });
+      // Namespace, pool, endpoints and provider settings are server-owned.
+      const response = await createWorkerEnrollment();
       setResult(response);
       await loadWorkers();
     } catch (err) {
@@ -128,23 +122,10 @@ export function WorkerEnrollmentPanel() {
       {expanded && (
         <div className="border-t border-amber-200 p-5 space-y-4">
           <form className="space-y-3" onSubmit={handleSubmit}>
-            <label className="block space-y-1 text-xs text-zinc-700">
-              <span>{t("tasks.enrollmentNamespace")}</span>
-              <input
-                value={namespace}
-                onChange={(event) => setNamespace(event.target.value)}
-                className="h-9 w-full rounded-md border border-amber-200 bg-white px-3 text-sm outline-none focus:border-amber-400"
-                required
-                maxLength={120}
-                data-testid="worker-enrollment-namespace"
-              />
-            </label>
-            <div className="flex flex-wrap items-center gap-3">
-              <Button type="submit" variant="default" size="sm" disabled={submitting || !namespace.trim()} data-testid="worker-enrollment-submit">
-                {submitting ? t("tasks.enrollmentIssuing") : t("tasks.enrollmentIssue")}
-              </Button>
-              <span className="text-xs text-amber-900/70">{t("tasks.enrollmentServerGuard")}</span>
-            </div>
+            <p className="text-xs leading-5 text-amber-900/70">{t("tasks.enrollmentServerGuard")}</p>
+            <Button type="submit" variant="default" size="sm" disabled={submitting} data-testid="worker-enrollment-submit">
+              {submitting ? t("tasks.enrollmentIssuing") : t("tasks.enrollmentIssue")}
+            </Button>
           </form>
 
           {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{t("tasks.enrollmentFailed")}: {error}</div>}
@@ -155,7 +136,7 @@ export function WorkerEnrollmentPanel() {
               <p className="text-xs text-emerald-900/80">{t("tasks.enrollmentTokenHint")}</p>
               <div className="grid gap-1 text-xs text-emerald-950">
                 <div><span className="font-medium">{t("tasks.enrollmentWorkerId")}:</span> <code>{result.worker_id}</code></div>
-                <div><span className="font-medium">{t("tasks.enrollmentTrustLevel")}:</span> {t(trustLabelKey(result.trust_level) as never)}</div>
+                <div><span className="font-medium">{t("tasks.publicWorkersNamespace")}:</span> <code>{result.namespace}</code></div>
               </div>
               <div className="flex gap-2">
                 <input readOnly value="••••••••••••••••" aria-label={t("tasks.enrollmentTokenLabel")} className="min-w-0 flex-1 rounded-md border border-emerald-200 bg-white px-3 py-2 font-mono text-xs" />
@@ -181,7 +162,7 @@ export function WorkerEnrollmentPanel() {
                   <div key={`${worker.worker_id}:${worker.namespace}`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200/80 bg-white/70 px-3 py-2 text-xs">
                     <div className="min-w-0">
                       <span className="block truncate font-mono text-zinc-700">{worker.worker_id}</span>
-                      <span className="mt-1 block truncate text-amber-900/70">{worker.namespace} · {t(trustLabelKey(worker.trust_level) as never)}</span>
+                      <span className="mt-1 block truncate text-amber-900/70">{worker.namespace}</span>
                     </div>
                     <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
                       <span className={`rounded-full px-2 py-0.5 font-medium ${worker.presence === "online" ? "bg-emerald-100 text-emerald-700" : worker.presence === "never_seen" ? "bg-zinc-100 text-zinc-600" : "bg-amber-100 text-amber-700"}`}>
