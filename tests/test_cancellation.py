@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 import backend.app as backend_app_module
 from backend.code_agent.worker.consumer import _process_next_task
-from backend.code_agent.worker.docker_runtime import run_docker_task
+from backend.code_agent.worker.claude_runtime import run_claude_task
 
 
 # ===========================================================================
@@ -161,32 +161,36 @@ class TestCancelEndpoint:
 
 
 # ===========================================================================
-# Async tests for docker runtime cancellation
+# Async tests for the unified direct runtime cancellation
 # ===========================================================================
 
 
-class TestDockerRuntimeCancellation:
+class TestClaudeRuntimeCancellation:
     @pytest.mark.asyncio
-    async def test_run_docker_task_stops_on_cancel_event(self):
+    async def test_run_claude_task_stops_on_cancel_event(self, tmp_path):
         cancel_event = asyncio.Event()
 
         proc_mock = AsyncMock()
-        # AsyncMock's default pid coerces to 1 on Linux. Keep the test from
-        # ever signalling a real process group while exercising cancellation.
-        proc_mock.pid = 99999999
         proc_mock.stdout.readline = AsyncMock(side_effect=[b"line1\n", b""])
         proc_mock.wait = AsyncMock(return_value=None)
         proc_mock.returncode = 0
         proc_mock.terminate = Mock()
         proc_mock.kill = Mock()
 
-        with patch("backend.code_agent.worker.docker_runtime.asyncio.create_subprocess_exec", AsyncMock(return_value=proc_mock)):
+        input_dir = tmp_path / "input"
+        output_dir = tmp_path / "output"
+        with patch("backend.code_agent.worker.claude_runtime.asyncio.create_subprocess_exec", AsyncMock(return_value=proc_mock)):
             events = []
-            async for event in run_docker_task(
+            async for event in run_claude_task(
                 task_id="task-1",
                 task_spec_id="spec-1",
                 dataset_snapshot_id="ds-1",
+                case_dir=str(input_dir),
+                output_dir=str(output_dir),
                 cancel_event=cancel_event,
+                attempt_gateway_url="https://gateway.example/attempt/task-1",
+                attempt_gateway_token="attempt-token",
+                attempt_model_id="model-1",
             ):
                 events.append(event)
                 if event.get("type") == "chunk":

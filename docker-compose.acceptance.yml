@@ -132,19 +132,12 @@ services:
       METHOD_SOURCE_UPLOAD_ROOT: ${METHOD_SOURCE_UPLOAD_ROOT}
       DATASET_UPLOAD_ROOT: ${DATASET_UPLOAD_ROOT}
       RESOURCE_STORAGE_ROOT: /workspace/resources
-      GOAL_DRIVEN_FIXTURE_ROOT: /fixtures
-      CODE_AGENT_DOCKER_IMAGE: ${CODE_AGENT_DOCKER_IMAGE}
-      CODE_AGENT_JOB_NETWORK: ${CODE_AGENT_JOB_NETWORK}
     extra_hosts:
       # Lets the container reach a host-run local Provider spy without
       # widening production egress rules.
       - "host.docker.internal:host-gateway"
     volumes:
       - ./workspace/${ACCEPTANCE_RUN_ID}/api:/workspace
-      # Read-only fixture input for explicit local acceptance commands. The
-      # API never executes it; the controlled executor reads it by logical
-      # analysis type only.
-      - ${ACCEPTANCE_FIXTURE_HOST_ROOT}:/fixtures:ro
     ports:
       - "127.0.0.1:${ACCEPTANCE_API_PORT}:8008"
     depends_on:
@@ -201,9 +194,10 @@ services:
         condition: service_completed_successfully
 
   outbox:
+    image: ${ACCEPTANCE_WORKER_IMAGE:-infinity-agent-worker:acceptance}
     build:
       context: .
-      dockerfile: backend/Dockerfile.fixture-worker
+      dockerfile: backend/Dockerfile.worker
     environment:
       APP_ENV: acceptance
       DATABASE_URL: postgresql://${ACCEPTANCE_OUTBOX_DB_USER}:${ACCEPTANCE_OUTBOX_DB_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
@@ -222,9 +216,10 @@ services:
     command: ["python", "-m", "backend.code_agent.outbox"]
 
   worker-a:
+    image: ${ACCEPTANCE_WORKER_IMAGE:-infinity-agent-worker:acceptance}
     build:
       context: .
-      dockerfile: backend/Dockerfile.fixture-worker
+      dockerfile: backend/Dockerfile.worker
     environment:
       APP_ENV: acceptance
       WORKER_ID: worker-a-${ACCEPTANCE_RUN_ID}
@@ -237,22 +232,16 @@ services:
       DB_RLS_WORKER_ROLE: infinity_worker
       REDIS_URL: redis://worker_a:${ACCEPTANCE_WORKER_A_REDIS_PASSWORD:-local-worker-a-redis-secret}@redis:6379/0
       REDIS_NAMESPACE: ${ACCEPTANCE_REDIS_NAMESPACE}
-      CODE_AGENT_DOCKER_IMAGE: ${CODE_AGENT_DOCKER_IMAGE}
-      CODE_AGENT_JOB_NETWORK: ${CODE_AGENT_JOB_NETWORK}
-      CODE_AGENT_EXECUTOR_MODE: ${CODE_AGENT_EXECUTOR_MODE}
-      ALLOW_FIXTURE_EXECUTOR: ${ALLOW_FIXTURE_EXECUTOR}
+      CODE_AGENT_EXECUTOR_MODE: direct
       ARTIFACT_STORAGE_ROOT: ${ARTIFACT_STORAGE_ROOT}
       DATASET_UPLOAD_ROOT: ${DATASET_UPLOAD_ROOT}
       METHOD_SOURCE_UPLOAD_ROOT: ${METHOD_SOURCE_UPLOAD_ROOT}
       RESOURCE_STORAGE_ROOT: /workspace/resources
-      GOAL_DRIVEN_FIXTURE_ROOT: /fixtures
       WORKER_ENROLLMENT_REQUIRED: ${ACCEPTANCE_WORKER_ENROLLMENT_REQUIRED:-1}
       ENABLE_LEASE_REAPER: "0"
       WORKER_CREDENTIAL: ${ACCEPTANCE_WORKER_A_CREDENTIAL:-}
       WORKER_CONTROL_PLANE_URL: http://api:8008
     volumes:
-      # Controlled fixture Executor; no host Docker Socket is exposed.
-      - ${ACCEPTANCE_FIXTURE_HOST_ROOT}:/fixtures:ro
       - ./workspace/${ACCEPTANCE_RUN_ID}/worker-a:/workspace
     depends_on:
       postgres:
@@ -264,9 +253,10 @@ services:
     command: ["python", "-m", "backend.code_agent.worker.consumer", "worker-a-${ACCEPTANCE_RUN_ID}"]
 
   worker-b:
+    image: ${ACCEPTANCE_WORKER_IMAGE:-infinity-agent-worker:acceptance}
     build:
       context: .
-      dockerfile: backend/Dockerfile.fixture-worker
+      dockerfile: backend/Dockerfile.worker
     environment:
       APP_ENV: acceptance
       WORKER_ID: worker-b-${ACCEPTANCE_RUN_ID}
@@ -279,22 +269,16 @@ services:
       DB_RLS_WORKER_ROLE: infinity_worker
       REDIS_URL: redis://worker_b:${ACCEPTANCE_WORKER_B_REDIS_PASSWORD:-local-worker-b-redis-secret}@redis:6379/0
       REDIS_NAMESPACE: ${ACCEPTANCE_REDIS_NAMESPACE}
-      CODE_AGENT_DOCKER_IMAGE: ${CODE_AGENT_DOCKER_IMAGE}
-      CODE_AGENT_JOB_NETWORK: ${CODE_AGENT_JOB_NETWORK}
-      CODE_AGENT_EXECUTOR_MODE: ${CODE_AGENT_EXECUTOR_MODE}
-      ALLOW_FIXTURE_EXECUTOR: ${ALLOW_FIXTURE_EXECUTOR}
+      CODE_AGENT_EXECUTOR_MODE: direct
       ARTIFACT_STORAGE_ROOT: ${ARTIFACT_STORAGE_ROOT}
       DATASET_UPLOAD_ROOT: ${DATASET_UPLOAD_ROOT}
       METHOD_SOURCE_UPLOAD_ROOT: ${METHOD_SOURCE_UPLOAD_ROOT}
       RESOURCE_STORAGE_ROOT: /workspace/resources
-      GOAL_DRIVEN_FIXTURE_ROOT: /fixtures
       WORKER_ENROLLMENT_REQUIRED: ${ACCEPTANCE_WORKER_ENROLLMENT_REQUIRED:-1}
       ENABLE_LEASE_REAPER: "0"
       WORKER_CREDENTIAL: ${ACCEPTANCE_WORKER_B_CREDENTIAL:-}
       WORKER_CONTROL_PLANE_URL: http://api:8008
     volumes:
-      # Controlled fixture Executor; no host Docker Socket is exposed.
-      - ${ACCEPTANCE_FIXTURE_HOST_ROOT}:/fixtures:ro
       - ./workspace/${ACCEPTANCE_RUN_ID}/worker-b:/workspace
     depends_on:
       postgres:
@@ -306,9 +290,10 @@ services:
     command: ["python", "-m", "backend.code_agent.worker.consumer", "worker-b-${ACCEPTANCE_RUN_ID}"]
 
   reaper:
+    image: ${ACCEPTANCE_WORKER_IMAGE:-infinity-agent-worker:acceptance}
     build:
       context: .
-      dockerfile: backend/Dockerfile.fixture-worker
+      dockerfile: backend/Dockerfile.worker
     environment:
       APP_ENV: acceptance
       DATABASE_URL: postgresql://${ACCEPTANCE_REAPER_DB_USER}:${ACCEPTANCE_REAPER_DB_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}

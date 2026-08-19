@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,10 +18,10 @@ import backend.app as backend_app_module
 from backend.code_agent.worker.executor import execute_task
 
 
-def _fixture_case(case_number: str) -> Path:
-    root_value = os.getenv("GOAL_DRIVEN_FIXTURE_ROOT", "").strip()
+def _case_dir(case_number: str) -> Path:
+    root_value = os.getenv("GOAL_DRIVEN_CASE_ROOT", "").strip()
     if not root_value:
-        pytest.skip("GOAL_DRIVEN_FIXTURE_ROOT is not configured")
+        pytest.skip("GOAL_DRIVEN_CASE_ROOT is not configured")
     case_dir = Path(root_value).expanduser() / case_number
     if not case_dir.is_dir():
         pytest.fail(f"Fixture case directory does not exist: {case_dir}")
@@ -250,85 +251,58 @@ class TestRegressionChains:
 
 
 class TestIntegrationRealDocker:
-    """Real Docker integration tests (GAP 3)."""
+    """Real unified Claude runtime smoke tests.
+
+    Full Case 2/3 acceptance runs through the PostgreSQL/Redis/API/Worker
+    stack in the acceptance runbook. These focused tests only exercise the
+    same direct runtime without importing the removed nested-Docker client.
+    """
+
+    async def _run_case(self, case_number: str, task_id: str, tmp_path):
+        case_dir = _case_dir(case_number)
+        input_dir = tmp_path / "input"
+        shutil.copytree(case_dir, input_dir)
+        out_dir = tmp_path / "output"
+        out_dir.mkdir(parents=True)
+        gateway_url = os.getenv("ATTEMPT_GATEWAY_URL", "").strip()
+        gateway_token = os.getenv("ATTEMPT_GATEWAY_TOKEN", "").strip()
+        model_id = os.getenv("ATTEMPT_MODEL_ID", "").strip()
+        if not all((gateway_url, gateway_token, model_id)):
+            pytest.skip("Attempt gateway environment is required for the direct runtime smoke test")
+
+        from backend.code_agent.worker.claude_runtime import run_claude_task
+
+        events = [
+            event async for event in run_claude_task(
+                task_id=task_id,
+                task_spec_id=f"spec-{case_number}",
+                dataset_snapshot_id=f"dataset-{case_number}",
+                title=f"Case {case_number}",
+                goal=f"Execute the supplied Case {case_number} inputs and write the documented outputs.",
+                analysis_type={"2": "biopython", "3": "scanpy"}.get(case_number, "generic"),
+                case_dir=str(input_dir),
+                output_dir=str(out_dir),
+                attempt_gateway_url=gateway_url,
+                attempt_gateway_token=gateway_token,
+                attempt_model_id=model_id,
+            )
+        ]
+        assert events, "direct runtime returned no events"
+        assert events[-1]["type"] == "done", events[-1]
+        assert any(path.is_file() for path in out_dir.rglob("*")), "runtime produced no output"
+        return events
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_case1_real_docker_executes(self, tmp_path):
-        from backend.code_agent.worker.docker_runtime import run_docker_task, check_docker_available
-
-        if not await check_docker_available():
-            pytest.skip("Docker is not available")
-
-        case_dir = str(_fixture_case("1"))
-        out_dir = tmp_path / "output"
-        out_dir.mkdir(parents=True)
-
-        events = []
-        async for event in run_docker_task(
-            task_id="integration-case1",
-            task_spec_id="spec-1",
-            dataset_snapshot_id="ds-1",
-            docker_image="claude-code-env:v2",
-            case_dir=case_dir,
-            output_dir=str(out_dir),
-        ):
-            events.append(event)
-
-        types = [e["type"] for e in events]
-        assert "done" in types
-        assert (out_dir / "results.csv").exists() or (out_dir / "report.md").exists()
+    async def test_case1_real_direct_runtime_executes(self, tmp_path):
+        await self._run_case("1", "integration-case1", tmp_path)
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_case2_real_docker_executes(self, tmp_path):
-        from backend.code_agent.worker.docker_runtime import run_docker_task, check_docker_available
-
-        if not await check_docker_available():
-            pytest.skip("Docker is not available")
-
-        case_dir = str(_fixture_case("2"))
-        out_dir = tmp_path / "output"
-        out_dir.mkdir(parents=True)
-
-        events = []
-        async for event in run_docker_task(
-            task_id="integration-case2",
-            task_spec_id="spec-2",
-            dataset_snapshot_id="ds-2",
-            docker_image="claude-code-env:v2",
-            case_dir=case_dir,
-            output_dir=str(out_dir),
-        ):
-            events.append(event)
-
-        types = [e["type"] for e in events]
-        assert "done" in types
-        assert (out_dir / "gc_content.txt").exists() or (out_dir / "report.md").exists()
+    async def test_case2_real_direct_runtime_executes(self, tmp_path):
+        await self._run_case("2", "integration-case2", tmp_path)
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_case3_real_docker_executes(self, tmp_path):
-        from backend.code_agent.worker.docker_runtime import run_docker_task, check_docker_available
-
-        if not await check_docker_available():
-            pytest.skip("Docker is not available")
-
-        case_dir = str(_fixture_case("3"))
-        out_dir = tmp_path / "output"
-        out_dir.mkdir(parents=True)
-
-        events = []
-        async for event in run_docker_task(
-            task_id="integration-case3",
-            task_spec_id="spec-3",
-            dataset_snapshot_id="ds-3",
-            docker_image="claude-code-env:v2",
-            case_dir=case_dir,
-            output_dir=str(out_dir),
-        ):
-            events.append(event)
-
-        types = [e["type"] for e in events]
-        assert "done" in types
-        assert (out_dir / "qc_metrics.csv").exists() or (out_dir / "report.md").exists()
+    async def test_case3_real_direct_runtime_executes(self, tmp_path):
+        await self._run_case("3", "integration-case3", tmp_path)

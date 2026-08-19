@@ -1,8 +1,7 @@
 """Infinity Agents unified Worker task executor.
 
 Production tasks use the fixed Claude Code runtime directly in the long-lived
-Worker container. The old nested-Docker executor is not a production fallback;
-fixture execution exists only for the isolated acceptance harness.
+Worker container. There is no nested-Docker or fixture execution branch.
 """
 
 from __future__ import annotations
@@ -546,14 +545,13 @@ async def _run_docker_execution(
     worker_runtime_capability: Optional[str] = None,
     worker_image_digest: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
-    """Run the configured execution mode.
-
-    ``direct`` runs Claude Code in this Worker container. ``fixture`` is
-    reserved for the isolated acceptance harness. Any legacy nested-Docker
-    mode fails closed instead of becoming a production fallback.
-    """
+    """Run the single production Claude Code execution mode."""
     input_dir = None
-    executor_mode = os.getenv("CODE_AGENT_EXECUTOR_MODE", "direct").strip().lower()
+    executor_mode = os.getenv("CODE_AGENT_EXECUTOR_MODE", "direct").strip().lower() or "direct"
+    if executor_mode != "direct":
+        raise SecurityBoundaryError(
+            f"Unsupported executor mode {executor_mode!r}; the unified Worker only supports direct Claude Code"
+        )
 
     # Preferred path: assemble the task input directory from the uploaded
     # method source document + dataset snapshot (design doc §8.5).
@@ -614,64 +612,39 @@ async def _run_docker_execution(
             else:
                 raise SecurityBoundaryError("execution document is not available to this Worker")
 
-    # Fallback: pre-existing case directories from the validation phase.
+    from backend.code_agent.worker.claude_runtime import run_claude_task
+
     if input_dir is None:
-        analysis_type = task_spec.get("analysis_type", "")
-        case_mapping = {
-            "rnaseq_deseq2": "1",
-            "biopython": "2",
-            "scanpy": "3",
-        }
-        case_num = case_mapping.get(analysis_type, "")
-        case_base = Path(os.getenv("CODE_AGENT_CASE_DIR", "/workspace/case"))
-        if case_num and (case_base / case_num).exists():
-            input_dir = case_base / case_num
-
-    if executor_mode == "fixture":
-        from backend.code_agent.worker.fixture_executor import run_fixture_executor
-        async for event in run_fixture_executor(task_spec, output_dir, input_dir=input_dir):
-            yield event
-        return
-
-    if executor_mode == "direct":
-        from backend.code_agent.worker.claude_runtime import run_claude_task
-
-        if input_dir is None:
-            input_dir = work_dir / "input"
-            input_dir.mkdir(parents=True, exist_ok=True)
-        gateway = await _request_attempt_gateway(
-            task_id=task_id,
-            attempt_id=attempt_id,
-            worker_id=worker_id,
-            worker_namespace=worker_namespace,
-            worker_credential=worker_credential,
-            lease_token=lease_token,
-            control_plane_url=control_plane_url,
-            worker_instance_id=worker_instance_id,
-            worker_protocol_version=worker_protocol_version,
-            worker_runtime_capability=worker_runtime_capability,
-            worker_image_digest=worker_image_digest,
-        )
-        async for event in run_claude_task(
-            task_id=task_id,
-            task_spec_id=task_spec.get("task_spec_id", ""),
-            dataset_snapshot_id=dataset.get("dataset_snapshot_id", "") if dataset else "",
-            title=task_spec.get("title", ""),
-            goal=task_spec.get("research_question") or task_spec.get("goal") or "",
-            analysis_type=task_spec.get("analysis_type", "generic"),
-            case_dir=str(input_dir),
-            output_dir=output_dir,
-            cancel_event=cancel_event,
-            attempt_gateway_url=gateway["gateway_url"],
-            attempt_gateway_token=gateway["gateway_token"],
-            attempt_model_id=gateway["model_id"],
-        ):
-            yield event
-        return
-
-    raise SecurityBoundaryError(
-        f"Unsupported executor mode {executor_mode!r}; only the unified direct runtime is production-safe"
+        input_dir = work_dir / "input"
+        input_dir.mkdir(parents=True, exist_ok=True)
+    gateway = await _request_attempt_gateway(
+        task_id=task_id,
+        attempt_id=attempt_id,
+        worker_id=worker_id,
+        worker_namespace=worker_namespace,
+        worker_credential=worker_credential,
+        lease_token=lease_token,
+        control_plane_url=control_plane_url,
+        worker_instance_id=worker_instance_id,
+        worker_protocol_version=worker_protocol_version,
+        worker_runtime_capability=worker_runtime_capability,
+        worker_image_digest=worker_image_digest,
     )
+    async for event in run_claude_task(
+        task_id=task_id,
+        task_spec_id=task_spec.get("task_spec_id", ""),
+        dataset_snapshot_id=dataset.get("dataset_snapshot_id", "") if dataset else "",
+        title=task_spec.get("title", ""),
+        goal=task_spec.get("research_question") or task_spec.get("goal") or "",
+        analysis_type=task_spec.get("analysis_type", "generic"),
+        case_dir=str(input_dir),
+        output_dir=output_dir,
+        cancel_event=cancel_event,
+        attempt_gateway_url=gateway["gateway_url"],
+        attempt_gateway_token=gateway["gateway_token"],
+        attempt_model_id=gateway["model_id"],
+    ):
+        yield event
 
 
 def _inside_upload_roots(path: Path) -> bool:
@@ -868,7 +841,7 @@ async def _validate_outputs(output_dir: Path, task_spec: Dict[str, Any]) -> Dict
         failures.append({"message": "Claude Code produced no output artifacts"})
     spec_json = task_spec.get("spec_json") if isinstance(task_spec, dict) else None
     required_outputs = spec_json.get("required_outputs", []) if isinstance(spec_json, dict) else []
-    present = {relative.as_posix() for _path, relative in files}
+    present = {str(relative) for _path, relative in files}
     if isinstance(required_outputs, list):
         for required in required_outputs:
             required_name = str(required).strip().lstrip("/")

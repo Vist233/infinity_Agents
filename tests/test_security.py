@@ -48,19 +48,22 @@ class TestUploadSizeLimit:
 
 
 class TestDockerNoRoot:
-    def test_docker_command_has_no_root_user(self):
-        from backend.code_agent.worker.docker_runtime import run_docker_task
+    def test_direct_runtime_uses_non_root_claude_identity(self):
+        from backend.code_agent.worker.claude_runtime import run_claude_task
         import inspect
-        source = inspect.getsource(run_docker_task)
-        assert "--user=root" not in source
-        assert "user=" not in source or "user_input" in source
 
-    def test_docker_command_has_security_opts(self):
-        from backend.code_agent.worker.docker_runtime import run_docker_task
-        import inspect
-        source = inspect.getsource(run_docker_task)
-        assert "--security-opt=no-new-privileges" in source
-        assert "--cap-drop=ALL" in source
+        source = inspect.getsource(run_claude_task)
+        assert "CLAUDE_RUNTIME_UID" in source or "_runtime_identity" in source
+        assert '"claude"' in source
+
+    def test_worker_image_has_no_docker_runtime_or_socket(self):
+        from pathlib import Path
+
+        dockerfile = Path("backend/Dockerfile.worker").read_text(encoding="utf-8")
+        assert "docker-ce" not in dockerfile
+        assert "docker.sock" not in dockerfile
+        assert "useradd --system --uid 10001" in dockerfile
+        assert "CLAUDE_RUNTIME_UID=10001" in dockerfile
 
 
 class TestSecretSanitization:

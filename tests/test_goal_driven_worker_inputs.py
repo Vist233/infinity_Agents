@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import zipfile
+from pathlib import Path
 
 import httpx
 import pytest
@@ -104,7 +105,7 @@ async def test_worker_downloads_remote_frozen_input_with_persistent_identity(tmp
 
 
 @pytest.mark.asyncio
-async def test_worker_fixture_downloads_inputs_uploads_artifact_and_cleans_workspace(tmp_path, monkeypatch):
+async def test_worker_downloads_inputs_runs_direct_runtime_uploads_artifact_and_cleans_workspace(tmp_path, monkeypatch):
     method_payload = b"# frozen method\n"
     dataset_payload = io.BytesIO()
     with zipfile.ZipFile(dataset_payload, "w") as archive:
@@ -113,12 +114,7 @@ async def test_worker_fixture_downloads_inputs_uploads_artifact_and_cleans_works
     method_hash = hashlib.sha256(method_payload).hexdigest()
     dataset_hash = hashlib.sha256(dataset_payload).hexdigest()
 
-    fixture_root = tmp_path / "fixtures"
-    fixture_output = fixture_root / "2" / "output"
-    fixture_output.mkdir(parents=True)
-    (fixture_output / "result.txt").write_text("fixture result\n", encoding="utf-8")
-
-    task_id = "worker-fixture-task"
+    task_id = "worker-direct-task"
     attempt_id = 7
     output_root = tmp_path / "worker-output"
     observed = {"inputs": [], "artifact": None}
@@ -156,9 +152,7 @@ async def test_worker_fixture_downloads_inputs_uploads_artifact_and_cleans_works
 
     monkeypatch.setattr(httpx, "AsyncClient", client_factory)
     monkeypatch.setenv("APP_ENV", "test")
-    monkeypatch.setenv("ALLOW_FIXTURE_EXECUTOR", "1")
-    monkeypatch.setenv("CODE_AGENT_EXECUTOR_MODE", "fixture")
-    monkeypatch.setenv("GOAL_DRIVEN_FIXTURE_ROOT", str(fixture_root))
+    monkeypatch.setenv("CODE_AGENT_EXECUTOR_MODE", "direct")
     monkeypatch.setattr(
         "backend.code_agent.worker.executor._get_task_spec",
         lambda *_args: _async_value({
@@ -189,6 +183,36 @@ async def test_worker_fixture_downloads_inputs_uploads_artifact_and_cleans_works
     )
     monkeypatch.setattr("backend.code_agent.worker.executor._get_image_digest", lambda *_args: _async_value(None))
     monkeypatch.setattr(
+        "backend.code_agent.worker.executor._request_attempt_gateway",
+        lambda *_args, **_kwargs: _async_value({
+            "gateway_url": "http://localhost:4318/attempt",
+            "gateway_token": "attempt-token",
+            "model_id": "acceptance-model",
+        }),
+    )
+    async def fake_direct_runtime(*_args, output_dir, **_kwargs):
+        result = Path(output_dir) / "result.txt"
+        result.parent.mkdir(parents=True, exist_ok=True)
+        result.write_text("direct runtime result\n", encoding="utf-8")
+        (result.parent / "frozen-input-manifest.json").write_text(
+            json.dumps([
+                {"relative_path": "method.md", "sha256": method_hash},
+                {
+                    "relative_path": "data/counts.csv",
+                    "sha256": hashlib.sha256(b"sample,value\nA,1\n").hexdigest(),
+                },
+            ]),
+            encoding="utf-8",
+        )
+        yield {"type": "status", "phase": "executing"}
+        yield {"type": "chunk", "content": "direct runtime\n"}
+        yield {"type": "done", "output": "direct runtime"}
+
+    monkeypatch.setattr(
+        "backend.code_agent.worker.claude_runtime.run_claude_task",
+        fake_direct_runtime,
+    )
+    monkeypatch.setattr(
         "backend.code_agent.task_service.complete_task_attempt",
         lambda *_args, **_kwargs: _async_value(None),
     )
@@ -202,7 +226,7 @@ async def test_worker_fixture_downloads_inputs_uploads_artifact_and_cleans_works
         dataset_snapshot_id="snapshot-1",
         worker_id="worker-a",
         lease_token="lease-token",
-        docker_image="fixture-image",
+        docker_image="unified-image",
         db_pool=None,
         redis_client=redis,
         method_source_id="method-1",
