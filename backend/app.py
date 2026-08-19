@@ -2383,7 +2383,7 @@ if __name__ == "__main__":
 # Task Execution System (Infinity Agent)
 # ============================================================================
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
 
 
@@ -2644,8 +2644,14 @@ class ProviderProfileResponse(BaseModel):
 
 
 class WorkerEnrollmentRequest(BaseModel):
-    worker_id: str
-    namespace: str
+    """Create one Worker in the server-owned public pool.
+
+    Namespace and Worker ID are intentionally absent.  Pydantic rejects
+    attempts to smuggle them (or pool/provider/trust fields) into the request;
+    the control plane generates both values from its deployment configuration.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
 
 # ---- Redis client singleton ----
@@ -2703,16 +2709,15 @@ def _worker_enrollment_issue_allowed(user: Principal) -> bool:
     return bool(user.user_id.strip())
 
 
-def _worker_trust_for_user(user: Principal) -> str:
-    """Derive Worker trust from the authenticated permission, never a form field."""
-    if user.is_superuser:
-        return "full"
-    configured_superusers = {
-        value.strip()
-        for value in os.getenv("SUPERUSER_USER_IDS", "").split(",")
-        if value.strip()
-    }
-    return "full" if user.user_id in configured_superusers else "general"
+def _public_worker_namespace() -> str:
+    """Return the only Namespace served by this control plane."""
+    namespace = (
+        os.getenv("WORKER_PUBLIC_NAMESPACE", "").strip()
+        or os.getenv("REDIS_NAMESPACE", "").strip().strip(":")
+    )
+    if not namespace:
+        raise HTTPException(status_code=503, detail="Public Worker Namespace is not configured")
+    return namespace
 
 
 @app.post("/api/worker-enrollments")
@@ -2720,20 +2725,21 @@ async def issue_worker_enrollment_endpoint(
     request: WorkerEnrollmentRequest,
     user: Principal = Depends(require_user),
 ):
-    """Issue a persistent per-Worker credential; its raw value is returned once."""
+    """Issue a persistent credential in the server-owned public Worker pool."""
     if not _worker_enrollment_issue_allowed(user):
         raise HTTPException(status_code=403, detail="A signed-in account is required to issue a Worker")
     from backend.worker_enrollment import issue_worker_credential
 
     try:
-        trust_issuer_pool = getattr(app.state, "trust_issuer_pool", None)
+        namespace = _public_worker_namespace()
+        worker_id = f"public-worker-{uuid.uuid4()}"
         credential = await issue_worker_credential(
             app.state.db_pool,
-            request.worker_id,
-            request.namespace,
-            owner_user_id=user.user_id,
-            trust_level=_worker_trust_for_user(user),
-            trust_issuer_pool=trust_issuer_pool,
+            worker_id,
+            namespace,
+            # Issuance is public-cluster scoped.  The authenticated user is
+            # the audit actor, not a Namespace or task-visibility boundary.
+            owner_user_id=None,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Worker enrollment request is invalid") from exc
@@ -2743,7 +2749,6 @@ async def issue_worker_enrollment_endpoint(
         "credential": credential.credential,
         "persistent": True,
         "one_time": False,
-        "trust_level": credential.trust_level,
     }
 
 
@@ -2799,7 +2804,6 @@ async def _authenticate_worker_request(request: Request) -> Dict[str, str]:
         "namespace": identity.namespace,
         "lease_token": lease_token,
         "owner_user_id": identity.owner_user_id or "",
-        "trust_level": identity.trust_level,
     }
 
 
@@ -4339,7 +4343,7 @@ async def submit_task_bundle_endpoint(
                     RETURNING task_id, status, attempt_count
                     """,
                     task_id, task_spec_id, dataset_snapshot_id, selected_project_id,
-                    method_source_id, task_title, _worker_trust_for_user(user), user.user_id,
+                    method_source_id, task_title, "general", user.user_id,
                 )
                 await conn.execute(
                     """
@@ -4571,7 +4575,9 @@ async def confirm_task_draft_endpoint(
     method_source_id = str(uuid.uuid4())
     dataset_snapshot_id = str(uuid.uuid4())
     task_id = str(uuid.uuid4())
-    required_trust = _worker_trust_for_user(user)
+    # Legacy schema compatibility only. New tasks have one public Worker
+    # execution policy; this value is not derived from the requesting user.
+    required_trust = "general"
     method_upload_root = FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", "/tmp/uploaded-method-sources")).resolve()
     method_final_path = method_upload_root / "documents" / f"{draft_id}-{FilePath(method_filename).name}"
     method_final_created = False
@@ -4733,7 +4739,9 @@ async def create_task_endpoint(
             title=request.title,
             status="queued",
             max_attempts=request.max_attempts,
-            required_trust_level=_worker_trust_for_user(user),
+            # Legacy schema compatibility only; all Workers use the same
+            # public-pool execution policy.
+            required_trust_level="general",
             created_by=user.user_id,
         )
         try:

@@ -1,0 +1,16 @@
+Baseline: dbb131f
+
+Command:
+eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q tests/test_worker_enrollment.py tests/test_task_ownership.py tests/test_task_api.py tests/test_task_draft_confirmation.py
+Exit: 0
+Result: 40 passed.
+
+Command:
+git diff --check
+Exit: 0
+
+Command:
+git diff --unified=0 | rg -n -i 'api[_-]?key|secret|token|password|credential|anthropic'
+Exit: 0 because only non-secret field names/comments were present; no literal credential value was added.
+
+Docker/PostgreSQL/Redis: not started or modified in this card. No external systems modified.

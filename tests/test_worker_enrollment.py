@@ -6,7 +6,6 @@ import backend.app as app_module
 from backend.auth import Principal
 from backend.worker_enrollment import (
     DuplicateWorkerError,
-    TRUST_FULL,
     authenticate_worker_identity,
     credential_digest,
     issue_worker_credential,
@@ -78,11 +77,10 @@ async def test_active_worker_id_cannot_be_issued_twice():
 
 
 @pytest.mark.asyncio
-async def test_worker_identity_returns_server_assigned_owner_and_trust():
+async def test_worker_identity_returns_server_assigned_owner_without_client_policy():
     conn = _Conn({
         "credential_hash": credential_digest("worker-secret"),
         "owner_user_id": "alice",
-        "trust_level": TRUST_FULL,
         "status": "active",
         "revoked_at": None,
     })
@@ -90,7 +88,6 @@ async def test_worker_identity_returns_server_assigned_owner_and_trust():
 
     assert identity is not None
     assert identity.owner_user_id == "alice"
-    assert identity.trust_level == TRUST_FULL
     assert any("last_seen_at" in query for query, _args in conn.queries)
 
 
@@ -102,10 +99,6 @@ def test_acceptance_worker_enrollment_requires_explicit_operator(monkeypatch):
     assert app_module._worker_enrollment_admin_allowed(Principal(user_id="operator")) is True
 
 
-def test_worker_trust_is_derived_from_superuser_permission(monkeypatch):
-    monkeypatch.delenv("SUPERUSER_USER_IDS", raising=False)
-    assert app_module._worker_trust_for_user(Principal(user_id="student")) == "general"
-    assert app_module._worker_trust_for_user(Principal(user_id="root", roles=("superuser",))) == "full"
-
-    monkeypatch.setenv("SUPERUSER_USER_IDS", "operator")
-    assert app_module._worker_trust_for_user(Principal(user_id="operator")) == "full"
+def test_public_worker_namespace_is_server_owned(monkeypatch):
+    monkeypatch.setenv("WORKER_PUBLIC_NAMESPACE", "infinity-public")
+    assert app_module._public_worker_namespace() == "infinity-public"

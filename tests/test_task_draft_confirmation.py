@@ -37,6 +37,8 @@ class _Connection:
             return {"task_id": self.idempotency["resource_id"], "status": "queued", "attempt_count": 0}
         if "INSERT INTO TASKS" in normalized:
             return {"task_id": args[0], "status": "queued", "attempt_count": 0}
+        if "INSERT INTO TASK_EVENTS" in normalized:
+            return {"task_event_id": 1}
         return None
 
     async def execute(self, query, *args):
@@ -124,7 +126,6 @@ async def test_confirm_task_draft_freezes_inputs_once_and_replays_idempotently(m
 
     monkeypatch.setattr(backend_app, "get_task_draft", get_draft)
     monkeypatch.setattr(backend_app, "_get_project_resource", lambda *_args: _async_value(resource))
-    monkeypatch.setattr(backend_app, "_worker_trust_for_user", lambda _user: "general")
     monkeypatch.setattr(backend_app, "app", type("App", (), {"state": type("State", (), {"db_pool": _Pool(connection)})()})())
 
     request = backend_app.TaskDraftConfirmRequest(idempotency_key="confirm-once")

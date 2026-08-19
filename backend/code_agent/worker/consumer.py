@@ -94,11 +94,7 @@ async def run_worker(
         # caller-provided Namespace after the handshake; all subsequent
         # heartbeat, claim, and input operations use the stored binding.
         worker_namespace = identity.namespace
-        logger.info(
-            "Worker %s authenticated with server-assigned trust level %s",
-            worker_id,
-            identity.trust_level,
-        )
+        logger.info("Worker %s authenticated in the public Worker cluster", worker_id)
     await redis_client.ensure_consumer_group(STREAM_TASKS_EXECUTE, CONSUMER_GROUP)
     logger.info("Worker %s started, waiting for tasks...", worker_id)
 
