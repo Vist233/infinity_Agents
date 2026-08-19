@@ -23,6 +23,9 @@ Worker container.
 - Updated the Worker handoff, public-pool runbook, edge README, root handoff,
   and current architecture notes so they no longer instruct users to run the
   deleted Node poll client, old `--build` flow, or D1-only Worker route.
+- Updated `scripts/run_local_cloudflare_workers.sh` to inject the current
+  `WORKER_REDIS_URL` and call the image-only Compose file; removed the orphaned
+  `docker-compose.cloudflare-workers.remote-redis.yml` override.
 - Retained D1 migrations and 410 negative tests as migration/compatibility
   evidence. The live `src/tasks.ts` handler is not deleted because the central
   PostgreSQL edge proxy is still an open P7 item; deleting it now would remove
@@ -56,6 +59,8 @@ frontend: npm run test:unit      -> 41 passed, exit 0
 frontend: npm run typecheck      -> exit 0
 backend: pyenv shell Agent; python -m pytest -q -> 321 passed, 45 skipped, exit 0
 git diff --check                  -> exit 0
+bash -n scripts/run_local_cloudflare_workers.sh -> exit 0
+Cloudflare regression after bootstrap cleanup -> 44 passed, exit 0
 ```
 
 The frontend test output contains the pre-existing React `act(...)` warnings;
