@@ -209,12 +209,11 @@ $$;
 REVOKE ALL ON FUNCTION app.project_access(uuid, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.project_access(uuid, text) TO infinity_api, infinity_worker;
 
--- A general Worker is scoped to the account that enrolled it.  Full-trust
--- Workers are the explicitly privileged server-side execution tier and may
--- process all tasks.  This closes the gap where a valid general credential
--- could otherwise claim another user's queued task from the shared Redis
--- stream.  The function is security-definer so the policy does not recurse
--- through worker_enrollments RLS.
+-- The legacy trust column does not grant execution capability.  Until the
+-- public-pool scheduling policy is explicitly enabled, this conservative
+-- compatibility helper keeps Worker claims scoped to the audit owner.  The
+-- function is SECURITY DEFINER so the policy does not recurse through
+-- worker_enrollments RLS.
 CREATE OR REPLACE FUNCTION app.worker_can_access_task(target_task uuid, actor text) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
   SELECT EXISTS (
@@ -230,12 +229,9 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app A
         'hex'
       )
       AND app.worker_session_compatible(actor)
-      AND (
-        w.trust_level = 'full'
-        OR (w.trust_level = 'general'
-            AND w.owner_user_id IS NOT NULL
-            AND t.created_by = w.owner_user_id)
-      )
+      AND w.execution_pool = 'public-default'
+      AND w.owner_user_id IS NOT NULL
+      AND t.created_by = w.owner_user_id
   )
 $$;
 REVOKE ALL ON FUNCTION app.worker_can_access_task(uuid, text) FROM PUBLIC;
@@ -685,14 +681,7 @@ GRANT EXECUTE ON FUNCTION app.reaper_task_expired(uuid) TO infinity_reaper;
 
 CREATE OR REPLACE FUNCTION app.worker_trust_allows(required text, actor text) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
-  SELECT required = 'general' OR EXISTS (
-    SELECT 1
-    FROM worker_enrollments w
-    WHERE w.worker_id = actor
-      AND w.status = 'active'
-      AND w.revoked_at IS NULL
-      AND w.trust_level = 'full'
-  )
+  SELECT required IN ('general', 'full')
 $$;
 REVOKE ALL ON FUNCTION app.worker_trust_allows(text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.worker_trust_allows(text, text) TO infinity_worker;
@@ -1330,7 +1319,7 @@ CREATE POLICY attempt_worker_policy ON task_attempts
 DROP POLICY IF EXISTS task_worker_policy ON tasks;
 CREATE POLICY task_worker_policy ON tasks
   FOR ALL TO infinity_worker
-  USING ((status = 'queued' AND app.worker_trust_allows(required_trust_level, app.current_worker_id())
+  USING ((status = 'queued'
          AND app.worker_can_access_task(task_id, app.current_worker_id()))
          -- This direct predicate is evaluated against both sides of an
          -- UPDATE by PostgreSQL RLS.  It therefore permits the new active
@@ -1339,7 +1328,7 @@ CREATE POLICY task_worker_policy ON tasks
              AND status IN ('claimed', 'running', 'succeeded', 'failed', 'cancelled', 'timeout')
              AND lease_expires_at > NOW()))
   WITH CHECK (
-    (status = 'queued' AND app.worker_trust_allows(required_trust_level, app.current_worker_id())
+    (status = 'queued'
      AND app.worker_can_access_task(task_id, app.current_worker_id()))
     -- WITH CHECK evaluates the new row.  The helper intentionally reads the
     -- old committed version, so a claim must validate the new lease fields

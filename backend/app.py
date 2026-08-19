@@ -3272,7 +3272,6 @@ async def _worker_task_input(task_id: str, worker: Dict[str, str], kind: str) ->
                 AND w.protocol_version = $7
                 AND w.runtime_capability = $8
                 AND w.ready = TRUE
-                AND (t.required_trust_level = 'general' OR w.trust_level = 'full')
           )
     """
     async with _worker_database_pool().acquire() as conn:
@@ -3334,7 +3333,6 @@ async def _worker_artifact_upload_allowed(
           AND w.protocol_version = $8
           AND w.runtime_capability = $9
           AND w.ready = TRUE
-          AND (t.required_trust_level = 'general' OR w.trust_level = 'full')
     """
     async with _worker_database_pool().acquire() as conn:
         return await conn.fetchrow(

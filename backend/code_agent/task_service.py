@@ -698,7 +698,9 @@ async def _worker_scope(pool, worker_id: str) -> Dict[str, Any]:
         epoch = 0
     return {
         "enrolled": True,
-        "trust_level": "full" if str(_row_value(row, "trust_level", "general")).lower() == "full" else "general",
+        # The storage column is retained for migration compatibility only.
+        # Every enrolled Worker uses the same public execution policy.
+        "trust_level": "general",
         "owner_user_id": str(_row_value(row, "owner_user_id")) if _row_value(row, "owner_user_id") else None,
         "namespace": str(_row_value(row, "namespace")) if _row_value(row, "namespace") else None,
         "execution_pool": str(_row_value(row, "execution_pool", "public-default") or "public-default"),
@@ -709,18 +711,6 @@ async def _worker_scope(pool, worker_id: str) -> Dict[str, Any]:
         "ready": bool(_row_value(row, "ready", False)),
         "session_epoch": epoch,
     }
-
-
-async def _worker_trust_level(pool, worker_id: str) -> str:
-    """Read the server-assigned trust used by the non-RLS compatibility path.
-
-    Release databases also enforce the same rule in the ``task_worker_policy``
-    RLS policy.  Keeping the parameterized predicate here lets legacy local
-    test workers claim explicitly general fixture tasks without weakening the
-    database policy for full-trust tasks.
-    """
-    scope = await _worker_scope(pool, worker_id)
-    return str(scope["trust_level"])
 
 
 async def try_claim_task(
@@ -750,7 +740,6 @@ async def try_claim_task(
     from datetime import timedelta
     lease_expires = now + timedelta(seconds=lease_seconds)
     worker_scope = await _worker_scope(pool, worker_id)
-    worker_trust_level = worker_scope["trust_level"]
     worker_owner_user_id = worker_scope["owner_user_id"]
     enrolled_namespace = worker_scope["namespace"]
     expected_protocol = os.getenv("WORKER_PROTOCOL_VERSION", "1").strip() or "1"
@@ -793,22 +782,19 @@ async def try_claim_task(
                 WHERE t.task_id = $1::uuid AND t.status = 'queued'
                   AND (t.lease_expires_at IS NULL OR t.lease_expires_at < NOW())
                   AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= NOW())
-                  -- General Workers are account-scoped. Full Workers are the
-                  -- explicitly privileged server execution tier. RLS
-                  -- repeats the same rule using the credential-bound actor.
+                  -- The legacy trust column is not an execution capability.
+                  -- Until the public-pool scheduling policy is explicitly
+                  -- enabled, the non-RLS compatibility path remains owner
+                  -- scoped as a conservative default.
+                  AND NULLIF($5::text, '') IS NOT NULL
+                  AND t.created_by = $5::text
                   AND (
-                    $5::text = 'full'
-                    OR (t.required_trust_level = 'general'
-                        AND NULLIF($6::text, '') IS NOT NULL
-                        AND t.created_by = $6::text)
-                  )
-                  AND (
-                    NULLIF($7::text, '') IS NULL
+                    NULLIF($6::text, '') IS NULL
                     OR EXISTS (
                       SELECT 1
                       FROM worker_enrollments w
                       WHERE w.worker_id = $2
-                        AND w.namespace = $7::text
+                        AND w.namespace = $6::text
                         AND w.status = 'active'
                         AND w.revoked_at IS NULL
                     )
@@ -817,7 +803,7 @@ async def try_claim_task(
                           t.project_id, t.method_source_id, t.title, t.max_attempts,
                           t.required_trust_level, t.execution_pool
                 """,
-                task_id, worker_id, lease_token, lease_expires, worker_trust_level,
+                task_id, worker_id, lease_token, lease_expires,
                 worker_owner_user_id, worker_namespace,
             )
             if not row:
@@ -1585,7 +1571,6 @@ async def create_artifact_if_current_lease(
                   WHERE w.worker_id = $13
                     AND w.status = 'active'
                     AND w.revoked_at IS NULL
-                    AND (tasks.required_trust_level = 'general' OR w.trust_level = 'full')
               )
           )
         RETURNING created_at

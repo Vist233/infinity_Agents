@@ -69,7 +69,7 @@ async def run_worker(
     worker_id: str,
     db_pool,
     redis_client,
-    docker_image: str = "claude-code-env:v2",
+    docker_image: str = "infinity-agent-worker:v1",
     *,
     poll_interval: float = 1.0,
     lease_seconds: int = 60,
@@ -654,7 +654,7 @@ async def _main(worker_id: str) -> None:
     from backend.security import validate_runtime_database_url
     validate_runtime_database_url(database_url)
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    docker_image = os.getenv("CODE_AGENT_DOCKER_IMAGE", "claude-code-env:v2")
+    docker_image = os.getenv("WORKER_IMAGE", "infinity-agent-worker:v1")
     namespace = os.getenv("REDIS_NAMESPACE", "").strip().strip(":")
     control_plane_url = os.getenv("WORKER_CONTROL_PLANE_URL") or os.getenv("CONTROL_PLANE_URL")
     instance_id = os.getenv("WORKER_INSTANCE_ID", "").strip()

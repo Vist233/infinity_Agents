@@ -91,6 +91,23 @@ async def test_worker_identity_returns_server_assigned_owner_without_client_poli
     assert any("last_seen_at" in query for query, _args in conn.queries)
 
 
+@pytest.mark.asyncio
+async def test_legacy_full_label_does_not_create_a_second_execution_policy():
+    conn = _Conn({
+        "credential_hash": credential_digest("worker-secret"),
+        "owner_user_id": "alice",
+        "trust_level": "full",
+        "execution_pool": "public-default",
+        "status": "active",
+        "revoked_at": None,
+    })
+    identity = await authenticate_worker_identity(_Pool(conn), "mac-01", "cluster-a", "worker-secret")
+
+    assert identity is not None
+    assert identity.trust_level == "general"
+    assert identity.execution_pool == "public-default"
+
+
 def test_acceptance_worker_enrollment_requires_explicit_operator(monkeypatch):
     user = Principal(user_id="student")
     monkeypatch.setenv("APP_ENV", "acceptance")
