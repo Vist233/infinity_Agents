@@ -14,6 +14,7 @@ import logging
 import secrets
 import uuid
 import hashlib
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -371,9 +372,9 @@ async def create_task(
 
     query = """
         INSERT INTO tasks (task_id, task_spec_id, dataset_snapshot_id, project_id,
-            method_source_id, title, status, max_attempts, required_trust_level,
+            execution_pool, method_source_id, title, status, max_attempts, required_trust_level,
             created_by, created_at, updated_at)
-        VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8, $9, $10, NOW(), NOW())
+        VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'public-default', $5::uuid, $6, $7, $8, $9, $10, NOW(), NOW())
         RETURNING task_id, status, attempt_count, created_at
     """
     async with pool.acquire() as conn:
@@ -525,9 +526,9 @@ async def submit_task_atomically(
             row = await conn.fetchrow(
                 """
                 INSERT INTO tasks (task_id, task_spec_id, dataset_snapshot_id, project_id,
-                    method_source_id, title, status, max_attempts, required_trust_level,
+                    execution_pool, method_source_id, title, status, max_attempts, required_trust_level,
                     created_by, created_at, updated_at)
-                VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, 'queued', $7, $8, $9, NOW(), NOW())
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'public-default', $5::uuid, $6, 'queued', $7, $8, $9, NOW(), NOW())
                 RETURNING task_id, status, attempt_count, created_at
                 """,
                 task.task_id,
@@ -579,7 +580,7 @@ async def submit_task_atomically(
 async def get_task(pool, task_id: str) -> Optional[Dict[str, Any]]:
     """Get a task by ID."""
     query = """
-        SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id, title,
+        SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, execution_pool, method_source_id, title,
                status, lease_owner, lease_token, lease_expires_at,
                active_attempt_id, attempt_count, max_attempts,
                required_trust_level,
@@ -610,7 +611,7 @@ async def get_tasks_by_project(
     """
     bounded_limit = max(1, min(int(limit), 100))
     query = """
-        SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id, title,
+        SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, execution_pool, method_source_id, title,
                status, lease_owner, lease_token, lease_expires_at,
                active_attempt_id, attempt_count, max_attempts,
                required_trust_level,
@@ -633,6 +634,7 @@ def _task_row_to_dict(row: Any) -> Dict[str, Any]:
         "task_spec_id": str(row["task_spec_id"]),
         "dataset_snapshot_id": str(row["dataset_snapshot_id"]),
         "project_id": str(row["project_id"]),
+        "execution_pool": _row_value(row, "execution_pool", "public-default"),
         "method_source_id": str(_row_value(row, "method_source_id")) if _row_value(row, "method_source_id") else None,
         "title": row["title"],
         "status": row["status"],
@@ -656,8 +658,8 @@ def _task_row_to_dict(row: Any) -> Dict[str, Any]:
 # CAS-based Task Claiming
 # ============================================================================
 
-async def _worker_scope(pool, worker_id: str) -> tuple[str, Optional[str], Optional[str]]:
-    """Return server-assigned trust, account owner, and Namespace.
+async def _worker_scope(pool, worker_id: str) -> Dict[str, Any]:
+    """Return the server-assigned policy and active protocol session.
 
     The compatibility path may have no enrollment row for an old local
     fixture worker.  Production/acceptance RLS runs this query under the
@@ -667,18 +669,46 @@ async def _worker_scope(pool, worker_id: str) -> tuple[str, Optional[str], Optio
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT trust_level, owner_user_id, namespace
+            SELECT trust_level, owner_user_id, namespace, execution_pool,
+                   protocol_version, runtime_capability, image_digest,
+                   active_instance_id, ready, session_epoch
             FROM worker_enrollments
             WHERE worker_id = $1 AND status = 'active' AND revoked_at IS NULL
             """,
             worker_id,
         )
     if not row:
-        return "general", None, None
-    trust = "full" if str(_row_value(row, "trust_level", "general")).lower() == "full" else "general"
-    owner = _row_value(row, "owner_user_id")
-    namespace = _row_value(row, "namespace")
-    return trust, (str(owner) if owner else None), (str(namespace) if namespace else None)
+        return {
+            "enrolled": False,
+            "trust_level": "general",
+            "owner_user_id": None,
+            "namespace": None,
+            "execution_pool": None,
+            "protocol_version": "legacy-v0",
+            "runtime_capability": "legacy",
+            "image_digest": None,
+            "active_instance_id": None,
+            "ready": False,
+            "session_epoch": 0,
+        }
+    raw_epoch = _row_value(row, "session_epoch", 0)
+    try:
+        epoch = int(raw_epoch or 0)
+    except (TypeError, ValueError):
+        epoch = 0
+    return {
+        "enrolled": True,
+        "trust_level": "full" if str(_row_value(row, "trust_level", "general")).lower() == "full" else "general",
+        "owner_user_id": str(_row_value(row, "owner_user_id")) if _row_value(row, "owner_user_id") else None,
+        "namespace": str(_row_value(row, "namespace")) if _row_value(row, "namespace") else None,
+        "execution_pool": str(_row_value(row, "execution_pool", "public-default") or "public-default"),
+        "protocol_version": str(_row_value(row, "protocol_version", "legacy-v0") or "legacy-v0"),
+        "runtime_capability": str(_row_value(row, "runtime_capability", "legacy") or "legacy"),
+        "image_digest": str(_row_value(row, "image_digest")) if _row_value(row, "image_digest") else None,
+        "active_instance_id": str(_row_value(row, "active_instance_id")) if _row_value(row, "active_instance_id") else None,
+        "ready": bool(_row_value(row, "ready", False)),
+        "session_epoch": epoch,
+    }
 
 
 async def _worker_trust_level(pool, worker_id: str) -> str:
@@ -689,8 +719,8 @@ async def _worker_trust_level(pool, worker_id: str) -> str:
     test workers claim explicitly general fixture tasks without weakening the
     database policy for full-trust tasks.
     """
-    trust_level, _owner_user_id, _namespace = await _worker_scope(pool, worker_id)
-    return trust_level
+    scope = await _worker_scope(pool, worker_id)
+    return str(scope["trust_level"])
 
 
 async def try_claim_task(
@@ -700,6 +730,11 @@ async def try_claim_task(
     lease_seconds: int = 60,
     *,
     worker_namespace: Optional[str] = None,
+    worker_instance_id: Optional[str] = None,
+    worker_protocol_version: Optional[str] = None,
+    worker_runtime_capability: Optional[str] = None,
+    worker_image_digest: Optional[str] = None,
+    worker_session_epoch: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """Atomically try to claim a task using CAS.
 
@@ -714,7 +749,29 @@ async def try_claim_task(
     # Add lease_seconds, rounding to avoid microsecond issues
     from datetime import timedelta
     lease_expires = now + timedelta(seconds=lease_seconds)
-    worker_trust_level, worker_owner_user_id, enrolled_namespace = await _worker_scope(pool, worker_id)
+    worker_scope = await _worker_scope(pool, worker_id)
+    worker_trust_level = worker_scope["trust_level"]
+    worker_owner_user_id = worker_scope["owner_user_id"]
+    enrolled_namespace = worker_scope["namespace"]
+    expected_protocol = os.getenv("WORKER_PROTOCOL_VERSION", "1").strip() or "1"
+    expected_runtime = os.getenv("WORKER_RUNTIME_CAPABILITY", "goal-driven-claude-code").strip() or "goal-driven-claude-code"
+    legacy_compatibility = (
+        not worker_scope["enrolled"]
+        and os.getenv("APP_ENV", "development").lower() in {"development", "dev", "test"}
+        and os.getenv("WORKER_ENROLLMENT_REQUIRED", "0").strip().lower() in {"0", "false", "no", "off"}
+    )
+    if worker_scope["enrolled"] and (
+        worker_scope["execution_pool"] != "public-default"
+        or worker_scope["protocol_version"] != expected_protocol
+        or worker_scope["runtime_capability"] != expected_runtime
+        or not worker_scope["ready"]
+        or not worker_scope["active_instance_id"]
+        or (worker_instance_id and worker_scope["active_instance_id"] != worker_instance_id)
+        or (worker_session_epoch is not None and worker_scope["session_epoch"] != int(worker_session_epoch))
+    ):
+        return None
+    if not worker_scope["enrolled"] and not legacy_compatibility:
+        return None
     if (
         worker_namespace
         and enrolled_namespace
@@ -758,7 +815,7 @@ async def try_claim_task(
                   )
                 RETURNING t.task_id, t.attempt_count, t.task_spec_id, t.dataset_snapshot_id,
                           t.project_id, t.method_source_id, t.title, t.max_attempts,
-                          t.required_trust_level
+                          t.required_trust_level, t.execution_pool
                 """,
                 task_id, worker_id, lease_token, lease_expires, worker_trust_level,
                 worker_owner_user_id, worker_namespace,
@@ -813,6 +870,7 @@ async def try_claim_task(
         "attempt_id": attempt_row["task_attempt_id"],
         "max_attempts": row["max_attempts"],
         "required_trust_level": _row_value(row, "required_trust_level", "full"),
+        "execution_pool": _row_value(row, "execution_pool", "public-default"),
         "lease_token": lease_token,
         "lease_expires_at": lease_expires.isoformat(),
     }

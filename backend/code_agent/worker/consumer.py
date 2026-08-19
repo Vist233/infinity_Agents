@@ -40,6 +40,11 @@ def _with_worker_rls_context(func):
             worker_id,
             kwargs.get("worker_credential"),
             kwargs.get("worker_namespace"),
+            instance_id=kwargs.get("worker_instance_id"),
+            protocol_version=kwargs.get("worker_protocol_version"),
+            runtime_capability=kwargs.get("worker_runtime_capability"),
+            image_digest=kwargs.get("worker_image_digest"),
+            session_epoch=kwargs.get("worker_session_epoch"),
         )
         try:
             return await func(worker_id, *args, **kwargs)
@@ -72,17 +77,41 @@ async def run_worker(
     worker_namespace: Optional[str] = None,
     worker_credential: Optional[str] = None,
     control_plane_url: Optional[str] = None,
+    worker_instance_id: Optional[str] = None,
+    worker_protocol_version: Optional[str] = None,
+    worker_runtime_capability: Optional[str] = None,
+    worker_image_digest: Optional[str] = None,
+    worker_session_epoch: Optional[int] = None,
 ) -> None:
     """Run a single worker instance."""
     stop_event = asyncio.Event()
     lease_renew_task = None
     lease_task = None
+    session_rls_token = None
     if worker_credential:
-        from backend.worker_enrollment import authenticate_worker_identity
+        from backend.worker_enrollment import (
+            authenticate_worker_identity,
+            expected_worker_protocol,
+            expected_worker_runtime_capability,
+        )
         if not worker_namespace or not str(worker_namespace).strip():
             raise PermissionError("Worker Namespace is required for persistent enrollment")
+        worker_instance_id = worker_instance_id or os.getenv("WORKER_INSTANCE_ID", "").strip() or f"{worker_id}-default"
+        worker_protocol_version = worker_protocol_version or os.getenv("WORKER_PROTOCOL_VERSION", expected_worker_protocol())
+        worker_runtime_capability = worker_runtime_capability or os.getenv("WORKER_RUNTIME_CAPABILITY", expected_worker_runtime_capability())
+        worker_image_digest = worker_image_digest or os.getenv("WORKER_IMAGE_DIGEST", "").strip() or None
         identity = (
-            await authenticate_worker_identity(db_pool, worker_id, worker_namespace, worker_credential)
+            await authenticate_worker_identity(
+                db_pool,
+                worker_id,
+                worker_namespace,
+                worker_credential,
+                instance_id=worker_instance_id,
+                protocol_version=worker_protocol_version,
+                runtime_capability=worker_runtime_capability,
+                image_digest=worker_image_digest,
+                ready=False,
+            )
             if worker_namespace else None
         )
         if identity is None:
@@ -94,12 +123,46 @@ async def run_worker(
         # caller-provided Namespace after the handshake; all subsequent
         # heartbeat, claim, and input operations use the stored binding.
         worker_namespace = identity.namespace
+        worker_instance_id = identity.active_instance_id
+        worker_protocol_version = identity.protocol_version
+        worker_runtime_capability = identity.runtime_capability
+        worker_image_digest = identity.image_digest
+        worker_session_epoch = identity.session_epoch
+        # The decorator binds the caller-supplied identity before the database
+        # handshake. Rebind the RLS context to the server-fenced session for
+        # every subsequent claim/input/artifact checkout.
+        from backend.db_rls import set_rls_worker
+        session_rls_token = set_rls_worker(
+            worker_id,
+            worker_credential,
+            worker_namespace,
+            instance_id=worker_instance_id,
+            protocol_version=worker_protocol_version,
+            runtime_capability=worker_runtime_capability,
+            image_digest=worker_image_digest,
+            session_epoch=worker_session_epoch,
+        )
         logger.info("Worker %s authenticated in the public Worker cluster", worker_id)
-    await redis_client.ensure_consumer_group(STREAM_TASKS_EXECUTE, CONSUMER_GROUP)
+    if redis_client.is_connected:
+        await redis_client.ensure_consumer_group(STREAM_TASKS_EXECUTE, CONSUMER_GROUP)
+    else:
+        logger.warning("Worker %s is online but not ready: central Redis is unavailable", worker_id)
     logger.info("Worker %s started, waiting for tasks...", worker_id)
 
     heartbeat_task = asyncio.create_task(
-        _heartbeat_loop(worker_id, redis_client, heartbeat_interval, db_pool, worker_namespace, worker_credential, stop_event)
+        _heartbeat_loop(
+            worker_id,
+            redis_client,
+            heartbeat_interval,
+            db_pool,
+            worker_namespace,
+            worker_credential,
+            stop_event,
+            worker_instance_id=worker_instance_id,
+            worker_protocol_version=worker_protocol_version,
+            worker_runtime_capability=worker_runtime_capability,
+            worker_image_digest=worker_image_digest,
+        )
     )
     # Lease renewal is part of the data-plane Worker itself.  The dedicated
     # reaper only recovers leases owned by dead Workers; disabling that service
@@ -151,6 +214,11 @@ async def run_worker(
                     worker_namespace=worker_namespace,
                     worker_credential=worker_credential,
                     control_plane_url=control_plane_url,
+                    worker_instance_id=worker_instance_id,
+                    worker_protocol_version=worker_protocol_version,
+                    worker_runtime_capability=worker_runtime_capability,
+                    worker_image_digest=worker_image_digest,
+                    worker_session_epoch=worker_session_epoch,
                     messages=pending_messages or None,
                 )
             except asyncio.CancelledError:
@@ -178,6 +246,9 @@ async def run_worker(
                 await lease_task
             except asyncio.CancelledError:
                 pass
+        if session_rls_token is not None:
+            from backend.db_rls import reset_rls_context
+            reset_rls_context(session_rls_token)
         logger.info("Worker %s stopped", worker_id)
 
 
@@ -314,20 +385,50 @@ async def _lease_reaper_loop(worker_id: str, db_pool, lease_seconds: int) -> Non
         await asyncio.sleep(10)
 
 
-async def _heartbeat_loop(worker_id: str, redis_client, interval: int, db_pool=None, namespace: Optional[str] = None, credential: Optional[str] = None, stop_event: Optional[asyncio.Event] = None) -> None:
+async def _heartbeat_loop(
+    worker_id: str,
+    redis_client,
+    interval: int,
+    db_pool=None,
+    namespace: Optional[str] = None,
+    credential: Optional[str] = None,
+    stop_event: Optional[asyncio.Event] = None,
+    *,
+    worker_instance_id: Optional[str] = None,
+    worker_protocol_version: Optional[str] = None,
+    worker_runtime_capability: Optional[str] = None,
+    worker_image_digest: Optional[str] = None,
+) -> None:
     """Periodically update worker heartbeat."""
     while True:
         try:
             if credential:
-                from backend.worker_enrollment import authenticate_worker
-                if not namespace or not await authenticate_worker(db_pool, worker_id, namespace, credential):
+                from backend.worker_enrollment import authenticate_worker_identity
+                if not namespace or not worker_instance_id:
+                    raise PermissionError("Worker session identity is missing")
+                identity = await authenticate_worker_identity(
+                    db_pool,
+                    worker_id,
+                    namespace,
+                    credential,
+                    instance_id=worker_instance_id,
+                    protocol_version=worker_protocol_version or "",
+                    runtime_capability=worker_runtime_capability or "",
+                    image_digest=worker_image_digest,
+                    ready=bool(redis_client.is_connected),
+                )
+                if identity is None:
                     logger.error("Worker %s enrollment was revoked; stopping heartbeat", worker_id)
                     if stop_event:
                         stop_event.set()
                     return
-            await redis_client.set_worker_heartbeat(worker_id, ttl=interval + 10)
-        except Exception:
-            pass
+            if redis_client.is_connected:
+                await redis_client.set_worker_heartbeat(worker_id, ttl=interval + 10)
+        except Exception as exc:
+            logger.warning("Worker %s heartbeat/session refresh failed: %s", worker_id, exc)
+            if credential and stop_event and "already connected" in str(exc).lower():
+                stop_event.set()
+                return
         await asyncio.sleep(interval)
 
 
@@ -382,6 +483,11 @@ async def _process_next_task(
     worker_namespace: Optional[str] = None,
     worker_credential: Optional[str] = None,
     control_plane_url: Optional[str] = None,
+    worker_instance_id: Optional[str] = None,
+    worker_protocol_version: Optional[str] = None,
+    worker_runtime_capability: Optional[str] = None,
+    worker_image_digest: Optional[str] = None,
+    worker_session_epoch: Optional[int] = None,
     messages: Optional[list[Dict[str, Any]]] = None,
 ) -> None:
     """Consume and process a single task from Redis Stream."""
@@ -430,6 +536,11 @@ async def _process_next_task(
         worker_id,
         lease_seconds,
         worker_namespace=worker_namespace,
+        worker_instance_id=worker_instance_id,
+        worker_protocol_version=worker_protocol_version,
+        worker_runtime_capability=worker_runtime_capability,
+        worker_image_digest=worker_image_digest,
+        worker_session_epoch=worker_session_epoch,
     )
     if not claimed:
         # A queued task may be visible in a shared Redis stream before the
@@ -470,6 +581,10 @@ async def _process_next_task(
             worker_namespace=worker_namespace,
             worker_credential=worker_credential,
             control_plane_url=control_plane_url,
+            worker_instance_id=worker_instance_id,
+            worker_protocol_version=worker_protocol_version,
+            worker_runtime_capability=worker_runtime_capability,
+            worker_image_digest=worker_image_digest,
         )
 
         if result.get("cancelled"):
@@ -542,6 +657,10 @@ async def _main(worker_id: str) -> None:
     docker_image = os.getenv("CODE_AGENT_DOCKER_IMAGE", "claude-code-env:v2")
     namespace = os.getenv("REDIS_NAMESPACE", "").strip().strip(":")
     control_plane_url = os.getenv("WORKER_CONTROL_PLANE_URL") or os.getenv("CONTROL_PLANE_URL")
+    instance_id = os.getenv("WORKER_INSTANCE_ID", "").strip()
+    protocol_version = os.getenv("WORKER_PROTOCOL_VERSION", "1").strip() or "1"
+    runtime_capability = os.getenv("WORKER_RUNTIME_CAPABILITY", "goal-driven-claude-code").strip() or "goal-driven-claude-code"
+    image_digest = os.getenv("WORKER_IMAGE_DIGEST", "").strip() or None
 
     raw_pool = await asyncpg.create_pool(database_url, min_size=1, max_size=5)
     from backend.db_rls import rls_enabled_from_env, wrap_runtime_pool
@@ -556,6 +675,8 @@ async def _main(worker_id: str) -> None:
         if os.getenv("WORKER_ENROLLMENT_REQUIRED", "0").lower() in {"1", "true", "yes"}:
             if not credential:
                 raise SystemExit("WORKER_CREDENTIAL is required")
+            if not instance_id:
+                raise SystemExit("WORKER_INSTANCE_ID is required")
         if credential and not namespace:
             raise SystemExit("REDIS_NAMESPACE is required for a credentialed Worker")
         # The Worker keeps its authenticated DB/Redis objects in memory and
@@ -582,6 +703,10 @@ async def _main(worker_id: str) -> None:
             worker_namespace=namespace if credential else None,
             worker_credential=credential,
             control_plane_url=control_plane_url,
+            worker_instance_id=instance_id or None,
+            worker_protocol_version=protocol_version,
+            worker_runtime_capability=runtime_capability,
+            worker_image_digest=image_digest,
         )
     finally:
         await redis_client.disconnect()

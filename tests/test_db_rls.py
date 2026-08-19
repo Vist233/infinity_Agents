@@ -53,11 +53,16 @@ async def test_rls_pool_binds_and_clears_user_context() -> None:
         "SELECT set_config('app.user_id', $1, false)",
         "SELECT set_config('app.worker_id', $1, false)",
     ]
-    assert commands[-5:] == [
+    assert commands[-10:] == [
         "RESET app.user_id",
         "RESET app.worker_id",
         "RESET app.worker_credential",
         "RESET app.worker_namespace",
+        "RESET app.worker_instance_id",
+        "RESET app.worker_protocol_version",
+        "RESET app.worker_runtime_capability",
+        "RESET app.worker_image_digest",
+        "RESET app.worker_session_epoch",
         "RESET ROLE",
     ]
     assert raw.released == [raw.connection]

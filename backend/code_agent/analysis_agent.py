@@ -155,7 +155,7 @@ def _build_task_spec_from_method(analysis_type: str, user_input: str) -> Dict[st
             "steps": method.get("steps", [
                 {"order": 1, "name": "load_data", "description": "Load and validate input dataset"},
                 {"order": 2, "name": "run_analysis", "description": f"Execute {analysis_type_label} workflow"},
-                {"order": 3, "name": "verify_outputs", "description": "Run five-level verification on outputs"},
+                {"order": 3, "name": "validate_outputs", "description": "Run deterministic output, manifest, and file-safety checks in the Worker"},
                 {"order": 4, "name": "package_results", "description": "Create artifact ZIP and manifest"},
             ]),
             "input_schema": method.get("input_schema", {
@@ -179,7 +179,7 @@ def _build_task_spec_from_method(analysis_type: str, user_input: str) -> Dict[st
                     "max_wall_clock_seconds": 1800,
                     "max_idle_seconds": 300,
                 }),
-                "required_stages": ["prepare", "execute", "verify", "package"],
+                "required_stages": ["prepare", "execute", "validate", "package"],
             },
             "parameters": method.get("parameters", {
                 "adjusted_p_value": {"type": "number", "default": 0.05},

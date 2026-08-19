@@ -192,7 +192,7 @@ async def test_worker_fixture_downloads_inputs_uploads_artifact_and_cleans_works
         "backend.code_agent.task_service.complete_task_attempt",
         lambda *_args, **_kwargs: _async_value(None),
     )
-    monkeypatch.setattr("backend.code_agent.worker.executor._verify_outputs", lambda *_args: _async_value({"passed": True, "failures": []}))
+    monkeypatch.setattr("backend.code_agent.worker.executor._validate_outputs", lambda *_args: _async_value({"passed": True, "failures": []}))
 
     redis = _RecordingRedis()
     result = await execute_task(

@@ -2737,9 +2737,10 @@ async def issue_worker_enrollment_endpoint(
             app.state.db_pool,
             worker_id,
             namespace,
-            # Issuance is public-cluster scoped.  The authenticated user is
-            # the audit actor, not a Namespace or task-visibility boundary.
-            owner_user_id=None,
+            # The authenticated user is retained only as the audit/status
+            # owner.  The server-owned execution_pool remains public-default.
+            owner_user_id=user.user_id,
+            execution_pool="public-default",
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Worker enrollment request is invalid") from exc
@@ -2778,22 +2779,53 @@ async def _authenticate_worker_request(request: Request) -> Dict[str, str]:
     worker_id = request.headers.get("X-Worker-ID", "").strip()
     namespace = request.headers.get("X-Worker-Namespace", "").strip()
     credential = request.headers.get("X-Worker-Credential", "")
-    if not worker_id or not namespace or not credential:
+    instance_id = request.headers.get("X-Worker-Instance-ID", "").strip()
+    protocol_version = request.headers.get("X-Worker-Protocol-Version", "").strip()
+    runtime_capability = request.headers.get("X-Worker-Runtime-Capability", "").strip()
+    image_digest = request.headers.get("X-Worker-Image-Digest", "").strip() or None
+    if not worker_id or not namespace or not credential or not instance_id:
         raise HTTPException(status_code=401, detail="Worker credentials are required")
     # The database RLS context binds the claimed Worker ID to the same
     # persistent credential that authenticated this request.  An ID alone is
     # forgeable by a process that has a shared database connection string.
-    set_rls_worker(worker_id, credential, namespace)
+    set_rls_worker(
+        worker_id,
+        credential,
+        namespace,
+        instance_id=instance_id,
+        protocol_version=protocol_version,
+        runtime_capability=runtime_capability,
+        image_digest=image_digest,
+    )
     try:
-        from backend.worker_enrollment import authenticate_worker_identity
-        identity = await authenticate_worker_identity(_worker_database_pool(), worker_id, namespace, credential)
+        from backend.worker_enrollment import (
+            ActiveWorkerInstanceError,
+            WorkerProtocolError,
+            authenticate_worker_identity,
+        )
+        identity = await authenticate_worker_identity(
+            _worker_database_pool(),
+            worker_id,
+            namespace,
+            credential,
+            instance_id=instance_id,
+            protocol_version=protocol_version,
+            runtime_capability=runtime_capability,
+            image_digest=image_digest,
+            ready=True,
+        )
+    except WorkerProtocolError as exc:
+        raise HTTPException(status_code=426, detail="Worker protocol is incompatible") from exc
+    except ActiveWorkerInstanceError as exc:
+        raise HTTPException(status_code=409, detail="Worker credential is connected by another instance") from exc
     except Exception as exc:
         raise HTTPException(status_code=401, detail="Worker credentials are invalid") from exc
     if identity is None:
         raise HTTPException(status_code=401, detail="Worker credentials are invalid or revoked")
-    configured_namespace = os.getenv("REDIS_NAMESPACE", "").strip().strip(":")
-    if not configured_namespace:
-        raise HTTPException(status_code=503, detail="Worker Namespace is not configured")
+    try:
+        configured_namespace = _public_worker_namespace()
+    except HTTPException:
+        raise
     if identity.namespace != configured_namespace:
         raise HTTPException(status_code=401, detail="Worker Namespace is not served by this control plane")
     lease_token = request.headers.get("X-Worker-Lease-Token", "").strip()
@@ -2804,6 +2836,12 @@ async def _authenticate_worker_request(request: Request) -> Dict[str, str]:
         "namespace": identity.namespace,
         "lease_token": lease_token,
         "owner_user_id": identity.owner_user_id or "",
+        "execution_pool": identity.execution_pool,
+        "instance_id": identity.active_instance_id or instance_id,
+        "protocol_version": identity.protocol_version,
+        "runtime_capability": identity.runtime_capability,
+        "image_digest": identity.image_digest or "",
+        "session_epoch": str(identity.session_epoch),
     }
 
 
@@ -3111,6 +3149,7 @@ async def _worker_task_input(task_id: str, worker: Dict[str, str], kind: str) ->
         raise HTTPException(status_code=404, detail="Worker input not found")
     query = """
         SELECT t.lease_owner, t.lease_token, t.status, t.required_trust_level,
+               t.execution_pool,
                ds.stored_path AS dataset_path, ds.original_filename AS dataset_name,
                ms.stored_path AS method_path, ms.original_filename AS method_name
         FROM tasks t
@@ -3128,6 +3167,12 @@ async def _worker_task_input(task_id: str, worker: Dict[str, str], kind: str) ->
                 AND w.namespace = $4
                 AND w.status = 'active'
                 AND w.revoked_at IS NULL
+                AND w.execution_pool = t.execution_pool
+                AND w.active_instance_id = $5
+                AND w.session_epoch = $6::bigint
+                AND w.protocol_version = $7
+                AND w.runtime_capability = $8
+                AND w.ready = TRUE
                 AND (t.required_trust_level = 'general' OR w.trust_level = 'full')
           )
     """
@@ -3138,6 +3183,10 @@ async def _worker_task_input(task_id: str, worker: Dict[str, str], kind: str) ->
             worker["worker_id"],
             worker["lease_token"],
             worker["namespace"],
+            worker["instance_id"],
+            worker["session_epoch"],
+            worker["protocol_version"],
+            worker["runtime_capability"],
         )
     if not row:
         raise HTTPException(status_code=404, detail="Worker input not found")
@@ -3180,6 +3229,12 @@ async def _worker_artifact_upload_allowed(
           AND t.active_attempt_id = $5
           AND t.status IN ('claimed', 'running')
           AND t.lease_expires_at > NOW()
+          AND w.execution_pool = t.execution_pool
+          AND w.active_instance_id = $6
+          AND w.session_epoch = $7::bigint
+          AND w.protocol_version = $8
+          AND w.runtime_capability = $9
+          AND w.ready = TRUE
           AND (t.required_trust_level = 'general' OR w.trust_level = 'full')
     """
     async with _worker_database_pool().acquire() as conn:
@@ -3190,6 +3245,10 @@ async def _worker_artifact_upload_allowed(
             worker["namespace"],
             worker["lease_token"],
             attempt_id,
+            worker["instance_id"],
+            worker["session_epoch"],
+            worker["protocol_version"],
+            worker["runtime_capability"],
         ) is not None
 
 

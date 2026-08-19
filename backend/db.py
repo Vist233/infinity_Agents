@@ -312,6 +312,9 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     task_spec_id UUID NOT NULL REFERENCES task_specs(task_spec_id),
                     dataset_snapshot_id UUID NOT NULL REFERENCES dataset_snapshots(dataset_snapshot_id),
                     project_id UUID NOT NULL,
+                    -- Human ownership remains in created_by. Worker scheduling
+                    -- is bounded by this server-owned public execution pool.
+                    execution_pool TEXT NOT NULL DEFAULT 'public-default',
                     title TEXT NOT NULL,
                     status VARCHAR(20) NOT NULL DEFAULT 'draft',
                     phase VARCHAR(20),
@@ -432,6 +435,9 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
                 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
                 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS method_source_id UUID;
+                ALTER TABLE tasks ADD COLUMN IF NOT EXISTS execution_pool TEXT NOT NULL DEFAULT 'public-default';
+                UPDATE tasks SET execution_pool = 'public-default'
+                WHERE execution_pool IS NULL OR btrim(execution_pool) = '';
                 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS required_trust_level VARCHAR(20) NOT NULL DEFAULT 'full';
                 UPDATE tasks
                 SET required_trust_level = 'full'
@@ -556,14 +562,39 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     credential_hash CHAR(64) NOT NULL,
                     namespace TEXT NOT NULL,
                     owner_user_id TEXT,
+                    execution_pool TEXT NOT NULL DEFAULT 'public-default',
                     trust_level VARCHAR(20) NOT NULL DEFAULT 'general',
+                    protocol_version TEXT NOT NULL DEFAULT 'legacy-v0',
+                    runtime_capability TEXT NOT NULL DEFAULT 'legacy',
+                    image_digest TEXT,
+                    active_instance_id TEXT,
+                    active_instance_expires_at TIMESTAMPTZ,
+                    session_epoch BIGINT NOT NULL DEFAULT 0,
+                    ready BOOLEAN NOT NULL DEFAULT FALSE,
+                    last_error TEXT,
+                    connected_at TIMESTAMPTZ,
                     status VARCHAR(20) NOT NULL DEFAULT 'active',
                     enrolled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     revoked_at TIMESTAMPTZ,
                     last_seen_at TIMESTAMPTZ
                 );
                 ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS execution_pool TEXT NOT NULL DEFAULT 'public-default';
+                UPDATE worker_enrollments SET execution_pool = 'public-default'
+                WHERE execution_pool IS NULL OR btrim(execution_pool) = '';
                 ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS trust_level VARCHAR(20) NOT NULL DEFAULT 'general';
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS protocol_version TEXT NOT NULL DEFAULT 'legacy-v0';
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS runtime_capability TEXT NOT NULL DEFAULT 'legacy';
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS image_digest TEXT;
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS active_instance_id TEXT;
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS active_instance_expires_at TIMESTAMPTZ;
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS session_epoch BIGINT NOT NULL DEFAULT 0;
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS ready BOOLEAN NOT NULL DEFAULT FALSE;
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS last_error TEXT;
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS connected_at TIMESTAMPTZ;
+                UPDATE worker_enrollments
+                SET protocol_version = 'legacy-v0', runtime_capability = 'legacy', ready = FALSE
+                WHERE protocol_version IS NULL OR btrim(protocol_version) = '';
                 UPDATE worker_enrollments
                 SET trust_level = 'general'
                 WHERE trust_level IS NULL OR trust_level NOT IN ('general', 'full');
@@ -572,6 +603,10 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     CHECK (trust_level IN ('general', 'full'));
                 CREATE INDEX IF NOT EXISTS idx_worker_enrollments_namespace ON worker_enrollments (namespace, status);
                 CREATE INDEX IF NOT EXISTS idx_worker_enrollments_owner ON worker_enrollments (owner_user_id, namespace, status);
+                CREATE INDEX IF NOT EXISTS idx_worker_enrollments_pool_status ON worker_enrollments (execution_pool, status);
+                CREATE INDEX IF NOT EXISTS idx_worker_enrollments_instance
+                    ON worker_enrollments (active_instance_id, active_instance_expires_at)
+                    WHERE active_instance_id IS NOT NULL;
 
                 CREATE TABLE IF NOT EXISTS worker_enrollment_tokens (
                     token_hash CHAR(64) PRIMARY KEY,

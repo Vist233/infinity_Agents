@@ -28,6 +28,11 @@ class RlsActor:
     # a Worker-supplied ID by itself.
     credential: Optional[str] = None
     namespace: Optional[str] = None
+    instance_id: Optional[str] = None
+    protocol_version: Optional[str] = None
+    runtime_capability: Optional[str] = None
+    image_digest: Optional[str] = None
+    session_epoch: Optional[int] = None
 
 
 _current_actor: ContextVar[Optional[RlsActor]] = ContextVar(
@@ -66,13 +71,31 @@ def set_rls_worker(
     worker_id: str,
     credential: str | None = None,
     namespace: str | None = None,
+    *,
+    instance_id: str | None = None,
+    protocol_version: str | None = None,
+    runtime_capability: str | None = None,
+    image_digest: str | None = None,
+    session_epoch: int | None = None,
 ) -> Token[Optional[RlsActor]]:
     value = str(worker_id or "").strip()
     if not value:
         raise ValueError("RLS worker ID cannot be empty")
     secret = str(credential or "")
     cluster = str(namespace or "").strip() or None
-    return _current_actor.set(RlsActor("worker", value, secret or None, cluster))
+    return _current_actor.set(
+        RlsActor(
+            "worker",
+            value,
+            secret or None,
+            cluster,
+            str(instance_id or "").strip() or None,
+            str(protocol_version or "").strip() or None,
+            str(runtime_capability or "").strip() or None,
+            str(image_digest or "").strip() or None,
+            session_epoch,
+        )
+    )
 
 
 @contextmanager
@@ -80,13 +103,31 @@ def rls_worker_context(
     worker_id: str,
     credential: str | None = None,
     namespace: str | None = None,
+    *,
+    instance_id: str | None = None,
+    protocol_version: str | None = None,
+    runtime_capability: str | None = None,
+    image_digest: str | None = None,
+    session_epoch: int | None = None,
 ) -> Iterator[None]:
     value = str(worker_id or "").strip()
     if not value:
         raise ValueError("RLS worker ID cannot be empty")
     secret = str(credential or "")
     cluster = str(namespace or "").strip() or None
-    token = _current_actor.set(RlsActor("worker", value, secret or None, cluster))
+    token = _current_actor.set(
+        RlsActor(
+            "worker",
+            value,
+            secret or None,
+            cluster,
+            str(instance_id or "").strip() or None,
+            str(protocol_version or "").strip() or None,
+            str(runtime_capability or "").strip() or None,
+            str(image_digest or "").strip() or None,
+            session_epoch,
+        )
+    )
     try:
         yield
     finally:
@@ -210,6 +251,26 @@ class _RlsAcquire:
                         "SELECT set_config('app.worker_namespace', $1, false)",
                         actor.namespace or "",
                     )
+                    await connection.execute(
+                        "SELECT set_config('app.worker_instance_id', $1, false)",
+                        actor.instance_id or "",
+                    )
+                    await connection.execute(
+                        "SELECT set_config('app.worker_protocol_version', $1, false)",
+                        actor.protocol_version or "",
+                    )
+                    await connection.execute(
+                        "SELECT set_config('app.worker_runtime_capability', $1, false)",
+                        actor.runtime_capability or "",
+                    )
+                    await connection.execute(
+                        "SELECT set_config('app.worker_image_digest', $1, false)",
+                        actor.image_digest or "",
+                    )
+                    await connection.execute(
+                        "SELECT set_config('app.worker_session_epoch', $1, false)",
+                        str(actor.session_epoch) if actor.session_epoch is not None else "",
+                    )
             self._configured = True
             return connection
         except BaseException:
@@ -235,6 +296,11 @@ class _RlsAcquire:
                 await connection.execute("RESET app.worker_id")
                 await connection.execute("RESET app.worker_credential")
                 await connection.execute("RESET app.worker_namespace")
+                await connection.execute("RESET app.worker_instance_id")
+                await connection.execute("RESET app.worker_protocol_version")
+                await connection.execute("RESET app.worker_runtime_capability")
+                await connection.execute("RESET app.worker_image_digest")
+                await connection.execute("RESET app.worker_session_epoch")
                 await connection.execute("RESET ROLE")
         finally:
             await self._pool._pool.release(connection)

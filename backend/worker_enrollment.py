@@ -23,6 +23,9 @@ from datetime import datetime, timedelta, timezone
 TRUST_GENERAL = "general"
 TRUST_FULL = "full"
 TRUST_LEVELS = frozenset({TRUST_GENERAL, TRUST_FULL})
+WORKER_PROTOCOL_VERSION = "1"
+WORKER_RUNTIME_CAPABILITY = "goal-driven-claude-code"
+WORKER_EXECUTION_POOL = "public-default"
 
 
 class WorkerEnrollmentError(RuntimeError):
@@ -35,6 +38,14 @@ class DuplicateWorkerError(WorkerEnrollmentError):
 
 class WorkerOwnershipError(WorkerEnrollmentError):
     """A revoked Worker ID cannot be transferred between accounts silently."""
+
+
+class WorkerProtocolError(WorkerEnrollmentError):
+    """The Worker runtime is not compatible with the active server protocol."""
+
+
+class ActiveWorkerInstanceError(WorkerEnrollmentError):
+    """A credential is already held by another live Worker process."""
 
 
 def normalize_trust_level(value: str | None) -> str:
@@ -64,6 +75,7 @@ class WorkerCredential:
     credential: str
     owner_user_id: str | None = None
     trust_level: str = TRUST_GENERAL
+    execution_pool: str = WORKER_EXECUTION_POOL
 
 
 @dataclass(frozen=True)
@@ -72,6 +84,13 @@ class WorkerIdentity:
     namespace: str
     owner_user_id: str | None
     trust_level: str
+    execution_pool: str = WORKER_EXECUTION_POOL
+    protocol_version: str = "legacy-v0"
+    runtime_capability: str = "legacy"
+    image_digest: str | None = None
+    active_instance_id: str | None = None
+    ready: bool = False
+    session_epoch: int = 0
 
 
 def credential_digest(value: str) -> str:
@@ -100,6 +119,50 @@ def _safe_owner_user_id(value: str | None) -> str | None:
     if len(owner) > 255 or any(ch.isspace() for ch in owner):
         raise WorkerEnrollmentError("invalid Worker owner")
     return owner
+
+
+def _safe_instance_id(value: str | None) -> str:
+    instance_id = str(value or "").strip()
+    if not instance_id or len(instance_id) > 128 or any(ch.isspace() for ch in instance_id):
+        raise WorkerProtocolError("invalid Worker instance ID")
+    return instance_id
+
+
+def expected_worker_protocol() -> str:
+    return os.getenv("WORKER_PROTOCOL_VERSION", WORKER_PROTOCOL_VERSION).strip() or WORKER_PROTOCOL_VERSION
+
+
+def expected_worker_runtime_capability() -> str:
+    return os.getenv("WORKER_RUNTIME_CAPABILITY", WORKER_RUNTIME_CAPABILITY).strip() or WORKER_RUNTIME_CAPABILITY
+
+
+def worker_session_ttl_seconds() -> int:
+    try:
+        value = int(os.getenv("WORKER_SESSION_TTL_SECONDS", "90"))
+    except ValueError:
+        value = 90
+    return max(30, min(value, 3600))
+
+
+def _identity_from_row(worker_id: str, namespace: str, row) -> WorkerIdentity:
+    raw_epoch = _row_value(row, "session_epoch", 0)
+    try:
+        epoch = int(raw_epoch or 0)
+    except (TypeError, ValueError):
+        epoch = 0
+    return WorkerIdentity(
+        worker_id=worker_id,
+        namespace=namespace,
+        owner_user_id=_safe_owner_user_id(_row_value(row, "owner_user_id")),
+        trust_level=normalize_trust_level(_row_value(row, "trust_level", TRUST_GENERAL)),
+        execution_pool=str(_row_value(row, "execution_pool", WORKER_EXECUTION_POOL) or WORKER_EXECUTION_POOL),
+        protocol_version=str(_row_value(row, "protocol_version", "legacy-v0") or "legacy-v0"),
+        runtime_capability=str(_row_value(row, "runtime_capability", "legacy") or "legacy"),
+        image_digest=str(_row_value(row, "image_digest")) if _row_value(row, "image_digest") else None,
+        active_instance_id=str(_row_value(row, "active_instance_id")) if _row_value(row, "active_instance_id") else None,
+        ready=bool(_row_value(row, "ready", False)),
+        session_epoch=epoch,
+    )
 
 
 def _row_value(row, key: str, default=None):
@@ -139,6 +202,7 @@ async def _persist_worker_enrollment(
     credential: str,
     owner_user_id: str | None,
     trust_level: str,
+    execution_pool: str | None = None,
     trust_issuer_connection: bool = False,
 ) -> None:
     """Persist enrollment through the protected issuer on RLS databases.
@@ -149,6 +213,15 @@ async def _persist_worker_enrollment(
     """
     digest = credential_digest(credential)
     if _rls_is_expected():
+        if execution_pool == WORKER_EXECUTION_POOL and trust_level != TRUST_FULL:
+            # Public-pool issuance is a distinct database capability. It keeps
+            # the human audit owner while deliberately not binding scheduling
+            # to that owner or to a user-selected Namespace.
+            await conn.execute(
+                "SELECT app.issue_public_worker_enrollment($1, $2, $3, $4)",
+                worker_id, digest, namespace, owner_user_id,
+            )
+            return
         if trust_level == TRUST_FULL:
             # Full trust is a database-role capability, not a caller-supplied
             # function argument. Acceptance/production uses a dedicated raw
@@ -169,20 +242,21 @@ async def _persist_worker_enrollment(
     await conn.execute(
         """
         INSERT INTO worker_enrollments (
-            worker_id, credential_hash, namespace, owner_user_id, trust_level,
+            worker_id, credential_hash, namespace, owner_user_id, execution_pool, trust_level,
             status, last_seen_at
-        ) VALUES ($1, $2, $3, $4, $5, 'active', NOW())
+        ) VALUES ($1, $2, $3, $4, COALESCE($6, 'public-default'), $5, 'active', NOW())
         ON CONFLICT (worker_id) DO UPDATE SET
             credential_hash = EXCLUDED.credential_hash,
             namespace = EXCLUDED.namespace,
             owner_user_id = COALESCE(EXCLUDED.owner_user_id, worker_enrollments.owner_user_id),
+            execution_pool = EXCLUDED.execution_pool,
             trust_level = EXCLUDED.trust_level,
             status = 'active',
             enrolled_at = NOW(),
             revoked_at = NULL,
             last_seen_at = NOW()
         """,
-        worker_id, digest, namespace, owner_user_id, trust_level,
+        worker_id, digest, namespace, owner_user_id, trust_level, execution_pool,
     )
 
 
@@ -236,6 +310,7 @@ async def issue_worker_credential(
     *,
     owner_user_id: str | None = None,
     trust_level: str = TRUST_GENERAL,
+    execution_pool: str = WORKER_EXECUTION_POOL,
     trust_issuer_pool=None,
 ) -> WorkerCredential:
     """Create a persistent credential for one globally unique Worker ID.
@@ -272,9 +347,10 @@ async def issue_worker_credential(
                     credential=credential,
                     owner_user_id=owner_user_id,
                     trust_level=trust_level,
+                    execution_pool=execution_pool,
                     trust_issuer_connection=True,
                 )
-        return WorkerCredential(worker_id, namespace, credential, owner_user_id, trust_level)
+        return WorkerCredential(worker_id, namespace, credential, owner_user_id, trust_level, execution_pool)
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -314,8 +390,9 @@ async def issue_worker_credential(
                 credential=credential,
                 owner_user_id=owner_user_id,
                 trust_level=trust_level,
+                execution_pool=execution_pool,
             )
-    return WorkerCredential(worker_id, namespace, credential, owner_user_id, trust_level)
+    return WorkerCredential(worker_id, namespace, credential, owner_user_id, trust_level, execution_pool)
 
 
 async def complete_enrollment(pool, worker_id: str, namespace: str, token: str) -> str:
@@ -376,15 +453,41 @@ async def authenticate_worker_identity(
     worker_id: str,
     namespace: str,
     credential: str,
+    *,
+    instance_id: str | None = None,
+    protocol_version: str | None = None,
+    runtime_capability: str | None = None,
+    image_digest: str | None = None,
+    ready: bool = False,
 ) -> WorkerIdentity | None:
-    """Validate a credential and return only server-stored Worker policy."""
+    """Validate a credential and return only server-stored Worker policy.
+
+    Supplying session fields performs the protocol/instance handshake.  The
+    no-session form remains only for compatibility with administrative status
+    checks; data-plane Workers must use the session form so one credential
+    cannot be live in two containers at once.
+    """
+    if instance_id is not None:
+        return await authenticate_worker_session(
+            pool,
+            worker_id,
+            namespace,
+            credential,
+            instance_id=instance_id,
+            protocol_version=protocol_version or "",
+            runtime_capability=runtime_capability or "",
+            image_digest=image_digest,
+            ready=ready,
+        )
     worker_id = _safe_worker_id(worker_id)
     namespace = _safe_namespace(namespace)
     supplied = credential_digest(credential)
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT owner_user_id, trust_level, credential_hash
+            SELECT owner_user_id, trust_level, execution_pool,
+                   protocol_version, runtime_capability, image_digest,
+                   active_instance_id, ready, session_epoch, credential_hash
             FROM worker_enrollments
             WHERE worker_id = $1 AND namespace = $2
               AND status = 'active' AND revoked_at IS NULL
@@ -401,12 +504,123 @@ async def authenticate_worker_identity(
             """,
             worker_id, namespace,
         )
-    return WorkerIdentity(
-        worker_id=worker_id,
-        namespace=namespace,
-        owner_user_id=_safe_owner_user_id(_row_value(row, "owner_user_id")),
-        trust_level=normalize_trust_level(_row_value(row, "trust_level", TRUST_GENERAL)),
-    )
+    return _identity_from_row(worker_id, namespace, row)
+
+
+async def authenticate_worker_session(
+    pool,
+    worker_id: str,
+    namespace: str,
+    credential: str,
+    *,
+    instance_id: str,
+    protocol_version: str,
+    runtime_capability: str,
+    image_digest: str | None = None,
+    ready: bool = False,
+) -> WorkerIdentity | None:
+    """Atomically authenticate and fence one long-lived Worker instance."""
+    worker_id = _safe_worker_id(worker_id)
+    namespace = _safe_namespace(namespace)
+    instance_id = _safe_instance_id(instance_id)
+    supplied_protocol = str(protocol_version or "").strip()
+    supplied_runtime = str(runtime_capability or "").strip()
+    supplied_digest = str(image_digest or "").strip() or None
+    if supplied_protocol != expected_worker_protocol():
+        raise WorkerProtocolError("Worker protocol is incompatible")
+    if supplied_runtime != expected_worker_runtime_capability():
+        raise WorkerProtocolError("Worker runtime capability is incompatible")
+    expected_digest = os.getenv("WORKER_IMAGE_DIGEST", "").strip()
+    if expected_digest and supplied_digest != expected_digest:
+        raise WorkerProtocolError("Worker image digest is incompatible")
+
+    supplied = credential_digest(credential)
+    now = datetime.now(timezone.utc)
+    expiry = now + timedelta(seconds=worker_session_ttl_seconds())
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                SELECT owner_user_id, trust_level, execution_pool,
+                       protocol_version, runtime_capability, image_digest,
+                       active_instance_id, active_instance_expires_at,
+                       ready, session_epoch, credential_hash
+                FROM worker_enrollments
+                WHERE worker_id = $1 AND namespace = $2
+                  AND status = 'active' AND revoked_at IS NULL
+                FOR UPDATE
+                """,
+                worker_id,
+                namespace,
+            )
+            if not row or not hmac.compare_digest(str(_row_value(row, "credential_hash", "")), supplied):
+                return None
+            current_instance = str(_row_value(row, "active_instance_id") or "").strip()
+            current_expiry = _row_value(row, "active_instance_expires_at")
+            live_other_instance = bool(
+                current_instance
+                and current_instance != instance_id
+                and current_expiry is not None
+                and current_expiry > now
+            )
+            if live_other_instance:
+                raise ActiveWorkerInstanceError("Worker credential is already connected by another instance")
+            try:
+                current_epoch = int(_row_value(row, "session_epoch", 0) or 0)
+            except (TypeError, ValueError):
+                current_epoch = 0
+            next_epoch = current_epoch if current_instance == instance_id and current_expiry and current_expiry > now else current_epoch + 1
+            await conn.execute(
+                """
+                UPDATE worker_enrollments
+                SET protocol_version = $3,
+                    runtime_capability = $4,
+                    image_digest = $5,
+                    active_instance_id = $6,
+                    active_instance_expires_at = $7,
+                    session_epoch = $8,
+                    ready = $9,
+                    last_error = NULL,
+                    connected_at = COALESCE(connected_at, NOW()),
+                    last_seen_at = NOW()
+                WHERE worker_id = $1 AND namespace = $2
+                  AND status = 'active' AND revoked_at IS NULL
+                """,
+                worker_id,
+                namespace,
+                supplied_protocol,
+                supplied_runtime,
+                supplied_digest,
+                instance_id,
+                expiry,
+                next_epoch,
+                bool(ready),
+            )
+            if not await conn.fetchrow(
+                """
+                SELECT worker_id
+                FROM worker_enrollments
+                WHERE worker_id = $1 AND namespace = $2
+                  AND active_instance_id = $3 AND session_epoch = $4
+                  AND status = 'active' AND revoked_at IS NULL
+                """,
+                worker_id,
+                namespace,
+                instance_id,
+                next_epoch,
+            ):
+                raise WorkerEnrollmentError("Worker session could not be fenced")
+            row = dict(row)
+            row.update({
+                "execution_pool": _row_value(row, "execution_pool", WORKER_EXECUTION_POOL),
+                "protocol_version": supplied_protocol,
+                "runtime_capability": supplied_runtime,
+                "image_digest": supplied_digest,
+                "active_instance_id": instance_id,
+                "ready": bool(ready),
+                "session_epoch": next_epoch,
+            })
+    return _identity_from_row(worker_id, namespace, row)
 
 
 async def authenticate_worker(pool, worker_id: str, namespace: str, credential: str) -> bool:
@@ -428,7 +642,9 @@ async def revoke_worker(pool, worker_id: str, namespace: str, *, operator_pool=N
         result = await conn.execute(
             """
             UPDATE worker_enrollments
-            SET status = 'revoked', revoked_at = NOW()
+            SET status = 'revoked', revoked_at = NOW(), ready = FALSE,
+                active_instance_id = NULL, active_instance_expires_at = NULL,
+                last_error = 'Worker credential revoked'
             WHERE worker_id = $1 AND namespace = $2 AND status = 'active'
             """,
             worker_id, namespace,

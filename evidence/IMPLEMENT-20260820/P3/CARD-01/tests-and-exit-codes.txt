@@ -1,0 +1,21 @@
+Baseline: b54ce9a
+
+Command:
+eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q tests/test_worker_enrollment.py tests/test_db_rls.py tests/test_goal_driven_worker_inputs.py tests/test_cloudflare_worker.py tests/test_task_ownership.py
+Exit: 0
+Result: 21 passed.
+
+Command:
+eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q tests/test_task_ownership.py tests/test_task_api.py tests/test_fault_injection.py tests/test_concurrency_recovery.py tests/test_goal_driven_worker_inputs.py
+Exit: 0
+Result: 56 passed, 35 skipped. The skipped cases require the optional real PostgreSQL fixture; no required test was weakened.
+
+Command:
+eval "$(pyenv init - zsh)"; pyenv shell Agent; python -m compileall -q backend tests
+Exit: 0
+
+Command:
+git diff --check
+Exit: 0
+
+External services: not started and not modified.

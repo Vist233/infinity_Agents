@@ -228,6 +228,9 @@ services:
     environment:
       APP_ENV: acceptance
       WORKER_ID: worker-a-${ACCEPTANCE_RUN_ID}
+      WORKER_INSTANCE_ID: acceptance-worker-a-${ACCEPTANCE_RUN_ID}
+      WORKER_PROTOCOL_VERSION: "1"
+      WORKER_RUNTIME_CAPABILITY: goal-driven-claude-code
       DATABASE_URL: postgresql://${ACCEPTANCE_WORKER_A_DB_USER}:${ACCEPTANCE_WORKER_A_DB_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
       DB_RLS_ENABLED: "1"
       DB_RLS_REQUIRE_CONTEXT: "1"
@@ -267,6 +270,9 @@ services:
     environment:
       APP_ENV: acceptance
       WORKER_ID: worker-b-${ACCEPTANCE_RUN_ID}
+      WORKER_INSTANCE_ID: acceptance-worker-b-${ACCEPTANCE_RUN_ID}
+      WORKER_PROTOCOL_VERSION: "1"
+      WORKER_RUNTIME_CAPABILITY: goal-driven-claude-code
       DATABASE_URL: postgresql://${ACCEPTANCE_WORKER_B_DB_USER}:${ACCEPTANCE_WORKER_B_DB_PASSWORD}@postgres:5432/${ACCEPTANCE_POSTGRES_DB}
       DB_RLS_ENABLED: "1"
       DB_RLS_REQUIRE_CONTEXT: "1"

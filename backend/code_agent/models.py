@@ -110,6 +110,9 @@ class Task:
     task_spec_id: str = ""
     dataset_snapshot_id: str = ""
     project_id: str = ""
+    # Server-owned scheduling pool. The public pool is the only new Worker
+    # execution route; this is not exposed as a client request field.
+    execution_pool: str = "public-default"
     method_source_id: Optional[str] = None
     title: str = ""
     status: str = "draft"

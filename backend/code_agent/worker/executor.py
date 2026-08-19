@@ -65,6 +65,33 @@ def _worker_transfer_timeout():
     return httpx.Timeout(connect=15.0, read=seconds, write=seconds, pool=15.0)
 
 
+def _worker_identity_headers(
+    *,
+    worker_id: str,
+    worker_namespace: str,
+    worker_credential: str,
+    worker_instance_id: Optional[str] = None,
+    worker_protocol_version: Optional[str] = None,
+    worker_runtime_capability: Optional[str] = None,
+    worker_image_digest: Optional[str] = None,
+) -> Dict[str, str]:
+    """Build machine headers without adding optional legacy-test fields."""
+    headers = {
+        "X-Worker-ID": worker_id,
+        "X-Worker-Namespace": worker_namespace,
+        "X-Worker-Credential": worker_credential,
+    }
+    if worker_instance_id:
+        headers.update({
+            "X-Worker-Instance-ID": worker_instance_id,
+            "X-Worker-Protocol-Version": worker_protocol_version or "",
+            "X-Worker-Runtime-Capability": worker_runtime_capability or "",
+        })
+        if worker_image_digest:
+            headers["X-Worker-Image-Digest"] = worker_image_digest
+    return headers
+
+
 async def execute_task(
     task_id: str,
     attempt_id: int,
@@ -82,6 +109,10 @@ async def execute_task(
     worker_namespace: Optional[str] = None,
     worker_credential: Optional[str] = None,
     control_plane_url: Optional[str] = None,
+    worker_instance_id: Optional[str] = None,
+    worker_protocol_version: Optional[str] = None,
+    worker_runtime_capability: Optional[str] = None,
+    worker_image_digest: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute a task end-to-end.
 
@@ -147,6 +178,10 @@ async def execute_task(
             worker_namespace=worker_namespace,
             worker_credential=worker_credential,
             control_plane_url=control_plane_url,
+            worker_instance_id=worker_instance_id,
+            worker_protocol_version=worker_protocol_version,
+            worker_runtime_capability=worker_runtime_capability,
+            worker_image_digest=worker_image_digest,
             lease_token=lease_token,
         ):
             if event["type"] == "status":
@@ -211,11 +246,11 @@ async def execute_task(
         "worker_id": worker_id,
     })
 
-    verification = await _verify_outputs(task_output_dir, task_spec)
-    if not verification["passed"]:
+    validation = await _validate_outputs(task_output_dir, task_spec)
+    if not validation["passed"]:
         failure_messages = ", ".join(
             str(item.get("message", item)) if isinstance(item, dict) else str(item)
-            for item in verification.get("failures", [])
+            for item in validation.get("failures", [])
         )
         await complete_task_attempt(
             db_pool,
@@ -254,6 +289,10 @@ async def execute_task(
             worker_namespace=worker_namespace,
             worker_credential=worker_credential,
             control_plane_url=control_plane_url,
+            worker_instance_id=worker_instance_id,
+            worker_protocol_version=worker_protocol_version,
+            worker_runtime_capability=worker_runtime_capability,
+            worker_image_digest=worker_image_digest,
         )
     except Exception as exc:
         await complete_task_attempt(
@@ -291,6 +330,10 @@ async def execute_task(
             worker_id=worker_id,
             worker_namespace=worker_namespace,
             worker_credential=worker_credential,
+            worker_instance_id=worker_instance_id,
+            worker_protocol_version=worker_protocol_version,
+            worker_runtime_capability=worker_runtime_capability,
+            worker_image_digest=worker_image_digest,
         )
         _cleanup_execution_workspace(task_work_dir)
         raise
@@ -314,6 +357,10 @@ async def _compensate_published_artifact(
     worker_id: Optional[str],
     worker_namespace: Optional[str],
     worker_credential: Optional[str],
+    worker_instance_id: Optional[str] = None,
+    worker_protocol_version: Optional[str] = None,
+    worker_runtime_capability: Optional[str] = None,
+    worker_image_digest: Optional[str] = None,
 ) -> None:
     """Best-effort lease-bound cleanup for an artifact/result race."""
     if not artifact_id:
@@ -321,13 +368,19 @@ async def _compensate_published_artifact(
     try:
         if control_plane_url and worker_id and worker_namespace and worker_credential:
             import httpx
-            headers = {
-                "X-Worker-ID": worker_id,
-                "X-Worker-Namespace": worker_namespace,
-                "X-Worker-Credential": worker_credential,
+            headers = _worker_identity_headers(
+                worker_id=worker_id,
+                worker_namespace=worker_namespace,
+                worker_credential=worker_credential,
+                worker_instance_id=worker_instance_id,
+                worker_protocol_version=worker_protocol_version,
+                worker_runtime_capability=worker_runtime_capability,
+                worker_image_digest=worker_image_digest,
+            )
+            headers.update({
                 "X-Worker-Lease-Token": lease_token,
                 "X-Worker-Attempt-ID": str(attempt_id),
-            }
+            })
             async with httpx.AsyncClient(timeout=_worker_transfer_timeout(), follow_redirects=False) as client:
                 response = await client.delete(
                     f"{control_plane_url}/api/worker/tasks/{task_id}/artifacts/{artifact_id}",
@@ -406,6 +459,10 @@ async def _request_attempt_gateway(
     worker_credential: Optional[str],
     lease_token: Optional[str],
     control_plane_url: Optional[str],
+    worker_instance_id: Optional[str] = None,
+    worker_protocol_version: Optional[str] = None,
+    worker_runtime_capability: Optional[str] = None,
+    worker_image_digest: Optional[str] = None,
 ) -> Dict[str, str]:
     """Acquire the current Attempt's short-lived model capability.
 
@@ -431,13 +488,19 @@ async def _request_attempt_gateway(
         raise SecurityBoundaryError("Worker identity is required for an Attempt gateway grant")
     import httpx
 
-    headers = {
-        "X-Worker-ID": worker_id,
-        "X-Worker-Namespace": worker_namespace,
-        "X-Worker-Credential": worker_credential,
+    headers = _worker_identity_headers(
+        worker_id=worker_id,
+        worker_namespace=worker_namespace,
+        worker_credential=worker_credential,
+        worker_instance_id=worker_instance_id,
+        worker_protocol_version=worker_protocol_version,
+        worker_runtime_capability=worker_runtime_capability,
+        worker_image_digest=worker_image_digest,
+    )
+    headers.update({
         "X-Worker-Lease-Token": lease_token,
         "X-Worker-Attempt-ID": str(attempt_id),
-    }
+    })
     url = f"{control_plane_url.rstrip('/')}/api/worker/tasks/{task_id}/attempts/{attempt_id}/gateway"
     try:
         async with httpx.AsyncClient(timeout=_worker_transfer_timeout(), follow_redirects=False) as client:
@@ -478,6 +541,10 @@ async def _run_docker_execution(
     worker_credential: Optional[str] = None,
     control_plane_url: Optional[str] = None,
     lease_token: Optional[str] = None,
+    worker_instance_id: Optional[str] = None,
+    worker_protocol_version: Optional[str] = None,
+    worker_runtime_capability: Optional[str] = None,
+    worker_image_digest: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Run the configured execution mode.
 
@@ -509,6 +576,10 @@ async def _run_docker_execution(
                     worker_namespace=worker_namespace,
                     worker_credential=worker_credential,
                     lease_token=lease_token or "",
+                    worker_instance_id=worker_instance_id,
+                    worker_protocol_version=worker_protocol_version,
+                    worker_runtime_capability=worker_runtime_capability,
+                    worker_image_digest=worker_image_digest,
                     destination=work_dir / "remote-input" / (Path(dataset.get("original_filename") or "dataset.zip").name),
                 )
                 _assert_frozen_input(downloaded, dataset, "dataset")
@@ -531,6 +602,10 @@ async def _run_docker_execution(
                     worker_namespace=worker_namespace,
                     worker_credential=worker_credential,
                     lease_token=lease_token or "",
+                    worker_instance_id=worker_instance_id,
+                    worker_protocol_version=worker_protocol_version,
+                    worker_runtime_capability=worker_runtime_capability,
+                    worker_image_digest=worker_image_digest,
                     destination=work_dir / "remote-input" / method_name,
                 )
                 downloaded_method = work_dir / "remote-input" / method_name
@@ -572,6 +647,10 @@ async def _run_docker_execution(
             worker_credential=worker_credential,
             lease_token=lease_token,
             control_plane_url=control_plane_url,
+            worker_instance_id=worker_instance_id,
+            worker_protocol_version=worker_protocol_version,
+            worker_runtime_capability=worker_runtime_capability,
+            worker_image_digest=worker_image_digest,
         )
         async for event in run_claude_task(
             task_id=task_id,
@@ -697,18 +776,26 @@ async def _download_remote_input(
     worker_credential: str,
     lease_token: str,
     destination: Path,
+    worker_instance_id: Optional[str] = None,
+    worker_protocol_version: Optional[str] = None,
+    worker_runtime_capability: Optional[str] = None,
+    worker_image_digest: Optional[str] = None,
 ) -> Path:
     """Download one input through the authenticated control-plane transfer API."""
     if not lease_token:
         raise SecurityBoundaryError("Worker lease token is unavailable for input transfer")
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.part")
-    headers = {
-        "X-Worker-ID": worker_id,
-        "X-Worker-Namespace": worker_namespace,
-        "X-Worker-Credential": worker_credential,
-        "X-Worker-Lease-Token": lease_token,
-    }
+    headers = _worker_identity_headers(
+        worker_id=worker_id,
+        worker_namespace=worker_namespace,
+        worker_credential=worker_credential,
+        worker_instance_id=worker_instance_id,
+        worker_protocol_version=worker_protocol_version,
+        worker_runtime_capability=worker_runtime_capability,
+        worker_image_digest=worker_image_digest,
+    )
+    headers["X-Worker-Lease-Token"] = lease_token
     import httpx
     try:
         timeout = _worker_transfer_timeout()
@@ -757,8 +844,8 @@ async def _collect_outputs(output_dir: Path) -> list:
     return [relative for _path, relative in collector._iter_files(output_dir)]
 
 
-async def _verify_outputs(output_dir: Path, task_spec: Dict[str, Any]) -> Dict[str, Any]:
-    """Apply deterministic output checks before artifact finalization.
+async def _validate_outputs(output_dir: Path, task_spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply deterministic data-plane checks before artifact finalization.
 
     Scientific correctness belongs in the frozen TaskSpec/Case manifest and
     downstream review. This function enforces only data-plane invariants:
@@ -801,6 +888,10 @@ async def _create_artifacts(
     worker_namespace: Optional[str] = None,
     worker_credential: Optional[str] = None,
     control_plane_url: Optional[str] = None,
+    worker_instance_id: Optional[str] = None,
+    worker_protocol_version: Optional[str] = None,
+    worker_runtime_capability: Optional[str] = None,
+    worker_image_digest: Optional[str] = None,
 ) -> str:
     """Create artifact records and manifest."""
     from backend.code_agent.task_service import create_artifact, create_artifact_if_current_lease
@@ -844,6 +935,10 @@ async def _create_artifacts(
             worker_namespace=worker_namespace,
             worker_credential=worker_credential,
             lease_token=lease_token or "",
+            worker_instance_id=worker_instance_id,
+            worker_protocol_version=worker_protocol_version,
+            worker_runtime_capability=worker_runtime_capability,
+            worker_image_digest=worker_image_digest,
         )
     if lease_token:
         artifact = await create_artifact_if_current_lease(
@@ -869,21 +964,31 @@ async def _upload_remote_artifact(
     worker_namespace: str,
     worker_credential: str,
     lease_token: str,
+    worker_instance_id: Optional[str] = None,
+    worker_protocol_version: Optional[str] = None,
+    worker_runtime_capability: Optional[str] = None,
+    worker_image_digest: Optional[str] = None,
 ) -> str:
     """Upload a result archive to the API before the Worker forgets its scratch path."""
     if not lease_token:
         raise SecurityBoundaryError("Worker lease token is unavailable for artifact transfer")
     import httpx
-    headers = {
-        "X-Worker-ID": worker_id,
-        "X-Worker-Namespace": worker_namespace,
-        "X-Worker-Credential": worker_credential,
+    headers = _worker_identity_headers(
+        worker_id=worker_id,
+        worker_namespace=worker_namespace,
+        worker_credential=worker_credential,
+        worker_instance_id=worker_instance_id,
+        worker_protocol_version=worker_protocol_version,
+        worker_runtime_capability=worker_runtime_capability,
+        worker_image_digest=worker_image_digest,
+    )
+    headers.update({
         "X-Worker-Lease-Token": lease_token,
         "X-Worker-Attempt-ID": str(attempt_id),
         "X-Worker-Artifact-ID": artifact_id,
         "Content-Type": "application/zip",
         "Content-Length": str(archive_path.stat().st_size),
-    }
+    })
     timeout = _worker_transfer_timeout()
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         class _ArchiveStream(httpx.AsyncByteStream):

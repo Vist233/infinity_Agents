@@ -20,6 +20,10 @@ services:
         required: false
     environment:
       WORKER_ID: ${WORKER_ID:?WORKER_ID must be supplied by the server-issued credential bundle}
+      WORKER_INSTANCE_ID: ${WORKER_INSTANCE_ID:?WORKER_INSTANCE_ID must be unique for this container}
+      WORKER_PROTOCOL_VERSION: ${WORKER_PROTOCOL_VERSION:-1}
+      WORKER_RUNTIME_CAPABILITY: ${WORKER_RUNTIME_CAPABILITY:-goal-driven-claude-code}
+      WORKER_IMAGE_DIGEST: ${WORKER_IMAGE_DIGEST:-}
       WORKER_ENROLLMENT_REQUIRED: "1"
       WORKER_CREDENTIAL: ${WORKER_CREDENTIAL:?WORKER_CREDENTIAL must be supplied by the server-issued credential bundle}
       DATABASE_URL: ${WORKER_DATABASE_URL:?WORKER_DATABASE_URL must be supplied by the administrator}

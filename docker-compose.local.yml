@@ -40,6 +40,11 @@ services:
     env_file: ${WORKER_ENV_FILE:-worker.env}
     environment:
       - WORKER_ID=worker-a
+      - WORKER_INSTANCE_ID=${WORKER_INSTANCE_ID_A:-local-worker-a}
+      - WORKER_PROTOCOL_VERSION=${WORKER_PROTOCOL_VERSION:-1}
+      - WORKER_RUNTIME_CAPABILITY=${WORKER_RUNTIME_CAPABILITY:-goal-driven-claude-code}
+      - WORKER_IMAGE_DIGEST=${WORKER_IMAGE_DIGEST:-}
+      - WORKER_ENROLLMENT_REQUIRED=1
       - APP_ENV=${APP_ENV:-production}
       # Default to the compose-local Redis; override in worker.env for remote.
       - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
@@ -70,6 +75,11 @@ services:
     env_file: ${WORKER_ENV_FILE:-worker.env}
     environment:
       - WORKER_ID=worker-b
+      - WORKER_INSTANCE_ID=${WORKER_INSTANCE_ID_B:-local-worker-b}
+      - WORKER_PROTOCOL_VERSION=${WORKER_PROTOCOL_VERSION:-1}
+      - WORKER_RUNTIME_CAPABILITY=${WORKER_RUNTIME_CAPABILITY:-goal-driven-claude-code}
+      - WORKER_IMAGE_DIGEST=${WORKER_IMAGE_DIGEST:-}
+      - WORKER_ENROLLMENT_REQUIRED=1
       - APP_ENV=${APP_ENV:-production}
       - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
       - DATABASE_URL=${WORKER_DATABASE_URL:?WORKER_DATABASE_URL is required for the data-plane Worker}

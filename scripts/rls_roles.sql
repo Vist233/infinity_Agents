@@ -34,6 +34,28 @@ ALTER TABLE IF EXISTS task_attempts ADD CONSTRAINT chk_task_attempt_status CHECK
 ));
 ALTER TABLE IF EXISTS artifacts ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 ALTER TABLE IF EXISTS artifacts ADD COLUMN IF NOT EXISTS cleanup_completed_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS tasks ADD COLUMN IF NOT EXISTS execution_pool TEXT NOT NULL DEFAULT 'public-default';
+UPDATE tasks SET execution_pool = 'public-default'
+WHERE execution_pool IS NULL OR btrim(execution_pool) = '';
+ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS execution_pool TEXT NOT NULL DEFAULT 'public-default';
+ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS protocol_version TEXT NOT NULL DEFAULT 'legacy-v0';
+ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS runtime_capability TEXT NOT NULL DEFAULT 'legacy';
+ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS image_digest TEXT;
+ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS active_instance_id TEXT;
+ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS active_instance_expires_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS session_epoch BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS ready BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS last_error TEXT;
+ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS connected_at TIMESTAMPTZ;
+UPDATE worker_enrollments
+SET execution_pool = 'public-default'
+WHERE execution_pool IS NULL OR btrim(execution_pool) = '';
+UPDATE worker_enrollments
+SET protocol_version = 'legacy-v0', runtime_capability = 'legacy', ready = FALSE
+WHERE protocol_version IS NULL OR btrim(protocol_version) = '';
+CREATE INDEX IF NOT EXISTS idx_worker_enrollments_instance
+  ON worker_enrollments (active_instance_id, active_instance_expires_at)
+  WHERE active_instance_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_artifacts_cleanup
   ON artifacts (deleted_at, cleanup_completed_at, created_at)
   WHERE deleted_at IS NOT NULL;
@@ -146,6 +168,30 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app A
   LIMIT 1
 $$;
 
+-- A credential is not enough to enter the new data plane.  The Worker must
+-- have completed the current protocol handshake, hold the one active instance
+-- fence, and be marked ready after its central Redis connection is healthy.
+-- This helper is deliberately additive: it does not grant any task access by
+-- itself and is called only by the existing Worker task/input policies.
+CREATE OR REPLACE FUNCTION app.worker_session_compatible(actor text) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.worker_enrollments w
+    WHERE w.worker_id = actor
+      AND w.status = 'active'
+      AND w.revoked_at IS NULL
+      AND w.execution_pool = 'public-default'
+      AND w.protocol_version = NULLIF(current_setting('app.worker_protocol_version', true), '')
+      AND w.runtime_capability = NULLIF(current_setting('app.worker_runtime_capability', true), '')
+      AND w.active_instance_id = NULLIF(current_setting('app.worker_instance_id', true), '')
+      AND w.session_epoch = NULLIF(current_setting('app.worker_session_epoch', true), '')::bigint
+      AND w.ready = TRUE
+  )
+$$;
+REVOKE ALL ON FUNCTION app.worker_session_compatible(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.worker_session_compatible(text) TO infinity_worker;
+
 -- Security-definer lookup avoids recursive RLS evaluation when a policy needs
 -- to inspect project_members and projects. The script must be run by the
 -- database owner/administrator so this helper has a controlled owner.
@@ -182,6 +228,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app A
         digest(NULLIF(current_setting('app.worker_credential', true), ''), 'sha256'),
         'hex'
       )
+      AND app.worker_session_compatible(actor)
       AND (
         w.trust_level = 'full'
         OR (w.trust_level = 'general'
@@ -734,6 +781,72 @@ $$;
 REVOKE ALL ON FUNCTION app.issue_worker_enrollment(text, text, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.issue_worker_enrollment(text, text, text, text) TO infinity_api;
 
+-- Public-pool issuance keeps the signed-in user as the audit owner, but does
+-- not bind the shared server Namespace to that user.  Scheduling access is a
+-- separate server-owned execution_pool decision; this function only creates
+-- one unique credential and starts it in the incompatible/not-ready state
+-- until the new Worker protocol handshake completes.
+CREATE OR REPLACE FUNCTION app.issue_public_worker_enrollment(
+  p_worker_id text,
+  p_credential_hash text,
+  p_namespace text,
+  p_owner_user_id text
+) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
+DECLARE
+  existing_owner text;
+  existing_status text;
+  existing_revoked_at timestamptz;
+BEGIN
+  IF p_owner_user_id IS NULL OR p_owner_user_id IS DISTINCT FROM app.current_user_id() THEN
+    RAISE EXCEPTION 'Worker issuer owner does not match the current API user';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('worker-namespace:' || p_namespace, 0));
+  SELECT owner_user_id, status, revoked_at
+  INTO existing_owner, existing_status, existing_revoked_at
+  FROM worker_enrollments
+  WHERE worker_id = p_worker_id
+  FOR UPDATE;
+  IF existing_status = 'active' AND existing_revoked_at IS NULL THEN
+    RAISE EXCEPTION 'Worker ID already has an active enrollment';
+  END IF;
+  IF existing_owner IS NOT NULL AND existing_owner IS DISTINCT FROM p_owner_user_id THEN
+    RAISE EXCEPTION 'Worker is already owned by another account';
+  END IF;
+  UPDATE worker_enrollments
+  SET credential_hash = p_credential_hash,
+      namespace = p_namespace,
+      owner_user_id = p_owner_user_id,
+      execution_pool = 'public-default',
+      trust_level = 'general',
+      protocol_version = 'legacy-v0',
+      runtime_capability = 'legacy',
+      image_digest = NULL,
+      active_instance_id = NULL,
+      active_instance_expires_at = NULL,
+      session_epoch = session_epoch + 1,
+      ready = FALSE,
+      last_error = NULL,
+      connected_at = NULL,
+      status = 'active',
+      enrolled_at = NOW(),
+      revoked_at = NULL,
+      last_seen_at = NOW()
+  WHERE worker_id = p_worker_id;
+  IF NOT FOUND THEN
+    INSERT INTO worker_enrollments (
+      worker_id, credential_hash, namespace, owner_user_id, execution_pool,
+      trust_level, protocol_version, runtime_capability, ready, status, last_seen_at
+    ) VALUES (
+      p_worker_id, p_credential_hash, p_namespace, p_owner_user_id,
+      'public-default', 'general', 'legacy-v0', 'legacy', FALSE, 'active', NOW()
+    );
+  END IF;
+END
+$$;
+REVOKE ALL ON FUNCTION app.issue_public_worker_enrollment(text, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.issue_public_worker_enrollment(text, text, text, text) TO infinity_api;
+
 CREATE OR REPLACE FUNCTION app.issue_full_worker_enrollment(
   p_worker_id text,
   p_credential_hash text,
@@ -821,7 +934,9 @@ CREATE OR REPLACE FUNCTION app.revoke_worker_enrollment(
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
 BEGIN
   UPDATE worker_enrollments
-  SET status = 'revoked', revoked_at = NOW()
+  SET status = 'revoked', revoked_at = NOW(), ready = FALSE,
+      active_instance_id = NULL, active_instance_expires_at = NULL,
+      last_error = 'Worker credential revoked'
   WHERE worker_id = p_worker_id
     AND namespace = p_namespace
     AND status = 'active';
