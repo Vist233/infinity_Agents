@@ -873,7 +873,7 @@ Paper/Analysis 仍运行在 Cloudflare，但 10 ms 约束只适用于 Cloudflare
 - `backend/app.py`：全局 OIDC Cookie、统一 Resource API、Task API 用户授权、安全图片响应、删除状态机。
 - `backend/db.py`：版本化 migration、owner/project 复合外键、RLS、资源与审计表；运行进程不再自动 DDL。
 - `backend/code_agent/*`：Task 创建原子事务、用户级幂等、Claude Code Runtime、Anthropic Messages-compatible Provider Profile、Worker 最小权限、per-attempt 模型 Gateway 能力。
-- `backend/code_agent/worker/docker_runtime.py`：默认拒绝网络，删除长期 Provider Key 透传，接入受控 Executor 与短期票据。
+- `backend/code_agent/worker/claude_runtime.py`：在统一 Worker 容器内直接运行 Claude Code；Provider Key 不进入 Worker，模型调用使用 Attempt 短期能力。
 - `docker-compose.local.yml`：隔离验收 namespace、Redis ACL/TLS、专用 DB 角色、逐 Worker 凭证和一致的上传/Artifact 路径；生产模板移除宿主 Docker Socket。
 - `image-judge/apps/desktop/imagejudge/model/*`、`export/*`：保留分类兼容模式，新增 TraitDefinition/Observation、多性状投影、标定与 QC；平台上传改为预处理 bytes。
 
