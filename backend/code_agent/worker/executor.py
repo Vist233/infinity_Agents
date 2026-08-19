@@ -947,6 +947,26 @@ async def _upload_remote_artifact(
     """Upload a result archive to the API before the Worker forgets its scratch path."""
     if not lease_token:
         raise SecurityBoundaryError("Worker lease token is unavailable for artifact transfer")
+    threshold = max(1, _env_int("ARTIFACT_MULTIPART_THRESHOLD_BYTES", 30 * 1024 * 1024))
+    if archive_path.stat().st_size > threshold:
+        if not archive_checksum:
+            raise SecurityBoundaryError("multipart artifact transfer requires an archive checksum")
+        return await _upload_remote_artifact_multipart(
+            control_plane_url,
+            task_id,
+            attempt_id,
+            artifact_id,
+            archive_path,
+            archive_checksum=archive_checksum,
+            worker_id=worker_id,
+            worker_namespace=worker_namespace,
+            worker_credential=worker_credential,
+            lease_token=lease_token,
+            worker_instance_id=worker_instance_id,
+            worker_protocol_version=worker_protocol_version,
+            worker_runtime_capability=worker_runtime_capability,
+            worker_image_digest=worker_image_digest,
+        )
     import httpx
     headers = _worker_identity_headers(
         worker_id=worker_id,
@@ -1003,6 +1023,191 @@ async def _upload_remote_artifact(
     if str(payload.get("artifact_id")) != artifact_id:
         raise SecurityBoundaryError("control-plane artifact ID mismatch")
     return artifact_id
+
+
+def _hash_file_range(path: Path, offset: int, length: int) -> str:
+    """Hash one bounded archive range without retaining it in memory."""
+    hasher = hashlib.sha256()
+    remaining = length
+    with path.open("rb") as handle:
+        handle.seek(offset)
+        while remaining:
+            chunk = handle.read(min(1024 * 1024, remaining))
+            if not chunk:
+                raise SecurityBoundaryError("archive changed while preparing multipart upload")
+            hasher.update(chunk)
+            remaining -= len(chunk)
+    return hasher.hexdigest()
+
+
+async def _upload_remote_artifact_multipart(
+    control_plane_url: str,
+    task_id: str,
+    attempt_id: int,
+    artifact_id: str,
+    archive_path: Path,
+    *,
+    archive_checksum: str,
+    worker_id: str,
+    worker_namespace: str,
+    worker_credential: str,
+    lease_token: str,
+    worker_instance_id: Optional[str] = None,
+    worker_protocol_version: Optional[str] = None,
+    worker_runtime_capability: Optional[str] = None,
+    worker_image_digest: Optional[str] = None,
+) -> str:
+    """Upload a large archive in server-sized parts, then finalize it."""
+    import httpx
+
+    archive_size = archive_path.stat().st_size
+    if archive_size <= 0 or not re.fullmatch(r"[0-9a-f]{64}", archive_checksum.lower()):
+        raise SecurityBoundaryError("multipart artifact metadata is invalid")
+    identity = _worker_identity_headers(
+        worker_id=worker_id,
+        worker_namespace=worker_namespace,
+        worker_credential=worker_credential,
+        worker_instance_id=worker_instance_id,
+        worker_protocol_version=worker_protocol_version,
+        worker_runtime_capability=worker_runtime_capability,
+        worker_image_digest=worker_image_digest,
+    )
+    identity.update({
+        "X-Worker-Lease-Token": lease_token,
+        "X-Worker-Attempt-ID": str(attempt_id),
+        "X-Worker-Artifact-ID": artifact_id,
+    })
+    timeout = _worker_transfer_timeout()
+    upload_id: Optional[str] = None
+
+    class _ArchivePartStream(httpx.AsyncByteStream):
+        def __init__(self, path: Path, offset: int, length: int, chunk_size: int = 1024 * 1024):
+            self.path = path
+            self.offset = offset
+            self.length = length
+            self.chunk_size = chunk_size
+
+        async def __aiter__(self):
+            handle = await asyncio.to_thread(self.path.open, "rb")
+            try:
+                await asyncio.to_thread(handle.seek, self.offset)
+                remaining = self.length
+                while remaining:
+                    chunk = await asyncio.to_thread(handle.read, min(self.chunk_size, remaining))
+                    if not chunk:
+                        raise SecurityBoundaryError("archive changed during multipart transfer")
+                    remaining -= len(chunk)
+                    yield chunk
+            finally:
+                await asyncio.to_thread(handle.close)
+
+        async def aclose(self) -> None:
+            return None
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            start_headers = {
+                **identity,
+                "X-Worker-Artifact-SHA256": archive_checksum.lower(),
+                "X-Worker-Artifact-Size": str(archive_size),
+            }
+            response = await client.post(
+                f"{control_plane_url}/api/worker/tasks/{task_id}/artifact-uploads",
+                headers=start_headers,
+            )
+            if response.status_code >= 400:
+                raise SecurityBoundaryError(f"control-plane multipart start failed ({response.status_code})")
+            try:
+                start_payload = response.json()
+                upload_id = str(start_payload["upload_id"])
+                part_size = int(start_payload["part_size_bytes"])
+                part_count = int(start_payload["part_count"])
+            except (ValueError, KeyError, TypeError) as exc:
+                raise SecurityBoundaryError("control-plane multipart start response is invalid") from exc
+            if not upload_id or part_size <= 0 or part_count <= 0:
+                raise SecurityBoundaryError("control-plane multipart part contract is invalid")
+            expected_count = (archive_size + part_size - 1) // part_size
+            if part_count != expected_count:
+                raise SecurityBoundaryError("control-plane multipart part count is invalid")
+
+            for part_number in range(part_count):
+                offset = part_number * part_size
+                length = min(part_size, archive_size - offset)
+                if length <= 0:
+                    raise SecurityBoundaryError("control-plane multipart part size is invalid")
+                part_checksum = await asyncio.to_thread(_hash_file_range, archive_path, offset, length)
+                part_headers = {
+                    **identity,
+                    "X-Worker-Part-SHA256": part_checksum,
+                    "Content-Type": "application/octet-stream",
+                    "Content-Length": str(length),
+                }
+                response = await client.put(
+                    f"{control_plane_url}/api/worker/tasks/{task_id}/artifact-uploads/{upload_id}/parts/{part_number}",
+                    headers=part_headers,
+                    content=_ArchivePartStream(archive_path, offset, length),
+                )
+                if response.status_code >= 400:
+                    raise SecurityBoundaryError(
+                        f"control-plane multipart part {part_number} failed ({response.status_code})"
+                    )
+
+            response = await client.post(
+                f"{control_plane_url}/api/worker/tasks/{task_id}/artifact-uploads/{upload_id}/complete",
+                headers=identity,
+            )
+            if response.status_code >= 400:
+                raise SecurityBoundaryError(f"control-plane multipart finalize failed ({response.status_code})")
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise SecurityBoundaryError("control-plane multipart finalize response is invalid") from exc
+            if str(payload.get("artifact_id")) != artifact_id:
+                raise SecurityBoundaryError("control-plane multipart artifact ID mismatch")
+            if str(payload.get("checksum_sha256", archive_checksum)).lower() != archive_checksum.lower():
+                raise SecurityBoundaryError("control-plane multipart artifact checksum mismatch")
+            if int(payload.get("file_size_bytes", archive_size)) != archive_size:
+                raise SecurityBoundaryError("control-plane multipart artifact size mismatch")
+            return artifact_id
+    except SecurityBoundaryError:
+        if upload_id:
+            await _abort_remote_artifact_multipart(
+                control_plane_url,
+                task_id,
+                upload_id,
+                identity,
+            )
+        raise
+    except Exception as exc:
+        if upload_id:
+            await _abort_remote_artifact_multipart(
+                control_plane_url,
+                task_id,
+                upload_id,
+                identity,
+            )
+        raise SecurityBoundaryError("control-plane multipart artifact transfer failed") from exc
+
+
+async def _abort_remote_artifact_multipart(
+    control_plane_url: str,
+    task_id: str,
+    upload_id: str,
+    identity: Dict[str, str],
+) -> None:
+    """Best-effort cleanup after a failed multipart transfer."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=_worker_transfer_timeout(), follow_redirects=False) as client:
+            response = await client.delete(
+                f"{control_plane_url}/api/worker/tasks/{task_id}/artifact-uploads/{upload_id}",
+                headers=identity,
+            )
+            if response.status_code >= 400:
+                logger.warning("Multipart cleanup was rejected (%s)", response.status_code)
+    except Exception:
+        logger.warning("Multipart cleanup failed", exc_info=True)
 
 
 async def _report_status(redis_client, task_id: str, status: str, data: Dict[str, Any]) -> None:

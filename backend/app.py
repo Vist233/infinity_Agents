@@ -3564,10 +3564,9 @@ async def upload_worker_artifact_endpoint(
     except Exception as exc:
         source.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail="Artifact archive validation failed") from exc
-    destination = upload_root / "remote" / task_id / f"{artifact_id}.zip"
+    destination = _worker_artifact_destination(task_id, artifact_id)
     moved = False
     try:
-        destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             raise HTTPException(status_code=409, detail="Artifact already exists")
         source.replace(destination)
@@ -3605,6 +3604,619 @@ async def upload_worker_artifact_endpoint(
             destination.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Artifact upload failed") from exc
     return {"artifact_id": artifact_id, "file_size_bytes": upload["file_size_bytes"], "checksum_sha256": upload["file_hash_sha256"]}
+
+
+def _multipart_limits() -> Tuple[int, int, int, int]:
+    """Return the server-owned multipart threshold and bounded part limits."""
+    threshold = max(1, _env_int("ARTIFACT_MULTIPART_THRESHOLD_BYTES", 30 * 1024 * 1024))
+    default_part = max(1, _env_int("ARTIFACT_MULTIPART_PART_BYTES", 16 * 1024 * 1024))
+    min_part = max(1, _env_int("ARTIFACT_MULTIPART_MIN_PART_BYTES", 1024 * 1024))
+    max_part = max(min_part, _env_int("ARTIFACT_MULTIPART_MAX_PART_BYTES", 64 * 1024 * 1024))
+    max_parts = max(1, _env_int("ARTIFACT_MULTIPART_MAX_PARTS", 4096))
+    return threshold, min_part, min(default_part, max_part), max_parts
+
+
+def _worker_upload_staging_root() -> FilePath:
+    """Return the dedicated staging root without following a root symlink."""
+    root = FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", "/workspace/task-outputs")).resolve()
+    staging_root = root / ".worker-staging"
+    if staging_root.is_symlink():
+        raise HTTPException(status_code=503, detail="Artifact staging root is not safe")
+    staging_root.mkdir(parents=True, exist_ok=True)
+    if not staging_root.is_dir():
+        raise HTTPException(status_code=503, detail="Artifact staging root is not a directory")
+    return staging_root
+
+
+def _worker_artifact_destination(task_id: str, artifact_id: str) -> FilePath:
+    """Create a result path without following a server-side directory link."""
+    try:
+        safe_task_id = str(uuid.UUID(task_id))
+    except (ValueError, AttributeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid task ID") from exc
+    root = FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", "/workspace/task-outputs")).resolve()
+    remote_root = root / "remote"
+    if remote_root.is_symlink():
+        raise HTTPException(status_code=503, detail="Artifact destination root is not safe")
+    remote_root.mkdir(parents=True, exist_ok=True)
+    if not remote_root.is_dir():
+        raise HTTPException(status_code=503, detail="Artifact destination root is not a directory")
+    task_root = remote_root / safe_task_id
+    if task_root.is_symlink():
+        raise HTTPException(status_code=503, detail="Artifact task destination is not safe")
+    task_root.mkdir(parents=True, exist_ok=True)
+    destination = task_root / f"{artifact_id}.zip"
+    if destination.is_symlink() or not destination.resolve(strict=False).is_relative_to(root):
+        raise HTTPException(status_code=409, detail="Artifact destination is invalid")
+    return destination
+
+
+def _validate_upload_staging_path(staging_root: FilePath, raw_path: str, upload_id: str) -> FilePath:
+    """Validate the server-generated upload directory before touching disk."""
+    raw_candidate = FilePath(raw_path)
+    if raw_candidate.is_symlink():
+        raise HTTPException(status_code=409, detail="Artifact upload staging path is invalid")
+    expected = (staging_root / upload_id).resolve(strict=False)
+    candidate = raw_candidate.resolve(strict=False)
+    if candidate != expected or candidate.is_symlink() or not candidate.is_relative_to(staging_root.resolve()):
+        raise HTTPException(status_code=409, detail="Artifact upload staging path is invalid")
+    return candidate
+
+
+async def _load_multipart_upload(task_id: str, upload_id: str, worker: Dict[str, str], attempt_id: int) -> Optional[Dict[str, Any]]:
+    """Load one open multipart session through the Worker RLS boundary."""
+    try:
+        parsed_upload_id = str(uuid.UUID(upload_id))
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid artifact upload ID")
+    query = """
+        SELECT artifact_uploads.upload_id::text, artifact_uploads.artifact_id,
+               artifact_uploads.task_id::text, artifact_uploads.task_attempt_id,
+               artifact_uploads.worker_id, artifact_uploads.staging_path,
+               artifact_uploads.expected_file_size_bytes,
+               artifact_uploads.expected_checksum_sha256,
+               artifact_uploads.part_size_bytes, artifact_uploads.part_count,
+               artifact_uploads.status
+        FROM artifact_uploads
+        JOIN tasks t ON t.task_id = artifact_uploads.task_id
+        JOIN task_attempts a
+          ON a.task_attempt_id = artifact_uploads.task_attempt_id
+         AND a.task_id = artifact_uploads.task_id
+        WHERE artifact_uploads.upload_id = $1::uuid
+          AND artifact_uploads.task_id = $2::uuid
+          AND artifact_uploads.task_attempt_id = $3
+          AND artifact_uploads.worker_id = $4
+          AND artifact_uploads.status IN ('open', 'completed')
+          AND t.active_attempt_id = artifact_uploads.task_attempt_id
+          AND t.lease_owner = $4
+          AND t.lease_token = $5
+          AND t.status IN ('claimed', 'running')
+          AND t.lease_expires_at > NOW()
+          AND a.worker_id = $4
+          AND a.status = 'running'
+    """
+    async with _worker_database_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            query,
+            parsed_upload_id,
+            task_id,
+            attempt_id,
+            worker["worker_id"],
+            worker["lease_token"],
+        )
+    return dict(row) if row else None
+
+
+async def _delete_multipart_upload(
+    upload_id: str,
+    task_id: str,
+    attempt_id: int,
+    worker_id: str,
+    lease_token: str,
+) -> bool:
+    """Best-effort removal of an open session; RLS still enforces the lease."""
+    try:
+        async with _worker_database_pool().acquire() as conn:
+            result = await conn.execute(
+                """
+                DELETE FROM artifact_uploads u
+                USING tasks t, task_attempts a
+                WHERE u.upload_id = $1::uuid AND u.task_id = $2::uuid
+                  AND u.task_attempt_id = $3 AND u.worker_id = $4
+                  AND u.status = 'open'
+                  AND t.task_id = u.task_id
+                  AND t.active_attempt_id = u.task_attempt_id
+                  AND t.lease_owner = $4
+                  AND t.lease_token = $5
+                  AND t.status IN ('claimed', 'running')
+                  AND t.lease_expires_at > NOW()
+                  AND a.task_attempt_id = u.task_attempt_id
+                  AND a.task_id = u.task_id
+                  AND a.worker_id = $4
+                  AND a.status = 'running'
+                """,
+                upload_id,
+                task_id,
+                attempt_id,
+                worker_id,
+                lease_token,
+            )
+        return str(result).endswith(" 1") or str(result).endswith("1")
+    except Exception:
+        logger.warning("Could not remove multipart upload state %s", upload_id, exc_info=True)
+        return False
+
+
+async def _finalize_multipart_upload(
+    upload: Dict[str, Any],
+    worker: Dict[str, str],
+    storage_path: FilePath,
+    file_size: int,
+    checksum: str,
+    metadata: Dict[str, Any],
+) -> bool:
+    """Atomically publish the Artifact and close its PG upload session."""
+    query = """
+        WITH inserted AS (
+            INSERT INTO artifacts (
+                artifact_id, task_id, task_attempt_id, name, kind,
+                storage_backend, storage_path, file_size_bytes, checksum_sha256,
+                content_type, metadata, created_at
+            )
+            SELECT u.artifact_id, u.task_id, u.task_attempt_id, 'result',
+                   'result_archive', 'local', $6, $7, $8, 'application/zip', $9::jsonb, NOW()
+            FROM artifact_uploads u
+            JOIN tasks t ON t.task_id = u.task_id
+            JOIN task_attempts a
+              ON a.task_attempt_id = u.task_attempt_id
+             AND a.task_id = u.task_id
+            WHERE u.upload_id = $1::uuid
+              AND u.task_id = $2::uuid
+              AND u.task_attempt_id = $3
+              AND u.worker_id = $4
+              AND u.status = 'open'
+              AND t.active_attempt_id = u.task_attempt_id
+              AND t.lease_owner = $4
+              AND t.lease_token = $5
+              AND t.status IN ('claimed', 'running')
+              AND t.lease_expires_at > NOW()
+              AND a.worker_id = $4
+              AND a.status = 'running'
+            RETURNING artifact_id
+        )
+        UPDATE artifact_uploads u
+        SET status = 'completed', updated_at = NOW(), completed_at = NOW()
+        FROM inserted
+        WHERE u.upload_id = $1::uuid AND u.status = 'open'
+        RETURNING u.artifact_id
+    """
+    async with _worker_database_pool().acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                query,
+                upload["upload_id"],
+                upload["task_id"],
+                upload["task_attempt_id"],
+                worker["worker_id"],
+                worker["lease_token"],
+                str(storage_path),
+                file_size,
+                checksum,
+                json.dumps(metadata, separators=(",", ":")),
+            )
+    return bool(row)
+
+
+def _assemble_multipart_archive(
+    staging_dir: FilePath,
+    parts: List[Dict[str, Any]],
+    destination: FilePath,
+    expected_size: int,
+    expected_checksum: str,
+) -> Tuple[int, str]:
+    """Concatenate verified part files without loading the archive in memory."""
+    hasher = hashlib.sha256()
+    total = 0
+    staging_dir = staging_dir.resolve()
+    destination = destination.resolve(strict=False)
+    if not destination.is_relative_to(staging_dir) or destination.is_symlink():
+        raise HTTPException(status_code=409, detail="Multipart destination is invalid")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with destination.open("wb") as output:
+            for part in parts:
+                raw_path = FilePath(str(part["storage_path"]))
+                if raw_path.is_symlink():
+                    raise HTTPException(status_code=422, detail="Multipart part is a symlink")
+                path = raw_path.resolve(strict=False)
+                if not path.is_relative_to(staging_dir) or not path.is_file():
+                    raise HTTPException(status_code=422, detail="Multipart part is not a regular file")
+                expected_part_size = int(part["file_size_bytes"])
+                if path.stat().st_size != expected_part_size:
+                    raise HTTPException(status_code=422, detail="Multipart part size changed")
+                part_hasher = hashlib.sha256()
+                with path.open("rb") as source:
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > expected_size:
+                            raise HTTPException(status_code=422, detail="Multipart archive is too large")
+                        part_hasher.update(chunk)
+                        hasher.update(chunk)
+                        output.write(chunk)
+                if part_hasher.hexdigest() != str(part["checksum_sha256"]).strip().lower():
+                    raise HTTPException(status_code=422, detail="Multipart part checksum changed")
+            output.flush()
+            os.fsync(output.fileno())
+    except HTTPException:
+        destination.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail="Multipart archive assembly failed") from exc
+    checksum = hasher.hexdigest()
+    if total != expected_size or checksum != expected_checksum:
+        destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail="Multipart archive checksum mismatch")
+    return total, checksum
+
+
+@app.post("/api/worker/tasks/{task_id}/artifact-uploads")
+async def start_worker_artifact_multipart_endpoint(task_id: str, request: Request):
+    """Start a server-side multipart result upload for a large archive."""
+    worker = await _authenticate_worker_request(request)
+    attempt_raw = request.headers.get("X-Worker-Attempt-ID", "").strip()
+    artifact_id = request.headers.get("X-Worker-Artifact-ID", "").strip()
+    checksum = request.headers.get("X-Worker-Artifact-SHA256", "").strip().lower()
+    size_raw = request.headers.get("X-Worker-Artifact-Size", "").strip()
+    try:
+        attempt_id = int(attempt_raw)
+        expected_size = int(size_raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid multipart artifact metadata") from exc
+    if attempt_id <= 0 or expected_size <= 0:
+        raise HTTPException(status_code=400, detail="Invalid multipart artifact metadata")
+    if not re.fullmatch(r"artifact-[0-9a-f-]{20,}", artifact_id):
+        raise HTTPException(status_code=400, detail="Invalid artifact ID")
+    if not re.fullmatch(r"[0-9a-f]{64}", checksum):
+        raise HTTPException(status_code=400, detail="Artifact SHA-256 header is required")
+    threshold, min_part, default_part, max_parts = _multipart_limits()
+    max_upload = max(1, _env_int("ARTIFACT_UPLOAD_MAX_BYTES", 3 * 1024**3))
+    if expected_size <= threshold or expected_size > max_upload:
+        raise HTTPException(status_code=413, detail="Artifact size does not require or exceed multipart upload")
+    part_size = min(max(default_part, min_part), max_upload)
+    part_count = (expected_size + part_size - 1) // part_size
+    if part_count > max_parts:
+        raise HTTPException(status_code=413, detail="Artifact has too many multipart parts")
+    if not await _worker_artifact_upload_allowed(task_id, worker, attempt_id):
+        raise HTTPException(status_code=409, detail="Worker lease is no longer active")
+    staging_root = _worker_upload_staging_root()
+    upload_id = str(uuid.uuid4())
+    staging_dir = staging_root / upload_id
+    query = """
+        INSERT INTO artifact_uploads (
+            upload_id, artifact_id, task_id, task_attempt_id, worker_id,
+            staging_path, expected_file_size_bytes, expected_checksum_sha256,
+            part_size_bytes, part_count, status, created_at, updated_at
+        )
+        SELECT $1::uuid, $2, t.task_id, $4, $5, $6, $7, $8, $9, $10, 'open', NOW(), NOW()
+        FROM tasks t
+        JOIN task_attempts a ON a.task_id = t.task_id AND a.task_attempt_id = $4
+        WHERE t.task_id = $3::uuid
+          AND t.active_attempt_id = $4
+          AND t.lease_owner = $5
+          AND t.lease_token = $11
+          AND t.status IN ('claimed', 'running')
+          AND t.lease_expires_at > NOW()
+          AND a.worker_id = $5
+          AND a.status = 'running'
+        RETURNING upload_id::text, artifact_id, part_size_bytes, part_count
+    """
+    try:
+        async with _worker_database_pool().acquire() as conn:
+            row = await conn.fetchrow(
+                query,
+                upload_id,
+                artifact_id,
+                task_id,
+                attempt_id,
+                worker["worker_id"],
+                str(staging_dir),
+                expected_size,
+                checksum,
+                part_size,
+                part_count,
+                worker["lease_token"],
+            )
+        if not row:
+            raise HTTPException(status_code=409, detail="Artifact upload could not be started")
+        staging_dir.mkdir(parents=True, exist_ok=False)
+    except HTTPException:
+        await _delete_multipart_upload(
+            upload_id, task_id, attempt_id, worker["worker_id"], worker["lease_token"]
+        )
+        raise
+    except FileExistsError as exc:
+        await _delete_multipart_upload(
+            upload_id, task_id, attempt_id, worker["worker_id"], worker["lease_token"]
+        )
+        raise HTTPException(status_code=409, detail="Artifact upload already exists") from exc
+    except Exception as exc:
+        await _delete_multipart_upload(
+            upload_id, task_id, attempt_id, worker["worker_id"], worker["lease_token"]
+        )
+        raise HTTPException(status_code=500, detail="Artifact upload could not be started") from exc
+    return {
+        "upload_id": upload_id,
+        "artifact_id": artifact_id,
+        "part_size_bytes": part_size,
+        "part_count": part_count,
+        "status": "open",
+    }
+
+
+@app.put("/api/worker/tasks/{task_id}/artifact-uploads/{upload_id}/parts/{part_number}")
+async def upload_worker_artifact_part_endpoint(
+    task_id: str,
+    upload_id: str,
+    part_number: int,
+    request: Request,
+):
+    """Stream one multipart part only after authenticating its active Attempt."""
+    worker = await _authenticate_worker_request(request)
+    try:
+        attempt_id = int(request.headers.get("X-Worker-Attempt-ID", ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid attempt ID") from exc
+    if attempt_id <= 0 or part_number < 0:
+        raise HTTPException(status_code=400, detail="Invalid multipart part")
+    part_checksum = request.headers.get("X-Worker-Part-SHA256", "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", part_checksum):
+        raise HTTPException(status_code=400, detail="Part SHA-256 header is required")
+    if not await _worker_artifact_upload_allowed(task_id, worker, attempt_id):
+        raise HTTPException(status_code=409, detail="Worker lease is no longer active")
+    upload = await _load_multipart_upload(task_id, upload_id, worker, attempt_id)
+    if not upload or upload["status"] != "open":
+        raise HTTPException(status_code=404, detail="Multipart upload not found")
+    part_count = int(upload["part_count"])
+    part_size = int(upload["part_size_bytes"])
+    expected_total = int(upload["expected_file_size_bytes"])
+    if part_number >= part_count:
+        raise HTTPException(status_code=400, detail="Invalid multipart part number")
+    expected_part_size = min(part_size, expected_total - part_number * part_size)
+    if expected_part_size <= 0:
+        raise HTTPException(status_code=400, detail="Invalid multipart part size")
+    async with _worker_database_pool().acquire() as conn:
+        existing = await conn.fetchrow(
+            """
+            SELECT file_size_bytes, checksum_sha256
+            FROM artifact_upload_parts
+            WHERE upload_id = $1::uuid AND part_number = $2
+            """,
+            upload_id,
+            part_number,
+        )
+    if existing:
+        if int(existing["file_size_bytes"]) == expected_part_size and str(existing["checksum_sha256"]).strip() == part_checksum:
+            return {"upload_id": upload_id, "part_number": part_number, "uploaded": True, "idempotent": True}
+        raise HTTPException(status_code=409, detail="Multipart part already exists with different content")
+    staging_root = _worker_upload_staging_root()
+    staging_dir = _validate_upload_staging_path(staging_root, str(upload["staging_path"]), upload_id)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    upload_result = await _stream_request_body_to_disk(
+        request,
+        staging_dir,
+        expected_part_size,
+        filename=f"part-{part_number:08d}.bin",
+    )
+    temporary_path = FilePath(upload_result["stored_path"])
+    if upload_result["file_size_bytes"] != expected_part_size or upload_result["file_hash_sha256"] != part_checksum:
+        temporary_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail="Multipart part size or checksum mismatch")
+    part_path = staging_dir / f"part-{part_number:08d}.bin"
+    try:
+        if part_path.exists() or part_path.is_symlink():
+            temporary_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=409, detail="Multipart part already exists")
+        try:
+            os.link(temporary_path, part_path)
+        except FileExistsError as exc:
+            temporary_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=409, detail="Multipart part already exists") from exc
+        temporary_path.unlink(missing_ok=True)
+        async with _worker_database_pool().acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO artifact_upload_parts (
+                    upload_id, part_number, file_size_bytes, checksum_sha256, storage_path, created_at
+                )
+                SELECT u.upload_id, $2, $3, $4, $5, NOW()
+                FROM artifact_uploads u
+                JOIN tasks t ON t.task_id = u.task_id
+                JOIN task_attempts a
+                  ON a.task_attempt_id = u.task_attempt_id
+                 AND a.task_id = u.task_id
+                WHERE u.upload_id = $1::uuid
+                  AND u.status = 'open'
+                  AND t.active_attempt_id = u.task_attempt_id
+                  AND t.lease_owner = $6
+                  AND t.lease_token = $7
+                  AND t.status IN ('claimed', 'running')
+                  AND t.lease_expires_at > NOW()
+                  AND a.worker_id = $6
+                  AND a.status = 'running'
+                ON CONFLICT (upload_id, part_number) DO NOTHING
+                RETURNING part_number
+                """,
+                upload_id,
+                part_number,
+                expected_part_size,
+                part_checksum,
+                str(part_path),
+                worker["worker_id"],
+                worker["lease_token"],
+            )
+            if not row:
+                part_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=409, detail="Multipart part already exists")
+            await conn.execute(
+                """
+                UPDATE artifact_uploads u
+                SET updated_at = NOW()
+                FROM tasks t
+                WHERE u.upload_id = $1::uuid AND u.status = 'open'
+                  AND t.task_id = u.task_id
+                  AND t.active_attempt_id = u.task_attempt_id
+                  AND t.lease_owner = $2
+                  AND t.lease_token = $3
+                  AND t.status IN ('claimed', 'running')
+                  AND t.lease_expires_at > NOW()
+                """,
+                upload_id,
+                worker["worker_id"],
+                worker["lease_token"],
+            )
+    except HTTPException:
+        temporary_path.unlink(missing_ok=True)
+        part_path.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        temporary_path.unlink(missing_ok=True)
+        part_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Multipart part upload failed") from exc
+    return {
+        "upload_id": upload_id,
+        "part_number": part_number,
+        "file_size_bytes": expected_part_size,
+        "checksum_sha256": part_checksum,
+        "uploaded": True,
+    }
+
+
+@app.delete("/api/worker/tasks/{task_id}/artifact-uploads/{upload_id}")
+async def abort_worker_artifact_multipart_endpoint(
+    task_id: str,
+    upload_id: str,
+    request: Request,
+):
+    """Abort and remove an open multipart session owned by this Attempt."""
+    worker = await _authenticate_worker_request(request)
+    try:
+        attempt_id = int(request.headers.get("X-Worker-Attempt-ID", ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid attempt ID") from exc
+    if attempt_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid attempt ID")
+    if not await _worker_artifact_upload_allowed(task_id, worker, attempt_id):
+        raise HTTPException(status_code=409, detail="Worker lease is no longer active")
+    upload = await _load_multipart_upload(task_id, upload_id, worker, attempt_id)
+    if not upload or upload["status"] != "open":
+        raise HTTPException(status_code=404, detail="Multipart upload not found")
+    staging_root = _worker_upload_staging_root()
+    staging_dir = _validate_upload_staging_path(staging_root, str(upload["staging_path"]), upload_id)
+    deleted = await _delete_multipart_upload(
+        upload_id,
+        task_id,
+        attempt_id,
+        worker["worker_id"],
+        worker["lease_token"],
+    )
+    if not deleted:
+        raise HTTPException(status_code=409, detail="Multipart upload lease is no longer active")
+    shutil.rmtree(staging_dir, ignore_errors=True)
+    return {"upload_id": upload_id, "status": "aborted"}
+
+
+@app.post("/api/worker/tasks/{task_id}/artifact-uploads/{upload_id}/complete")
+async def complete_worker_artifact_multipart_endpoint(
+    task_id: str,
+    upload_id: str,
+    request: Request,
+):
+    """Assemble, validate, and atomically publish a multipart Worker result."""
+    worker = await _authenticate_worker_request(request)
+    try:
+        attempt_id = int(request.headers.get("X-Worker-Attempt-ID", ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid attempt ID") from exc
+    if attempt_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid attempt ID")
+    if not await _worker_artifact_upload_allowed(task_id, worker, attempt_id):
+        raise HTTPException(status_code=409, detail="Worker lease is no longer active")
+    upload = await _load_multipart_upload(task_id, upload_id, worker, attempt_id)
+    if not upload:
+        raise HTTPException(status_code=404, detail="Multipart upload not found")
+    if upload["status"] == "completed":
+        return {"upload_id": upload_id, "artifact_id": upload["artifact_id"], "status": "completed"}
+    async with _worker_database_pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT part_number, file_size_bytes, checksum_sha256, storage_path
+            FROM artifact_upload_parts
+            WHERE upload_id = $1::uuid
+            ORDER BY part_number ASC
+            """,
+            upload_id,
+        )
+    part_count = int(upload["part_count"])
+    if len(rows) != part_count or [int(row["part_number"]) for row in rows] != list(range(part_count)):
+        raise HTTPException(status_code=409, detail="Multipart upload is missing parts")
+    staging_root = _worker_upload_staging_root()
+    staging_dir = _validate_upload_staging_path(staging_root, str(upload["staging_path"]), upload_id)
+    assembled = staging_dir / "assembled.result.zip"
+    moved_destination = False
+    try:
+        file_size, checksum = await asyncio.to_thread(
+            _assemble_multipart_archive,
+            staging_dir,
+            [dict(row) for row in rows],
+            assembled,
+            int(upload["expected_file_size_bytes"]),
+            str(upload["expected_checksum_sha256"]).strip(),
+        )
+        await asyncio.to_thread(_validate_result_archive, assembled)
+        destination = _worker_artifact_destination(task_id, str(upload["artifact_id"]))
+        if destination.exists() or destination.is_symlink():
+            raise HTTPException(status_code=409, detail="Artifact already exists")
+        assembled.replace(destination)
+        moved_destination = True
+        published = await _finalize_multipart_upload(
+            upload,
+            worker,
+            destination,
+            file_size,
+            checksum,
+            {"remote_worker_id": worker["worker_id"], "multipart": True},
+        )
+        if not published:
+            destination.unlink(missing_ok=True)
+            raise HTTPException(status_code=409, detail="Worker lease is no longer active")
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        return {
+            "upload_id": upload_id,
+            "artifact_id": upload["artifact_id"],
+            "file_size_bytes": file_size,
+            "checksum_sha256": checksum,
+            "status": "completed",
+        }
+    except HTTPException:
+        if moved_destination:
+            destination.unlink(missing_ok=True)
+        await _delete_multipart_upload(
+            upload_id, task_id, attempt_id, worker["worker_id"], worker["lease_token"]
+        )
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+    except Exception as exc:
+        if moved_destination:
+            destination.unlink(missing_ok=True)
+        await _delete_multipart_upload(
+            upload_id, task_id, attempt_id, worker["worker_id"], worker["lease_token"]
+        )
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail="Multipart artifact finalize failed") from exc
 
 
 @app.delete("/api/worker/tasks/{task_id}/artifacts/{artifact_id}")
