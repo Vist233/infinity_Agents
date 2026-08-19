@@ -86,10 +86,10 @@ curl -fsSI https://infinity.zhangyvjing.com/image-judge/
    401；Worker 认证响应带 `WWW-Authenticate: Bearer`。
 3. 首页可见 `Analysis`、`任务执行中心`、`Image Judge`，不再出现旧的
    `PaperAgent` 标签或旧的“发送给 PaperAgent”文案。
-4. 新 Worker 注册只提交 Namespace；持久 credential 原文不落盘到 D1，之后用
-   `connect`、`heartbeat`、`health`、`poll` 和 revoke 验证生命周期。同一
-   Namespace 下应能创建第二个不同 Worker ID；同一凭证的第二个活动实例必须
-   返回 `WORKER_ALREADY_CONNECTED`；旧版一次性 enrollment 仅做兼容回归。
+4. 新 Worker 注册只提交 Namespace；持久 credential 原文不落盘到 D1，之后由
+   中央 PostgreSQL/Redis Worker 协议验证生命周期。同一 Namespace 下应能创建
+   任意多个不同 Worker ID；同一凭证的第二个活动实例必须返回
+   `WORKER_ALREADY_CONNECTED`。旧 `/api/worker/v1/*` 只做 410 兼容回归。
 5. 超级用户公共 Worker 卡每次点击“创建”都能新增一个注册，没有两台上限；普通用户
    看不到公共 Worker ID、credential 或其他用户任务。用户 Worker 空闲时优先
    领取自己的任务，忙碌/离线时公共 Worker 才能回退领取。
@@ -98,24 +98,26 @@ curl -fsSI https://infinity.zhangyvjing.com/image-judge/
 
 ## macOS / Windows Worker 加入
 
-由已登录用户在任务中心的“添加 Worker”卡创建持久注册，然后在目标机器运行：
+目标机器运行统一 Docker Worker 镜像，不再运行 Cloudflare Edge 的旧
+HTTPS poll 客户端。超级管理员提供 PostgreSQL、Redis、中央 API、Namespace、
+Worker ID、持久 credential 和本地 Provider 配置；普通用户不能自行填写这些
+中心地址或全局密钥。
 
 ```sh
-cd cloudflare-worker
-export INFINITY_WORKER_CREDENTIAL='任务中心返回的持久凭证'
-node worker-client.mjs configure \
-  --control-url https://infinity.zhangyvjing.com \
-  --worker-id '<任务中心返回的 Worker ID>' \
-  --namespace '<任务中心填写的 Namespace>'
-node worker-client.mjs connect
-node worker-client.mjs health
-node worker-client.mjs poll
+export WORKER_IMAGE='infinity-agent-worker@sha256:<已核验 digest>'
+export WORKER_ID='<服务器签发的 Worker ID>'
+export WORKER_CREDENTIAL='<服务器签发的持久 credential>'
+export WORKER_DATABASE_URL='<管理员提供的 TLS PostgreSQL URL>'
+export WORKER_REDIS_URL='<管理员提供的 Redis URL>'
+export REDIS_NAMESPACE='<管理员提供的 Namespace>'
+docker compose -f docker-compose.cloudflare-workers.yml up -d worker-b
+docker compose -f docker-compose.cloudflare-workers.yml logs -f worker-b
 ```
 
-Windows 使用同一 Node 18+ 客户端和 HTTPS 控制面，把配置文件 ACL 限定给
-Worker 服务账号；不安装 Wrangler，不配置 Cloudflare account/API token。若
-运行本地 Docker Worker，则在本地配置文件中增加远程 `REDIS_URL`、Provider
-key、Base URL 和 Model，不把这些值上传到 Cloudflare。
+Windows 使用 Docker Desktop 和同一 Compose 文件，将这些变量放入只允许
+Worker 服务账号读取的本地 env 文件；不安装 Wrangler，不配置 Cloudflare
+account/API token，不运行旧的 Node HTTPS 控制客户端。Provider key、Base URL
+和 Model 只留在本机 Worker env 中。
 
 ## Redis 与后续 Relay
 

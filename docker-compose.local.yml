@@ -33,10 +33,7 @@ services:
       retries: 5
 
   worker-a:
-    image: infinity-agent-worker:latest
-    build:
-      context: .
-      dockerfile: backend/Dockerfile.worker
+    image: ${WORKER_IMAGE:?WORKER_IMAGE must be supplied; use a local tag or pinned GHCR digest}
     env_file: ${WORKER_ENV_FILE:-worker.env}
     environment:
       - WORKER_ID=worker-a
@@ -68,10 +65,7 @@ services:
     command: python -m backend.code_agent.worker.consumer worker-a
 
   worker-b:
-    image: infinity-agent-worker:latest
-    build:
-      context: .
-      dockerfile: backend/Dockerfile.worker
+    image: ${WORKER_IMAGE:?WORKER_IMAGE must be supplied; use a local tag or pinned GHCR digest}
     env_file: ${WORKER_ENV_FILE:-worker.env}
     environment:
       - WORKER_ID=worker-b
@@ -98,10 +92,7 @@ services:
     command: python -m backend.code_agent.worker.consumer worker-b
 
   outbox-publisher:
-    image: infinity-agent-worker:latest
-    build:
-      context: .
-      dockerfile: backend/Dockerfile.worker
+    image: ${WORKER_IMAGE:?WORKER_IMAGE must be supplied; use a local tag or pinned GHCR digest}
     environment:
       - APP_ENV=${APP_ENV:-production}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
@@ -117,10 +108,7 @@ services:
     command: python -m backend.code_agent.outbox
 
   reaper:
-    image: infinity-agent-worker:latest
-    build:
-      context: .
-      dockerfile: backend/Dockerfile.worker
+    image: ${WORKER_IMAGE:?WORKER_IMAGE must be supplied; use a local tag or pinned GHCR digest}
     environment:
       - APP_ENV=${APP_ENV:-production}
       - DATABASE_URL=${REAPER_DATABASE_URL:?REAPER_DATABASE_URL is required for the Reaper service}

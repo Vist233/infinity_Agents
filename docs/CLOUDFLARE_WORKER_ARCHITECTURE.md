@@ -264,13 +264,12 @@ Case 3 的线上结果约 30.7 MB，已经覆盖 Multipart 入口；Case 2 覆�
 |---|---|
 | cloudflare-worker/src/index.ts | Worker 路由组合、浏览器 API 和控制 API 入口 |
 | cloudflare-worker/src/tasks.ts | Task、TaskSpec、Artifact、Worker 注册和用户权限 |
-| cloudflare-worker/src/worker-control.ts | connect、heartbeat、poll、lease、Attempt、上传、finalize |
+| backend/code_agent/worker/consumer.py | PostgreSQL/Redis 领取、租约、执行和回传主循环 |
 | cloudflare-worker/src/env.ts | D1/R2/认证/Provider 绑定声明 |
-| backend/code_agent/worker/cloudflare_worker.py | 本地 Docker Worker 主循环 |
 | backend/code_agent/worker/claude_runtime.py | 直接启动 Claude Code CLI |
-| docker-compose.cloudflare-workers.yml | 本地 Worker B、输入/输出 named volume |
+| docker-compose.cloudflare-workers.yml | 单个统一 Docker Worker 的启动模板 |
 | scripts/run_local_cloudflare_workers.sh | SSH 隧道、Redis ACL、容器启动 |
-| cloudflare-worker/worker-client.mjs | Mac/Windows 的轻量连接、health、poll 客户端 |
+| cloudflare-worker/src/index.ts | Cloudflare 浏览器入口；旧 `/api/worker/v1/*` 只返回 410 |
 
 ## 11. 发布和回滚原则
 

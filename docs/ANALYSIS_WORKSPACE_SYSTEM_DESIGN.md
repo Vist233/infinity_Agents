@@ -812,6 +812,14 @@ Next.js + FastAPI/BFF :8008
 
 ## 10. Cloudflare 第二阶段边界
 
+> **当前路线（2026-08-20）**：本节下面保留的是原 Cloudflare/D1/HTTPS-only
+> 设计历史，不是当前 Worker 实施合同。当前合同由
+> `ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md` 和
+> `docs/UNIFIED_WORKER_IMPLEMENTATION_PLAN.md` 定义：PostgreSQL 是唯一 Task
+> 事实源，Redis 只做通知与 presence；所有 Worker 使用同一公共集群、服务器签发的
+> 持久 credential 和统一 Docker 镜像；不运行独立 Verifier；旧
+> `/api/worker/v1/*` 已关闭并返回 410。不要按下面旧图启动 Worker。
+
 Cloudflare 远程阶段只在本地 T0–T13 全部通过后开始。它把 Web、Analysis 编排和控制事实迁入 Cloudflare，但不把长时 Docker 科研计算搬进 Cloudflare Worker。
 
 ```text

@@ -1,10 +1,10 @@
 # Infinity Agents — Handoff / 交接文档
 
-> 最后更新：2026-08-11
-> 分支：`stepfun-agent-developing`
-> 当前验证：后端全量回归 `279 passed, 44 skipped`，前端 Vitest `25 passed`、Playwright E2E `8 passed`，ruff、lint/typecheck 通过，Next webpack production build 通过；隔离 PostgreSQL RLS 凭证绑定、信任分级、租约领取/完成、无上下文探针通过。
+> 最后更新：2026-08-20
+> 分支：`cloudflare-deploy`
+> 本文是交接摘要；阶段性测试和未完成事项以 `evidence/IMPLEMENT-20260820/` 与当前执行计划为准。
 
-> **当前权威实现**：Worker 使用 `backend/Dockerfile.direct-worker`，在 Worker 容器内直接启动 Claude Code；不挂载宿主机 Docker Socket，也不在容器内启动 Docker。网页任务接口使用登录会话与 CSRF，Worker 使用数据库保存摘要的持久凭证；凭证不是一次性 Token。远程 Worker 通过受凭证和租约保护的输入下载、产物上传接口与中心 API 交换文件。本文早期历史段落若与上述说明冲突，以当前代码、`worker.env.example` 和 `docs/WORKER_ONBOARDING.md` 为准。
+> **当前权威实现**：Worker 使用 `backend/Dockerfile.worker`，在 Worker 容器内直接启动 Claude Code；不挂载宿主机 Docker Socket，也不在容器内启动 Docker。网页任务接口使用登录会话与 CSRF，Worker 使用数据库保存摘要的持久凭证；凭证不是一次性 Token。远程 Worker 通过受凭证和租约保护的输入下载、产物上传接口与中心 API 交换文件。本文早期历史段落若与上述说明冲突，以当前代码、`worker.env.example` 和 `docs/WORKER_ONBOARDING.md` 为准。
 
 > **2026-08-20 目标架构更新**：当前代码尚未完成的统一 Worker 改造由
 > `docs/ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md` 和
@@ -61,10 +61,10 @@ FastAPI Backend (backend/app.py)
     |
     +--- Worker A / Worker B / ...（消费 Redis Stream，直接执行 Claude Code）
             |
-            | 本地输入可直接读取；远程输入通过控制面下载
+            | 输入通过当前 Worker credential/lease 保护的控制面下载
             |   claude --print <prompt>（Worker 容器内子进程）
             v
-        产物收集 → 本地或控制面上传 → Verifier 验证 → Artifact 原子发布 → SSE 推送
+        产物收集 → 单文件/分片上传 → checksum/manifest/fencing → Artifact 原子发布 → SSE 推送
 ```
 
 ### 数据流（任务创建 → 完成）
@@ -75,7 +75,7 @@ FastAPI Backend (backend/app.py)
     → OutboxEvent 写入 outbox_events 表（pending）
       → OutboxPublisher 轮询 pending → 写入 Redis Stream `stream:tasks:execute`
         → Worker 消费 → try_claim_task (CAS 原子认领) → Direct Claude Code 执行
-          → 本地收集或控制面上传 → Verifier 验证 → Artifact ZIP 原子发布
+          → 控制面上传 → checksum/manifest/fencing 检查 → Artifact ZIP 原子发布
             → Task 状态 → succeeded/failed/cancelled/timeout
               → task_events 表 + Redis Stream → SSE 推送给前端
 ```
@@ -102,19 +102,18 @@ infinity_Agents/
 │   ├── auth.py                         # OIDC: require_user / verify_websocket_token
 │   ├── db.py                           # 数据库初始化 + 全部 schema（21 张表）
 │   ├── db_rls.py                        # 请求/Worker/Outbox 上下文与连接池隔离
-│   ├── Dockerfile.direct-worker        # Direct Worker 镜像（代码烘焙进镜像）
+│   ├── Dockerfile.worker               # 统一 Worker 镜像（代码烘焙进镜像）
 │   ├── code_agent/
 │   │   ├── models.py                   # Task/TaskSpec 数据模型 + 状态机 TRANSITIONS
 │   │   ├── task_service.py             # 服务层（CRUD、CAS claim、requeue、Outbox、Artifact）
 │   │   ├── redis_client.py             # Redis 客户端（Stream/心跳/限流；断连时 fail-open）
 │   │   ├── outbox.py                   # OutboxPublisher（lifespan 自动启动轮询）
 │   │   ├── retry_policy.py             # 失败分类 + 指数退避(full jitter)
-│   │   ├── verifier.py                 # 多级验证器（file/format/content/... + 领域规则）
 │   │   ├── analysis_agent.py           # TaskSpec 生成（LLM，无 key 时降级 mock）
 │   │   └── worker/
 │   │       ├── consumer.py             # Worker 主循环 + 失败分类路由
 │   │       ├── reaper.py               # 独立 Lease Reaper（专用数据库角色）
-│   │       ├── direct_runtime.py       # Claude Code 直接运行器（取消 + 超时）
+│   │       ├── claude_runtime.py       # Claude Code 直接运行器（取消 + 超时）
 │   │       └── executor.py             # 执行编排（产物写入 ARTIFACT_STORAGE_ROOT）
 ├── frontend/
 │   ├── app/
@@ -262,7 +261,7 @@ run_worker(worker_id, db_pool, redis_client, docker_image)
         ├── execute_task (executor.py) + 后台取消检测协程
         │     ├── Worker 私有 scratch 目录接收输入并生成结果
         │     ├── 通过控制面下载输入并上传结果归档
-        │     └── direct_runtime 启动 Claude Code，默认任务超时 12h
+        │     └── claude_runtime 启动 Claude Code，默认任务超时 12h
         ├── 失败 → _fail_or_requeue（按 failure_code 分类）
         └── ack_message (XACK)
 

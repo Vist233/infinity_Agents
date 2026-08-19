@@ -39,6 +39,21 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Validate arm64 build definition without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile.worker
+          platforms: linux/arm64
+          push: false
+          outputs: type=oci,dest=/tmp/infinity-agent-worker-arm64.oci.tar
+          build-args: |
+            CLAUDE_CODE_VERSION=${{ env.CLAUDE_CODE_VERSION }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          sbom: true
+          provenance: mode=max
+
       - name: Smoke test runtime boundary
         shell: bash
         run: |

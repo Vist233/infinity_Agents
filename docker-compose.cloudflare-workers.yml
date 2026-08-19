@@ -1,14 +1,12 @@
-# One local persistent Worker connected to the central PostgreSQL/Redis
-# cluster. The image can be built locally or pulled from GHCR by setting
-# WORKER_IMAGE=ghcr.io/<org-or-user>/infinity-agent-worker:v1.
+# One persistent Worker connected to the central PostgreSQL/Redis cluster.
+# This deployment Compose file never builds from source. Supply either a local
+# smoke-test tag or an immutable GHCR reference, for example:
+# WORKER_IMAGE=ghcr.io/<org-or-user>/infinity-agent-worker@sha256:<digest>
 # This file intentionally does not start PostgreSQL, Redis, or a verifier;
 # those are administrator-managed central services.
 
 x-cloudflare-worker: &cloudflare-worker
-  image: ${WORKER_IMAGE:-infinity-agent-worker:cloudflare}
-  build:
-    context: .
-    dockerfile: backend/Dockerfile.worker
+  image: ${WORKER_IMAGE:?WORKER_IMAGE must be supplied as a local tag or pinned GHCR digest}
   restart: unless-stopped
   command: ["python", "-m", "backend.code_agent.worker.consumer", "${WORKER_ID:-worker-default}"]
 

@@ -1,249 +1,91 @@
 # Infinity Agents Edge
 
-Cloudflare Worker edge for the Infinity Agents Analysis/Coding web application
-and the isolated ImageJudge API. It is an OIDC relying party for
-`https://auth.zhangyvjing.com`,
-keeps browser sessions in the Infinity D1 database, and proxies model/tool
-calls without exposing upstream API keys to clients.
+This directory contains the Cloudflare browser/authentication edge for Infinity
+Agents and the isolated ImageJudge API. It is not the execution runtime. The
+production Worker is the image built from `backend/Dockerfile.worker` and is
+started by Compose with administrator-provided PostgreSQL, Redis, Worker ID,
+credential, Namespace, and local Provider settings.
 
-## Endpoints
+## Edge endpoints
 
 - `GET /health`
 - `GET /auth/login`
 - `GET /auth/callback`
 - `POST /auth/logout`
 - `GET /api/me` (authenticated)
-- `GET /api/sessions` (authenticated)
-- `POST /api/sessions` (authenticated)
-- `GET /api/sessions/:id/messages` (authenticated)
-- `PATCH /api/sessions/:id/title` (authenticated)
-- `DELETE /api/sessions/:id` (authenticated)
-- `POST /api/chat` (authenticated SSE stream)
+- `GET/POST /api/sessions` and session message/title/delete routes
+- `POST /api/chat` (authenticated SSE stream used by the Analysis workspace)
+- `/image-judge/*` desktop authorization, token, logout, health, and evaluate
+  routes
 
-Analysis/Coding task control uses the same authenticated browser session:
+The edge also contains the current authenticated browser task and persistent
+Worker-registration handlers in `src/tasks.ts`. Those handlers are a migration
+boundary while the central PostgreSQL API proxy is completed; they must not be
+read as a second production Task fact source. PostgreSQL is the target and
+eventual sole source of truth for Task, Attempt, Worker, Event, and Artifact.
 
-- `GET /api/projects/default`
-- `POST /api/method-sources/upload`
-- `POST /api/dataset-snapshots/upload`
-- `POST /api/task-specs` and `POST /api/task-specs/:id/freeze`
-- `POST /api/dataset-snapshots`
-- `POST/GET /api/tasks`, `POST /api/tasks/direct`, `GET /api/tasks/:id` (the
-  generic `POST /api/tasks` requires an Agent confirmation; the authenticated
-  Task Center uses the dedicated direct route)
-- `GET/POST /api/worker-enrollments` and `POST /api/worker-enrollments/:id/revoke`
-- `GET /api/admin/public-worker-pool` and `POST /api/admin/public-workers` (superuser only)
-- `GET /api/admin/public-workers/:id/credential`, `POST .../:id/rotate`, and
-  `POST .../:id/revoke` (superuser only)
-- `POST /api/tasks/:id/cancel`
-- `GET /api/tasks/:id/events` and `/events/stream`
-- `GET /api/tasks/:id/artifacts` and `GET /api/artifacts/:id`
+The Task Center direct route uses `agent_confirmation=false` and creates a task
+without a chat confirmation row. A task is still named from its execution
+document, and its only input kinds are `Method` and `Dataset` (25 MB each).
 
-Task creation has two equivalent entry points that use the same TaskSpec and
-Task API:
+## Retired Worker protocol
 
-1. The Analysis conversation can call `request_task_creation`; its inline card
-   keeps the Agent confirmation ID and resumes the conversation after submit.
-2. The Task Center has a direct creation card. It sends the same uploads and
-   TaskSpec/Task function path to `/api/tasks/direct` with
-   `agent_confirmation=false`, a fresh idempotency key, and no chat
-   confirmation row. It does not call the Agent again. The generic task route
-   does not accept a caller-supplied Task Center source flag.
-
-## Worker Control API
-
-The Task Center's collapsed “Add Worker” card creates a persistent user-owned
-machine registration through the authenticated `POST /api/worker-enrollments`
-endpoint. Only `namespace` is supplied by the browser. Namespace is reusable,
-so one user can create multiple Worker IDs in the same scope. The server
-assigns the trust level from the verified Zhang Auth role: only a superuser
-receives `owner_trusted`; ordinary users and students receive
-`institution_trusted`. A user-owned Worker can only poll tasks created by its
-owner.
-
-The superuser-only Public Worker panel manages a platform-owned public pool.
-The public pool uses the fixed `infinity-public` Namespace. Each click in the
-superuser panel creates another independent persistent registration with a
-server-generated Worker ID and its own recoverable credential; there is no
-two-Worker cap. Public Workers are the fallback for all users' queued tasks when
-the task owner's own Worker is busy or offline; they are not visible to ordinary
-users.
-
-Both registration types use a non-expiring opaque credential:
+The former D1-only HTTPS Worker control implementation and its Node bootstrap
+client were removed. The edge deliberately returns:
 
 ```text
-POST /api/worker-enrollments
-{ "namespace": "infinity" }
-→ { "worker_id": "...", "namespace": "infinity", "worker_credential": "...",
-    "credential_expires_at": null, "persistent": true, "one_time": false }
+/api/worker/v1/* → 410 LEGACY_WORKER_PROTOCOL_DISABLED
 ```
 
-The raw credential is never stored as plaintext in D1 or returned by a normal
-list endpoint. `worker_registrations` stores its SHA-256 digest plus an AES-GCM
-encrypted copy; the encryption key is the `WORKER_CREDENTIAL_ENCRYPTION_KEY`
-Cloudflare Secret and never enters D1, the browser bundle, or logs. The owner
-can explicitly retrieve or rotate a user credential, while only a verified
-superuser can retrieve or rotate a public credential. Credentials must not be
-committed or placed in a browser bundle.
+The 410 boundary is covered by Cloudflare tests so an old Worker cannot silently
+claim a new task. The repository no longer contains a Cloudflare poll client,
+verifier container, Docker socket/Docker-in-Docker path, or one-time enrollment
+client.
 
-Every task uses the `owner_then_public` dispatch policy: an online idle Worker
-owned by the task creator gets the first offer; a public Worker can receive the
-task only when all owner Workers are busy/offline. The D1 offer and fencing
-checks remain authoritative under races.
+## Unified Docker Worker
 
-Before polling, a persistent Worker performs a reverse handshake. D1 keeps one
-short lease per `worker_id + namespace`; a second active instance using the same
-credential receives `WORKER_ALREADY_CONNECTED`. The session expires without
-revoking the durable credential when a machine stops. The control flow is:
+The long-lived Worker loop is:
 
 ```text
-POST /api/worker/v1/connect
-POST /api/worker/v1/heartbeat
-GET  /api/worker/v1/health
-POST /api/worker/v1/poll
-POST /api/worker/v1/offers/:offer_id/accept
-POST /api/worker/v1/attempts/:attempt_id/heartbeat
-GET  /api/worker/v1/attempts/:attempt_id/resources/:resource_id
-POST /api/worker/v1/attempts/:attempt_id/artifacts
-POST /api/worker/v1/attempts/:attempt_id/artifacts/multipart/init
-PUT  /api/worker/v1/attempts/:attempt_id/artifacts/:artifact_id/parts/:part_number
-POST /api/worker/v1/attempts/:attempt_id/artifacts/:artifact_id/multipart/complete
-POST /api/worker/v1/attempts/:attempt_id/finalize
+PostgreSQL/Redis hint
+→ claim with lease + fencing
+→ download Method + Dataset
+→ fixed Goal-Driven Claude Code runtime
+→ upload Artifact (single request or multipart)
+→ checksum/manifest/finalize in PostgreSQL
+→ clean task directory
+→ wait for the next task
 ```
 
-Every Attempt is bound to `worker_id + task_id + fencing_epoch`; expired or
-revoked Workers cannot renew a lease or finalize an Artifact. Inputs are read
-through exact Attempt-scoped URLs. Worker finalize checks object existence,
-size, checksum and manifest binding, then atomically marks the Task, Attempt and
-Artifact succeeded/published. There is no verifier container or
-`verification_pending` runtime state. The Worker receives no D1 or R2 parent
-credential. Redis and provider settings are local Worker settings; only
-non-secret capability flags and the provider model name cross the handshake.
-
-### macOS / Windows bootstrap client
-
-`worker-client.mjs` is a dependency-free Node 18+ HTTPS client for both macOS
-and Windows. Configure a persistent registration without putting the raw
-credential in shell history:
+Use the image-only Compose template from the repository root. It never builds
+source during deployment and requires a local tag or immutable image digest:
 
 ```sh
-export INFINITY_WORKER_CREDENTIAL='credential-from-task-center'
-node worker-client.mjs configure \
-  --control-url https://infinity.zhangyvjing.com \
-  --worker-id worker-from-task-center \
-  --namespace infinity
-node worker-client.mjs connect
-node worker-client.mjs health
-node worker-client.mjs poll
+export WORKER_IMAGE='infinity-agent-worker@sha256:<verified-digest>'
+export WORKER_ID='<server-issued-worker-id>'
+export WORKER_CREDENTIAL='<server-issued-persistent-credential>'
+export WORKER_DATABASE_URL='<administrator-provided PostgreSQL URL>'
+export WORKER_REDIS_URL='<administrator-provided Redis URL>'
+export REDIS_NAMESPACE='<administrator-provided namespace>'
+docker compose -f docker-compose.cloudflare-workers.yml up -d worker-b
+docker compose -f docker-compose.cloudflare-workers.yml logs -f worker-b
 ```
 
-On Windows, set `INFINITY_WORKER_CREDENTIAL` in the Worker service environment and
-apply a Windows ACL granting only that service account access to the config
-file. The control endpoint is HTTPS-only. The client config can also hold local
-`REDIS_URL`, `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`,
-`ANTHROPIC_BASE_URL`, and `ANTHROPIC_MODEL` values; only boolean capability
-signals and the non-secret model name are sent during the handshake. The older
-`enroll` command and `/api/worker/v1/enroll` endpoint remain only as a legacy
-one-time bootstrap path while pre-existing clients are migrated.
+Provider keys, `ANTHROPIC_BASE_URL`, and `ANTHROPIC_MODEL` stay in the local
+Worker environment. They are not sent to the Cloudflare bundle. The image does
+not contain Docker CLI, Docker daemon, or `/var/run/docker.sock`; Claude Code
+runs directly inside the Worker container as the dedicated non-root runtime
+user.
 
-### Local Docker execution
-
-`docker-compose.cloudflare-workers.yml` starts one new local Worker B without
-PostgreSQL or a second Redis container. It uses one local env file with
-`CONTROL_BASE_URL`, one server-created Worker ID and credential, a unique
-`WORKER_INSTANCE_ID`, the existing remote `REDIS_URL`, and the provider
-variables supplied only from that local env file. The Mac SSH bootstrap script
-can overlay the tunneled Redis URL without rewriting the file. Additional public Workers can
-use the same image and compose pattern with their own credentials. The Worker downloads exact
-Attempt resources over HTTPS, invokes the Claude Code CLI directly inside that
-same container with Goal-Driven instructions, and uploads results to R2
-quarantine. It never mounts the host Docker socket and never starts Docker
-inside Docker. None of the Redis or provider secrets are sent to Cloudflare.
-The Worker has isolated input/output named volumes, clears task-local files
-after each Attempt, and remains online for the next task. Results up to 20 MB
-use the single upload endpoint; larger results use 8 MB R2 Multipart parts and
-are checked for contiguous parts, total size, and object size before finalize.
-
-ImageJudge uses the same Worker under an isolated `/image-judge/*` namespace:
-
-- `GET /image-judge/healthz`
-- `GET /image-judge/desktop/authorize`
-- `GET /image-judge/auth/callback`
-- `POST /image-judge/desktop/token`
-- `POST /image-judge/desktop/refresh`
-- `POST /image-judge/desktop/logout`
-- `POST /image-judge/api/v1/evaluate`
-
-## Deployment
-
-Run these commands from the `cloudflare-deploy` branch. The frontend build is
-required first because Wrangler uploads `../frontend/out` as the Worker asset
-directory. `--remote` is intentional: production D1 migrations must be
-applied to the configured Cloudflare databases, never to a local preview.
+## Checks
 
 ```sh
-cd frontend
-npm ci
-CLOUDFLARE_EXPORT=1 npm run build
-
-cd ../cloudflare-worker
 npm ci
 npm run check
 npm test
-npx wrangler d1 migrations apply infinity-agents-db --remote
-npx wrangler d1 migrations apply image-judge-db --remote
-npx wrangler deploy
 ```
 
-Before the first production deploy, configure secrets interactively. Do not
-put their values in `wrangler.jsonc`, `.env` files, the frontend bundle, or
-the Git repository:
-
-```sh
-npx wrangler secret put STEPFUN_API_KEY
-npx wrangler secret put ZHANG_AUTH_CLIENT_SECRET
-npx wrangler secret put WORKER_CREDENTIAL_ENCRYPTION_KEY
-npx wrangler secret put IMAGE_JUDGE_ZHANG_AUTH_CLIENT_SECRET
-npx wrangler secret put IMAGE_JUDGE_TOKEN_SIGNING_SECRET
-npx wrangler secret put IMAGE_JUDGE_DASHSCOPE_API_KEY
-```
-
-The execution container is external to the Cloudflare Edge runtime; Cloudflare
-provides the HTTPS control plane, D1 and R2, while the container executes
-Claude Code. Redis on `zhangbot` is
-intentionally not a Worker binding: the
-deployed Worker uses D1/R2 only, while the local execution Workers use the
-existing Redis service.
-
-After deploy, run the read-only smoke checks below and record the version ID
-shown by Wrangler:
-
-```sh
-curl -fsS https://infinity.zhangyvjing.com/health
-curl -fsS https://infinity.zhangyvjing.com/image-judge/healthz
-curl -fsSI https://infinity.zhangyvjing.com/
-curl -fsSI https://infinity.zhangyvjing.com/code-agent/
-curl -fsSI https://infinity.zhangyvjing.com/code-agent/tasks/
-curl -fsSI https://infinity.zhangyvjing.com/image-judge/
-```
-
-The macOS/Windows client joins after the authenticated Task Center has created
-the persistent registration. Do not commit the returned credential. Verify
-the registration, `health`, `poll`, and revoke behavior; multiple Worker IDs
-may share one Namespace.
-
-The deployed Worker needs these Analysis/Coding secrets:
-
-- `STEPFUN_API_KEY`: StepFun Coding Plan key.
-- `ZHANG_AUTH_CLIENT_SECRET`: confidential secret for client `infinity-agents`.
-
-The callback is fixed to `https://infinity.zhangyvjing.com/auth/callback`. The
-Worker stores the provider access/refresh tokens server-side and validates the
-access token against the configured Zhang Auth JWKS before every protected API
-request. Browser cookies contain only an opaque session identifier.
-
-ImageJudge has separate `IMAGE_JUDGE_DB`, `IMAGE_JUDGE_KV`,
-`IMAGE_JUDGE_USER_LOCK`, migrations, and `IMAGE_JUDGE_*` secrets. Its Zhang Auth
-callback is `https://infinity.zhangyvjing.com/image-judge/auth/callback`. The
-platform model secret is intentionally unset while local BYOK validation is in
-progress; the endpoint returns `PLATFORM_MODEL_NOT_CONFIGURED` instead of
-retrying.
+The old `/api/worker/v1/*` tests are negative compatibility tests only. They do
+not prove the central PostgreSQL/Redis Worker path; that path requires the
+central API, real PostgreSQL/Redis, a server-issued credential, and the real
+Case 2/Case 3 acceptance run.

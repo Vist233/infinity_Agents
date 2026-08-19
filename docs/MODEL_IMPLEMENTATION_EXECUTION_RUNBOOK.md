@@ -371,12 +371,13 @@ SR7 G0–G9 全量生产同构验收
 
 - Cloudflare 只由平台管理员部署一次；
 - 学生/学校不部署 Cloudflare，也没有 Cloudflare 账户或 Token；
-- 学生 Docker 只配置 `WORKER_CONTROL_BASE_URL`、`WORKER_GATEWAY_BASE_URL` 和一次性 enrollment token；
-- 第二个 Gateway origin 统一承载 Attempt-scoped Resource 下载、Claude Code 模型转发和 Artifact 上传；学生不再配置 R2/Provider 第三地址；
+- 所有 Docker Worker 都使用管理员签发的持久 Worker ID/credential，并配置管理员提供的 `WORKER_CONTROL_PLANE_URL`、`WORKER_DATABASE_URL`、`WORKER_REDIS_URL` 和 `REDIS_NAMESPACE`；不再使用一次性 enrollment token 或旧 Node HTTPS poll 客户端；
+- 中央 PostgreSQL 是 Task、Attempt、Worker、Event、Artifact 的唯一事实源；Redis 只保存通知、presence 和事件 hint；Cloudflare D1 不参与新任务事实写入；
+- Worker 直接下载 Method + Dataset，运行固定 Goal-Driven Claude Code，再以单文件或分片方式上传 Artifact；上传、SHA-256、manifest、lease/fencing 和 finalize 由中央 API/数据库检查；
 - 10 ms 只约束 Cloudflare Worker 的 CPU，不约束 2C2G Redis/Relay 或学生 Docker；
 - Redis 只绑定 loopback/Unix socket，不公开 6379；
-- D1 是事实库，Redis 只是 opaque hint；
-- 不可信学生节点只接收 public/sanitized 数据；
+- 不区分可信/不可信 Worker；权限由管理员签发的最小数据库、Redis 和 Provider 凭证控制；
+- 不运行独立 Verifier；Worker 内置的确定性输出/归档安全检查不是独立服务；
 - 全部 G0–G9 同一版本通过后一次切换生产，否则不部署。
 
 真正执行 `wrangler deploy`、改 DNS/route、创建生产 Secret、迁移真实数据或开放学生 enrollment 前，主模型必须停下请求明确授权。
@@ -387,7 +388,7 @@ SR7 G0–G9 全量生产同构验收
 
 从强到弱：
 
-1. 真实故障/越权负测与独立 Verifier；
+1. 真实故障/越权负测与数据库/Artifact 不变量；
 2. 真实 PostgreSQL/Redis/Docker/OIDC/浏览器/Cloudflare 集成；
 3. 单元、类型、构建、schema 检查；
 4. diff 与静态审查；
