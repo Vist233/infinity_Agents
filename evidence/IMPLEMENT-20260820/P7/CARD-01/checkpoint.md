@@ -1,7 +1,7 @@
 # CHECKPOINT IMPLEMENT-20260820 / P7 / CARD-01
 
 - baseline commit: 391b094
-- current commit: pending local commit
+- current commit: 99eddf6
 - main Agent: primary Codex implementation Agent
 - sub Agent review: not run; this card is awaiting the central-auth authorization checkpoint
 - completed outcome: real browser Task ID, single direct Task Center request contract, and retired D1-only Worker protocol boundary
