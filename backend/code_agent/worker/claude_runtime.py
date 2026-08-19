@@ -16,6 +16,11 @@ from typing import Any, AsyncIterator, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+_FAILURE_MARKERS = (
+    ("BLOCKED_INPUT", "blocked_input"),
+    ("DEPENDENCY_FAILURE", "dependency_failure"),
+)
+
 
 def _runtime_identity() -> tuple[int, int, str, str]:
     """Return the non-root Claude identity used by Dockerfile.worker."""
@@ -141,15 +146,42 @@ FAILURE RULES
 - Maximum retries per command: 3.
 - Do not repeat the same command without changing a relevant condition.
 - Do not replace the requested method with a simpler method unless TaskSpec explicitly permits fallback.
-- If a scientific input is missing, stop and write BLOCKED_INPUT.
-- If a dependency cannot be installed, write DEPENDENCY_FAILURE.
+- If a scientific input is missing, write exactly one line to
+  {logs_dir / 'BLOCKED_INPUT'} and stop.
+- If a dependency cannot be installed, write exactly one line to
+  {logs_dir / 'DEPENDENCY_FAILURE'} and stop.
 - If memory is insufficient, apply only listed memory fallbacks.
 
 COMPLETION
 Your completion message is not proof of success.
 The execution service decides whether the task can be finalized and publishes only the
-uploaded result artifact. Save every deliverable under {output_dir}/.
+uploaded result artifact. Save every deliverable under {output_dir}/. A completion
+message or an exit code of zero cannot override either failure marker.
 """
+
+
+def _failure_marker(logs_dir: Path) -> Optional[tuple[str, str]]:
+    """Return the first bounded, platform-defined failure marker."""
+    for marker_name, failure_code in _FAILURE_MARKERS:
+        marker = logs_dir / marker_name
+        try:
+            if not marker.is_file():
+                continue
+            with marker.open("rb") as stream:
+                payload = stream.read(8193)
+            if len(payload) > 8192:
+                return marker_name, "invalid_failure_marker"
+            try:
+                text = payload.decode("utf-8")
+            except UnicodeDecodeError:
+                return marker_name, "invalid_failure_marker"
+            lines = text.splitlines()
+            if len(lines) != 1 or not lines[0].strip() or "\x00" in text:
+                return marker_name, "invalid_failure_marker"
+            return marker_name, failure_code
+        except OSError:
+            continue
+    return None
 
 
 async def run_claude_task(
@@ -255,10 +287,18 @@ async def run_claude_task(
             group=claude_gid,
         )
     except FileNotFoundError:
-        yield {"type": "error", "message": "Claude Code CLI not found in the Worker image"}
+        yield {
+            "type": "error",
+            "message": "Claude Code CLI not found in the Worker image",
+            "failure_code": "runtime_unavailable",
+        }
         return
     except Exception as exc:
-        yield {"type": "error", "message": f"Failed to start Claude Code: {exc}"}
+        yield {
+            "type": "error",
+            "message": f"Failed to start Claude Code: {exc}",
+            "failure_code": "runtime_start_failed",
+        }
         return
 
     output = ""
@@ -283,7 +323,11 @@ async def run_claude_task(
                         await proc.wait()
                     except Exception:
                         pass
-                yield {"type": "cancelled", "message": "Task cancelled by user"}
+                yield {
+                    "type": "cancelled",
+                    "message": "Task cancelled by user",
+                    "failure_code": "cancelled",
+                }
                 return
 
             if deadline is not None and asyncio.get_running_loop().time() >= deadline:
@@ -300,7 +344,11 @@ async def run_claude_task(
                         await proc.wait()
                     except Exception:
                         pass
-                yield {"type": "error", "message": "Claude Code task execution timed out"}
+                yield {
+                    "type": "error",
+                    "message": "Claude Code task execution timed out",
+                    "failure_code": "timeout",
+                }
                 return
 
             try:
@@ -319,10 +367,10 @@ async def run_claude_task(
             await proc.wait()
         except Exception:
             pass
-        yield {"type": "error", "message": "Task cancelled"}
+        yield {"type": "error", "message": "Task cancelled", "failure_code": "cancelled"}
         return
     except Exception as exc:
-        yield {"type": "error", "message": str(exc)}
+        yield {"type": "error", "message": str(exc), "failure_code": "runtime_error"}
         return
     finally:
         if proc.returncode is None:
@@ -332,7 +380,21 @@ async def run_claude_task(
             except Exception:
                 pass
 
-    if proc.returncode == 0:
+    marker = _failure_marker(logs_dir)
+    if marker:
+        marker_name, failure_code = marker
+        yield {
+            "type": "error",
+            "message": f"Claude Code reported {marker_name}",
+            "failure_code": failure_code,
+            "output": output,
+        }
+    elif proc.returncode == 0:
         yield {"type": "done", "output": output}
     else:
-        yield {"type": "error", "message": f"Claude Code exited with code {proc.returncode}", "output": output}
+        yield {
+            "type": "error",
+            "message": f"Claude Code exited with code {proc.returncode}",
+            "failure_code": "execution_error",
+            "output": output,
+        }

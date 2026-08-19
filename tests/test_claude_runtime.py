@@ -74,3 +74,78 @@ def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch)
     assert os.stat(input_dir).st_mode & 0o222 == 0
     assert os.stat(input_dir / "method.md").st_mode & 0o222 == 0
     assert events[-1]["type"] == "done"
+
+
+def test_goal_driven_failure_marker_overrides_zero_exit(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    logs_dir = input_dir.parent / "logs"
+    logs_dir.mkdir(parents=True)
+    (logs_dir / "BLOCKED_INPUT").write_text("dataset is missing\n", encoding="utf-8")
+    input_dir.mkdir(parents=True, exist_ok=True)
+    process = AsyncMock()
+    process.stdout.readline = AsyncMock(side_effect=[b"agent stopped\n", b""])
+    process.wait = AsyncMock(return_value=None)
+    process.returncode = 0
+
+    async def run():
+        return [
+            event async for event in run_claude_task(
+                "task-marker",
+                "spec-marker",
+                "dataset-marker",
+                case_dir=str(input_dir),
+                output_dir=str(output_dir),
+                attempt_gateway_url="https://gateway.example/attempt/task-marker",
+                attempt_gateway_token="attempt-token",
+                attempt_model_id="test-model",
+            )
+        ]
+
+    with patch(
+        "backend.code_agent.worker.claude_runtime.asyncio.create_subprocess_exec",
+        AsyncMock(return_value=process),
+    ):
+        events = asyncio.run(run())
+
+    assert events[-1]["type"] == "error"
+    assert events[-1]["failure_code"] == "blocked_input"
+    assert "dataset is missing" not in events[-1]["message"]
+
+
+def test_runtime_start_failure_has_explicit_failure_code(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir(parents=True)
+
+    async def run():
+        return [
+            event async for event in run_claude_task(
+                "task-start-failure",
+                "spec-start-failure",
+                "dataset-start-failure",
+                case_dir=str(input_dir),
+                output_dir=str(tmp_path / "output"),
+                attempt_gateway_url="https://gateway.example/attempt/task-start-failure",
+                attempt_gateway_token="attempt-token",
+                attempt_model_id="test-model",
+            )
+        ]
+
+    with patch(
+        "backend.code_agent.worker.claude_runtime.asyncio.create_subprocess_exec",
+        AsyncMock(side_effect=FileNotFoundError),
+    ):
+        events = asyncio.run(run())
+
+    assert events[-1]["type"] == "error"
+    assert events[-1]["failure_code"] == "runtime_unavailable"
+
+
+def test_oversized_failure_marker_is_rejected_without_unbounded_read(tmp_path):
+    from backend.code_agent.worker.claude_runtime import _failure_marker
+
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "DEPENDENCY_FAILURE").write_bytes(b"x" * 8193)
+
+    assert _failure_marker(logs_dir) == ("DEPENDENCY_FAILURE", "invalid_failure_marker")
