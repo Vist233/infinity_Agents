@@ -61,16 +61,6 @@ def normalize_trust_level(value: str | None) -> str:
 
 
 @dataclass(frozen=True)
-class EnrollmentToken:
-    worker_id: str
-    namespace: str
-    token: str
-    expires_at: str
-    owner_user_id: str | None = None
-    trust_level: str = TRUST_GENERAL
-
-
-@dataclass(frozen=True)
 class WorkerCredential:
     worker_id: str
     namespace: str
@@ -267,49 +257,6 @@ async def _persist_worker_enrollment(
     )
 
 
-async def issue_enrollment_token(
-    pool,
-    worker_id: str,
-    namespace: str,
-    *,
-    ttl_seconds: int = 600,
-    owner_user_id: str | None = None,
-    trust_level: str = TRUST_GENERAL,
-) -> EnrollmentToken:
-    """Issue an optional one-time bootstrap token with fixed server policy."""
-    worker_id = _safe_worker_id(worker_id)
-    namespace = _safe_namespace(namespace)
-    owner_user_id = _safe_owner_user_id(owner_user_id)
-    trust_level = normalize_trust_level(trust_level)
-    if ttl_seconds < 30 or ttl_seconds > 3600:
-        raise WorkerEnrollmentError("enrollment token TTL is outside the local safety range")
-    raw = secrets.token_urlsafe(32)
-    expires = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
-    async with pool.acquire() as conn:
-        if _rls_is_expected():
-            # The compatibility bootstrap token is always general trust on an
-            # RLS database.  Full trust is issued only through the persistent
-            # credential path and the dedicated trust-issuer role.
-            await conn.execute(
-                """
-                INSERT INTO worker_enrollment_tokens (
-                    token_hash, worker_id, namespace, owner_user_id, expires_at
-                ) VALUES ($1, $2, $3, $4, $5)
-                """,
-                credential_digest(raw), worker_id, namespace, owner_user_id, expires,
-            )
-        else:
-            await conn.execute(
-                """
-                INSERT INTO worker_enrollment_tokens (
-                    token_hash, worker_id, namespace, owner_user_id, trust_level, expires_at
-                ) VALUES ($1, $2, $3, $4, $5, $6)
-                """,
-                credential_digest(raw), worker_id, namespace, owner_user_id, trust_level, expires,
-            )
-    return EnrollmentToken(worker_id, namespace, raw, expires.isoformat(), owner_user_id, trust_level)
-
-
 async def issue_worker_credential(
     pool,
     worker_id: str,
@@ -400,59 +347,6 @@ async def issue_worker_credential(
                 execution_pool=execution_pool,
             )
     return WorkerCredential(worker_id, namespace, credential, owner_user_id, trust_level, execution_pool)
-
-
-async def complete_enrollment(pool, worker_id: str, namespace: str, token: str) -> str:
-    """Consume a one-time token and return a persistent per-Worker credential."""
-    worker_id = _safe_worker_id(worker_id)
-    namespace = _safe_namespace(namespace)
-    token_hash = credential_digest(token)
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """
-                SELECT token_hash, worker_id, namespace, owner_user_id, trust_level,
-                       expires_at, used_at
-                FROM worker_enrollment_tokens
-                WHERE token_hash = $1
-                FOR UPDATE
-                """,
-                token_hash,
-            )
-            if not row or row["worker_id"] != worker_id or row["namespace"] != namespace:
-                raise WorkerEnrollmentError("enrollment token is invalid")
-            if row["used_at"] is not None or row["expires_at"] <= datetime.now(timezone.utc):
-                raise WorkerEnrollmentError("enrollment token is expired or already used")
-            owner_user_id = _safe_owner_user_id(_row_value(row, "owner_user_id"))
-            trust_level = normalize_trust_level(_row_value(row, "trust_level", TRUST_GENERAL))
-            await _lock_owner_namespace(conn, owner_user_id)
-            existing = await conn.fetchrow(
-                """
-                SELECT worker_id, owner_user_id, status, revoked_at FROM worker_enrollments
-                WHERE worker_id = $1
-                FOR UPDATE
-                """,
-                worker_id,
-            )
-            if existing and existing["status"] == "active" and existing["revoked_at"] is None:
-                raise DuplicateWorkerError("worker ID already has an active enrollment")
-            existing_owner = _safe_owner_user_id(_row_value(existing, "owner_user_id")) if existing else None
-            if existing_owner and owner_user_id and existing_owner != owner_user_id:
-                raise WorkerOwnershipError("worker ID belongs to another account")
-            credential = secrets.token_urlsafe(32)
-            await conn.execute(
-                "UPDATE worker_enrollment_tokens SET used_at = NOW() WHERE token_hash = $1",
-                token_hash,
-            )
-            await _persist_worker_enrollment(
-                conn,
-                worker_id=worker_id,
-                namespace=namespace,
-                credential=credential,
-                owner_user_id=owner_user_id,
-                trust_level=trust_level,
-            )
-            return credential
 
 
 async def authenticate_worker_identity(
