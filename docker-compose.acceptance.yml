@@ -53,7 +53,7 @@ services:
       - ">${ACCEPTANCE_WORKER_A_REDIS_PASSWORD:-local-worker-a-redis-secret}"
       - "~${ACCEPTANCE_REDIS_NAMESPACE}:stream:*"
       - "~${ACCEPTANCE_REDIS_NAMESPACE}:progress:*"
-      - "~${ACCEPTANCE_REDIS_NAMESPACE}:worker:worker-a-${ACCEPTANCE_RUN_ID}"
+      - "~${ACCEPTANCE_REDIS_NAMESPACE}:worker:${ACCEPTANCE_WORKER_A_ID:-worker-a-${ACCEPTANCE_RUN_ID}}"
       - +@read
       - +@write
       - +@stream
@@ -64,7 +64,7 @@ services:
       - ">${ACCEPTANCE_WORKER_B_REDIS_PASSWORD:-local-worker-b-redis-secret}"
       - "~${ACCEPTANCE_REDIS_NAMESPACE}:stream:*"
       - "~${ACCEPTANCE_REDIS_NAMESPACE}:progress:*"
-      - "~${ACCEPTANCE_REDIS_NAMESPACE}:worker:worker-b-${ACCEPTANCE_RUN_ID}"
+      - "~${ACCEPTANCE_REDIS_NAMESPACE}:worker:${ACCEPTANCE_WORKER_B_ID:-worker-b-${ACCEPTANCE_RUN_ID}}"
       - +@read
       - +@write
       - +@stream
@@ -114,6 +114,7 @@ services:
       # session secret is already a high-entropy bootstrap secret here; a
       # production deployment must provide a distinct MODEL_GATEWAY_SIGNING_SECRET.
       MODEL_GATEWAY_SIGNING_SECRET: ${ACCEPTANCE_SESSION_COOKIE_SECRET}
+      SECRET_STORE_KEK: ${ACCEPTANCE_SECRET_STORE_KEK}
       DB_RLS_SERVICE_ROLE: infinity_outbox
       ENABLE_OUTBOX_PUBLISHER: "0"
       REDIS_URL: redis://api:${ACCEPTANCE_REDIS_PASSWORD}@redis:6379/0
@@ -127,6 +128,13 @@ services:
       AUTH_DEV_LOGIN_USER_ID: ${AUTH_DEV_LOGIN_USER_ID:-acceptance_api}
       COOKIE_SECURE: "0"
       SESSION_COOKIE_SECRET: ${ACCEPTANCE_SESSION_COOKIE_SECRET}
+      # Provider credentials are supplied only to the trusted API gateway for
+      # this local acceptance run. The Worker image receives an attempt-scoped
+      # gateway capability instead of these long-lived values.
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ARTIFACT_STORAGE_ROOT: ${ARTIFACT_STORAGE_ROOT}
       ARTIFACT_DOWNLOAD_ROOT: ${ARTIFACT_DOWNLOAD_ROOT}
       METHOD_SOURCE_UPLOAD_ROOT: ${METHOD_SOURCE_UPLOAD_ROOT}
@@ -167,7 +175,10 @@ services:
       NPM_CONFIG_USERCONFIG: /run/secrets/frontend_npmrc
     secrets:
       - frontend_npmrc
-    command: ["sh", "-c", "npm ci --no-audit --no-fund && npm run build"]
+    # The production server only needs the compiled output, but the build
+    # itself requires TypeScript and the other devDependencies. Make that
+    # dependency boundary explicit instead of relying on a warm host install.
+    command: ["sh", "-c", "npm ci --include=dev --no-audit --no-fund && npm run build"]
     depends_on:
       api:
         condition: service_started
@@ -222,7 +233,11 @@ services:
       dockerfile: backend/Dockerfile.worker
     environment:
       APP_ENV: acceptance
-      WORKER_ID: worker-a-${ACCEPTANCE_RUN_ID}
+      # The control plane is the source of truth for Worker IDs. The
+      # acceptance harness defaults only to a readable placeholder so the
+      # database/frontend services can be started before issuance; the real
+      # run overrides this with the server-issued ID.
+      WORKER_ID: ${ACCEPTANCE_WORKER_A_ID:-worker-a-${ACCEPTANCE_RUN_ID}}
       WORKER_INSTANCE_ID: acceptance-worker-a-${ACCEPTANCE_RUN_ID}
       WORKER_PROTOCOL_VERSION: "1"
       WORKER_RUNTIME_CAPABILITY: goal-driven-claude-code
@@ -250,7 +265,7 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-    command: ["python", "-m", "backend.code_agent.worker.consumer", "worker-a-${ACCEPTANCE_RUN_ID}"]
+    command: ["python", "-m", "backend.code_agent.worker.consumer", "${ACCEPTANCE_WORKER_A_ID:-worker-a-${ACCEPTANCE_RUN_ID}}"]
 
   worker-b:
     image: ${ACCEPTANCE_WORKER_IMAGE:-infinity-agent-worker:acceptance}
@@ -259,7 +274,7 @@ services:
       dockerfile: backend/Dockerfile.worker
     environment:
       APP_ENV: acceptance
-      WORKER_ID: worker-b-${ACCEPTANCE_RUN_ID}
+      WORKER_ID: ${ACCEPTANCE_WORKER_B_ID:-worker-b-${ACCEPTANCE_RUN_ID}}
       WORKER_INSTANCE_ID: acceptance-worker-b-${ACCEPTANCE_RUN_ID}
       WORKER_PROTOCOL_VERSION: "1"
       WORKER_RUNTIME_CAPABILITY: goal-driven-claude-code
@@ -287,7 +302,7 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-    command: ["python", "-m", "backend.code_agent.worker.consumer", "worker-b-${ACCEPTANCE_RUN_ID}"]
+    command: ["python", "-m", "backend.code_agent.worker.consumer", "${ACCEPTANCE_WORKER_B_ID:-worker-b-${ACCEPTANCE_RUN_ID}}"]
 
   reaper:
     image: ${ACCEPTANCE_WORKER_IMAGE:-infinity-agent-worker:acceptance}

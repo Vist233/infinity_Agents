@@ -66,7 +66,14 @@ from backend.auth import (
 from backend.security import redact_secrets, safe_relative_path, ensure_within
 from backend.security import validate_outbound_url, validate_runtime_database_url
 from backend.secrets import decrypt_secret, encrypt_secret, secret_fingerprint
-from backend.db_rls import clear_rls_context, rls_enabled_from_env, rls_user_context, set_rls_worker, wrap_runtime_pool
+from backend.db_rls import (
+    clear_rls_context,
+    rls_enabled_from_env,
+    rls_user_context,
+    set_rls_user,
+    set_rls_worker,
+    wrap_runtime_pool,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -2767,16 +2774,23 @@ async def issue_worker_enrollment_endpoint(
     try:
         namespace = _public_worker_namespace()
         worker_id = f"public-worker-{uuid.uuid4()}"
-        credential = await issue_worker_credential(
-            app.state.db_pool,
-            worker_id,
-            namespace,
-            # The authenticated user is retained only as the audit/status
-            # owner.  The server-owned execution_pool remains public-default.
-            owner_user_id=user.user_id,
-            execution_pool="public-default",
-        )
+        # The enrollment write uses the protected RLS pool. Bind the
+        # authenticated principal for the complete transaction so the pool
+        # can set app.user_id/app.user_proof before selecting and invoking the
+        # server-owned public-pool issuer function.
+        with rls_user_context(user.user_id):
+            credential = await issue_worker_credential(
+                app.state.db_pool,
+                worker_id,
+                namespace,
+                # The authenticated user is retained only as the audit/status
+                # owner. The server-owned execution_pool remains
+                # public-default.
+                owner_user_id=user.user_id,
+                execution_pool="public-default",
+            )
     except Exception as exc:
+        logger.exception("Worker enrollment issuance failed for user=%s", user.user_id)
         raise HTTPException(status_code=400, detail="Worker enrollment request is invalid") from exc
     return {
         "worker_id": credential.worker_id,
@@ -2960,6 +2974,20 @@ async def _authenticate_worker_request(request: Request) -> Dict[str, str]:
         raise
     if identity.namespace != configured_namespace:
         raise HTTPException(status_code=401, detail="Worker Namespace is not served by this control plane")
+    # The handshake increments or confirms the server-side session fence. The
+    # database pool used by the remainder of this request must carry that
+    # returned epoch; otherwise RLS correctly treats the pre-handshake context
+    # (which has no epoch) as incompatible and hides the task inputs as 404.
+    set_rls_worker(
+        identity.worker_id,
+        credential,
+        identity.namespace,
+        instance_id=identity.active_instance_id or instance_id,
+        protocol_version=identity.protocol_version,
+        runtime_capability=identity.runtime_capability,
+        image_digest=identity.image_digest,
+        session_epoch=int(identity.session_epoch),
+    )
     lease_token = request.headers.get("X-Worker-Lease-Token", "").strip()
     if not lease_token:
         raise HTTPException(status_code=401, detail="Worker lease token is required")
@@ -3315,7 +3343,7 @@ async def _worker_task_input(task_id: str, worker: Dict[str, str], kind: str) ->
             worker["lease_token"],
             worker["namespace"],
             worker["instance_id"],
-            worker["session_epoch"],
+            int(worker["session_epoch"]),
             worker["protocol_version"],
             worker["runtime_capability"],
         )
@@ -3376,7 +3404,7 @@ async def _worker_artifact_upload_allowed(
             worker["lease_token"],
             attempt_id,
             worker["instance_id"],
-            worker["session_epoch"],
+            int(worker["session_epoch"]),
             worker["protocol_version"],
             worker["runtime_capability"],
         ) is not None
@@ -4289,6 +4317,10 @@ async def _require_task_api_key(request: Request) -> Optional[Principal]:
         raise HTTPException(status_code=503, detail="Task API authentication is required in this environment")
     if auth_required:
         principal = await require_user(request)
+        # FastAPI may finish the authentication dependency in a child context
+        # before invoking the endpoint. Re-bind the verified principal here so
+        # every Task API database checkout receives the same RLS identity.
+        set_rls_user(principal.user_id)
         request.state.task_principal = principal
         return principal
     if _env_flag("ALLOW_LEGACY_TASK_API_TOKEN", False):
@@ -5132,6 +5164,9 @@ async def submit_task_bundle_endpoint(
     """
     if user is None:
         raise HTTPException(status_code=401, detail="Authentication required")
+    # Re-bind inside the endpoint task as well as in the dependency. Starlette
+    # may isolate dependency ContextVars from the multipart handler's task.
+    set_rls_user(user.user_id)
     if not idempotency_key.strip() or len(idempotency_key.strip()) > 255:
         raise HTTPException(status_code=400, detail="A bounded idempotency key is required")
 

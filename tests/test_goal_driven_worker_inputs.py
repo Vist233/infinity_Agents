@@ -105,7 +105,7 @@ async def test_worker_downloads_remote_frozen_input_with_persistent_identity(tmp
 
 
 @pytest.mark.asyncio
-async def test_worker_downloads_inputs_runs_direct_runtime_uploads_artifact_and_cleans_workspace(tmp_path, monkeypatch):
+async def test_worker_downloads_inputs_runs_claude_uploads_artifact_and_cleans_workspace(tmp_path, monkeypatch):
     method_payload = b"# frozen method\n"
     dataset_payload = io.BytesIO()
     with zipfile.ZipFile(dataset_payload, "w") as archive:
@@ -191,7 +191,7 @@ async def test_worker_downloads_inputs_runs_direct_runtime_uploads_artifact_and_
             "model_id": "acceptance-model",
         }),
     )
-    async def fake_direct_runtime(*_args, output_dir, **_kwargs):
+    async def fake_claude_runtime(*_args, output_dir, **_kwargs):
         result = Path(output_dir) / "result.txt"
         result.parent.mkdir(parents=True, exist_ok=True)
         result.write_text("direct runtime result\n", encoding="utf-8")
@@ -211,7 +211,7 @@ async def test_worker_downloads_inputs_runs_direct_runtime_uploads_artifact_and_
 
     monkeypatch.setattr(
         "backend.code_agent.worker.claude_runtime.run_claude_task",
-        fake_direct_runtime,
+        fake_claude_runtime,
     )
     monkeypatch.setattr(
         "backend.code_agent.task_service.complete_task_attempt",

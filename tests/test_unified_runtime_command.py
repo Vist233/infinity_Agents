@@ -5,7 +5,7 @@ import inspect
 from backend.code_agent.worker.claude_runtime import _claude_child_environment, run_claude_task
 
 
-def test_direct_runtime_has_no_nested_docker_command():
+def test_claude_runtime_has_no_nested_docker_command():
     source = inspect.getsource(run_claude_task)
     assert '"docker"' not in source
     assert "docker run" not in source

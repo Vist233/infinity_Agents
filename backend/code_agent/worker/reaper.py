@@ -61,7 +61,6 @@ async def _cleanup_artifact_tombstones(pool, *, limit: int = 50) -> int:
                   AND cleanup_completed_at IS NULL
                 ORDER BY deleted_at ASC
                 LIMIT $1
-                FOR UPDATE SKIP LOCKED
                 """,
                 max(1, min(int(limit), 200)),
             )
@@ -78,17 +77,12 @@ async def _cleanup_artifact_tombstones(pool, *, limit: int = 50) -> int:
                 try:
                     if resolved.exists() and not resolved.is_dir():
                         resolved.unlink()
-                    await conn.execute(
-                        """
-                        UPDATE artifacts
-                        SET cleanup_completed_at = NOW()
-                        WHERE artifact_id = $1
-                          AND deleted_at IS NOT NULL
-                          AND cleanup_completed_at IS NULL
-                        """,
+                    marked = await conn.fetchval(
+                        "SELECT app.reaper_mark_artifact_cleanup($1)",
                         row["artifact_id"],
                     )
-                    cleaned += 1
+                    if marked:
+                        cleaned += 1
                 except OSError as exc:
                     logger.warning("Could not remove recovered artifact %s: %s", row["storage_path"], exc)
     return cleaned

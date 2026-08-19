@@ -209,7 +209,7 @@ class TestWorkerCrashReaper:
                 task.task_id,
             )
 
-        # Run the reaper logic inline (same as consumer._lease_reaper_loop).
+        # Run the same bounded recovery query used by the dedicated Reaper.
         from backend.code_agent.retry_policy import calculate_retry_delay
         from backend.code_agent.task_service import create_outbox_event
 

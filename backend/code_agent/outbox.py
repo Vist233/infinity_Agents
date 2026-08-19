@@ -62,6 +62,15 @@ class OutboxPublisher:
         """Main publish loop."""
         while self._running:
             try:
+                # Redis may be restarted independently of the API/Outbox
+                # process. RedisClient deliberately drops a broken socket;
+                # reconnect before polling so a transient coordinator outage
+                # does not strand durable PostgreSQL outbox rows forever.
+                if not self._redis.is_connected:
+                    await self._redis.connect()
+                if not self._redis.is_connected:
+                    await asyncio.sleep(max(self._poll_interval, 1.0))
+                    continue
                 await self._publish_batch()
             except asyncio.CancelledError:
                 break

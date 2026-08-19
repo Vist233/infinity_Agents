@@ -153,7 +153,7 @@ async def execute_task(
         "phase": "starting",
     })
 
-    # Run Docker container
+    # Run Claude Code directly in this Worker container.
     success = False
     error_message = None
     failure_code = None
@@ -162,13 +162,12 @@ async def execute_task(
     image_digest = await _get_image_digest(docker_image)
 
     try:
-        async for event in _run_docker_execution(
+        async for event in _run_claude_execution(
             task_id=task_id,
             attempt_id=attempt_id,
             task_spec=task_spec,
             dataset=dataset,
             method_source=method_source,
-            docker_image=docker_image,
             work_dir=task_work_dir,
             output_dir=task_output_dir,
             redis_client=redis_client,
@@ -524,13 +523,12 @@ async def _request_attempt_gateway(
     return values
 
 
-async def _run_docker_execution(
+async def _run_claude_execution(
     task_id: str,
     attempt_id: int,
     task_spec: Dict[str, Any],
     dataset: Dict[str, Any],
     method_source: Optional[Dict[str, Any]],
-    docker_image: str,
     work_dir: Path,
     output_dir: Path,
     redis_client,

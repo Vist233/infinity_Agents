@@ -354,11 +354,10 @@ BEGIN
   END IF;
 
   IF NEW.result_artifact_id IS NOT NULL
-     AND NOT EXISTS (
-       SELECT 1 FROM artifacts a
-       WHERE a.artifact_id = NEW.result_artifact_id
-         AND a.task_id = NEW.task_id
-         AND a.task_attempt_id = NEW.active_attempt_id
+     AND NOT app.worker_has_result_artifact(
+       NEW.task_id,
+       NEW.result_artifact_id,
+       actor
      ) THEN
     RAISE EXCEPTION 'Task result artifact is not attached to the active attempt';
   END IF;
@@ -644,6 +643,40 @@ $$;
 REVOKE ALL ON FUNCTION app.worker_has_active_attempt(uuid, bigint, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.worker_has_active_attempt(uuid, bigint, text) TO infinity_worker;
 
+-- A successful Attempt is completed before the Worker promotes its Task to
+-- succeeded. During that short hand-off the ordinary artifact RLS policy
+-- remains restricted to running Attempts, while the Task update trigger
+-- still needs to verify the just-published artifact. Keep that verification
+-- in a narrowly scoped SECURITY DEFINER helper instead of broadening artifact
+-- visibility for the Worker role.
+CREATE OR REPLACE FUNCTION app.worker_has_result_artifact(
+  target_task uuid,
+  target_artifact text,
+  actor text
+) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM tasks t
+    JOIN task_attempts a
+      ON a.task_id = t.task_id
+     AND a.task_attempt_id = t.active_attempt_id
+    JOIN artifacts ar
+      ON ar.task_id = t.task_id
+     AND ar.task_attempt_id = a.task_attempt_id
+     AND ar.artifact_id = target_artifact
+    WHERE t.task_id = target_task
+      AND t.lease_owner = actor
+      AND t.status IN ('claimed', 'running')
+      AND t.lease_expires_at > NOW()
+      AND a.worker_id = actor
+      AND a.status = 'succeeded'
+      AND ar.deleted_at IS NULL
+  )
+$$;
+REVOKE ALL ON FUNCTION app.worker_has_result_artifact(uuid, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.worker_has_result_artifact(uuid, text, text) TO infinity_worker;
+
 -- Keep the legacy helper object for idempotent upgrades, but revoke it: all
 -- active policies below use the attempt-bound helpers instead.
 DO $$
@@ -730,6 +763,44 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app A
 $$;
 REVOKE ALL ON FUNCTION app.reaper_task_expired(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.reaper_task_expired(uuid) TO infinity_reaper;
+
+-- Reaper recovery needs to tombstone an expired Attempt's artifacts, but the
+-- runtime role must not receive table-wide Artifact UPDATE access merely to
+-- satisfy PostgreSQL's RLS command check. Keep both mutations behind narrow
+-- server-owned functions and grant the Reaper only EXECUTE.
+CREATE OR REPLACE FUNCTION app.reaper_tombstone_artifacts(
+  target_task uuid,
+  target_attempt bigint
+) RETURNS TABLE(storage_backend text, storage_path text)
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
+  UPDATE artifacts a
+  SET deleted_at = NOW()
+  FROM tasks t
+  WHERE t.task_id = target_task
+    AND t.status IN ('claimed', 'running')
+    AND t.lease_expires_at < NOW()
+    AND a.task_id = t.task_id
+    AND a.task_attempt_id = target_attempt
+    AND a.deleted_at IS NULL
+  RETURNING a.storage_backend, a.storage_path
+$$;
+REVOKE ALL ON FUNCTION app.reaper_tombstone_artifacts(uuid, bigint) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.reaper_tombstone_artifacts(uuid, bigint) TO infinity_reaper;
+
+CREATE OR REPLACE FUNCTION app.reaper_mark_artifact_cleanup(target_artifact text) RETURNS boolean
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
+  WITH marked AS (
+    UPDATE artifacts
+    SET cleanup_completed_at = NOW()
+    WHERE artifact_id = target_artifact
+      AND deleted_at IS NOT NULL
+      AND cleanup_completed_at IS NULL
+    RETURNING 1
+  )
+  SELECT EXISTS (SELECT 1 FROM marked)
+$$;
+REVOKE ALL ON FUNCTION app.reaper_mark_artifact_cleanup(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.reaper_mark_artifact_cleanup(text) TO infinity_reaper;
 
 CREATE OR REPLACE FUNCTION app.worker_trust_allows(required text, actor text) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
@@ -1113,7 +1184,15 @@ GRANT INSERT (
 ) ON artifacts TO infinity_worker;
 GRANT SELECT ON task_specs, dataset_snapshots, method_sources TO infinity_worker;
 GRANT SELECT ON worker_enrollments TO infinity_worker;
-GRANT UPDATE (last_seen_at) ON worker_enrollments TO infinity_worker;
+-- The Worker performs its own protocol/instance handshake against the
+-- central database. These are session-fence fields, not ownership or
+-- credential fields; the worker_enrollment_worker_heartbeat_policy below
+-- still limits the row to app.current_worker_id(), which is credential-bound.
+GRANT UPDATE (
+  protocol_version, runtime_capability, image_digest, active_instance_id,
+  active_instance_expires_at, session_epoch, ready, last_error, connected_at,
+  last_seen_at
+) ON worker_enrollments TO infinity_worker;
 GRANT INSERT (
   aggregate_type, aggregate_id, event_type, payload, status,
   next_attempt_at, created_at
@@ -1141,7 +1220,11 @@ GRANT UPDATE (
 ) ON tasks TO infinity_reaper;
 GRANT UPDATE (status, finished_at, error_message, failure_code) ON task_attempts TO infinity_reaper;
 GRANT SELECT ON artifacts TO infinity_reaper;
-GRANT UPDATE (deleted_at, cleanup_completed_at) ON artifacts TO infinity_reaper;
+-- Artifact recovery is performed through the two narrowly scoped
+-- SECURITY DEFINER functions above. The Reaper login deliberately has no
+-- direct Artifact UPDATE privilege.
+REVOKE UPDATE ON artifacts FROM infinity_reaper;
+REVOKE UPDATE (deleted_at, cleanup_completed_at) ON artifacts FROM infinity_reaper;
 GRANT INSERT (task_id, worker_id, status, attempt_index, started_at, finished_at,
   error_message, failure_code) ON task_attempts TO infinity_reaper;
 GRANT INSERT (task_id, task_attempt_id, event_type, event_data, created_at)
@@ -1317,7 +1400,12 @@ CREATE POLICY session_context_compression_owner_policy ON session_context_compre
 DROP POLICY IF EXISTS projects_member_policy ON projects;
 CREATE POLICY projects_member_policy ON projects
   FOR ALL TO infinity_api
-  USING (app.project_access(project_id, app.current_user_id()))
+  -- The default-project helper uses an idempotent INSERT ... ON CONFLICT
+  -- DO UPDATE. PostgreSQL evaluates the UPDATE USING predicate during that
+  -- statement even when the row is new, so the owner check must be present
+  -- alongside existing membership access.
+  USING (owner_user_id = app.current_user_id()
+         OR app.project_access(project_id, app.current_user_id()))
   WITH CHECK (owner_user_id = app.current_user_id());
 
 DROP POLICY IF EXISTS project_members_self_policy ON project_members;

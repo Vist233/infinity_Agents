@@ -85,8 +85,6 @@ async def run_worker(
 ) -> None:
     """Run a single worker instance."""
     stop_event = asyncio.Event()
-    lease_renew_task = None
-    lease_task = None
     session_rls_token = None
     if worker_credential:
         from backend.worker_enrollment import (
@@ -164,20 +162,6 @@ async def run_worker(
             worker_image_digest=worker_image_digest,
         )
     )
-    # Lease renewal is part of the data-plane Worker itself.  The dedicated
-    # reaper only recovers leases owned by dead Workers; disabling that service
-    # must never disable renewal for a healthy Worker running a long task.
-    lease_renew_task = asyncio.create_task(
-        _lease_renew_loop(worker_id, db_pool, lease_seconds, stop_event)
-    )
-    # Lease recovery is a dedicated service. Keep the old loop as an explicit
-    # compatibility hook for focused unit tests/local experiments, but never
-    # enable it by default or in a normal data-plane Worker.
-    if os.getenv("ENABLE_LEASE_REAPER", "0").strip().lower() not in {"0", "false", "no", "off"}:
-        lease_task = asyncio.create_task(
-            _lease_reaper_loop(worker_id, db_pool, lease_seconds)
-        )
-
     try:
         pending_recovery_at = 0.0
         pending_recovery_interval = max(5.0, min(float(lease_seconds), 30.0))
@@ -228,161 +212,14 @@ async def run_worker(
                 await asyncio.sleep(poll_interval)
     finally:
         heartbeat_task.cancel()
-        if lease_renew_task is not None:
-            lease_renew_task.cancel()
-        if lease_task is not None:
-            lease_task.cancel()
         try:
             await heartbeat_task
         except asyncio.CancelledError:
             pass
-        if lease_renew_task is not None:
-            try:
-                await lease_renew_task
-            except asyncio.CancelledError:
-                pass
-        if lease_task is not None:
-            try:
-                await lease_task
-            except asyncio.CancelledError:
-                pass
         if session_rls_token is not None:
             from backend.db_rls import reset_rls_context
             reset_rls_context(session_rls_token)
         logger.info("Worker %s stopped", worker_id)
-
-
-async def _lease_renew_loop(
-    worker_id: str,
-    db_pool,
-    lease_seconds: int,
-    stop_event: Optional[asyncio.Event] = None,
-) -> None:
-    """Renew active leases owned by this Worker until it stops.
-
-    This loop intentionally does not enumerate tasks or touch another
-    Worker's rows.  The owner/active-attempt predicates are also enforced by
-    the database RLS policy, so a stale Worker cannot extend a lease after it
-    has expired or been transferred.
-    """
-    from datetime import datetime, timedelta, timezone
-
-    stop_event = stop_event or asyncio.Event()
-    interval = max(1.0, min(float(lease_seconds) / 3.0, 10.0))
-    while not stop_event.is_set():
-        try:
-            new_expiry = datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)
-            async with db_pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    UPDATE tasks
-                    SET lease_expires_at = $2, updated_at = NOW()
-                    WHERE lease_owner = $1
-                      AND status IN ('claimed', 'running')
-                      AND lease_token IS NOT NULL
-                      AND active_attempt_id IS NOT NULL
-                      AND lease_expires_at > NOW()
-                      AND EXISTS (
-                          SELECT 1
-                          FROM task_attempts a
-                          WHERE a.task_attempt_id = tasks.active_attempt_id
-                            AND a.task_id = tasks.task_id
-                            AND a.worker_id = $1
-                            AND a.status = 'running'
-                      )
-                    """,
-                    worker_id,
-                    new_expiry,
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            # A transient renewal failure is observable and will be handled by
-            # the central Reaper if the Worker cannot recover before expiry.
-            logger.warning("Worker %s lease renewal failed: %s", worker_id, exc)
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=interval)
-        except asyncio.TimeoutError:
-            pass
-
-
-async def _lease_reaper_loop(worker_id: str, db_pool, lease_seconds: int) -> None:
-    """Renew own leases and reap expired leases from other workers."""
-    from datetime import timedelta, timezone
-    from datetime import datetime as dt
-    from backend.code_agent.task_service import reap_expired_lease
-    from backend.db_rls import rls_reaper_context
-
-    while True:
-        try:
-            now = dt.now(timezone.utc)
-            new_expiry = now + timedelta(seconds=lease_seconds)
-
-            # Renew own leases
-            async with db_pool.acquire() as conn:
-                rows = await conn.fetch(
-                    """
-                    SELECT task_id, lease_token
-                    FROM tasks
-                    WHERE lease_owner = $1
-                      AND status IN ('claimed', 'running')
-                      AND lease_expires_at < NOW() + INTERVAL '15 seconds'
-                      AND EXISTS (
-                          SELECT 1
-                          FROM task_attempts a
-                          WHERE a.task_attempt_id = tasks.active_attempt_id
-                            AND a.task_id = tasks.task_id
-                            AND a.worker_id = $1
-                            AND a.status = 'running'
-                      )
-                    FOR UPDATE SKIP LOCKED
-                    """,
-                    worker_id,
-                )
-                for row in rows:
-                    await conn.execute(
-                        """
-                    UPDATE tasks SET lease_expires_at = $3, updated_at = NOW()
-                        WHERE task_id = $1::uuid AND lease_token = $2
-                          AND lease_expires_at > NOW()
-                        """,
-                        str(row["task_id"]), row["lease_token"], new_expiry,
-                    )
-
-            # Reap expired leases from dead workers under a separate, narrow
-            # service role. A Worker identity must never see or mutate another
-            # Worker's expired task just because it runs the reaper loop.
-            with rls_reaper_context():
-                async with db_pool.acquire() as conn:
-                    expired = await conn.fetch(
-                        """
-                        SELECT task_id, lease_token
-                        FROM tasks
-                        WHERE status IN ('claimed', 'running')
-                          AND lease_expires_at < NOW()
-                        LIMIT 10
-                        FOR UPDATE SKIP LOCKED
-                        """
-                    )
-                    # The SELECT transaction only prevents this reaper from
-                    # competing with another reaper.  The helper re-checks the
-                    # lease and performs the actual state transition atomically.
-                for row in expired:
-                    recovered = await reap_expired_lease(
-                        db_pool,
-                        str(row["task_id"]),
-                        row["lease_token"],
-                        now=now,
-                    )
-                    if recovered:
-                        logger.info(
-                            "Reaper reclaimed task %s → %s",
-                            row["task_id"],
-                            recovered["status"],
-                        )
-        except Exception as exc:
-            logger.warning("Lease reaper error: %s", exc)
-        await asyncio.sleep(10)
 
 
 async def _heartbeat_loop(
@@ -553,10 +390,27 @@ async def _process_next_task(
     logger.info("Worker %s claimed task %s (attempt %d)", worker_id, task_id, claimed["attempt_index"])
 
     cancel_event = asyncio.Event()
+    lease_lost_event = asyncio.Event()
+    lease_renew_stop = asyncio.Event()
+    lease_renew_task = asyncio.create_task(
+        _renew_claimed_task_lease(
+            db_pool,
+            task_id,
+            claimed["lease_token"],
+            lease_seconds,
+            lease_renew_stop,
+            lease_lost_event,
+            worker_id,
+        )
+    )
 
     async def _poll_for_cancellation():
         while not cancel_event.is_set():
             await asyncio.sleep(1.0)
+            if lease_lost_event.is_set():
+                logger.warning("Worker %s stopping task %s after lease loss", worker_id, task_id)
+                cancel_event.set()
+                return
             task = await get_task(db_pool, task_id)
             if task and task.get("cancel_requested_at"):
                 logger.info("Worker %s detected cancellation request for task %s", worker_id, task_id)
@@ -630,12 +484,53 @@ async def _process_next_task(
         except Exception:
             pass
     finally:
+        lease_renew_stop.set()
+        lease_renew_task.cancel()
+        try:
+            await lease_renew_task
+        except asyncio.CancelledError:
+            pass
         poll_task.cancel()
         try:
             await poll_task
         except asyncio.CancelledError:
             pass
         await redis_client.ack_message(message_id)
+
+
+async def _renew_claimed_task_lease(
+    db_pool,
+    task_id: str,
+    lease_token: str,
+    lease_seconds: int,
+    stop_event: asyncio.Event,
+    lease_lost_event: asyncio.Event,
+    worker_id: str,
+) -> None:
+    """Renew exactly one claimed Task until its executor finishes.
+
+    The lease token is the fencing boundary. A task-scoped renewer avoids a
+    broad worker scan, makes a zero-row update observable, and prevents a
+    long-running Claude process from being mistaken for a dead Worker.
+    """
+    from backend.code_agent.task_service import renew_lease
+
+    interval = max(1.0, min(float(lease_seconds) / 3.0, 10.0))
+    while not stop_event.is_set():
+        try:
+            renewed = await renew_lease(db_pool, task_id, lease_token, lease_seconds)
+            if not renewed:
+                lease_lost_event.set()
+                logger.warning("Worker %s lost lease for task %s", worker_id, task_id)
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Worker %s task lease renewal failed for %s: %s", worker_id, task_id, exc)
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
 
 
 async def _main(worker_id: str) -> None:

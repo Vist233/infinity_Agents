@@ -22,7 +22,8 @@ from backend.code_agent.task_service import (
     create_task,
     get_task,
 )
-from backend.code_agent.worker.consumer import _lease_reaper_loop, _process_next_task
+from backend.code_agent.worker.consumer import _process_next_task
+from backend.code_agent.worker.reaper import reap_once
 from backend.code_agent.redis_client import RedisClient
 
 
@@ -419,15 +420,7 @@ class TestWorkerCrashDuringExecution:
 
         async def run():
             with patch("backend.code_agent.task_service.create_outbox_event", AsyncMock()):
-                task_obj = asyncio.create_task(
-                    _lease_reaper_loop("reaper-worker", pool, lease_seconds=60)
-                )
-                await asyncio.sleep(0.3)
-                task_obj.cancel()
-                try:
-                    await task_obj
-                except asyncio.CancelledError:
-                    pass
+                await reap_once(pool, limit=10)
 
             requeue_ops = [op for op in reaper_updates if op[0] == "requeue"]
             assert len(requeue_ops) >= 1, f"Reaper must have requeued the expired lease, got {reaper_updates}"

@@ -1173,10 +1173,7 @@ async def reap_expired_lease(
                 artifact_rows = await conn.fetch(
                     """
                     SELECT storage_backend, storage_path
-                    FROM artifacts
-                    WHERE task_id = $1::uuid AND task_attempt_id = $2
-                      AND deleted_at IS NULL
-                    FOR UPDATE
+                    FROM app.reaper_tombstone_artifacts($1::uuid, $2)
                     """,
                     task_id,
                     attempt_id,
@@ -1189,16 +1186,6 @@ async def reap_expired_lease(
                         }
                         for row in artifact_rows
                     ]
-                    await conn.execute(
-                        """
-                        UPDATE artifacts
-                        SET deleted_at = NOW()
-                        WHERE task_id = $1::uuid AND task_attempt_id = $2
-                          AND deleted_at IS NULL
-                        """,
-                        task_id,
-                        attempt_id,
-                    )
 
             attempt_count = int(row["attempt_count"] or 0)
             max_attempts = int(row["max_attempts"] or 1)

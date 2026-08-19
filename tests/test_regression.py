@@ -141,11 +141,11 @@ class TestRegressionChains:
             {"type": "done", "output": "done"},
         ]
 
-        with patch("backend.code_agent.worker.executor._run_docker_execution") as mock_docker:
-            async def _fake_docker(*args, **kwargs):
+        with patch("backend.code_agent.worker.executor._run_claude_execution") as mock_runtime:
+            async def _fake_runtime(*args, **kwargs):
                 for event in docker_events:
                     yield event
-            mock_docker.side_effect = _fake_docker
+            mock_runtime.side_effect = _fake_runtime
 
             result = await execute_task(
                 task_id="task-1",
@@ -184,11 +184,11 @@ class TestRegressionChains:
             {"type": "done", "output": "done"},
         ]
 
-        with patch("backend.code_agent.worker.executor._run_docker_execution") as mock_docker:
-            async def _fake_docker(*args, **kwargs):
+        with patch("backend.code_agent.worker.executor._run_claude_execution") as mock_runtime:
+            async def _fake_runtime(*args, **kwargs):
                 for event in docker_events:
                     yield event
-            mock_docker.side_effect = _fake_docker
+            mock_runtime.side_effect = _fake_runtime
 
             result = await execute_task(
                 task_id="task-2",
@@ -225,11 +225,11 @@ class TestRegressionChains:
             {"type": "done", "output": "done"},
         ]
 
-        with patch("backend.code_agent.worker.executor._run_docker_execution") as mock_docker:
-            async def _fake_docker(*args, **kwargs):
+        with patch("backend.code_agent.worker.executor._run_claude_execution") as mock_runtime:
+            async def _fake_runtime(*args, **kwargs):
                 for event in docker_events:
                     yield event
-            mock_docker.side_effect = _fake_docker
+            mock_runtime.side_effect = _fake_runtime
 
             result = await execute_task(
                 task_id="task-3",
@@ -250,7 +250,7 @@ class TestRegressionChains:
         assert "success" in result
 
 
-class TestIntegrationRealDocker:
+class TestIntegrationRealWorker:
     """Real unified Claude runtime smoke tests.
 
     Full Case 2/3 acceptance runs through the PostgreSQL/Redis/API/Worker
@@ -268,7 +268,7 @@ class TestIntegrationRealDocker:
         gateway_token = os.getenv("ATTEMPT_GATEWAY_TOKEN", "").strip()
         model_id = os.getenv("ATTEMPT_MODEL_ID", "").strip()
         if not all((gateway_url, gateway_token, model_id)):
-            pytest.skip("Attempt gateway environment is required for the direct runtime smoke test")
+            pytest.skip("Attempt gateway environment is required for the Claude runtime smoke test")
 
         from backend.code_agent.worker.claude_runtime import run_claude_task
 
@@ -287,22 +287,22 @@ class TestIntegrationRealDocker:
                 attempt_model_id=model_id,
             )
         ]
-        assert events, "direct runtime returned no events"
+        assert events, "Claude runtime returned no events"
         assert events[-1]["type"] == "done", events[-1]
         assert any(path.is_file() for path in out_dir.rglob("*")), "runtime produced no output"
         return events
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_case1_real_direct_runtime_executes(self, tmp_path):
+    async def test_case1_real_claude_runtime_executes(self, tmp_path):
         await self._run_case("1", "integration-case1", tmp_path)
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_case2_real_direct_runtime_executes(self, tmp_path):
+    async def test_case2_real_claude_runtime_executes(self, tmp_path):
         await self._run_case("2", "integration-case2", tmp_path)
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_case3_real_direct_runtime_executes(self, tmp_path):
+    async def test_case3_real_claude_runtime_executes(self, tmp_path):
         await self._run_case("3", "integration-case3", tmp_path)

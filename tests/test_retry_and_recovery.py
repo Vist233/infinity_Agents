@@ -111,17 +111,11 @@ class TestLeaseReaperBackoff:
         backend_app_module.app.state.db_pool = pool
 
         with patch("backend.code_agent.task_service.create_outbox_event", AsyncMock()):
-            from backend.code_agent.worker.consumer import _lease_reaper_loop
+            from backend.code_agent.worker.reaper import reap_once
             import asyncio
 
             async def _run_once():
-                task = asyncio.create_task(_lease_reaper_loop("worker-1", pool, 60))
-                await asyncio.sleep(0.1)
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+                await reap_once(pool)
 
             asyncio.run(_run_once())
 

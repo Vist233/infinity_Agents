@@ -47,8 +47,8 @@ class TestUploadSizeLimit:
         assert response.status_code in (400, 413, 404), response.text
 
 
-class TestDockerNoRoot:
-    def test_direct_runtime_uses_non_root_claude_identity(self):
+class TestWorkerImageSecurity:
+    def test_claude_runtime_uses_non_root_identity(self):
         from backend.code_agent.worker.claude_runtime import run_claude_task
         import inspect
 
