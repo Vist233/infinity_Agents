@@ -158,6 +158,7 @@ if [[ "$ACCEPTANCE_REQUIRE_RLS" == "1" ]]; then
       ('dataset_snapshots'), ('tasks'), ('task_attempts'), ('task_events'),
       ('outbox_events'), ('artifacts'), ('idempotency_keys'), ('project_resources'),
       ('session_resource_links'), ('provider_profiles'), ('provider_secrets'),
+      ('artifact_uploads'), ('artifact_upload_parts'),
       ('worker_enrollments'), ('worker_enrollment_tokens')),
     role_check AS (
       SELECT count(*) = 5 AS ok,

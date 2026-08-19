@@ -34,6 +34,41 @@ ALTER TABLE IF EXISTS task_attempts ADD CONSTRAINT chk_task_attempt_status CHECK
 ));
 ALTER TABLE IF EXISTS artifacts ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 ALTER TABLE IF EXISTS artifacts ADD COLUMN IF NOT EXISTS cleanup_completed_at TIMESTAMPTZ;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE IF NOT EXISTS artifact_uploads (
+  upload_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  artifact_id TEXT NOT NULL UNIQUE,
+  task_id UUID NOT NULL REFERENCES tasks(task_id),
+  task_attempt_id BIGINT NOT NULL REFERENCES task_attempts(task_attempt_id),
+  worker_id TEXT NOT NULL,
+  staging_path TEXT NOT NULL,
+  expected_file_size_bytes BIGINT NOT NULL,
+  expected_checksum_sha256 CHAR(64) NOT NULL,
+  part_size_bytes INTEGER NOT NULL,
+  part_count INTEGER NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'open',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at TIMESTAMPTZ,
+  CONSTRAINT chk_artifact_upload_status CHECK (status IN ('open', 'completed', 'aborted')),
+  CONSTRAINT chk_artifact_upload_size CHECK (expected_file_size_bytes > 0),
+  CONSTRAINT chk_artifact_upload_parts CHECK (part_size_bytes > 0 AND part_count > 0)
+);
+CREATE TABLE IF NOT EXISTS artifact_upload_parts (
+  upload_id UUID NOT NULL REFERENCES artifact_uploads(upload_id) ON DELETE CASCADE,
+  part_number INTEGER NOT NULL,
+  file_size_bytes BIGINT NOT NULL,
+  checksum_sha256 CHAR(64) NOT NULL,
+  storage_path TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (upload_id, part_number),
+  CONSTRAINT chk_artifact_upload_part_number CHECK (part_number >= 0),
+  CONSTRAINT chk_artifact_upload_part_size CHECK (file_size_bytes > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_artifact_uploads_attempt
+  ON artifact_uploads (task_id, task_attempt_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_artifact_upload_parts_path
+  ON artifact_upload_parts (storage_path);
 ALTER TABLE IF EXISTS tasks ADD COLUMN IF NOT EXISTS execution_pool TEXT NOT NULL DEFAULT 'public-default';
 UPDATE tasks SET execution_pool = 'public-default'
 WHERE execution_pool IS NULL OR btrim(execution_pool) = '';
@@ -63,8 +98,6 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_cleanup
 
 -- Used by the database-side Worker proof below.  The Worker only knows its
 -- own persistent credential; an ID alone is never accepted as an RLS actor.
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'infinity_api') THEN
@@ -592,6 +625,25 @@ $$;
 REVOKE ALL ON FUNCTION app.worker_has_active_lease(uuid, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.worker_has_active_lease(uuid, text) TO infinity_worker;
 
+CREATE OR REPLACE FUNCTION app.worker_has_active_attempt(target_task uuid, target_attempt bigint, actor text) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM tasks t
+    JOIN task_attempts a ON a.task_id = t.task_id
+    WHERE t.task_id = target_task
+      AND t.active_attempt_id = target_attempt
+      AND t.lease_owner = actor
+      AND t.status IN ('claimed', 'running')
+      AND t.lease_expires_at > NOW()
+      AND a.task_attempt_id = target_attempt
+      AND a.worker_id = actor
+      AND a.status = 'running'
+  )
+$$;
+REVOKE ALL ON FUNCTION app.worker_has_active_attempt(uuid, bigint, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.worker_has_active_attempt(uuid, bigint, text) TO infinity_worker;
+
 -- Keep the legacy helper object for idempotent upgrades, but revoke it: all
 -- active policies below use the attempt-bound helpers instead.
 DO $$
@@ -1036,6 +1088,12 @@ GRANT UPDATE (used_at) ON worker_enrollment_tokens TO infinity_api;
 -- Immutable task inputs, ownership, and required trust are never writable by
 -- the Worker database role, even if its process is compromised.
 GRANT SELECT, DELETE ON artifacts TO infinity_worker;
+-- Multipart state is visible only through the Worker role and its lease-bound
+-- policies below. Immutable upload identity/expectations are insert-only;
+-- Workers can only advance status timestamps during an active lease.
+GRANT SELECT, INSERT, DELETE ON artifact_uploads TO infinity_worker;
+GRANT UPDATE (status, updated_at, completed_at) ON artifact_uploads TO infinity_worker;
+GRANT SELECT, INSERT, DELETE ON artifact_upload_parts TO infinity_worker;
 GRANT SELECT ON tasks, task_attempts, task_events TO infinity_worker;
 GRANT UPDATE (
   status, phase, lease_owner, lease_token, lease_expires_at, active_attempt_id,
@@ -1108,6 +1166,7 @@ BEGIN
     'dataset_snapshots', 'tasks', 'task_attempts', 'task_events',
     'outbox_events', 'artifacts', 'idempotency_keys', 'project_resources',
     'session_resource_links', 'provider_profiles', 'provider_secrets',
+    'artifact_uploads', 'artifact_upload_parts',
     'worker_enrollments', 'worker_enrollment_tokens'
   ] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', table_name);
@@ -1381,17 +1440,51 @@ DROP POLICY IF EXISTS artifact_worker_policy ON artifacts;
 CREATE POLICY artifact_worker_policy ON artifacts
   FOR ALL TO infinity_worker
   USING (artifacts.deleted_at IS NULL
-         AND app.worker_has_active_lease(artifacts.task_id, app.current_worker_id())
-         AND EXISTS (SELECT 1 FROM task_attempts a
-                     WHERE a.task_attempt_id = artifacts.task_attempt_id
-                       AND a.task_id = artifacts.task_id
-                       AND a.worker_id = app.current_worker_id()))
+         AND app.worker_has_active_attempt(
+           artifacts.task_id, artifacts.task_attempt_id, app.current_worker_id()))
   WITH CHECK (artifacts.deleted_at IS NULL
-              AND app.worker_has_active_lease(artifacts.task_id, app.current_worker_id())
-              AND EXISTS (SELECT 1 FROM task_attempts a
-                          WHERE a.task_attempt_id = artifacts.task_attempt_id
-                            AND a.task_id = artifacts.task_id
-                            AND a.worker_id = app.current_worker_id()));
+              AND app.worker_has_active_attempt(
+                artifacts.task_id, artifacts.task_attempt_id, app.current_worker_id()));
+
+DROP POLICY IF EXISTS artifact_upload_worker_policy ON artifact_uploads;
+CREATE POLICY artifact_upload_worker_policy ON artifact_uploads
+  FOR ALL TO infinity_worker
+  USING (
+    artifact_uploads.worker_id = app.current_worker_id()
+    AND artifact_uploads.status IN ('open', 'completed')
+    AND app.worker_has_active_attempt(
+      artifact_uploads.task_id, artifact_uploads.task_attempt_id, app.current_worker_id())
+  )
+  WITH CHECK (
+    artifact_uploads.worker_id = app.current_worker_id()
+    AND artifact_uploads.status IN ('open', 'completed')
+    AND app.worker_has_active_attempt(
+      artifact_uploads.task_id, artifact_uploads.task_attempt_id, app.current_worker_id())
+  );
+
+DROP POLICY IF EXISTS artifact_upload_parts_worker_policy ON artifact_upload_parts;
+CREATE POLICY artifact_upload_parts_worker_policy ON artifact_upload_parts
+  FOR ALL TO infinity_worker
+  USING (
+    EXISTS (
+      SELECT 1
+      FROM artifact_uploads u
+      WHERE u.upload_id = artifact_upload_parts.upload_id
+        AND u.worker_id = app.current_worker_id()
+        AND u.status = 'open'
+        AND app.worker_has_active_attempt(u.task_id, u.task_attempt_id, app.current_worker_id())
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1
+      FROM artifact_uploads u
+      WHERE u.upload_id = artifact_upload_parts.upload_id
+        AND u.worker_id = app.current_worker_id()
+        AND u.status = 'open'
+        AND app.worker_has_active_attempt(u.task_id, u.task_attempt_id, app.current_worker_id())
+    )
+  );
 
 DROP POLICY IF EXISTS task_attempt_api_policy ON task_attempts;
 CREATE POLICY task_attempt_api_policy ON task_attempts

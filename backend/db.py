@@ -415,6 +415,46 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_artifacts_task ON artifacts (task_id, created_at DESC);
 
+                -- Large Worker result archives are assembled from server-side
+                -- parts. PostgreSQL owns the upload state; the filesystem is
+                -- only a bounded staging backend and is never the source of
+                -- truth for which parts belong to an Attempt.
+                CREATE TABLE IF NOT EXISTS artifact_uploads (
+                    upload_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    artifact_id TEXT NOT NULL UNIQUE,
+                    task_id UUID NOT NULL REFERENCES tasks(task_id),
+                    task_attempt_id BIGINT NOT NULL REFERENCES task_attempts(task_attempt_id),
+                    worker_id TEXT NOT NULL,
+                    staging_path TEXT NOT NULL,
+                    expected_file_size_bytes BIGINT NOT NULL,
+                    expected_checksum_sha256 CHAR(64) NOT NULL,
+                    part_size_bytes INTEGER NOT NULL,
+                    part_count INTEGER NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'open',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    completed_at TIMESTAMPTZ,
+                    CONSTRAINT chk_artifact_upload_status CHECK (status IN ('open', 'completed', 'aborted')),
+                    CONSTRAINT chk_artifact_upload_size CHECK (expected_file_size_bytes > 0),
+                    CONSTRAINT chk_artifact_upload_parts CHECK (part_size_bytes > 0 AND part_count > 0)
+                );
+                CREATE INDEX IF NOT EXISTS idx_artifact_uploads_attempt
+                    ON artifact_uploads (task_id, task_attempt_id, status, updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS artifact_upload_parts (
+                    upload_id UUID NOT NULL REFERENCES artifact_uploads(upload_id) ON DELETE CASCADE,
+                    part_number INTEGER NOT NULL,
+                    file_size_bytes BIGINT NOT NULL,
+                    checksum_sha256 CHAR(64) NOT NULL,
+                    storage_path TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (upload_id, part_number),
+                    CONSTRAINT chk_artifact_upload_part_number CHECK (part_number >= 0),
+                    CONSTRAINT chk_artifact_upload_part_size CHECK (file_size_bytes > 0)
+                );
+                CREATE INDEX IF NOT EXISTS idx_artifact_upload_parts_path
+                    ON artifact_upload_parts (storage_path);
+
                 CREATE TABLE IF NOT EXISTS idempotency_keys (
                     idempotency_key VARCHAR(255) NOT NULL,
                     user_id TEXT NOT NULL DEFAULT '__legacy__',
