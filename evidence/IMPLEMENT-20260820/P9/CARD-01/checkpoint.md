@@ -1,7 +1,7 @@
 # CHECKPOINT IMPLEMENT-20260820 / P9 / CARD-01
 
 - baseline commit: `0c710fd`
-- current commit: `ebe9e20`
+- implementation commit: `88b8649`
 - main Agent: primary Codex implementation Agent
 - sub Agent review: not run; P10 remains the final read-only review gate
 - completed outcome: real local PostgreSQL + Redis + API + Outbox + Reaper + two persistent Docker Workers executed Case 2 and Case 3 through the authenticated Task API, uploaded durable result Artifacts, and cleared task-local Worker workspaces
