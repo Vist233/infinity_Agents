@@ -9,6 +9,14 @@ from backend.core.config import settings
 from backend.db_rls import rls_enabled_from_env, wrap_runtime_pool
 
 
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    """Read asyncpg.Record and lightweight test rows uniformly."""
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return default
+
+
 async def ensure_table(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
          await conn.execute(
@@ -326,10 +334,10 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     active_attempt_id BIGINT,
                     attempt_count INT NOT NULL DEFAULT 0,
                     max_attempts INT NOT NULL DEFAULT 3,
-                    -- The safe internal default is full trust. The
-                    -- authenticated API derives general for ordinary users
-                    -- and full for server-recognized superusers.
-                    required_trust_level VARCHAR(20) NOT NULL DEFAULT 'full',
+                    -- Deprecated migration-only marker. Runtime scheduling
+                    -- uses the single server-owned public execution pool and
+                    -- never reads this column.
+                    required_trust_level VARCHAR(20) NOT NULL DEFAULT 'public',
                     cancel_requested_at TIMESTAMPTZ,
                     result_artifact_id TEXT,
                     error_message TEXT,
@@ -440,6 +448,9 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_artifact_uploads_attempt
                     ON artifact_uploads (task_id, task_attempt_id, status, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_artifact_uploads_open_updated
+                    ON artifact_uploads (status, updated_at ASC)
+                    WHERE status = 'open';
 
                 CREATE TABLE IF NOT EXISTS artifact_upload_parts (
                     upload_id UUID NOT NULL REFERENCES artifact_uploads(upload_id) ON DELETE CASCADE,
@@ -478,13 +489,14 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS execution_pool TEXT NOT NULL DEFAULT 'public-default';
                 UPDATE tasks SET execution_pool = 'public-default'
                 WHERE execution_pool IS NULL OR btrim(execution_pool) = '';
-                ALTER TABLE tasks ADD COLUMN IF NOT EXISTS required_trust_level VARCHAR(20) NOT NULL DEFAULT 'full';
-                UPDATE tasks
-                SET required_trust_level = 'full'
-                WHERE required_trust_level IS NULL OR required_trust_level NOT IN ('general', 'full');
+                ALTER TABLE tasks ADD COLUMN IF NOT EXISTS required_trust_level VARCHAR(20) NOT NULL DEFAULT 'public';
+                ALTER TABLE tasks ALTER COLUMN required_trust_level SET DEFAULT 'public';
                 ALTER TABLE tasks DROP CONSTRAINT IF EXISTS chk_tasks_required_trust_level;
+                UPDATE tasks
+                SET required_trust_level = 'public'
+                WHERE required_trust_level IS DISTINCT FROM 'public';
                 ALTER TABLE tasks ADD CONSTRAINT chk_tasks_required_trust_level
-                    CHECK (required_trust_level IN ('general', 'full'));
+                    CHECK (required_trust_level = 'public');
                 ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS container_id TEXT;
                 ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS executor_image_digest TEXT;
                 ALTER TABLE task_attempts ADD COLUMN IF NOT EXISTS failure_code VARCHAR(50);
@@ -604,7 +616,9 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     namespace TEXT NOT NULL,
                     owner_user_id TEXT,
                     execution_pool TEXT NOT NULL DEFAULT 'public-default',
-                    trust_level VARCHAR(20) NOT NULL DEFAULT 'general',
+                    -- Deprecated migration-only marker; every Worker uses
+                    -- the same public execution policy.
+                    trust_level VARCHAR(20) NOT NULL DEFAULT 'public',
                     protocol_version TEXT NOT NULL DEFAULT 'legacy-v0',
                     runtime_capability TEXT NOT NULL DEFAULT 'legacy',
                     image_digest TEXT,
@@ -624,7 +638,9 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS execution_pool TEXT NOT NULL DEFAULT 'public-default';
                 UPDATE worker_enrollments SET execution_pool = 'public-default'
                 WHERE execution_pool IS NULL OR btrim(execution_pool) = '';
-                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS trust_level VARCHAR(20) NOT NULL DEFAULT 'general';
+                ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS trust_level VARCHAR(20) NOT NULL DEFAULT 'public';
+                ALTER TABLE worker_enrollments ALTER COLUMN trust_level SET DEFAULT 'public';
+                ALTER TABLE worker_enrollments DROP CONSTRAINT IF EXISTS chk_worker_enrollment_trust_level;
                 ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS protocol_version TEXT NOT NULL DEFAULT 'legacy-v0';
                 ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS runtime_capability TEXT NOT NULL DEFAULT 'legacy';
                 ALTER TABLE worker_enrollments ADD COLUMN IF NOT EXISTS image_digest TEXT;
@@ -638,11 +654,10 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 SET protocol_version = 'legacy-v0', runtime_capability = 'legacy', ready = FALSE
                 WHERE protocol_version IS NULL OR btrim(protocol_version) = '';
                 UPDATE worker_enrollments
-                SET trust_level = 'general'
-                WHERE trust_level IS NULL OR trust_level NOT IN ('general', 'full');
-                ALTER TABLE worker_enrollments DROP CONSTRAINT IF EXISTS chk_worker_enrollment_trust_level;
+                SET trust_level = 'public'
+                WHERE trust_level IS DISTINCT FROM 'public';
                 ALTER TABLE worker_enrollments ADD CONSTRAINT chk_worker_enrollment_trust_level
-                    CHECK (trust_level IN ('general', 'full'));
+                    CHECK (trust_level = 'public');
                 CREATE INDEX IF NOT EXISTS idx_worker_enrollments_namespace ON worker_enrollments (namespace, status);
                 CREATE INDEX IF NOT EXISTS idx_worker_enrollments_owner ON worker_enrollments (owner_user_id, namespace, status);
                 CREATE INDEX IF NOT EXISTS idx_worker_enrollments_pool_status ON worker_enrollments (execution_pool, status);
@@ -655,16 +670,20 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     worker_id TEXT NOT NULL,
                     namespace TEXT NOT NULL,
                     owner_user_id TEXT,
-                    trust_level VARCHAR(20) NOT NULL DEFAULT 'general',
+                    trust_level VARCHAR(20) NOT NULL DEFAULT 'public',
                     expires_at TIMESTAMPTZ NOT NULL,
                     used_at TIMESTAMPTZ,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 ALTER TABLE worker_enrollment_tokens ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
-                ALTER TABLE worker_enrollment_tokens ADD COLUMN IF NOT EXISTS trust_level VARCHAR(20) NOT NULL DEFAULT 'general';
+                ALTER TABLE worker_enrollment_tokens ADD COLUMN IF NOT EXISTS trust_level VARCHAR(20) NOT NULL DEFAULT 'public';
+                ALTER TABLE worker_enrollment_tokens ALTER COLUMN trust_level SET DEFAULT 'public';
                 ALTER TABLE worker_enrollment_tokens DROP CONSTRAINT IF EXISTS chk_worker_enrollment_token_trust_level;
+                UPDATE worker_enrollment_tokens
+                SET trust_level = 'public'
+                WHERE trust_level IS DISTINCT FROM 'public';
                 ALTER TABLE worker_enrollment_tokens ADD CONSTRAINT chk_worker_enrollment_token_trust_level
-                    CHECK (trust_level IN ('general', 'full'));
+                    CHECK (trust_level = 'public');
                 CREATE INDEX IF NOT EXISTS idx_worker_enrollment_tokens_worker
                     ON worker_enrollment_tokens (worker_id, namespace, expires_at);
             """
@@ -1548,55 +1567,6 @@ async def get_task_draft(pool, draft_id: str, owner_user_id: str) -> Optional[Di
     """
     async with pool.acquire() as conn:
         row = await conn.fetchrow(query, draft_id, owner_user_id)
-    return _task_draft_row(row) if row else None
-
-
-async def update_task_draft_inputs(
-    pool,
-    draft_id: str,
-    owner_user_id: str,
-    *,
-    method_path: Optional[str] = None,
-    method_filename: Optional[str] = None,
-    method_preview: Optional[str] = None,
-    method_size_bytes: Optional[int] = None,
-    method_hash_sha256: Optional[str] = None,
-    dataset_resource_id: Optional[str] = None,
-    dataset_filename: Optional[str] = None,
-    dataset_size_bytes: Optional[int] = None,
-    dataset_hash_sha256: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
-    query = """
-        UPDATE task_drafts
-        SET revision = revision + 1,
-            method_path = COALESCE($3, method_path),
-            method_filename = COALESCE($4, method_filename),
-            method_preview = COALESCE($5, method_preview),
-            method_size_bytes = COALESCE($6, method_size_bytes),
-            method_hash_sha256 = COALESCE($7, method_hash_sha256),
-            dataset_resource_id = COALESCE(NULLIF($8, '')::uuid, dataset_resource_id),
-            dataset_filename = COALESCE($9, dataset_filename),
-            dataset_size_bytes = COALESCE($10, dataset_size_bytes),
-            dataset_hash_sha256 = COALESCE($11, dataset_hash_sha256),
-            status = 'awaiting_user_confirmation',
-            updated_at = NOW()
-        WHERE draft_id = $1::uuid AND owner_user_id = $2
-          AND status IN ('draft', 'awaiting_user_confirmation', 'revising')
-          AND expires_at > NOW()
-        RETURNING draft_id, session_id, project_id, owner_user_id, revision, title,
-                  goal_summary, method_path, method_filename, method_preview,
-                  method_size_bytes, method_hash_sha256, dataset_resource_id,
-                  dataset_filename, dataset_size_bytes, dataset_hash_sha256,
-                  task_spec, missing_inputs, status, confirmed_task_id,
-                  created_at, updated_at, expires_at
-    """
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            query, draft_id, owner_user_id, method_path, method_filename,
-            method_preview, method_size_bytes, method_hash_sha256,
-            dataset_resource_id or "", dataset_filename, dataset_size_bytes,
-            dataset_hash_sha256,
-        )
     return _task_draft_row(row) if row else None
 
 

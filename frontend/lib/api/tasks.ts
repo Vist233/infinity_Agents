@@ -68,17 +68,7 @@ export interface ChatTaskConfirmation {
   dataset_name: string;
 }
 
-export interface WorkerEnrollmentInfo {
-  worker_id: string;
-  namespace: string;
-  credential: string;
-  persistent: boolean;
-  one_time: boolean;
-}
-
-// Compatibility contracts retained for the legacy Task Center cards that are
-// still shipped on the Cloudflare branch. The current direct bundle endpoint
-// remains the preferred path for the new Task Center UI.
+// Shared contracts for the persistent server-owned Worker cluster.
 export interface ProjectInfo {
   project_id: string;
   name: string;
@@ -106,11 +96,9 @@ export interface DatasetUploadInfo {
 export interface WorkerEnrollmentResponse {
   worker_id: string;
   namespace: string;
-  trust_level: "general" | "full" | "owner_trusted" | "institution_trusted" | "student_untrusted";
   worker_credential: string;
   execution_pool?: string;
   credential_expires_at: string | null;
-  control_base_url: string;
   persistent: boolean;
   one_time: boolean;
 }
@@ -118,7 +106,6 @@ export interface WorkerEnrollmentResponse {
 export interface WorkerRegistration {
   worker_id: string;
   namespace: string;
-  trust_level: "owner_trusted" | "institution_trusted" | "student_untrusted";
   status: "active" | "revoked" | "draining" | string;
   presence: "online" | "offline" | "never_seen";
   credential_expires_at: string | null;
@@ -126,8 +113,6 @@ export interface WorkerRegistration {
   created_at: string | null;
   revoked_at: string | null;
   credential_available?: boolean;
-  worker_kind?: "public" | "user" | string;
-  pool_id?: string | null;
   execution_pool?: string;
   ready?: boolean;
   protocol_version?: string;

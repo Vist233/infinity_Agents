@@ -11,23 +11,29 @@
 - `frontend/out` 是静态资源；`cloudflare-worker/src/index.ts` 是动态入口。
 - Infinity Agents 的浏览器产品使用 Analysis/Coding 命名；ImageJudge 继续使用
   独立的 `/image-judge/*` 命名空间、D1、KV 和 Durable Object。
-- D1 是任务事实源，R2 保存资源和隔离中的 Artifact；Redis 不作为 Cloudflare
-  binding。用户自有 Docker Worker 可以通过本地配置访问现有远程 Redis。
+- 当前任务事实源仍是中心 PostgreSQL，Redis 只负责通知、心跳和恢复；R2/D1
+  仅属于尚未完成的 Cloudflare Edge 适配层，不得与本地 PostgreSQL 任务事实源并行
+  运行。用户自有 Docker Worker 通过管理员提供的配置访问同一集群。
 - 任务中心提供直接创建任务卡，使用与 Agent confirmation 卡相同的
   TaskSpec/Task 上传与幂等路径，并将 `agent_confirmation=false`；Analysis
   对话中的 confirmation 卡仍保留为聊天入口。
-- Worker 注册卡默认折叠，只填写 Namespace。Namespace 可以被同一用户的多台
-  Worker 复用；每台 Worker ID 和长期凭证由服务端生成并写入 D1（只存凭证摘要）。
-  只有 superuser 映射到 `owner_trusted`，普通用户和学生映射到
-  `institution_trusted`。每个 Worker 凭证同时只能占用一个反向握手会话。
-- 公共执行池固定为 `public-default` / `infinity-public`，由超级用户页面创建
-  可按需创建的独立持久 Worker；任务采用“创建者自有 Worker 优先，公共 Worker 回退”。
-  Docker 执行实例在 Cloudflare Edge 外部运行，Edge 只提供控制面。
+- Worker 注册卡默认折叠；Namespace、Pool、数据库、Redis、Provider 和公网地址均由
+  超级管理员冻结。每次创建由服务端生成新的 Worker ID 和持久 credential，并保证同一
+  credential 同时只能占用一个活动握手会话。所有 Worker 使用同一公共执行策略，不存在
+  `general/full` 或 `trusted/student` 执行等级。
+- 公共执行池固定为 `public-default` / `infinity-public`，可按需创建任意数量的独立持久
+  Worker；普通用户只能触发服务器签发 credential 和查看该 Worker 状态，不能修改集群
+  配置。Docker 执行实例在 Cloudflare Edge 外部运行，Edge 只提供控制面。
+- 当前本地 PostgreSQL-backed API 已按上述单一公共策略验收；Cloudflare Edge 目录中
+  仍有 D1 旧任务/注册实现，尚未完成到中央 PostgreSQL API 的认证代理。因此本手册的
+  Cloudflare 发布步骤在该代理合同完成并复验前保持阻断，不把本地验收当作线上部署通过。
 - 公共池的两 Worker 配置和验收步骤见 [`CLOUDFLARE_PUBLIC_WORKER_POOL.md`](./CLOUDFLARE_PUBLIC_WORKER_POOL.md)。
 
 ## 每次发布
 
 ```sh
+# 当前门禁：中央 PostgreSQL API 代理和同源认证合同尚未完成时，不执行以下部署命令。
+# 先完成并验收该代理，再按此流程发布，避免把旧 D1 任务实现部署到公网。
 git switch cloudflare-deploy
 git pull --ff-only origin cloudflare-deploy
 

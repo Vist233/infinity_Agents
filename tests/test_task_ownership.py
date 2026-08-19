@@ -62,7 +62,6 @@ async def test_submit_rejects_a_task_spec_owned_by_another_user():
         project_id="project-1",
         title="private task",
         status="queued",
-        required_trust_level="general",
         created_by="current-user",
         created_at=datetime.now(timezone.utc).isoformat(),
     )

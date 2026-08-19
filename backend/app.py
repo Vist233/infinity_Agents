@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, WebSocket, WebSock
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse, StreamingResponse
 from pathlib import Path as FilePath
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Literal, Optional, Tuple, Union
 from fastapi.middleware.cors import CORSMiddleware
 from agent.paperAgent import create_paper_agent
 from agent.tools.pdf_extractor import PDFExtractor, ExtractedContent
@@ -50,7 +50,6 @@ from backend.db import (
     update_session_context_compression_state,
     upsert_task_draft,
     get_task_draft,
-    update_task_draft_inputs,
     cancel_task_draft,
 )
 from backend.auth import (
@@ -180,9 +179,9 @@ async def lifespan(app):
     if trust_issuer_dsn:
         try:
             # This pool is deliberately raw and is used only by the server
-            # derived full-trust enrollment path. Its login inherits the
+            # owned public-cluster enrollment path. Its login inherits the
             # NOLOGIN infinity_trust_issuer role; the ordinary API login does
-            # not have SET ROLE permission for that role.
+            # not have permission to invoke the protected issuer function.
             app.state.trust_issuer_pool = await asyncpg.create_pool(
                 dsn=trust_issuer_dsn,
                 min_size=1,
@@ -1693,7 +1692,6 @@ async def _persist_task_draft_tool_result(
         "status": draft["status"],
         "title": draft["title"],
         "goal_summary": draft["goal_summary"],
-        "session_id": draft["session_id"],
         "method": ({
             "filename": draft["method_filename"],
             "size_bytes": draft["method_size_bytes"],
@@ -2601,6 +2599,8 @@ class CreateDatasetRequest(BaseModel):
 
 
 class CreateTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     project_id: str
     task_spec_id: str
     dataset_snapshot_id: str
@@ -2608,7 +2608,13 @@ class CreateTaskRequest(BaseModel):
     method_source_id: Optional[str] = None
     idempotency_key: Optional[str] = None
     max_attempts: int = Field(default=3, ge=1, le=10)
+    # ``confirmation_id`` remains accepted for the Analysis confirmation
+    # path. Task Center uses the explicit ``chat_confirmation_id`` marker so
+    # the two submission modes cannot be confused by a silent extra field.
     confirmation_id: Optional[str] = None
+    chat_confirmation_id: Optional[Union[str, bool]] = None
+    submission_source: Optional[Literal["task_center"]] = None
+    agent_confirmation: Optional[bool] = None
 
 
 class SubmitTaskBundleResponse(BaseModel):
@@ -2740,12 +2746,10 @@ def _worker_enrollment_admin_allowed(user: Principal) -> bool:
 
 
 def _worker_enrollment_issue_allowed(user: Principal) -> bool:
-    """Every signed-in user may issue a general Worker for their own account.
+    """Allow a signed-in user to request a server-owned public credential.
 
-    Trust is still derived below: only a server-recognized superuser can
-    receive full trust.  Keeping issuance separate from the operator-only
-    revoke/health/outbox guard lets students run their own local Worker
-    without giving them administrative control over another account.
+    The request is only a trigger. Namespace, execution pool, credential
+    persistence and all database privileges remain under the server issuer.
     """
     return bool(user.user_id.strip())
 
@@ -2783,11 +2787,8 @@ async def issue_worker_enrollment_endpoint(
                 app.state.db_pool,
                 worker_id,
                 namespace,
-                # The authenticated user is retained only as the audit/status
-                # owner. The server-owned execution_pool remains
-                # public-default.
                 owner_user_id=user.user_id,
-                execution_pool="public-default",
+                trust_issuer_pool=getattr(app.state, "trust_issuer_pool", None),
             )
     except Exception as exc:
         logger.exception("Worker enrollment issuance failed for user=%s", user.user_id)
@@ -2797,9 +2798,6 @@ async def issue_worker_enrollment_endpoint(
         "namespace": credential.namespace,
         "worker_credential": credential.credential,
         "execution_pool": credential.execution_pool,
-        # Kept as a server-derived legacy label for older clients. It is not
-        # an execution capability and is never accepted from the browser.
-        "trust_level": "general",
         "credential_expires_at": None,
         "persistent": True,
         "one_time": False,
@@ -2824,7 +2822,6 @@ def _worker_status_payload(row: Any) -> Dict[str, Any]:
         "worker_id": str(row["worker_id"]),
         "namespace": str(row["namespace"]),
         "execution_pool": str(row["execution_pool"] or "public-default"),
-        "trust_level": "general",
         "status": status,
         "presence": presence,
         "ready": bool(row["ready"]),
@@ -2892,7 +2889,6 @@ async def get_worker_credential_endpoint(
         "namespace": namespace,
         "worker_credential": credential,
         "execution_pool": "public-default",
-        "trust_level": "general",
         "credential_expires_at": None,
         "persistent": True,
         "one_time": False,
@@ -3308,8 +3304,7 @@ async def _worker_task_input(task_id: str, worker: Dict[str, str], kind: str) ->
     if kind not in {"dataset", "method"}:
         raise HTTPException(status_code=404, detail="Worker input not found")
     query = """
-        SELECT t.lease_owner, t.lease_token, t.status, t.required_trust_level,
-               t.execution_pool,
+        SELECT t.lease_owner, t.lease_token, t.status, t.execution_pool,
                ds.stored_path AS dataset_path, ds.original_filename AS dataset_name,
                ms.stored_path AS method_path, ms.original_filename AS method_name
         FROM tasks t
@@ -4334,6 +4329,43 @@ async def _require_task_api_key(request: Request) -> Optional[Principal]:
     return None
 
 
+def _validate_task_submission_contract(request: CreateTaskRequest) -> None:
+    """Keep direct Task Center submission distinct from Agent confirmation.
+
+    The browser sends the marker because Task Center creates a task directly;
+    the server must enforce that marker as well so a stale or hand-written
+    client cannot silently fall back to the confirmation workflow.
+    """
+    if request.submission_source == "task_center":
+        if request.agent_confirmation is not False:
+            raise HTTPException(
+                status_code=400,
+                detail="Task Center submissions require agent_confirmation=false",
+            )
+        if request.chat_confirmation_id not in (None, False):
+            raise HTTPException(
+                status_code=400,
+                detail="Task Center submissions cannot carry an Agent confirmation ID",
+            )
+        if request.confirmation_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Task Center submissions cannot carry an Agent confirmation ID",
+            )
+        return
+
+    if request.agent_confirmation is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_confirmation is only valid for Task Center submissions",
+        )
+    if request.chat_confirmation_id is False:
+        raise HTTPException(
+            status_code=400,
+            detail="chat_confirmation_id=false requires submission_source=task_center",
+        )
+
+
 def _rate_limit_settings() -> tuple[int, int]:
     """(limit, window_seconds) for per-user paperAgent request throttling."""
     limit = int(os.getenv("PAPER_CHAT_RATE_LIMIT", "3"))
@@ -5319,12 +5351,12 @@ async def submit_task_bundle_endpoint(
                     """
                     INSERT INTO tasks (
                         task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
-                        title, status, max_attempts, required_trust_level, created_by
-                    ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, 'queued', 3, $7, $8)
+                        title, status, max_attempts, created_by
+                    ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, 'queued', 3, $7)
                     RETURNING task_id, status, attempt_count
                     """,
                     task_id, task_spec_id, dataset_snapshot_id, selected_project_id,
-                    method_source_id, task_title, "general", user.user_id,
+                    method_source_id, task_title, user.user_id,
                 )
                 await conn.execute(
                     """
@@ -5556,9 +5588,6 @@ async def confirm_task_draft_endpoint(
     method_source_id = str(uuid.uuid4())
     dataset_snapshot_id = str(uuid.uuid4())
     task_id = str(uuid.uuid4())
-    # Legacy schema compatibility only. New tasks have one public Worker
-    # execution policy; this value is not derived from the requesting user.
-    required_trust = "general"
     method_upload_root = FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", "/tmp/uploaded-method-sources")).resolve()
     method_final_path = method_upload_root / "documents" / f"{draft_id}-{FilePath(method_filename).name}"
     method_final_created = False
@@ -5635,12 +5664,12 @@ async def confirm_task_draft_endpoint(
                     """
                     INSERT INTO tasks (
                         task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
-                        title, status, max_attempts, required_trust_level, created_by
-                    ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, 'queued', 3, $7, $8)
+                        title, status, max_attempts, created_by
+                    ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, 'queued', 3, $7)
                     RETURNING task_id, status, attempt_count
                     """,
                     task_id, task_spec_id, dataset_snapshot_id, str(draft["project_id"]),
-                    method_source_id, title, required_trust, user.user_id,
+                    method_source_id, title, user.user_id,
                 )
                 await conn.execute(
                     """
@@ -5703,6 +5732,7 @@ async def create_task_endpoint(
     user: Optional[Principal] = Depends(_require_task_api_key),
 ):
     """Create a new task with idempotency support."""
+    _validate_task_submission_contract(request)
     pool = app.state.db_pool
 
     # The authenticated confirmation path is atomic and requires a user-scoped
@@ -5720,9 +5750,6 @@ async def create_task_endpoint(
             title=request.title,
             status="queued",
             max_attempts=request.max_attempts,
-            # Legacy schema compatibility only; all Workers use the same
-            # public-pool execution policy.
-            required_trust_level="general",
             created_by=user.user_id,
         )
         try:

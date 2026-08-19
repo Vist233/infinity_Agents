@@ -1,15 +1,14 @@
 # Local PostgreSQL security profile
 
-> **2026-08-20 架构覆盖说明**：本文件记录当前数据库安全实现，因此仍包含
-> `trust_level`、owner-scoped claim 和 trust issuer 等遗留结构。目标架构由
-> [`ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md`](./ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md)
-> 定义：所有 Worker 位于同一公共 Pool，普通用户只能触发服务器签发 credential 并查看
-> 对应 Worker 状态；只有超级管理员配置集群地址、平台密钥、Namespace/Pool 和调度策略。
-> 在数据库迁移与负向测试完成前，不得删除现有保护，也不得把旧 trust 分级视为目标设计。
+> **2026-08-20 架构覆盖说明**：所有 Worker 使用同一公共执行策略。数据库中仍保留
+> `trust_level`、`required_trust_level` 等旧列，只为平滑迁移历史表结构；迁移会把它们
+> 固定为 `public`，运行时不读取它们，也不会向 API 或 Worker 暴露信任等级。任务的
+> owner/project 隔离仍是用户数据可见性边界；专用 issuer 角色只负责 credential 签发的
+> 数据库权限隔离，不代表另一种 Worker 执行等级。
 
 `scripts/rls_roles.sql` is the explicit database-security step for a clean
 local acceptance database. It creates non-superuser, `NOBYPASSRLS` API,
-Worker, Outbox, server-only trust-issuer, and lease-reaper roles, adds project/Task composite references, and forces RLS on the
+Worker, server-only credential-issuer, Outbox, and lease-reaper roles, adds project/Task composite references, and forces RLS on the
 project, resource, provider, Task, Attempt, Outbox, and Artifact tables.
 
 The application must set the request-scoped `app.user_id` on the same
@@ -80,7 +79,7 @@ administrator before applying the SQL profile. The runtime pool is wrapped by
 `backend.db_rls.RlsPool` when `DB_RLS_ENABLED=1`; it selects the managed role
 from the actor context, injects `app.user_id` or `app.worker_id` plus the
 persistent Worker credential on checkout, and resets all actor settings before
-release. The server-derived superuser enrollment path uses a dedicated
+release. The server-owned public enrollment path uses a dedicated
 `TRUST_ISSUER_DATABASE_URL` login that inherits only
 `infinity_trust_issuer`; the ordinary API login is explicitly denied membership
 in that role. The API's Worker gateway uses its own Worker-role pool. Worker,
@@ -89,26 +88,28 @@ cannot set one another's roles. A deployment must still run the negative
 Alice/Bob and no-context probes against the real database; a schema-only
 preflight is not sufficient.
 
-## Legacy Worker trust gate（待迁移）
+## Legacy Worker columns and current public policy
 
-以下内容是当前实现事实，不是目标权限模型。实施统一公共集群时，需要用 credential
-签发权限、状态可见性、公共 Pool CAS claim 和协议兼容门禁替换它，并通过迁移保证旧
-Worker 不能越权领取或上传。
+`worker_enrollments.trust_level`, `worker_enrollment_tokens.trust_level`, and
+`tasks.required_trust_level` are server-maintained compatibility columns. The
+schema migration normalizes every existing value to `public` and adds a fixed
+constraint; runtime identity, claim, input, artifact, and finalize code never
+uses these columns as a capability decision. New Worker rows always use the
+server-owned `public-default` execution pool.
 
-`worker_enrollments.owner_user_id` and `trust_level` are server-owned fields.
-The Add Worker endpoint allows every signed-in user to issue a Worker for their
-own account, but derives `full` only from a verified `superuser`/`root` OIDC
-role or `SUPERUSER_USER_IDS`; students and all other users receive `general`.
-The internal `tasks.required_trust_level` default remains `full`, while the
-authenticated user API writes `general` for ordinary users and `full` for
-superusers. A general Worker can claim only general tasks created by its owner
-account; a full Worker is the explicitly privileged server execution tier.
-The claim SQL, input-transfer SQL, and artifact registration all repeat this
-check, so a Worker cannot promote itself by editing `worker.env` or by sending
-a different header. The ordinary API role can call only the general-trust
-issuer; full trust is a separate function executable only after the controlled
-runtime login performs `SET LOCAL ROLE infinity_trust_issuer` for the
-server-derived superuser path.
+Every credential is persistent, separately revocable, and bound to one active
+Worker instance at a time. A signed-in user may request a server-issued
+credential and inspect the resulting Worker status, but cannot choose the
+Namespace, pool, database, Redis, Provider, trust label, or dispatch policy.
+The dedicated `infinity_trust_issuer` login remains because ordinary API
+connections must not be able to invoke the protected credential-issuance
+function directly; it is a database privilege boundary, not a trust tier.
+
+The owner/project predicates remain deliberately in the user-facing Task API
+and the current Worker claim path as a data-visibility boundary. Removing that
+predicate would require an explicit cross-user Method/Dataset authorization
+contract; it is not safe to infer that change from the single-public-pool
+decision.
 
 Worker task policies require a credential-bound active lease for claims,
 attempts, events, artifacts, and outbox rows. The status transition keeps the

@@ -67,13 +67,35 @@ CREATE TABLE IF NOT EXISTS artifact_upload_parts (
 );
 CREATE INDEX IF NOT EXISTS idx_artifact_uploads_attempt
   ON artifact_uploads (task_id, task_attempt_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_artifact_uploads_open_updated
+  ON artifact_uploads (status, updated_at ASC)
+  WHERE status = 'open';
 CREATE INDEX IF NOT EXISTS idx_artifact_upload_parts_path
   ON artifact_upload_parts (storage_path);
 ALTER TABLE IF EXISTS tasks ADD COLUMN IF NOT EXISTS execution_pool TEXT NOT NULL DEFAULT 'public-default';
 UPDATE tasks SET execution_pool = 'public-default'
 WHERE execution_pool IS NULL OR btrim(execution_pool) = '';
+ALTER TABLE IF EXISTS tasks ADD COLUMN IF NOT EXISTS required_trust_level VARCHAR(20) NOT NULL DEFAULT 'public';
+ALTER TABLE IF EXISTS tasks ALTER COLUMN required_trust_level SET DEFAULT 'public';
+ALTER TABLE IF EXISTS tasks DROP CONSTRAINT IF EXISTS chk_tasks_required_trust_level;
+UPDATE tasks SET required_trust_level = 'public'
+WHERE required_trust_level IS DISTINCT FROM 'public';
 ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS execution_pool TEXT NOT NULL DEFAULT 'public-default';
 ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS credential_ciphertext TEXT;
+ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS trust_level VARCHAR(20) NOT NULL DEFAULT 'public';
+ALTER TABLE IF EXISTS worker_enrollments ALTER COLUMN trust_level SET DEFAULT 'public';
+ALTER TABLE IF EXISTS worker_enrollments DROP CONSTRAINT IF EXISTS chk_worker_enrollment_trust_level;
+UPDATE worker_enrollments SET trust_level = 'public'
+WHERE trust_level IS DISTINCT FROM 'public';
+-- PostgreSQL cannot add a CHECK constraint in the same transaction after an
+-- UPDATE has queued row-level trigger events. Commit the harmless legacy
+-- marker normalization before adding the fixed-value constraints below.
+COMMIT;
+BEGIN;
+ALTER TABLE IF EXISTS tasks ADD CONSTRAINT chk_tasks_required_trust_level
+  CHECK (required_trust_level = 'public');
+ALTER TABLE IF EXISTS worker_enrollments ADD CONSTRAINT chk_worker_enrollment_trust_level
+  CHECK (trust_level = 'public');
 ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS protocol_version TEXT NOT NULL DEFAULT 'legacy-v0';
 ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS runtime_capability TEXT NOT NULL DEFAULT 'legacy';
 ALTER TABLE IF EXISTS worker_enrollments ADD COLUMN IF NOT EXISTS image_digest TEXT;
@@ -242,11 +264,8 @@ $$;
 REVOKE ALL ON FUNCTION app.project_access(uuid, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.project_access(uuid, text) TO infinity_api, infinity_worker;
 
--- The legacy trust column does not grant execution capability.  Until the
--- public-pool scheduling policy is explicitly enabled, this conservative
--- compatibility helper keeps Worker claims scoped to the audit owner.  The
--- function is SECURITY DEFINER so the policy does not recurse through
--- worker_enrollments RLS.
+-- All Workers use the same public execution policy. The owner predicate is a
+-- data-visibility boundary, not a Worker trust tier.
 CREATE OR REPLACE FUNCTION app.worker_can_access_task(target_task uuid, actor text) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
   SELECT EXISTS (
@@ -802,97 +821,46 @@ $$;
 REVOKE ALL ON FUNCTION app.reaper_mark_artifact_cleanup(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.reaper_mark_artifact_cleanup(text) TO infinity_reaper;
 
-CREATE OR REPLACE FUNCTION app.worker_trust_allows(required text, actor text) RETURNS boolean
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
-  SELECT required IN ('general', 'full')
+-- Multipart uploads can be abandoned after a Worker lease expires. Keep the
+-- candidate scan and delete behind Reaper-only functions so the data-plane
+-- Worker cannot purge another Worker's upload state. The Python reaper holds
+-- the row locks while removing the exact staging directory, then calls the
+-- delete function; a failed filesystem removal therefore remains retryable.
+CREATE OR REPLACE FUNCTION app.reaper_expired_multipart_uploads(
+  target_limit integer,
+  stale_before timestamptz
+) RETURNS TABLE(upload_id uuid, staging_path text)
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
+  SELECT u.upload_id, u.staging_path
+  FROM artifact_uploads u
+  WHERE u.status = 'open'
+    AND u.updated_at < stale_before
+  ORDER BY u.updated_at ASC
+  LIMIT GREATEST(1, LEAST(COALESCE(target_limit, 50), 200))
+  FOR UPDATE SKIP LOCKED
 $$;
-REVOKE ALL ON FUNCTION app.worker_trust_allows(text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.worker_trust_allows(text, text) TO infinity_worker;
+REVOKE ALL ON FUNCTION app.reaper_expired_multipart_uploads(integer, timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.reaper_expired_multipart_uploads(integer, timestamptz) TO infinity_reaper;
 
--- The ordinary API role can only issue general-trust enrollments. Full trust
--- uses a separate NOLOGIN role that the controlled runtime login may SET ROLE
--- to for the duration of the server-derived superuser issuance call. A direct
--- connection as infinity_api cannot invoke the full-trust function.
-DROP FUNCTION IF EXISTS app.issue_worker_enrollment(text, text, text, text, text);
-CREATE OR REPLACE FUNCTION app.issue_worker_enrollment(
-  p_worker_id text,
-  p_credential_hash text,
-  p_namespace text,
-  p_owner_user_id text
-) RETURNS void
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
-DECLARE
-  existing_owner text;
-  existing_namespace text;
-  existing_status text;
-  existing_revoked_at timestamptz;
-BEGIN
-  IF p_owner_user_id IS NOT NULL THEN
-    -- Serialize the account Namespace check with concurrent Worker issuance.
-    -- Without this transaction-scoped lock, two simultaneous requests can
-    -- both observe no active enrollment and commit different Namespaces.
-    PERFORM pg_advisory_xact_lock(hashtextextended(p_owner_user_id, 0));
-  END IF;
-  IF p_owner_user_id IS DISTINCT FROM app.current_user_id() THEN
-    RAISE EXCEPTION 'Worker owner does not match the current API user';
-  END IF;
-  IF p_namespace IS NOT NULL THEN
-    PERFORM pg_advisory_xact_lock(hashtextextended('worker-namespace:' || p_namespace, 0));
-    IF EXISTS (
-      SELECT 1
-      FROM worker_enrollments
-      WHERE namespace = p_namespace
-        AND owner_user_id IS NOT NULL
-        AND owner_user_id IS DISTINCT FROM p_owner_user_id
-    ) THEN
-      RAISE EXCEPTION 'Worker Namespace is already bound to another user';
-    END IF;
-  END IF;
-  SELECT owner_user_id, status, revoked_at
-  INTO existing_owner, existing_status, existing_revoked_at
-  FROM worker_enrollments
-  WHERE worker_id = p_worker_id
-  FOR UPDATE;
-  IF existing_status = 'active' AND existing_revoked_at IS NULL THEN
-    RAISE EXCEPTION 'Worker ID already has an active enrollment';
-  END IF;
-  IF existing_owner IS NOT NULL AND existing_owner IS DISTINCT FROM p_owner_user_id THEN
-    RAISE EXCEPTION 'Worker is already owned by another user';
-  END IF;
-  IF p_owner_user_id IS NOT NULL THEN
-    SELECT namespace INTO existing_namespace
-    FROM worker_enrollments
-    WHERE owner_user_id = p_owner_user_id
-      AND status = 'active'
-      AND namespace IS DISTINCT FROM p_namespace
-    LIMIT 1;
-    IF existing_namespace IS NOT NULL THEN
-      RAISE EXCEPTION 'Account is already bound to another Worker Namespace';
-    END IF;
-  END IF;
-  UPDATE worker_enrollments
-  SET credential_hash = p_credential_hash,
-      namespace = p_namespace,
-      owner_user_id = p_owner_user_id,
-      trust_level = 'general',
-      status = 'active',
-      enrolled_at = NOW(),
-      revoked_at = NULL,
-      last_seen_at = NOW()
-  WHERE worker_id = p_worker_id;
-  IF NOT FOUND THEN
-    INSERT INTO worker_enrollments (
-      worker_id, credential_hash, namespace, owner_user_id, trust_level,
-      status, last_seen_at
-    ) VALUES (
-      p_worker_id, p_credential_hash, p_namespace, p_owner_user_id,
-      'general', 'active', NOW()
-    );
-  END IF;
-END
+CREATE OR REPLACE FUNCTION app.reaper_delete_expired_multipart_upload(
+  target_upload uuid,
+  stale_before timestamptz
+) RETURNS text
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
+  DELETE FROM artifact_uploads
+  WHERE upload_id = target_upload
+    AND status = 'open'
+    AND updated_at < stale_before
+  RETURNING staging_path
 $$;
-REVOKE ALL ON FUNCTION app.issue_worker_enrollment(text, text, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.issue_worker_enrollment(text, text, text, text) TO infinity_api;
+REVOKE ALL ON FUNCTION app.reaper_delete_expired_multipart_upload(uuid, timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.reaper_delete_expired_multipart_upload(uuid, timestamptz) TO infinity_reaper;
+
+-- Older releases created two separate issuer functions. Remove those
+-- capability branches before installing the single public-cluster issuer.
+DROP FUNCTION IF EXISTS app.issue_worker_enrollment(text, text, text, text, text);
+DROP FUNCTION IF EXISTS app.issue_worker_enrollment(text, text, text, text);
+DROP FUNCTION IF EXISTS app.issue_full_worker_enrollment(text, text, text, text);
 
 -- Public-pool issuance keeps the signed-in user as the audit owner, but does
 -- not bind the shared server Namespace to that user.  Scheduling access is a
@@ -934,7 +902,7 @@ BEGIN
       namespace = p_namespace,
       owner_user_id = p_owner_user_id,
       execution_pool = 'public-default',
-      trust_level = 'general',
+      trust_level = 'public',
       protocol_version = 'legacy-v0',
       runtime_capability = 'legacy',
       image_digest = NULL,
@@ -955,90 +923,13 @@ BEGIN
       trust_level, protocol_version, runtime_capability, ready, status, last_seen_at
     ) VALUES (
       p_worker_id, p_credential_hash, p_credential_ciphertext, p_namespace, p_owner_user_id,
-      'public-default', 'general', 'legacy-v0', 'legacy', FALSE, 'active', NOW()
+      'public-default', 'public', 'legacy-v0', 'legacy', FALSE, 'active', NOW()
     );
   END IF;
 END
 $$;
 REVOKE ALL ON FUNCTION app.issue_public_worker_enrollment(text, text, text, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.issue_public_worker_enrollment(text, text, text, text, text) TO infinity_api;
-
-CREATE OR REPLACE FUNCTION app.issue_full_worker_enrollment(
-  p_worker_id text,
-  p_credential_hash text,
-  p_namespace text,
-  p_owner_user_id text
-) RETURNS void
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
-DECLARE
-  existing_owner text;
-  existing_namespace text;
-  existing_status text;
-  existing_revoked_at timestamptz;
-BEGIN
-  IF p_owner_user_id IS NOT NULL THEN
-    PERFORM pg_advisory_xact_lock(hashtextextended(p_owner_user_id, 0));
-  END IF;
-  IF p_owner_user_id IS DISTINCT FROM app.current_user_id() THEN
-    RAISE EXCEPTION 'Worker owner does not match the current API user';
-  END IF;
-  IF p_namespace IS NOT NULL THEN
-    PERFORM pg_advisory_xact_lock(hashtextextended('worker-namespace:' || p_namespace, 0));
-    IF EXISTS (
-      SELECT 1
-      FROM worker_enrollments
-      WHERE namespace = p_namespace
-        AND owner_user_id IS NOT NULL
-        AND owner_user_id IS DISTINCT FROM p_owner_user_id
-    ) THEN
-      RAISE EXCEPTION 'Worker Namespace is already bound to another user';
-    END IF;
-  END IF;
-  SELECT owner_user_id, status, revoked_at
-  INTO existing_owner, existing_status, existing_revoked_at
-  FROM worker_enrollments
-  WHERE worker_id = p_worker_id
-  FOR UPDATE;
-  IF existing_status = 'active' AND existing_revoked_at IS NULL THEN
-    RAISE EXCEPTION 'Worker ID already has an active enrollment';
-  END IF;
-  IF existing_owner IS NOT NULL AND existing_owner IS DISTINCT FROM p_owner_user_id THEN
-    RAISE EXCEPTION 'Worker is already owned by another user';
-  END IF;
-  IF p_owner_user_id IS NOT NULL THEN
-    SELECT namespace INTO existing_namespace
-    FROM worker_enrollments
-    WHERE owner_user_id = p_owner_user_id
-      AND status = 'active'
-      AND namespace IS DISTINCT FROM p_namespace
-    LIMIT 1;
-    IF existing_namespace IS NOT NULL THEN
-      RAISE EXCEPTION 'Account is already bound to another Worker Namespace';
-    END IF;
-  END IF;
-  UPDATE worker_enrollments
-  SET credential_hash = p_credential_hash,
-      namespace = p_namespace,
-      owner_user_id = p_owner_user_id,
-      trust_level = 'full',
-      status = 'active',
-      enrolled_at = NOW(),
-      revoked_at = NULL,
-      last_seen_at = NOW()
-  WHERE worker_id = p_worker_id;
-  IF NOT FOUND THEN
-    INSERT INTO worker_enrollments (
-      worker_id, credential_hash, namespace, owner_user_id, trust_level,
-      status, last_seen_at
-    ) VALUES (
-      p_worker_id, p_credential_hash, p_namespace, p_owner_user_id,
-      'full', 'active', NOW()
-    );
-  END IF;
-END
-$$;
-REVOKE ALL ON FUNCTION app.issue_full_worker_enrollment(text, text, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.issue_full_worker_enrollment(text, text, text, text) TO infinity_trust_issuer;
+GRANT EXECUTE ON FUNCTION app.issue_public_worker_enrollment(text, text, text, text, text) TO infinity_trust_issuer;
 
 -- Revoke is an operator action. The HTTP layer checks the authenticated
 -- operator, while the database capability is held by the dedicated trust
@@ -1060,7 +951,6 @@ BEGIN
 END
 $$;
 REVOKE ALL ON FUNCTION app.revoke_worker_enrollment(text, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION app.revoke_worker_enrollment(text, text) FROM infinity_api;
 GRANT EXECUTE ON FUNCTION app.revoke_worker_enrollment(text, text) TO infinity_trust_issuer;
 
 -- Cross-project references are part of the ownership boundary. NOT VALID lets
@@ -1136,10 +1026,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
   artifacts, idempotency_keys, project_resources, session_resource_links,
   provider_profiles, provider_secrets
 TO infinity_api;
--- Enrollment trust is server-derived.  The ordinary API role may create or
--- rotate an enrollment, but it cannot supply or mutate trust_level through
--- direct SQL; the protected issuance function below is the only RLS path that
--- writes that column.
+-- Worker enrollment policy is server-owned. The ordinary API role cannot
+-- invoke the issuer or mutate the migration-only policy marker directly.
 GRANT SELECT, DELETE ON worker_enrollments TO infinity_api;
 GRANT INSERT (
   worker_id, credential_hash, credential_ciphertext, namespace, owner_user_id, status,
@@ -1156,8 +1044,7 @@ GRANT INSERT (
 GRANT UPDATE (used_at) ON worker_enrollment_tokens TO infinity_api;
 
 -- Workers can only change the lease/state columns needed by the executor.
--- Immutable task inputs, ownership, and required trust are never writable by
--- the Worker database role, even if its process is compromised.
+-- Immutable task inputs and ownership are never writable by the Worker role.
 GRANT SELECT, DELETE ON artifacts TO infinity_worker;
 -- Multipart state is visible only through the Worker role and its lease-bound
 -- policies below. Immutable upload identity/expectations are insert-only;

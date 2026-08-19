@@ -23,15 +23,12 @@ function poolResponse(count: number) {
     workers: Array.from({ length: count }, (_, index) => ({
       worker_id: `public-worker-${index + 1}`,
       namespace: "infinity-public",
-      trust_level: "owner_trusted" as const,
       status: "active",
       presence: "never_seen" as const,
       credential_expires_at: null,
       last_seen_at: null,
       created_at: null,
       revoked_at: null,
-      worker_kind: "public" as const,
-      pool_id: "public-default",
     })),
   };
 }
@@ -45,9 +42,7 @@ describe("PublicWorkerAdminPanel", () => {
     vi.mocked(createPublicWorker).mockResolvedValue({
       worker_id: "public-worker-4",
       namespace: "infinity-public",
-      trust_level: "owner_trusted",
       credential_expires_at: null,
-      control_base_url: "https://infinity.zhangyvjing.com",
       worker_credential: "wc_test_4",
       persistent: true,
       one_time: false,

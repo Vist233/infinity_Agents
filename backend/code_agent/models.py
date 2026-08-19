@@ -125,10 +125,6 @@ class Task:
     active_attempt_id: Optional[int] = None
     attempt_count: int = 0
     max_attempts: int = 3
-    # The API derives this from the creator: ordinary users create
-    # account-scoped general tasks, while a superuser can create full-trust
-    # tasks. Internal callers keep the conservative full default.
-    required_trust_level: str = "full"
     cancel_requested_at: Optional[str] = None
     result_artifact_id: Optional[str] = None
     error_message: Optional[str] = None

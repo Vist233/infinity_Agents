@@ -5,9 +5,10 @@ stores only its digest. Namespace, pool, provider, and execution capability
 are server-owned; a browser cannot select them. All compatible Workers join the
 same public PostgreSQL/Redis cluster, with independent revocable credentials.
 
-The legacy ``trust_level`` storage field is retained only for schema migration
-compatibility and is forced to the same public execution policy for every new
-credential. It is not an authorization input or a capability branch.
+Older PostgreSQL rows may still contain a ``trust_level`` column, but the
+runtime deliberately ignores it. Every issued and authenticated Worker uses
+the same server-owned public execution policy; there is no trust issuer or
+capability tier in this module.
 """
 
 from __future__ import annotations
@@ -22,9 +23,6 @@ from datetime import datetime, timedelta, timezone
 from backend.secrets import encrypt_secret
 
 
-TRUST_GENERAL = "general"
-TRUST_FULL = "full"
-TRUST_LEVELS = frozenset({TRUST_GENERAL, TRUST_FULL})
 WORKER_PROTOCOL_VERSION = "1"
 WORKER_RUNTIME_CAPABILITY = "goal-driven-claude-code"
 WORKER_EXECUTION_POOL = "public-default"
@@ -50,23 +48,12 @@ class ActiveWorkerInstanceError(WorkerEnrollmentError):
     """A credential is already held by another live Worker process."""
 
 
-def normalize_trust_level(value: str | None) -> str:
-    """Normalize a legacy field to the one public execution policy.
-
-    Existing rows may still contain the old labels while the database migrates.
-    New authentication and issuance never use this value to grant capabilities.
-    """
-    normalized = str(value or TRUST_GENERAL).strip().lower()
-    return TRUST_GENERAL if normalized in TRUST_LEVELS else TRUST_GENERAL
-
-
 @dataclass(frozen=True)
 class WorkerCredential:
     worker_id: str
     namespace: str
     credential: str
     owner_user_id: str | None = None
-    trust_level: str = TRUST_GENERAL
     execution_pool: str = WORKER_EXECUTION_POOL
 
 
@@ -75,7 +62,6 @@ class WorkerIdentity:
     worker_id: str
     namespace: str
     owner_user_id: str | None
-    trust_level: str
     execution_pool: str = WORKER_EXECUTION_POOL
     protocol_version: str = "legacy-v0"
     runtime_capability: str = "legacy"
@@ -146,8 +132,7 @@ def _identity_from_row(worker_id: str, namespace: str, row) -> WorkerIdentity:
         worker_id=worker_id,
         namespace=namespace,
         owner_user_id=_safe_owner_user_id(_row_value(row, "owner_user_id")),
-        trust_level=normalize_trust_level(_row_value(row, "trust_level", TRUST_GENERAL)),
-        execution_pool=str(_row_value(row, "execution_pool", WORKER_EXECUTION_POOL) or WORKER_EXECUTION_POOL),
+        execution_pool=WORKER_EXECUTION_POOL,
         protocol_version=str(_row_value(row, "protocol_version", "legacy-v0") or "legacy-v0"),
         runtime_capability=str(_row_value(row, "runtime_capability", "legacy") or "legacy"),
         image_digest=str(_row_value(row, "image_digest")) if _row_value(row, "image_digest") else None,
@@ -193,15 +178,12 @@ async def _persist_worker_enrollment(
     namespace: str,
     credential: str,
     owner_user_id: str | None,
-    trust_level: str,
-    execution_pool: str | None = None,
-    trust_issuer_connection: bool = False,
 ) -> None:
     """Persist enrollment through the protected issuer on RLS databases.
 
-    The ordinary API role has no direct trust-level DML privilege after the
-    RLS migration.  Development databases without that operator migration
-    retain the legacy direct path so local smoke tests remain usable.
+    The ordinary API role has no direct enrollment DML privilege after the
+    RLS migration. Development databases without that operator migration
+    retain the direct path so local smoke tests remain usable.
     """
     digest = credential_digest(credential)
     credential_ciphertext = encrypt_secret(
@@ -209,51 +191,32 @@ async def _persist_worker_enrollment(
         aad=f"worker:{worker_id}:{namespace}",
     )
     if _rls_is_expected():
-        if execution_pool == WORKER_EXECUTION_POOL and trust_level != TRUST_FULL:
-            # Public-pool issuance is a distinct database capability. It keeps
-            # the human audit owner while deliberately not binding scheduling
-            # to that owner or to a user-selected Namespace.
-            await conn.execute(
-                "SELECT app.issue_public_worker_enrollment($1, $2, $3, $4, $5)",
-                worker_id, digest, credential_ciphertext, namespace, owner_user_id,
-            )
-            return
-        if trust_level == TRUST_FULL:
-            # Full trust is a database-role capability, not a caller-supplied
-            # function argument. Acceptance/production uses a dedicated raw
-            # trust-issuer login; the ordinary API login cannot SET ROLE into
-            # this NOLOGIN role.
-            if _rls_is_expected() and not trust_issuer_connection:
-                raise RuntimeError("dedicated trust issuer connection is required")
-            await conn.execute(
-                "SELECT app.issue_full_worker_enrollment($1, $2, $3, $4)",
-                worker_id, digest, namespace, owner_user_id,
-            )
-        else:
-            await conn.execute(
-                "SELECT app.issue_worker_enrollment($1, $2, $3, $4)",
-                worker_id, digest, namespace, owner_user_id,
-            )
+        # There is one public-cluster policy. The caller must already be on
+        # the server-owned issuer connection; ordinary API connections do not
+        # receive this function's database grant.
+        await conn.execute(
+            "SELECT app.issue_public_worker_enrollment($1, $2, $3, $4, $5)",
+            worker_id, digest, credential_ciphertext, namespace, owner_user_id,
+        )
         return
     await conn.execute(
         """
         INSERT INTO worker_enrollments (
             worker_id, credential_hash, credential_ciphertext, namespace, owner_user_id, execution_pool, trust_level,
             status, last_seen_at
-        ) VALUES ($1, $2, $3, $4, $5, COALESCE($7, 'public-default'), $6, 'active', NOW())
+        ) VALUES ($1, $2, $3, $4, $5, 'public-default', 'public', 'active', NOW())
         ON CONFLICT (worker_id) DO UPDATE SET
             credential_hash = EXCLUDED.credential_hash,
             credential_ciphertext = EXCLUDED.credential_ciphertext,
             namespace = EXCLUDED.namespace,
             owner_user_id = COALESCE(EXCLUDED.owner_user_id, worker_enrollments.owner_user_id),
             execution_pool = EXCLUDED.execution_pool,
-            trust_level = EXCLUDED.trust_level,
             status = 'active',
             enrolled_at = NOW(),
             revoked_at = NULL,
             last_seen_at = NOW()
         """,
-        worker_id, digest, credential_ciphertext, namespace, owner_user_id, trust_level, execution_pool,
+        worker_id, digest, credential_ciphertext, namespace, owner_user_id,
     )
 
 
@@ -263,48 +226,43 @@ async def issue_worker_credential(
     namespace: str,
     *,
     owner_user_id: str | None = None,
-    trust_level: str = TRUST_GENERAL,
-    execution_pool: str = WORKER_EXECUTION_POOL,
     trust_issuer_pool=None,
 ) -> WorkerCredential:
     """Create a persistent credential for one globally unique Worker ID.
 
-    Re-enrolling a revoked Worker rotates its credential and refreshes the
-    server-derived trust.  An active Worker must be revoked explicitly first.
+    Re-enrolling a revoked Worker rotates its persistent credential. An active
+    Worker must be revoked explicitly first.
     A revoked Worker cannot silently move to another account.
     """
     worker_id = _safe_worker_id(worker_id)
     namespace = _safe_namespace(namespace)
     owner_user_id = _safe_owner_user_id(owner_user_id)
-    trust_level = normalize_trust_level(trust_level)
     credential = secrets.token_urlsafe(32)
-    if trust_level == TRUST_FULL and _rls_is_expected() and trust_issuer_pool is None:
-        raise RuntimeError("dedicated trust issuer pool is required")
-    if trust_level == TRUST_FULL and trust_issuer_pool is not None:
-        # The trust issuer function enforces the owner binding from this
-        # transaction-local identity; no user GUC is left on the raw pool.
-        async with trust_issuer_pool.acquire() as trust_conn:
-            async with trust_conn.transaction():
+    if _rls_is_expected():
+        if trust_issuer_pool is None:
+            raise RuntimeError("server-owned Worker issuer connection is required")
+        # The issuer role intentionally has no table DML. All duplicate,
+        # ownership and credential writes happen inside the one protected SQL
+        # function, under a transaction-local authenticated user context.
+        async with trust_issuer_pool.acquire() as conn:
+            async with conn.transaction():
                 from backend.db_rls import user_context_proof
-                await trust_conn.execute(
+                await conn.execute(
                     "SELECT set_config('app.user_id', $1, true)",
                     owner_user_id or "",
                 )
-                await trust_conn.execute(
+                await conn.execute(
                     "SELECT set_config('app.user_proof', $1, true)",
                     user_context_proof(owner_user_id or ""),
                 )
                 await _persist_worker_enrollment(
-                    trust_conn,
+                    conn,
                     worker_id=worker_id,
                     namespace=namespace,
                     credential=credential,
                     owner_user_id=owner_user_id,
-                    trust_level=trust_level,
-                    execution_pool=execution_pool,
-                    trust_issuer_connection=True,
                 )
-        return WorkerCredential(worker_id, namespace, credential, owner_user_id, trust_level, execution_pool)
+        return WorkerCredential(worker_id, namespace, credential, owner_user_id)
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -343,10 +301,8 @@ async def issue_worker_credential(
                 namespace=namespace,
                 credential=credential,
                 owner_user_id=owner_user_id,
-                trust_level=trust_level,
-                execution_pool=execution_pool,
             )
-    return WorkerCredential(worker_id, namespace, credential, owner_user_id, trust_level, execution_pool)
+    return WorkerCredential(worker_id, namespace, credential, owner_user_id)
 
 
 async def authenticate_worker_identity(
@@ -386,7 +342,7 @@ async def authenticate_worker_identity(
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT owner_user_id, trust_level, execution_pool,
+            SELECT owner_user_id, execution_pool,
                    protocol_version, runtime_capability, image_digest,
                    active_instance_id, ready, session_epoch, credential_hash
             FROM worker_enrollments
@@ -395,7 +351,12 @@ async def authenticate_worker_identity(
             """,
             worker_id, namespace,
         )
-        if not row or not hmac.compare_digest(str(row["credential_hash"]), supplied):
+        if (
+            not row
+            or str(_row_value(row, "execution_pool", WORKER_EXECUTION_POOL) or WORKER_EXECUTION_POOL)
+            != WORKER_EXECUTION_POOL
+            or not hmac.compare_digest(str(row["credential_hash"]), supplied)
+        ):
             return None
         await conn.execute(
             """
@@ -442,7 +403,7 @@ async def authenticate_worker_session(
         async with conn.transaction():
             row = await conn.fetchrow(
                 """
-                SELECT owner_user_id, trust_level, execution_pool,
+                SELECT owner_user_id, execution_pool,
                        protocol_version, runtime_capability, image_digest,
                        active_instance_id, active_instance_expires_at,
                        ready, session_epoch, credential_hash
@@ -454,7 +415,12 @@ async def authenticate_worker_session(
                 worker_id,
                 namespace,
             )
-            if not row or not hmac.compare_digest(str(_row_value(row, "credential_hash", "")), supplied):
+            if (
+                not row
+                or str(_row_value(row, "execution_pool", WORKER_EXECUTION_POOL) or WORKER_EXECUTION_POOL)
+                != WORKER_EXECUTION_POOL
+                or not hmac.compare_digest(str(_row_value(row, "credential_hash", "")), supplied)
+            ):
                 return None
             current_instance = str(_row_value(row, "active_instance_id") or "").strip()
             current_expiry = _row_value(row, "active_instance_expires_at")

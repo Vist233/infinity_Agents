@@ -92,11 +92,11 @@ async def test_worker_identity_returns_server_assigned_owner_without_client_poli
 
 
 @pytest.mark.asyncio
-async def test_legacy_full_label_does_not_create_a_second_execution_policy():
+async def test_legacy_worker_row_uses_the_single_public_execution_policy():
     conn = _Conn({
         "credential_hash": credential_digest("worker-secret"),
         "owner_user_id": "alice",
-        "trust_level": "full",
+        "trust_level": "full",  # migration-only input; runtime ignores it
         "execution_pool": "public-default",
         "status": "active",
         "revoked_at": None,
@@ -104,8 +104,8 @@ async def test_legacy_full_label_does_not_create_a_second_execution_policy():
     identity = await authenticate_worker_identity(_Pool(conn), "mac-01", "cluster-a", "worker-secret")
 
     assert identity is not None
-    assert identity.trust_level == "general"
     assert identity.execution_pool == "public-default"
+    assert not hasattr(identity, "trust_level")
 
 
 def test_acceptance_worker_enrollment_requires_explicit_operator(monkeypatch):

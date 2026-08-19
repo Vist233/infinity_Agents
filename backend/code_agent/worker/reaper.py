@@ -9,10 +9,11 @@ connection.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 from pathlib import Path
+import shutil
 
 import asyncpg
 
@@ -46,6 +47,37 @@ def _artifact_path_in_configured_root(raw_path: str) -> Path | None:
     except (OSError, ValueError) as exc:
         logger.warning("Could not validate recovered artifact %s: %s", raw_path, exc)
     return None
+
+
+def _multipart_staging_path(raw_path: str, upload_id: str) -> Path | None:
+    """Resolve exactly one upload directory below the artifact staging root."""
+    root = Path(os.getenv("ARTIFACT_DOWNLOAD_ROOT", "/workspace/task-outputs")).resolve()
+    staging_root = root / ".worker-staging"
+    if staging_root.is_symlink() or not raw_path or not upload_id:
+        return None
+    try:
+        staging_root = staging_root.resolve()
+        candidate = Path(raw_path)
+        resolved = candidate.resolve(strict=False)
+        expected = staging_root / upload_id
+        if candidate.is_symlink() or resolved != expected:
+            logger.warning("Skipping unsafe multipart staging path %s", raw_path)
+            return None
+        if not resolved.is_relative_to(staging_root) or resolved.parent != staging_root:
+            logger.warning("Skipping multipart staging path outside root %s", raw_path)
+            return None
+        return resolved
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not validate multipart staging path %s: %s", raw_path, exc)
+        return None
+
+
+def _artifact_staging_ttl_seconds() -> int:
+    try:
+        configured = int(os.getenv("ARTIFACT_STAGING_TTL_SECONDS", str(24 * 60 * 60)))
+    except ValueError:
+        configured = 24 * 60 * 60
+    return max(300, configured)
 
 
 async def _cleanup_artifact_tombstones(pool, *, limit: int = 50) -> int:
@@ -88,6 +120,52 @@ async def _cleanup_artifact_tombstones(pool, *, limit: int = 50) -> int:
     return cleaned
 
 
+async def _cleanup_expired_multipart_uploads(
+    pool,
+    *,
+    limit: int = 50,
+    observed_at: datetime | None = None,
+) -> int:
+    """Remove stale open upload rows and their exact filesystem staging dirs."""
+    observed_at = observed_at or datetime.now(timezone.utc)
+    stale_before = observed_at - timedelta(seconds=_artifact_staging_ttl_seconds())
+    cleaned = 0
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            rows = await conn.fetch(
+                """
+                SELECT upload_id::text, staging_path
+                FROM app.reaper_expired_multipart_uploads($1, $2::timestamptz)
+                """,
+                max(1, min(int(limit), 200)),
+                stale_before,
+            )
+            for row in rows:
+                staging_dir = _multipart_staging_path(
+                    str(row["staging_path"] or ""),
+                    str(row["upload_id"] or ""),
+                )
+                if staging_dir is None:
+                    continue
+                try:
+                    if staging_dir.is_dir() and not staging_dir.is_symlink():
+                        shutil.rmtree(staging_dir)
+                    elif staging_dir.exists():
+                        staging_dir.unlink()
+                except OSError as exc:
+                    logger.warning("Could not remove stale multipart staging %s: %s", staging_dir, exc)
+                    continue
+
+                deleted_path = await conn.fetchval(
+                    "SELECT app.reaper_delete_expired_multipart_upload($1::uuid, $2::timestamptz)",
+                    row["upload_id"],
+                    stale_before,
+                )
+                if deleted_path is not None:
+                    cleaned += 1
+    return cleaned
+
+
 async def reap_once(pool, *, limit: int = 10) -> int:
     """Recover a bounded batch of expired leases under the reaper context."""
 
@@ -120,6 +198,13 @@ async def reap_once(pool, *, limit: int = 10) -> int:
         cleaned = await _cleanup_artifact_tombstones(pool, limit=max(limit, 50))
         if cleaned:
             logger.info("Reaper removed %d expired artifact file(s)", cleaned)
+        multipart_cleaned = await _cleanup_expired_multipart_uploads(
+            pool,
+            limit=max(limit, 50),
+            observed_at=observed_at,
+        )
+        if multipart_cleaned:
+            logger.info("Reaper removed %d stale multipart upload(s)", multipart_cleaned)
     return recovered_count
 
 

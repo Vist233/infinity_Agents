@@ -12,6 +12,7 @@ from backend.app import (
     _worker_artifact_destination,
     _validate_upload_staging_path,
 )
+from backend.code_agent.worker.reaper import _multipart_staging_path
 
 
 def test_multipart_limits_are_bounded_by_server_configuration(monkeypatch):
@@ -120,6 +121,22 @@ def test_multipart_staging_path_rejects_symlink_root(tmp_path):
     assert exc_info.value.status_code == 409
 
 
+def test_reaper_multipart_path_is_exactly_one_upload_directory(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARTIFACT_DOWNLOAD_ROOT", str(tmp_path))
+    staging_root = tmp_path / ".worker-staging"
+    upload = staging_root / "upload-id"
+    upload.mkdir(parents=True)
+
+    assert _multipart_staging_path(str(upload), "upload-id") == upload
+    assert _multipart_staging_path(str(staging_root), "upload-id") is None
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = staging_root / "other-id"
+    link.symlink_to(outside, target_is_directory=True)
+    assert _multipart_staging_path(str(link), "other-id") is None
+
+
 def test_artifact_destination_rejects_directory_symlink(tmp_path, monkeypatch):
     monkeypatch.setenv("ARTIFACT_DOWNLOAD_ROOT", str(tmp_path))
     outside = tmp_path / "outside"
@@ -145,6 +162,9 @@ def test_multipart_schema_has_lease_bound_worker_policies():
     assert "GRANT UPDATE (expected_file_size_bytes" not in rls
     assert "CREATE POLICY artifact_upload_worker_policy" in rls
     assert "CREATE POLICY artifact_upload_parts_worker_policy" in rls
+    assert "app.reaper_expired_multipart_uploads" in rls
+    assert "app.reaper_delete_expired_multipart_upload" in rls
+    assert "idx_artifact_uploads_open_updated" in rls
     assert "CREATE OR REPLACE FUNCTION app.worker_has_active_attempt" in rls
     assert "artifact_uploads.task_id, artifact_uploads.task_attempt_id" in rls
     assert "app.worker_has_active_attempt(u.task_id" in rls

@@ -1,6 +1,6 @@
 # Infinity Agents — 工作区、图像示例与统一交互改造执行文档
 
-> 状态：实施中；本轮统一工作区 UI 候选已发布并通过只读 smoke，但真实 Worker/Case 2–3 闸门尚未通过，因此不把本轮宣称为完整执行链路发布。
+> 状态：前端与本地真实 Worker/Case 2–3 闸门已通过；Cloudflare Edge 到中央 PostgreSQL API 的认证代理仍是发布阻断项。
 > 日期：2026-08-10
 > 适用分支：`cloudflare-deploy`；本地 `main` 的现有修改不在本轮规划中被覆盖。
 
@@ -8,12 +8,12 @@
 
 ## 0. 本轮边界
 
-本轮按本文件执行，界面、账户设置、持久 Worker、本地真实链路、三方验收和 Cloudflare 发布均已完成；以下事项明确不在本轮：
+本轮按本文件执行，界面、账户设置、持久 Worker 和本地真实链路已完成；Cloudflare 发布仍需先完成中央 API 代理合同，以下事项明确不在本轮：
 
 - Redis、PostgreSQL 或 Cloudflare 线上数据的清理；
 - 把图像示例误认为已经完成的通用性状提取能力。
 
-现有 Cloudflare 分支已经具备一版直接创建任务和持久 Worker 注册的实现；本文件把它作为基线，后续以小步修改方式对齐新的工作区和移动端结构。
+现有 Cloudflare 分支包含 Edge/D1 兼容实现，但它不能替代 PostgreSQL-backed 中央 API；本文件把本地统一实现作为验收基线，Cloudflare Edge 只在代理合同明确后发布。
 
 ## 1. 总目标
 
@@ -135,7 +135,7 @@ Worker 是当前登录用户集群中的机器身份，绑定关系必须由服�
 - 用户只填写 Namespace；Worker ID 由服务端生成；
 - 同一用户可以在同一 Namespace 下拥有多个不同 Worker ID；
 - Namespace 可以复用，但 `(user_id, worker_id, namespace)` 不能越权复用；
-- 只有超级用户映射为完全信任；普通用户和学生都按一般信任处理；
+- 所有 Worker 使用同一 public 执行策略；普通用户可以触发服务端签发 credential 和查看状态，超级管理员负责 Namespace、Pool、数据库、Redis、Provider 和公网配置；
 - Worker 注册记录、状态、信任等级、最后心跳和凭证摘要保存到数据库；
 - 正常 UI 流程只创建 `worker_registrations` 中的非过期持久凭证，不创建一次性 enrollment token；旧 `worker_enrollments`/`enrollment_token` 仅作为历史客户端兼容路径，不是本轮注册入口；
 - “注册状态”和“在线状态”分开：`active` 表示仍属于集群且凭证有效，`online/offline` 由 `last_seen_at` 和心跳窗口推导；
@@ -461,7 +461,7 @@ npm test
 
 #### F7：Worker 前端合同
 
-1. 普通用户和学生显示一般信任，超级用户显示完全信任；
+1. 页面不显示 Worker 信任等级；仅显示持久注册、在线/离线、ready、协议和错误状态；
 2. 同一 Namespace 可生成多个不同 Worker ID；
 3. 刷新页面后已注册 Worker 仍显示；
 4. Worker 的注册状态来自数据库，在线状态由最近心跳推导，不来自浏览器猜测；

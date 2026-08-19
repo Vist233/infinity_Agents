@@ -26,7 +26,7 @@ Analysis（PaperAgent 2.0）
 → submit_goal_driven_task 异步提交冻结的 Method + Dataset
 → API 快速返回 task_id，Analysis 立即恢复服务其他对话
 → 独立 Docker Goal-driven Runtime 可执行数小时或整夜
-→ Verifier 验收、Artifact 原子发布
+→ 服务端租约、完整性和 Artifact finalize 检查后发布结果
 → 用户在任务执行中心查看状态、记录与下载结果
 ```
 
@@ -39,7 +39,7 @@ Task 的两项用户业务材料严格固定为：
 2. 冻结的 Dataset Snapshot
 ```
 
-TaskSpec、确认记录、幂等键、校验和、权限、lease 和 Verifier 规则属于系统控制元数据，不是第三份业务材料。Coding Runtime 不读取 Analysis 的完整聊天记录。
+TaskSpec、确认记录、幂等键、校验和、权限、lease 和 finalize 规则属于系统控制元数据，不是第三份业务材料。Coding Runtime 不读取 Analysis 的完整聊天记录。
 
 运行时间长、模型受控试错和单 Task 成本偏高不阻塞 MVP；下列问题必须阻塞发布：
 
@@ -48,7 +48,7 @@ TaskSpec、确认记录、幂等键、校验和、权限、lease 和 Verifier �
 - Analysis 被长时 Coding 占住；
 - 同一 Task 出现多个有效执行者或多个有效结果；
 - Worker/Redis/API 故障后无法恢复；
-- 模型自述完成但 Verifier 未通过；
+- 模型自述完成但必需输出、租约或完整性 finalize 检查未通过；
 - Artifact 不可验证、不可下载或不可复现；
 - Web 自动上传性状提取原图。
 

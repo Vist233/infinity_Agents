@@ -188,6 +188,30 @@ class TestTaskAPIEndpoints:
         })
         assert r.status_code in (200, 500)
 
+    def test_task_center_create_requires_explicit_direct_contract(self, client):
+        base = {
+            "project_id": "proj-123",
+            "task_spec_id": "s1",
+            "dataset_snapshot_id": "d1",
+            "title": "Task Center test",
+            "submission_source": "task_center",
+        }
+        missing_marker = client.post("/api/tasks", json=base)
+        assert missing_marker.status_code == 400
+        assert "agent_confirmation=false" in missing_marker.json()["detail"]
+
+        conflicting_confirmation = client.post(
+            "/api/tasks",
+            json={**base, "agent_confirmation": False, "chat_confirmation_id": "chat-1"},
+        )
+        assert conflicting_confirmation.status_code == 400
+
+        accepted = client.post(
+            "/api/tasks",
+            json={**base, "agent_confirmation": False, "chat_confirmation_id": False},
+        )
+        assert accepted.status_code in (200, 500)
+
     def test_get_task_not_found(self, client):
         assert client.get("/api/tasks/nonexistent").status_code == 404
 

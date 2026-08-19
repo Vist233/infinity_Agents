@@ -396,7 +396,7 @@ ruff check backend                              # clean
 | `test_concurrency_recovery.py` / `test_retry_and_recovery.py` | 并发 claim、租约恢复、退避重试 |
 | `test_sse_reconnection.py` | SSE last_event_id 断点续传 |
 | `test_db_rls.py` | API/Worker/Outbox 角色绑定、持久凭证注入、连接归还清理、无上下文拒绝 |
-| `scripts/rls_roles.sql` + 隔离 PostgreSQL | 凭证绑定、账号范围 general/full 信任领取、终态提交、Reaper 回收、直接信任写入阻断 |
+| `scripts/rls_roles.sql` + 隔离 PostgreSQL | 凭证绑定、单一 public 策略兼容列固定、终态提交、Reaper 回收、直接策略写入阻断 |
 | `test_security.py` / `test_artifact_download.py` | 路径遍历、符号链接、白名单 |
 | `test_regression.py` | case1/2/3 全链路（mock Docker；`@pytest.mark.integration` 为真实 Docker） |
 | `frontend/app/image-judge/__tests__/page.test.tsx` | 下载直链、平台探测、推荐卡片 |
@@ -415,8 +415,9 @@ ruff check backend                              # clean
    可在 Redis 故障时回退数据库事件，Worker 不使用未认证的数据库轮询回退。
 5. **持久 Worker 身份**：每个 Worker ID/Namespace 对应一个可撤销的持久凭证；同一
    Worker ID 重新签发会替换旧凭证，凭证不作为一次性任务 Token 使用。
-   普通用户/学生签发 `general` Worker，只能处理该账号创建的任务；超级用户签发的 `full`
-   Worker 才是跨账号的受控服务器执行层，Redis Namespace 必须与数据库 enrollment 一致。
+   所有 Worker 使用同一 public 执行策略；普通用户可触发服务端签发 credential 并查看状态，
+   但不能修改 Namespace、Pool、数据库、Redis、Provider 或调度策略，Redis Namespace 必须
+   与数据库 enrollment 一致。
 6. **Worker 隔离与传输**：每个 Worker 使用独立 scratch 目录；通过认证控制面下载输入、
    上传结果归档，归档绑定到当前任务租约。
 7. **幂等性**：`idempotency_keys` 表（24h 过期）+ ON CONFLICT DO NOTHING。
@@ -443,21 +444,22 @@ ruff check backend                              # clean
 3. **arxiv 网络测试**：依赖外部 API，偶发 HTTP 429，与本项目代码无关。
 4. **数据库 RLS 是发布门禁**：`scripts/rls_roles.sql` 提供
    `infinity_api`/`infinity_worker`/`infinity_outbox` 三个数据面 `NOBYPASSRLS` 角色，
-   以及仅用于服务器派生完全信任签发的 `infinity_trust_issuer` 和仅用于过期租约恢复的
+   以及仅用于服务器公共 credential 签发的 `infinity_trust_issuer` 和仅用于过期租约恢复的
    `infinity_reaper` 角色与策略；
    `backend/db_rls.py` 已把 HTTP 用户、Worker lease、Outbox publisher 的身份绑定到
    每次连接 checkout，并在归还前清除上下文。Worker 凭证摘要匹配后才产生有效
    `app.current_worker_id()`；`tasks_worker_update_guard` 在数据库层再校验 Worker 的
    claim/lease/state/attempt/artifact 变更；终态提交在租约窗口内完成，终态保留租约标记但不再开放数据面操作。
-   隔离 PostgreSQL 上凭证绑定、general/full 信任和终态提交探针已通过。目标 acceptance/生产库仍必须由数据库管理员执行脚本并完成同样的负向探针，
+   隔离 PostgreSQL 上凭证绑定、单一 public 策略和终态提交探针已通过。目标 acceptance/生产库仍必须由数据库管理员执行脚本并完成同样的负向探针，
    不能把现有开发库自动改角色；使用 `scripts/acceptance_prepare_db_logins.sh` 创建
    API、Worker gateway、Outbox、Worker-A/B、Reaper 的独立登录，再把对应
    `RLS_*_LOGIN_ROLE` 传给迁移脚本授予 `SET ROLE` membership，`scripts/acceptance_preflight.sh` 默认
    `ACCEPTANCE_REQUIRE_RLS=1`，会阻断缺少角色、membership、FORCE RLS 或策略的 acceptance 环境。
 5. **Direct Worker 的权限边界**：Claude Code 在专用 Worker 容器内允许完整工具权限，
-   因此 Worker 主机和凭证必须专用；如果把中心 Provider 密钥放进不受信的学生 Worker，
-   Claude Code 在“全权限 + 可出网”边界内理论上可以读取并外传该密钥。当前实现不把它
-   宣称为宿主机级安全沙箱；不受信 Worker 应改用 Attempt-scoped gateway 能力。
+   因此每台加入公共集群的机器和 credential 都必须按管理员提供的最小权限配置。不要把
+   全局数据库、Redis 或 Provider 管理密钥放入容器；当前运行时优先使用 Attempt-scoped
+   gateway capability，凭证/地址由超级管理员提供并可撤销。公共集群不再按学生/管理员
+   划分 Worker 信任等级。
 6. **未做 GB 级压力测试**：单文件/解压/产物有上限且采用流式写盘；Worker 产物上传已改为
    认证/租约预检后的原始 request body，避免 multipart 在鉴权前先 spool，但用户级总磁盘配额、
    长期产物清理和真实大文件链路仍需在部署环境验证。

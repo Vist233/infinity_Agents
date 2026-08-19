@@ -101,6 +101,87 @@ test("Task Center shows task history and direct creation form", async ({ page })
   await expect(page.getByText("运行中", { exact: true }).first()).toBeVisible();
 });
 
+test("unauthenticated Task Center shows only sign-in actions", async ({ page }) => {
+  await page.unroute("**/api/me");
+  await page.route("**/api/me", async (route) => {
+    await route.fulfill({ status: 401, body: JSON.stringify({ detail: "Authentication required" }), contentType: "application/json" });
+  });
+  const requestedUrls: string[] = [];
+  page.on("request", (request) => requestedUrls.push(request.url()));
+
+  await page.goto("/task-center");
+  await expect(page.getByRole("button", { name: "登录 / 注册", exact: true })).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "退出登录", exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("task-list-panel")).toHaveCount(0);
+  await expect(page.getByTestId("task-creation-card")).toHaveCount(0);
+  expect(requestedUrls.some((url) => url.includes("/api/tasks/preview"))).toBe(false);
+});
+
+test("Task Center submits files directly without a preview call", async ({ page }) => {
+  let taskCreateBody: Record<string, unknown> | null = null;
+  const requestedUrls: string[] = [];
+  page.on("request", (request) => requestedUrls.push(request.url()));
+
+  await page.route("**/api/tasks*", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === "GET" && url.pathname === "/api/tasks") {
+      await route.fulfill({ status: 200, body: JSON.stringify({ tasks: MOCK_TASKS }), contentType: "application/json" });
+      return;
+    }
+    if (request.method() === "POST" && url.pathname === "/api/tasks") {
+      taskCreateBody = request.postDataJSON() as Record<string, unknown>;
+      await route.fulfill({ status: 201, body: JSON.stringify({ task_id: "task-created", status: "queued" }), contentType: "application/json" });
+      return;
+    }
+    await route.continue();
+  });
+  await page.route("**/api/projects/default", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify({ project_id: "proj-1", name: "Default Project" }), contentType: "application/json" });
+  });
+  await page.route("**/api/task-specs", async (route) => {
+    await route.fulfill({ status: 201, body: JSON.stringify({ task_spec_id: "spec-created", revision: 1, status: "draft" }), contentType: "application/json" });
+  });
+  await page.route("**/api/task-specs/spec-created/freeze", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify({ task_spec_id: "spec-created", status: "frozen", frozen: true }), contentType: "application/json" });
+  });
+  await page.route("**/api/method-sources/upload", async (route) => {
+    await route.fulfill({ status: 201, body: JSON.stringify({ method_source_id: "method-created", original_filename: "case-2.md", file_size_bytes: 16 }), contentType: "application/json" });
+  });
+  await page.route("**/api/dataset-snapshots/upload", async (route) => {
+    await route.fulfill({ status: 201, body: JSON.stringify({ resource_id: "resource-created", logical_name: "case-2.zip", file_hash_sha256: "hash", file_size_bytes: 16, original_filename: "case-2.zip" }), contentType: "application/json" });
+  });
+  await page.route("**/api/dataset-snapshots", async (route) => {
+    await route.fulfill({ status: 201, body: JSON.stringify({ dataset_snapshot_id: "snapshot-created" }), contentType: "application/json" });
+  });
+  await page.route("**/api/tasks/task-created", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify({ ...MOCK_TASKS[1], task_id: "task-created", title: "case-2" }), contentType: "application/json" });
+  });
+  await page.route("**/api/tasks/task-created/events", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify([]), contentType: "application/json" });
+  });
+  await page.route("**/api/tasks/task-created/artifacts", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify([]), contentType: "application/json" });
+  });
+
+  await page.goto("/task-center");
+  const fileInputs = page.locator('input[type="file"]');
+  await fileInputs.nth(0).setInputFiles({ name: "case-2.md", mimeType: "text/markdown", buffer: Buffer.from("# Case 2 method") });
+  await fileInputs.nth(1).setInputFiles({ name: "case-2.zip", mimeType: "application/zip", buffer: Buffer.from("fake zip fixture") });
+  await page.getByRole("button", { name: "创建任务", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/task-center\/tasks\/task-created\/?$/);
+  expect(taskCreateBody).toMatchObject({
+    agent_confirmation: false,
+    submission_source: "task_center",
+    chat_confirmation_id: false,
+    project_id: "proj-1",
+    task_spec_id: "spec-created",
+    dataset_snapshot_id: "snapshot-created",
+  });
+  expect(requestedUrls.some((url) => url.includes("/api/tasks/preview"))).toBe(false);
+});
+
 test("legacy /code-agent/tasks index redirects to Task Center", async ({ page }) => {
   await page.route("**/api/tasks*", async (route) => {
     await route.fulfill({

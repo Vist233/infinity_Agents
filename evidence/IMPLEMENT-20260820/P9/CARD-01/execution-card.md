@@ -87,3 +87,25 @@ git diff --check                                -> exit 0
 The isolated acceptance stack and its ignored local credentials remain
 available for the final read-only review. No secret value is included in this
 card.
+
+## Follow-up run after the single-public-policy migration (2026-08-20)
+
+The same isolated PostgreSQL/Redis/API/Outbox/Reaper stack was restarted with
+the current `cloudflare-deploy` source, the RLS script was reapplied, and the
+two saved persistent Worker credentials were reconnected. The follow-up tasks
+were submitted through the authenticated local Task API with CSRF protection;
+no Task, Attempt, or Artifact row was manually inserted or promoted.
+
+| Case | Task ID | Attempt | Worker | Task status | Artifact ID | Size | SHA-256 |
+|---|---|---:|---|---|---|---:|---|
+| 2 | `0b39ec92-05a3-4688-b767-84e52e06187a` | 25 | `public-worker-8fe8f68f-e2ff-47b3-b273-0ca362d968be` | `succeeded` | `artifact-b2f77b88-f5bb-4e91-9481-adb71c5e248d` | 242,819 | `ae10df55be1f53ed89dc9b02ecc3b0f0dcd1f331c0a509b182efaeff7cb539e8` |
+| 3 | `08246a86-9c61-4cb5-bf4d-b7d6206cdb23` | 26 | `public-worker-9c8521e8-476e-4aef-8e3f-dfd231527547` | `succeeded` | `artifact-5782f55e-4a37-4007-8773-ac813353d0ca` | 8,962,835 | `73657cac19c8e353884fdfbed0016e4648f641e63a479e022a4d68610fa9bb31` |
+
+Both downloaded files matched the API checksum and passed `unzip -t`. Case 2
+contained the Biopython report/statistics/images/manifest; Case 3 contained
+the Scanpy `h5ad`, QC/marker/UMAP outputs, report, code, and manifest. The
+Case 3 result was uploaded through the authenticated streamed artifact route;
+the multipart state table was empty after finalization. Both Worker rows were
+still `active`, `ready`, protocol `1`, runtime capability
+`goal-driven-claude-code`, and their task-local directories were empty after
+publication. Existing user containers were not touched.

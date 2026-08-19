@@ -372,9 +372,9 @@ async def create_task(
 
     query = """
         INSERT INTO tasks (task_id, task_spec_id, dataset_snapshot_id, project_id,
-            execution_pool, method_source_id, title, status, max_attempts, required_trust_level,
+            execution_pool, method_source_id, title, status, max_attempts,
             created_by, created_at, updated_at)
-        VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'public-default', $5::uuid, $6, $7, $8, $9, $10, NOW(), NOW())
+        VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'public-default', $5::uuid, $6, $7, $8, $9, NOW(), NOW())
         RETURNING task_id, status, attempt_count, created_at
     """
     async with pool.acquire() as conn:
@@ -389,7 +389,6 @@ async def create_task(
                 task.title,
                 task.status,
                 task.max_attempts,
-                task.required_trust_level,
                 task.created_by,
             )
         except Exception as exc:
@@ -526,9 +525,9 @@ async def submit_task_atomically(
             row = await conn.fetchrow(
                 """
                 INSERT INTO tasks (task_id, task_spec_id, dataset_snapshot_id, project_id,
-                    execution_pool, method_source_id, title, status, max_attempts, required_trust_level,
+                    execution_pool, method_source_id, title, status, max_attempts,
                     created_by, created_at, updated_at)
-                VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'public-default', $5::uuid, $6, 'queued', $7, $8, $9, NOW(), NOW())
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'public-default', $5::uuid, $6, 'queued', $7, $8, NOW(), NOW())
                 RETURNING task_id, status, attempt_count, created_at
                 """,
                 task.task_id,
@@ -538,7 +537,6 @@ async def submit_task_atomically(
                 task.method_source_id,
                 task.title,
                 task.max_attempts,
-                task.required_trust_level,
                 user_id,
             )
             await conn.execute(
@@ -583,7 +581,6 @@ async def get_task(pool, task_id: str) -> Optional[Dict[str, Any]]:
         SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, execution_pool, method_source_id, title,
                status, lease_owner, lease_token, lease_expires_at,
                active_attempt_id, attempt_count, max_attempts,
-               required_trust_level,
                result_artifact_id, error_message, created_by,
                created_at, updated_at, finished_at
         FROM tasks
@@ -614,7 +611,6 @@ async def get_tasks_by_project(
         SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, execution_pool, method_source_id, title,
                status, lease_owner, lease_token, lease_expires_at,
                active_attempt_id, attempt_count, max_attempts,
-               required_trust_level,
                result_artifact_id, error_message, created_by,
                created_at, updated_at, finished_at
         FROM tasks
@@ -644,7 +640,6 @@ def _task_row_to_dict(row: Any) -> Dict[str, Any]:
         "active_attempt_id": row["active_attempt_id"],
         "attempt_count": row["attempt_count"],
         "max_attempts": row["max_attempts"],
-        "required_trust_level": _row_value(row, "required_trust_level", "full"),
         "result_artifact_id": row["result_artifact_id"],
         "error_message": row["error_message"],
         "created_by": row["created_by"],
@@ -669,7 +664,7 @@ async def _worker_scope(pool, worker_id: str) -> Dict[str, Any]:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT trust_level, owner_user_id, namespace, execution_pool,
+            SELECT owner_user_id, namespace, execution_pool,
                    protocol_version, runtime_capability, image_digest,
                    active_instance_id, ready, session_epoch
             FROM worker_enrollments
@@ -680,7 +675,6 @@ async def _worker_scope(pool, worker_id: str) -> Dict[str, Any]:
     if not row:
         return {
             "enrolled": False,
-            "trust_level": "general",
             "owner_user_id": None,
             "namespace": None,
             "execution_pool": None,
@@ -698,9 +692,6 @@ async def _worker_scope(pool, worker_id: str) -> Dict[str, Any]:
         epoch = 0
     return {
         "enrolled": True,
-        # The storage column is retained for migration compatibility only.
-        # Every enrolled Worker uses the same public execution policy.
-        "trust_level": "general",
         "owner_user_id": str(_row_value(row, "owner_user_id")) if _row_value(row, "owner_user_id") else None,
         "namespace": str(_row_value(row, "namespace")) if _row_value(row, "namespace") else None,
         "execution_pool": str(_row_value(row, "execution_pool", "public-default") or "public-default"),
@@ -801,7 +792,7 @@ async def try_claim_task(
                   )
                 RETURNING t.task_id, t.attempt_count, t.task_spec_id, t.dataset_snapshot_id,
                           t.project_id, t.method_source_id, t.title, t.max_attempts,
-                          t.required_trust_level, t.execution_pool
+                          t.execution_pool
                 """,
                 task_id, worker_id, lease_token, lease_expires,
                 worker_owner_user_id, worker_namespace,
@@ -855,7 +846,6 @@ async def try_claim_task(
         "attempt_index": attempt_index,
         "attempt_id": attempt_row["task_attempt_id"],
         "max_attempts": row["max_attempts"],
-        "required_trust_level": _row_value(row, "required_trust_level", "full"),
         "execution_pool": _row_value(row, "execution_pool", "public-default"),
         "lease_token": lease_token,
         "lease_expires_at": lease_expires.isoformat(),
