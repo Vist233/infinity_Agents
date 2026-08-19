@@ -22,15 +22,14 @@ credential，执行协议与能力完全相同。
 超级管理员提供不进入 Git 的基础配置包：
 
 ```dotenv
-WORKER_IMAGE=ghcr.io/<repository-owner>/infinity-agent-worker:v1
+WORKER_IMAGE=ghcr.io/<repository-owner>/infinity-agent-worker@sha256:<verified-digest>
 WORKER_IMAGE_DIGEST=<pinned-digest>
 WORKER_PROTOCOL_VERSION=<current-version>
 
-DATABASE_URL=<admin-issued-per-worker-database-url>
-REDIS_URL=<admin-issued-per-worker-redis-acl-url>
+WORKER_DATABASE_URL=<admin-issued-per-worker-database-url>
+WORKER_REDIS_URL=<admin-issued-per-worker-redis-acl-url>
 REDIS_NAMESPACE=<admin-configured-public-namespace>
-SERVER_API_BASE_URL=<admin-provided-public-api>
-ARTIFACT_API_BASE_URL=<admin-provided-artifact-api>
+WORKER_CONTROL_PLANE_URL=<admin-provided-central-api>
 
 ANTHROPIC_BASE_URL=<admin-provided-base-url>
 ANTHROPIC_MODEL=<admin-provided-model>

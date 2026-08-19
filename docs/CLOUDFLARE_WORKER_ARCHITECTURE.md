@@ -1,295 +1,185 @@
-# Cloudflare Worker 架构解析
-
-## 1. 结论先行
-
-当前 Infinity Agents 的 Cloudflare 版本是一个“Cloudflare 控制面 + 本地 Docker 执行面”的系统：
-
-- Cloudflare Worker 是唯一公网入口，负责身份、任务事实、Worker 注册、租约和 Artifact 元数据。
-- Cloudflare D1 是当前 Cloudflare 版本的任务事实库，R2 是输入和结果对象存储。
-- Mac/Windows 上的 Docker Worker 才执行 Claude Code；它只拿自己的长期 Worker credential 和本机 Provider 配置。
-- zhangbot 上的 Redis 保持现有服务，通过本地 SSH 隧道给本地 Worker 使用；Cloudflare Edge 不把 Redis 暴露成公网 binding。
-- 一个 Namespace 可以对应多个不同 Worker ID；一个 Worker credential 同时只允许一个活动机器实例。
-- 结果上传后先进入 quarantine；同一个持有有效 Attempt 租约的 Worker 在完成对象存在、大小、checksum 和 manifest 绑定检查后直接发布为网页可下载的 Artifact。
-- 当前运行链路放弃 verifier 容器和 `verification_pending` 状态；保留 Worker 控制面的租约、fencing、checksum、对象存在和基础 ZIP 完整性边界。
-
-## 2. 总体拓扑
-
-~~~mermaid
-flowchart LR
-  U[用户浏览器] -->|OIDC Cookie + CSRF| E[Cloudflare Edge Worker]
-  E --> D[(Cloudflare D1)]
-  E --> R[(Cloudflare R2)]
-  E -->|SSE / JSON| U
-
-  E -->|HTTPS Worker Control API| B[本地 Docker Worker B]
-
-  B -->|SSH 隧道 16379| Z
-
-  B -->|上传结果| R
-  R --> Q[quarantine → published Artifact]
-  U -->|鉴权下载| E
-  E -->|流式读取| R
-~~~
-
-### 2.1 为什么任务队列不画在 Redis 上
-
-当前 Cloudflare Worker 版本的领取和租约使用 D1 控制 API；本地 Worker 对 zhangbot Redis 做连接检查并保留本机运行所需配置，但 Cloudflare Edge 不直接通过 Redis 分发任务。这样可以：
-
-- 不把 Redis 地址、ACL 或命令能力暴露到公网；
-- 不让 Cloudflare Worker 持有数据库/Redis 父凭证；
-- 用 D1 的条件更新和 fencing epoch 保证同一 Attempt 不被旧 Worker 覆盖。
-
-## 3. 组件职责
-
-### 3.1 浏览器和前端
-
-主要入口：
-
-- Analysis：对话式任务意图和确认卡。
-- Task Center：任务列表、任务详情、直接新建任务、折叠的 Add Worker 卡、Artifact 下载。
-- Image Judge：独立的 /image-judge/* 命名空间和应用下载入口。
-
-任务中心直接创建任务使用：
-
-~~~text
-POST /api/tasks/direct
-agent_confirmation = false
-submission_source = task_center
-~~~
-
-Analysis 对话创建任务仍可使用确认卡；两条入口最终都进入同一个 TaskSpec、Task、Attempt 和 Artifact 数据模型。
-
-浏览器只保存会话 Cookie、页面状态和当前用户可见的 Worker 信息，不保存 D1、R2、Redis 或 Provider 主密钥。
-
-### 3.2 Cloudflare Edge Worker
-
-动态代码位于 cloudflare-worker/src/，负责：
-
-- OIDC 登录、回调、会话和 CSRF；
-- Analysis 对话和 SSE；
-- TaskSpec、执行文档、数据集和任务 API；
-- Worker 注册列表、创建、credential 查询、轮换和撤销；
-- Worker connect、heartbeat、poll、offer、accept、Attempt heartbeat；
-- Attempt 专属输入下载；
-- 单请求 Artifact 上传和 R2 Multipart 上传；
-- 用户鉴权的 Artifact 列表和流式下载；
-- Image Judge 隔离命名空间。
-
-Edge Worker 不负责执行 Claude Code、直接访问本地 Docker、直接连接 zhangbot Redis，或把数据库父凭证和 Provider Secret 下发到 Worker。
-
-### 3.3 D1
-
-D1 保存控制面事实：
-
-- 用户和 OIDC 关联信息；
-- task spec、method source、dataset snapshot；
-- task、worker offer、worker attempt、task event；
-- worker registration、session、credential hash/ciphertext；
-- Artifact 的 object key、大小、checksum、status 和 manifest。
-
-D1 不保存大文件本体。Artifact 二进制都在 R2。
-
-### 3.4 R2
-
-R2 保存 task-inputs 下的执行文档和数据集，以及 task-outputs/quarantine 下的执行结果。发布后的结果对象仍由服务端通过受保护的 Artifact API 读取。
-
-R2 key 不直接暴露给浏览器。下载路径必须先根据当前用户查询 D1，再从 R2 流式返回。
-
-### 3.5 本地 Docker Worker
-
-本地 Worker 由 backend/code_agent/worker/cloudflare_worker.py 实现：
-
-- 读取 CONTROL_BASE_URL、Worker ID、Namespace、长期 credential；
-- 启动时检查本机到 zhangbot Redis 的连通性；
-- 通过 HTTPS 反向握手；
-- 轮询并接收 Offer；
-- 下载 Attempt 输入；
-- 在同一容器中直接运行 Claude Code；
-- 打包、计算 SHA-256、上传 Artifact；
-- 完成 Attempt 后清空任务目录；
-- 默认保持进程在线，继续等待下一个任务；只有一次性验收才显式设置 `WORKER_RECYCLE_AFTER_TASK=1`。
-
-本地容器只挂载两个 named volume：/worker-inputs 和 /worker-outputs。没有宿主 Docker socket，因此执行模型不是 Docker-in-Docker，也不是 Docker-outside-of-Docker。
-
-### 3.6 Finalize / Artifact 发布
-
-Worker 不能凭文字自报成功；它只能提交自己租约、Attempt、Namespace、fencing
-epoch 绑定的对象。控制面在 `finalize` 中检查对象存在、大小、checksum、manifest
-绑定和租约，然后在一个 D1 batch 中同时写入 Task succeeded、Attempt succeeded、
-Artifact published 和成功事件。当前不启动 verifier 容器，也不保留
-`verification_pending` 运行状态。
-
-## 4. 端到端时序
-
-~~~mermaid
-sequenceDiagram
-  participant Browser as 浏览器
-  participant Edge as Cloudflare Edge
-  participant D1 as D1
-  participant R2 as R2
-  participant Worker as 本地 Worker B
-  participant Claude as Claude Code
-
-  Browser->>Edge: 登录/创建任务/上传 method + dataset
-  Edge->>R2: 写入输入对象
-  Edge->>D1: 写入 TaskSpec、Task(queued)、幂等键
-  Worker->>Edge: connect + heartbeat + poll
-  Edge->>D1: 创建 offer
-  Worker->>Edge: accept offer
-  Edge->>D1: 原子 claim + fencing epoch
-  Worker->>Edge: 下载 Attempt 专属资源
-  Edge->>R2: 读取输入
-  Worker->>Claude: 传入 Goal-Driven 执行上下文
-  Claude-->>Worker: 写入输出目录
-  Worker->>Worker: ZIP + SHA-256
-  alt 结果 <= 20 MB
-    Worker->>Edge: 单请求上传
-  else 结果 > 20 MB
-    Worker->>Edge: Multipart init/parts/complete
-  end
-  Edge->>R2: 写入 quarantine object
-  Worker->>Edge: finalize(manifest, epoch)
-  Worker->>Edge: finalize(manifest, epoch, checksum)
-  Edge->>D1: 原子写入 Task succeeded + Attempt succeeded + Artifact published
-  Browser->>Edge: 查询任务和 Artifact
-  Edge->>R2: 流式返回结果 ZIP
-~~~
-
-## 5. 关键状态和 fencing
-
-Task、Attempt、Artifact 的正常路径：
-
-~~~text
-Task:     queued -> claimed -> running -> succeeded
-Attempt:  claimed -> running -> succeeded
-Artifact: uploading -> quarantine -> published（同一 finalize 原子发布）
-~~~
-
-每次认领都会生成新的 fencing_epoch。后续 heartbeat、资源下载、Artifact 上传、multipart 完成和 finalize 都带 epoch，并在 D1 中同时检查 Worker ID、Namespace、Attempt ID、Task ID、epoch、lease 未过期和当前状态。因此旧容器即使在网络恢复后继续运行，也不能覆盖新 Worker 已经接管的任务。
-
-失败时 Attempt 可以是 failed、expired 或 cancelled；Task 根据 Attempt 次数和错误类型重新进入 queued 或进入终态；Artifact 只有 published 才能出现在用户下载 API。
-
-## 6. 长期 Worker credential
-
-新注册不是一次性签发：
-
-~~~text
-POST /api/worker-enrollments
-{ "namespace": "infinity" }
-
-=> worker_id
-=> namespace
-=> trust_level
-=> worker_credential
-=> credential_expires_at: null
-=> persistent: true
-=> one_time: false
-~~~
-
-服务端每次创建新的 Worker ID 和 credential；Namespace 是可复用执行范围。D1 只保存 credential hash 和加密副本。Worker API 只接受 HTTPS Bearer credential，connect 后再绑定短期 session lease。disconnect 或 lease 过期不会撤销长期 credential；轮换会立即使旧 credential 和旧 session 失效；revoke 会让后续认证失败。
-
-信任等级来自已验证账号权限：
-
-~~~text
-superuser        -> owner_trusted
-ordinary/student -> institution_trusted
-~~~
-
-不能通过浏览器 body 自己提交 trust level。
-
-## 7. 结果大小和上传策略
-
-当前本地 Worker 使用：
-
-- Task Method/Dataset 输入上限：每个文件 25 MB；
-- Artifact 单请求阈值：20 MB；
-- Multipart part：8 MB；
-- Artifact 总上限：默认 2 GB，可由 Cloudflare 变量限制；
-- 全量 ZIP SHA-256；
-- Multipart 完成时检查 part 从 1 连续、总大小一致、R2 head 一致；
-- finalize 时再做 Attempt、manifest、对象存在和 checksum 绑定检查。
-
-Case 3 的线上结果约 30.7 MB，已经覆盖 Multipart 入口；Case 2 覆盖小结果单请求路径。
-
-## 8. 本地 Mac 的实际运行链
-
-~~~text
-本机 zsh 环境
-  ├─ ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY
-  ├─ ANTHROPIC_BASE_URL
-  └─ ANTHROPIC_MODEL
-        │
-        └─ scripts/run_local_cloudflare_workers.sh
-              ├─ SSH local forward: localhost:16379 -> zhangbot:6379
-              ├─ 读取 Redis ACL（不打印）
-              ├─ worker-b 容器
-              │    ├─ /worker-inputs
-              │    └─ /worker-outputs
-~~~
-
-本地 Worker 配置中的 CONTROL_BASE_URL 是 Cloudflare Worker URL，不是 D1 SQL 地址。不要把 Cloudflare account token、D1 token、Redis password 或 Anthropic token 放入前端。
-
-## 9. 安全边界和故障边界
-
-凭证边界：
-
-- 浏览器：OIDC session cookie。
-- 本地执行 Worker：自己的长期 Worker credential。
-- Provider：只在本机环境和执行容器中存在。
-- Redis：只在本机/SSH 隧道一侧使用。
-- 不存在 verifier 运行时、verifier token 或 `verification_pending` 依赖。
-
-恢复边界：
-
-- 连接失败：Worker 重试 connect。
-- session 过期：重新握手，不重新注册。
-- offer 过期：任务继续留在队列。
-- lease 过期：D1 回收 Attempt，按策略重试或 timeout。
-- Claude Code 失败：Worker 报告失败，服务端保留错误码。
-- R2 上传失败：不允许 finalize 成功。
-- finalize 前的 Artifact 保持 quarantine；校验失败或租约失效时不能发布。
-- 浏览器断线：任务继续执行；重新打开 Task Center 后从 D1/SSE 读取状态。
-
-不做的事情：
-
-- 不在 Edge Worker 中保存或执行本地 Provider。
-- 不让 Edge 直接访问 zhangbot Redis。
-- 不依赖宿主机 Docker socket。
-- 不把大型结果转成一次性浏览器 Blob 再上传；Worker 直接到 R2。
-- 不把本轮 Subagent 验收当作产品运行依赖。
-
-## 10. 代码到职责映射
-
-| 文件 | 职责 |
-|---|---|
-| cloudflare-worker/src/index.ts | Worker 路由组合、浏览器 API 和控制 API 入口 |
-| cloudflare-worker/src/tasks.ts | Task、TaskSpec、Artifact、Worker 注册和用户权限 |
-| backend/code_agent/worker/consumer.py | PostgreSQL/Redis 领取、租约、执行和回传主循环 |
-| cloudflare-worker/src/env.ts | D1/R2/认证/Provider 绑定声明 |
-| backend/code_agent/worker/claude_runtime.py | 直接启动 Claude Code CLI |
-| docker-compose.cloudflare-workers.yml | 单个统一 Docker Worker 的启动模板 |
-| scripts/run_local_cloudflare_workers.sh | SSH 隧道、Redis ACL、容器启动 |
-| cloudflare-worker/src/index.ts | Cloudflare 浏览器入口；旧 `/api/worker/v1/*` 只返回 410 |
-
-## 11. 发布和回滚原则
-
-发布顺序：
-
-1. 在 cloudflare-deploy 分支准备前端静态输出。
-2. 运行 Cloudflare Worker check/test。
-3. 远程执行 D1 migrations。
-4. 使用 Wrangler deploy。
-5. 只读检查 health、页面 HTTP 状态和 D1 任务事实。
-6. 需要时重启本地 Worker，让它们使用新的控制 API。
-
-当前发布只覆盖 infinity-agents-edge。不创建新 Worker，不修改 main 的用户工作树，不把本地 Redis 迁移成 Cloudflare binding。
-
-如果线上发布有问题，优先使用 Wrangler 的上一版本回滚/重部署能力；不要使用 git reset --hard 或直接删除 D1/R2 数据。先保留 task、Attempt、Artifact 和部署版本证据，再处理回滚。
-
-## 12. 文档阅读顺序
-
-1. 本文件：理解组件和边界。
-2. HANDOFF.md：按照当前环境实际操作。
-3. CLOUDFLARE_DEPLOYMENT_RUNBOOK.md：发布和线上检查。
-4. WORKER_ONBOARDING.md：新机器加入。
-5. LOCAL_DEVELOPMENT.md：只在回到旧 FastAPI/PostgreSQL 本地版本时阅读，不能拿它替代 Cloudflare 运行手册。
+# Infinity Agents Cloudflare / Worker 架构解析
+
+> 更新：2026-08-20
+>
+> 本文描述当前冻结的目标架构和已确认的迁移边界。它不把尚未完成的中央 API 代理
+> 写成已上线能力，也不把旧 D1/HTTPS Worker 协议当作可运行方案。
+
+## 1. 结论
+
+Infinity Agents 由两个边界组成：
+
+1. Cloudflare Edge：静态页面、登录、Cookie/CSRF、ImageJudge 入口和浏览器公网边界；
+2. 中央执行面：PostgreSQL、Redis、中央 API、对象/Artifact 存储和长期 Docker Worker。
+
+Cloudflare Edge 不运行 Docker、Claude Code、Verifier，也不持有 Worker 的数据库/Redis
+父凭证。PostgreSQL 是 Task、Attempt、Worker、Event、Artifact 的唯一事实源；Redis
+只负责任务通知、presence 和事件加速。所有 Worker（管理员机器、公共机器、学生机器）
+进入同一个公共集群，不区分可信/不可信执行等级。
+
+```text
+浏览器
+  │ OIDC Cookie + CSRF
+  ▼
+Cloudflare Edge ───── 静态页面 / 登录 / ImageJudge / 浏览器 API
+  │
+  │ 已批准的中央 API 服务认证（P7 待完成）
+  ▼
+中央 API
+  ├─ PostgreSQL：Task / Attempt / Worker / Event / Artifact 事实
+  ├─ Redis：opaque task hint / presence / event
+  └─ Artifact store：输入与结果的流式存储
+                │
+                ▼
+       长期 Docker Worker（每容器一个 ID + credential）
+       ├─ claim + lease + fencing
+       ├─ Method + Dataset
+       ├─ Goal-Driven Claude Code
+       ├─ 单文件/Multipart Artifact 上传
+       ├─ checksum/manifest/finalize
+       └─ 清理当前任务目录并等待下一任务
+```
+
+## 2. Cloudflare Edge 的实际边界
+
+`cloudflare-worker/src/index.ts` 负责：
+
+- `/health`、OIDC 登录回调、opaque session Cookie、CSRF；
+- 浏览器 Analysis/Task Center API 的边缘入口；
+- `/image-judge/*` 隔离入口；
+- 静态 Next 资源和真实 Task ID 动态路由壳；
+- 对旧 Worker 协议的明确拒绝。
+
+所有 `/api/worker/v1/*` 请求返回：
+
+```text
+410 LEGACY_WORKER_PROTOCOL_DISABLED
+```
+
+这条 410 是迁移门禁，不是 Worker 的新连接协议。仓库已经删除了旧的
+`worker-control.ts`、Node `worker-client.mjs` 和对应测试；旧 D1 migration 及 410
+回归测试保留，用于防止旧客户端重新领取任务。
+
+## 3. Task Center 与事实源
+
+Task Center 直接创建任务时：
+
+```text
+POST /api/tasks
+agent_confirmation=false
+submission_source=task_center
+```
+
+Analysis 对话的确认卡和 Task Center 的直接创建都必须最终进入同一个中央 Task
+合同。每个任务只有两个输入类型：`Method` 与 `Dataset`，每项上限 25 MB。任务名默认
+来自执行文档名称，不能把浏览器显示或 Chat 消息当成任务事实。
+
+当前 Cloudflare bundle 仍保留 `src/tasks.ts` 的 D1 handler 作为迁移期间的兼容代码；
+它不是目标事实源。P7 尚未拿到已批准的固定中央 API 地址和服务到服务认证断言，因此
+不能现在删除它，也不能宣称 Cloudflare 已经完成 PostgreSQL 代理切换。上线门禁是：
+
+- Edge 路由把浏览器请求转发到中央 API；
+- Edge 不把浏览器 bearer 或数据库密钥冒充服务身份；
+- 新 Task/Attempt/Artifact 只在 PostgreSQL 产生事实；
+- D1 不再写入新的 Task 事实。
+
+## 4. Worker 身份与权限
+
+超级管理员统一签发并提供：
+
+- PostgreSQL 地址和每个 Worker 的最小数据库权限；
+- Redis 地址、ACL 和共享 Namespace；
+- 中央 API/Artifact 地址；
+- Provider Base URL、Model 和按机器/Attempt 的密钥策略；
+- 服务器生成的 Worker ID 与持久 credential。
+
+普通用户只能触发服务器签发 credential、复制自己被授权的 credential、检查绑定
+Worker 状态；不能提交数据库、Redis、公网 API、Provider、Namespace 或调度范围。
+
+规则：
+
+- 同一 Namespace 可以创建任意多个 Worker；
+- 每个 credential 对应一个 Worker ID；
+- 一个 credential 同时只允许一个 active instance；
+- 停止容器只使 session/lease 过期，不删除持久注册；
+- 轮换或撤销立即阻止握手、claim、续租、上传和 finalize；
+- 不向机器分发全局管理员密钥；
+- Worker 所在机器的所有者可能读取容器 Secret，因此“同一集群”不等于“共享全局密码”。
+
+## 5. 统一 Docker Worker 执行流
+
+镜像唯一入口是 `backend/Dockerfile.worker`。容器内直接运行 Claude Code，不安装
+Docker CLI、不启动 Docker daemon、不挂载 `/var/run/docker.sock`。固定流程：
+
+```text
+PostgreSQL Outbox → Redis hint
+→ Worker authenticate/reverse handshake
+→ Redis consume + PostgreSQL CAS claim
+→ 下载当前 Attempt 的 Method + Dataset
+→ 固定 Goal-Driven 平台提示词 + 用户任务输入
+→ Claude Code 在容器内执行
+→ 结果收集、路径/大小/manifest 检查
+→ 单请求或 Multipart 流式上传
+→ lease/fencing/checksum/manifest/finalize
+→ 删除 input/work/output/log 临时目录
+→ 保留中心 Artifact，Worker 继续等待
+```
+
+没有独立 Verifier 服务。Worker 内的确定性文件和归档安全检查只负责数据面不变量；
+科学结果是否满足 Method 中的验收条件由任务结果和用户/后续科学审查判断，不能由
+模型自报“完成”替代 Artifact 事实。
+
+## 6. 镜像与 Compose 约束
+
+生产/公共启动文件 `docker-compose.cloudflare-workers.yml` 是 image-only：
+
+```sh
+docker compose --env-file worker-b.cloudflare.env \
+  -f docker-compose.cloudflare-workers.yml config
+docker compose --env-file worker-b.cloudflare.env \
+  -f docker-compose.cloudflare-workers.yml up -d worker-b
+```
+
+`WORKER_IMAGE` 必须是本地已核验 tag 或不可变 GHCR digest；Compose 不在启动时隐式
+构建源码。`scripts/run_local_cloudflare_workers.sh` 只负责可选的 zhangbot Redis
+SSH 隧道和调用这份 image-only Compose，不再加载旧的 HTTPS control client。
+
+镜像 CI 检查：
+
+- linux/amd64 与 linux/arm64 构建；
+- Claude Code 版本检查；
+- 无 Docker socket/CLI 边界检查；
+- SBOM/provenance 构建检查；
+- 仅构建验证，不自动发布 GHCR。
+
+## 7. Artifact 与大文件
+
+中心 API/Artifact 层必须支持：
+
+- 小结果单请求上传；
+- 大结果按固定 part size 流式分片；
+- part 编号连续、总大小和 SHA-256 一致；
+- 当前 Attempt、lease token、fencing epoch 和 manifest 一致；
+- finalize 成功后才可下载；
+- 上传失败或 lease 失效时不发布孤儿 Artifact；
+- Worker 只清理本机任务目录，不清除中心任务事实。
+
+## 8. 当前发布门禁
+
+已完成并有证据：
+
+- 旧 Edge Worker 协议返回 410；
+- Task detail 使用真实浏览器 Task ID；
+- Artifact Multipart 的 PG 状态、大小、SHA、ZIP、manifest、lease/fencing 检查；
+- Worker image 本地 amd64/arm64 构建和运行边界；
+- 旧 Cloudflare Worker control/client 代码清理。
+
+尚未完成：
+
+- P7：固定的 Edge → 中央 API 服务认证与路由代理；
+- P9：真实中央 PostgreSQL + Redis + 新 Docker Worker + Claude Code 执行 Case 2/3；
+- P10：最终只读审查；
+- GHCR 推送和 Cloudflare 部署。
+
+在 P7/P9/P10 通过前，不能把线上 `infinity.zhangyvjing.com` 或已有旧容器的状态
+写成新架构的通过证据，也不能删除现有线上数据或旧运行容器。

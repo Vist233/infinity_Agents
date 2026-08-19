@@ -397,7 +397,6 @@ npm run test:e2e
 cd ../cloudflare-worker
 npm run check
 npm test
-node --test worker-client.test.mjs
 ```
 
 如果后端、数据库或本地执行器被改动，再按本地验收环境补跑 Python/数据库/Redis 集成测试；不能只跑前端测试就声称任务链路完成。使用 Python 时遵循当前环境要求先执行 `pyenv shell Agent`。

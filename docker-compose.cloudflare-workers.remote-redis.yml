@@ -1,7 +1,0 @@
-# Optional override used by scripts/run_local_cloudflare_workers.sh.
-# The Redis URL is supplied by the caller after opening the SSH tunnel and is
-# never stored in this file.
-services:
-  worker-b:
-    environment:
-      REDIS_URL: ${WORKER_B_REDIS_URL:?WORKER_B_REDIS_URL must be set by the local Worker B bootstrap script}
