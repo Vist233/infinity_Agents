@@ -1,7 +1,7 @@
 # CHECKPOINT IMPLEMENT-20260820 / P0 / CARD-02
 
 - baseline commit: b2fdb5b
-- current commit: 6c009ef
+- current commit: 4dc2e7f (implementation commit; checkpoint metadata is finalized separately)
 - main Agent: Codex / GPT-5
 - sub Agent review: pending P10; this cleanup card used no sub-agent
 - completed outcome: removed the obsolete Cloudflare-control client, nested-Docker runtime, Fixture Executor, legacy Worker Dockerfile, and unused `backend.code_agent.service`; acceptance Compose now uses the one unified Worker image and direct Claude Code runtime
