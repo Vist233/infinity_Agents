@@ -1,7 +1,7 @@
 # CHECKPOINT IMPLEMENT-20260820 / P6 / CARD-03
 
-- baseline commit: c01f4bf
-- current commit: pending local commit
+- baseline commit: 56cc59b
+- current commit: 391b094
 - main Agent: primary Codex implementation Agent
 - sub Agent review: read-only attempts timed out; main Agent review completed
 - completed outcome: authenticated multipart transfer, per-part streaming/hash, server validation, atomic finalize, abort cleanup, and Worker client integration

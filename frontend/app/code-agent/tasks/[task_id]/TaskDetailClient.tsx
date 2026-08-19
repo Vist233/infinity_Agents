@@ -103,11 +103,27 @@ function artifactDownloadFilename(name: string) {
   return /\.zip$/i.test(normalized) ? normalized : `${normalized}.zip`;
 }
 
+function taskIdFromBrowserPath(pathname: string): string | null {
+  const match = pathname.match(/^\/(?:code-agent|task-center)\/tasks\/([^/]+)\/?$/);
+  if (!match) return null;
+  const candidate = decodeURIComponent(match[1]).trim();
+  return candidate && candidate !== "preview" ? candidate : null;
+}
+
 export default function TaskDetailPage() {
   const { t } = useLanguage();
   const router = useRouter();
   const params = useParams();
-  const taskId = params.task_id as string;
+  const paramTaskId = typeof params.task_id === "string" ? params.task_id : null;
+  // Next static export hydrates a deterministic `preview` shell. The live
+  // browser URL is the source of truth for the actual task identifier.
+  const taskId = useMemo(() => {
+    if (typeof window !== "undefined") {
+      const fromPath = taskIdFromBrowserPath(window.location.pathname);
+      if (fromPath) return fromPath;
+    }
+    return paramTaskId && paramTaskId !== "preview" ? paramTaskId : null;
+  }, [paramTaskId]);
 
   const [task, setTask] = useState<TaskDetail | null>(null);
   const [events, setEvents] = useState<TaskEvent[]>([]);
@@ -276,7 +292,7 @@ export default function TaskDetailPage() {
   };
 
   const handleCancel = async () => {
-    if (!task) return;
+    if (!task || !taskId) return;
     const confirmed = window.confirm(t("tasks.cancelConfirm"));
     if (!confirmed) return;
     setCancelling(true);
@@ -327,7 +343,7 @@ export default function TaskDetailPage() {
             <div className="flex items-center gap-2">
               <MobileWorkspaceMenu
                 active="tasks"
-                activeTaskId={taskId}
+                activeTaskId={taskId ?? undefined}
                 taskItems={authStatus === "authenticated" ? taskList.map((item) => ({
                   task_id: item.task_id,
                   title: item.title,

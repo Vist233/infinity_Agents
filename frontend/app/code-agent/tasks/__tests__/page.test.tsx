@@ -5,7 +5,7 @@ import TaskDetailPage from "../[task_id]/page";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
-  useParams: () => ({ task_id: "task-1" }),
+  useParams: () => ({ task_id: "preview" }),
   redirect: vi.fn(),
 }));
 
@@ -31,7 +31,7 @@ describe("Task detail downloads", () => {
     vi.clearAllMocks();
     (getCurrentUser as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "user-1", email: "tester@example.com", name: "Tester" });
     window.localStorage.setItem("infinity-agents-language", "zh");
-    window.history.replaceState({}, "", "/code-agent/tasks/?task_id=task-1");
+    window.history.replaceState({}, "", "/task-center/tasks/task-1/");
     (listTasks as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     const task = {
       task_id: "task-1",

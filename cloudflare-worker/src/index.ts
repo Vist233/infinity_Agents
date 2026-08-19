@@ -12,7 +12,6 @@ import { handleCancelChatTaskConfirmation, handleChat } from "./chat";
 import { currentDailyUsage } from "./quota";
 import { handleImageJudge } from "./image-judge";
 import { handleTaskApi } from "./tasks";
-import { handleWorkerControlApi } from "./worker-control";
 import { handleUserSettings } from "./settings";
 
 export { ImageJudgeUserConcurrencyLock } from "./image-judge";
@@ -86,12 +85,11 @@ export default {
       return handleLogout(request, env);
     }
 
-    // Worker control is authenticated with a revocable per-machine bearer
-    // credential, not with a browser OIDC cookie. Keep it ahead of the generic
-    // `/api/*` user session resolver so a Worker can enroll/poll without ever
-    // receiving browser-session semantics.
+    // The old D1-only Worker protocol is intentionally closed. Unified
+    // Workers use the central PostgreSQL/Redis protocol and never write Task
+    // state to this edge Worker.
     if (pathname.startsWith("/api/worker/v1/")) {
-      return handleWorkerControlApi(request, env);
+      return errorJson("Legacy Worker protocol is disabled", 410, "LEGACY_WORKER_PROTOCOL_DISABLED");
     }
 
     if (pathname === "/api" || pathname.startsWith("/api/")) {

@@ -80,7 +80,7 @@ describe("Infinity Edge route composition", () => {
     expect(await response.json()).toMatchObject({ error: { code: "UNAUTHENTICATED" } });
   });
 
-  it("keeps Worker control credentials separate from browser OIDC", async () => {
+  it("closes the retired D1-only Worker protocol", async () => {
     const response = await worker.fetch(
       new Request("https://app.test/api/worker/v1/poll", {
         method: "POST",
@@ -89,20 +89,20 @@ describe("Infinity Edge route composition", () => {
       }),
       testEnv(),
     );
-    expect(response.status).toBe(401);
-    expect(await response.json()).toMatchObject({ error: { code: "WORKER_UNAUTHENTICATED" } });
+    expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({ error: { code: "LEGACY_WORKER_PROTOCOL_DISABLED" } });
   });
 
-  it("rejects plaintext Worker control requests before authentication", async () => {
+  it("rejects plaintext requests through the retired Worker protocol", async () => {
     const response = await worker.fetch(
       new Request("http://app.test/api/worker/v1/health"),
       testEnv(),
     );
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: { code: "HTTPS_REQUIRED" } });
+    expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({ error: { code: "LEGACY_WORKER_PROTOCOL_DISABLED" } });
   });
 
-  it("validates enrollment before touching the D1 token store", async () => {
+  it("does not enroll through the retired D1-only protocol", async () => {
     const response = await worker.fetch(
       new Request("https://app.test/api/worker/v1/enroll", {
         method: "POST",
@@ -111,8 +111,8 @@ describe("Infinity Edge route composition", () => {
       }),
       testEnv(),
     );
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: { code: "INVALID_ENROLLMENT" } });
+    expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({ error: { code: "LEGACY_WORKER_PROTOCOL_DISABLED" } });
   });
 
   it("falls back to the Next static export for product pages", async () => {

@@ -253,10 +253,15 @@ export async function createTask(input: {
   direct?: boolean;
 }): Promise<{ task_id: string; status: string; duplicate?: boolean }> {
   const { direct, ...body } = input;
-  return requestJson(`${getApiBase()}${direct ? "/api/tasks/direct" : "/api/tasks"}`, {
+  const payload = direct
+    ? { ...body, agent_confirmation: false, submission_source: "task_center" as const }
+    : body;
+  // The central API has one task creation endpoint. Task Center is identified
+  // in the request body, rather than by a second D1-only route.
+  return requestJson(`${getApiBase()}/api/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
 }
 
