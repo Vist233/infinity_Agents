@@ -1,7 +1,7 @@
 # CHECKPOINT IMPLEMENT-20260820 / P3 / CARD-03
 
 - baseline commit: 9b4a0cf
-- current commit: pending commit for this card
+- current commit: a43ef32 (implementation commit; checkpoint metadata is finalized separately)
 - main Agent: Codex / GPT-5
 - sub Agent review: pending P10; no sub-agent used for this card
 - completed outcome: legacy trust labels no longer grant an execution tier in Python task claims, API Worker input/artifact preflight, or PostgreSQL RLS policy; all new Worker identity responses remain public-default/general compatibility labels
