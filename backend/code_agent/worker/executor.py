@@ -904,6 +904,7 @@ async def _create_artifacts(
             attempt_id,
             artifact_id,
             collected.archive_path,
+            archive_checksum=collected.checksum_sha256,
             worker_id=worker_id,
             worker_namespace=worker_namespace,
             worker_credential=worker_credential,
@@ -933,6 +934,7 @@ async def _upload_remote_artifact(
     artifact_id: str,
     archive_path: Path,
     *,
+    archive_checksum: Optional[str] = None,
     worker_id: str,
     worker_namespace: str,
     worker_credential: str,
@@ -962,6 +964,8 @@ async def _upload_remote_artifact(
         "Content-Type": "application/zip",
         "Content-Length": str(archive_path.stat().st_size),
     })
+    if archive_checksum:
+        headers["X-Worker-Artifact-SHA256"] = archive_checksum
     timeout = _worker_transfer_timeout()
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         class _ArchiveStream(httpx.AsyncByteStream):

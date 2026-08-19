@@ -134,6 +134,7 @@ async def test_worker_downloads_inputs_runs_direct_runtime_uploads_artifact_and_
                 "credential": request.headers.get("X-Worker-Credential"),
                 "lease": request.headers.get("X-Worker-Lease-Token"),
                 "attempt": request.headers.get("X-Worker-Attempt-ID"),
+                "artifact_sha256": request.headers.get("X-Worker-Artifact-SHA256"),
                 "archive": request.content,
             }
             return httpx.Response(
@@ -243,6 +244,7 @@ async def test_worker_downloads_inputs_runs_direct_runtime_uploads_artifact_and_
     assert observed["artifact"]["credential"] == "persistent-credential"
     assert observed["artifact"]["lease"] == "lease-token"
     assert observed["artifact"]["attempt"] == str(attempt_id)
+    assert observed["artifact"]["artifact_sha256"] == hashlib.sha256(observed["artifact"]["archive"]).hexdigest()
     archive = zipfile.ZipFile(io.BytesIO(observed["artifact"]["archive"]))
     manifest_name = next(name for name in archive.namelist() if name.endswith("frozen-input-manifest.json"))
     manifest = json.loads(archive.read(manifest_name))

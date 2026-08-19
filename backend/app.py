@@ -98,6 +98,38 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _cleanup_worker_staging(upload_root: FilePath) -> int:
+    """Remove only stale, abandoned remote-upload staging entries."""
+    upload_root = upload_root.resolve()
+    staging_root = upload_root / ".worker-staging"
+    if staging_root.is_symlink() or not staging_root.exists() or not staging_root.is_dir():
+        return 0
+    ttl = max(300, _env_int("ARTIFACT_STAGING_TTL_SECONDS", 24 * 60 * 60))
+    cutoff = time.time() - ttl
+    removed = 0
+    try:
+        entries = list(staging_root.iterdir())
+    except OSError:
+        return 0
+    for entry in entries:
+        try:
+            if entry.is_symlink():
+                if entry.lstat().st_mtime < cutoff:
+                    entry.unlink(missing_ok=True)
+                    removed += 1
+                continue
+            if entry.stat().st_mtime >= cutoff:
+                continue
+            if entry.is_dir():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            logger.warning("Could not clean stale Worker staging entry %s", entry)
+    return removed
+
+
 ENABLE_WS_STATUS_EVENTS = _env_flag("ENABLE_WS_STATUS_EVENTS", True)
 ENABLE_FIRST_CHUNK_RETRY = _env_flag("ENABLE_FIRST_CHUNK_RETRY", True)
 FIRST_CHUNK_TIMEOUT_SECONDS = max(1, _env_int("FIRST_CHUNK_TIMEOUT_SECONDS", 8))
@@ -109,6 +141,7 @@ TOOL_KEEP_RECENT = max(1, _env_int("PAPER_AGENT_TOOL_KEEP_RECENT", 3))
 @asynccontextmanager
 async def lifespan(app):
     await init_db(app)
+    _cleanup_worker_staging(FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", "/workspace/task-outputs")))
     app.state.worker_gateway_pool = None
     app.state.trust_issuer_pool = None
     gateway_dsn = os.getenv("WORKER_GATEWAY_DATABASE_URL", "").strip()
@@ -3349,6 +3382,136 @@ async def _worker_artifact_upload_allowed(
         ) is not None
 
 
+def _validate_result_archive(path: FilePath) -> Dict[str, Any]:
+    """Validate a Worker result ZIP and its content-addressed manifest."""
+    import zipfile
+    import zlib
+
+    from backend.security import reject_secret_content
+
+    max_files = max(1, _env_int("ARTIFACT_MAX_FILES", 5000))
+    max_file_bytes = max(1, _env_int("ARTIFACT_MAX_FILE_BYTES", 512 * 1024 * 1024))
+    max_total_bytes = max(1, _env_int("ARTIFACT_MAX_TOTAL_BYTES", 2 * 1024**3))
+    max_compression_ratio = max(1.0, _env_float("ARTIFACT_MAX_COMPRESSION_RATIO", 200.0))
+    try:
+        with zipfile.ZipFile(path) as archive:
+            infos = archive.infolist()
+            if not infos or len(infos) > max_files + 1:
+                raise ValueError("artifact entry count exceeds the allowed limit")
+            manifest_infos = [
+                info for info in infos
+                if info.filename.replace("\\", "/") == "manifest.json"
+            ]
+            if len(manifest_infos) != 1:
+                raise ValueError("artifact manifest is missing or duplicated")
+            manifest_mode = (manifest_infos[0].external_attr >> 16) & 0o170000
+            if manifest_mode and manifest_mode != 0o100000:
+                raise ValueError("artifact manifest is a special file")
+            if manifest_infos[0].file_size > 2 * 1024 * 1024:
+                raise ValueError("artifact manifest is too large")
+            if (
+                manifest_infos[0].file_size
+                and manifest_infos[0].file_size / max(manifest_infos[0].compress_size, 1) > max_compression_ratio
+            ):
+                raise ValueError("artifact manifest compression ratio is unsafe")
+
+            files: list[tuple[Any, str]] = []
+            seen: set[str] = set()
+            total_bytes = 0
+            for info in infos:
+                name = info.filename.replace("\\", "/")
+                if name == "manifest.json":
+                    continue
+                if not name or name.endswith("/"):
+                    raise ValueError("artifact contains a directory entry")
+                safe_relative_path(name)
+                mode = (info.external_attr >> 16) & 0o170000
+                if mode and mode != 0o100000:
+                    raise ValueError("artifact contains a special file")
+                if name in seen:
+                    raise ValueError("artifact contains duplicate paths")
+                seen.add(name)
+                if info.file_size > max_file_bytes:
+                    raise ValueError("artifact file exceeds the allowed limit")
+                if info.file_size and info.file_size / max(info.compress_size, 1) > max_compression_ratio:
+                    raise ValueError("artifact compression ratio is unsafe")
+                total_bytes += info.file_size
+                if total_bytes > max_total_bytes:
+                    raise ValueError("artifact total size exceeds the allowed limit")
+                files.append((info, name))
+            if len(files) > max_files:
+                raise ValueError("artifact file count exceeds the allowed limit")
+
+            manifest_bytes = bytearray()
+            with archive.open(manifest_infos[0], "r") as source:
+                while True:
+                    chunk = source.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    manifest_bytes.extend(chunk)
+                    if len(manifest_bytes) > 2 * 1024 * 1024:
+                        raise ValueError("artifact manifest expands beyond the allowed limit")
+            reject_secret_content(bytes(manifest_bytes), label="artifact manifest")
+            manifest = json.loads(manifest_bytes.decode("utf-8"))
+            if not isinstance(manifest, dict) or manifest.get("version") != 1:
+                raise ValueError("artifact manifest version is invalid")
+            entries = manifest.get("files")
+            if not isinstance(entries, list) or len(entries) > max_files:
+                raise ValueError("artifact manifest file list is invalid")
+            declared: Dict[str, Dict[str, Any]] = {}
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    raise ValueError("artifact manifest entry is invalid")
+                name = safe_relative_path(str(entry.get("path", "")))
+                if name in declared or name == "manifest.json":
+                    raise ValueError("artifact manifest contains duplicate paths")
+                digest = str(entry.get("sha256", "")).lower()
+                size = entry.get("size")
+                if not re.fullmatch(r"[0-9a-f]{64}", digest) or not isinstance(size, int) or size < 0:
+                    raise ValueError("artifact manifest digest or size is invalid")
+                declared[name] = {"sha256": digest, "size": size}
+            if set(declared) != seen:
+                raise ValueError("artifact manifest does not match ZIP entries")
+
+            for info, name in files:
+                hasher = hashlib.sha256()
+                size = 0
+                with archive.open(info, "r") as source:
+                    overlap = b""
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        if size > max_file_bytes:
+                            raise ValueError("artifact file expands beyond the allowed limit")
+                        hasher.update(chunk)
+                        window = overlap + chunk
+                        reject_secret_content(window, label=name)
+                        overlap = window[-8192:]
+                expected = declared[name]
+                if size != expected["size"] or hasher.hexdigest() != expected["sha256"]:
+                    raise ValueError("artifact manifest checksum mismatch")
+            return {
+                "file_count": len(files),
+                "byte_count": total_bytes,
+                "manifest_version": 1,
+            }
+    except (
+        OSError,
+        zipfile.BadZipFile,
+        KeyError,
+        UnicodeError,
+        ValueError,
+        RuntimeError,
+        NotImplementedError,
+        TypeError,
+        AttributeError,
+        zlib.error,
+    ) as exc:
+        raise HTTPException(status_code=422, detail="Artifact archive validation failed") from exc
+
+
 @app.get("/api/worker/tasks/{task_id}/inputs/{kind}")
 async def download_worker_input_endpoint(task_id: str, kind: str, request: Request):
     """Transfer a task input to a remote Worker over its persistent credential."""
@@ -3386,6 +3549,21 @@ async def upload_worker_artifact_endpoint(
     max_bytes = int(os.getenv("ARTIFACT_UPLOAD_MAX_BYTES", str(3 * 1024**3)))
     upload = await _stream_request_body_to_disk(request, staging_root, max_bytes, filename="result.zip")
     source = FilePath(upload["stored_path"])
+    expected_checksum = request.headers.get("X-Worker-Artifact-SHA256", "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_checksum):
+        source.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Artifact SHA-256 header is required")
+    if expected_checksum != upload["file_hash_sha256"]:
+        source.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail="Artifact checksum mismatch")
+    try:
+        archive_metadata = _validate_result_archive(source)
+    except HTTPException:
+        source.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        source.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail="Artifact archive validation failed") from exc
     destination = upload_root / "remote" / task_id / f"{artifact_id}.zip"
     moved = False
     try:
@@ -3409,7 +3587,7 @@ async def upload_worker_artifact_endpoint(
                 file_size_bytes=upload["file_size_bytes"],
                 checksum_sha256=upload["file_hash_sha256"],
                 content_type="application/zip",
-                metadata={"remote_worker_id": worker["worker_id"]},
+                metadata={"remote_worker_id": worker["worker_id"], **archive_metadata},
             ),
             worker["lease_token"],
             worker_id=worker["worker_id"],
