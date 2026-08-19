@@ -1,7 +1,8 @@
-"""Infinity Agent — Task executor.
+"""Infinity Agents unified Worker task executor.
 
-Orchestrates the full task execution flow: Docker execution,
-artifact collection, verification, and result reporting.
+Production tasks use the fixed Claude Code runtime directly in the long-lived
+Worker container. The old nested-Docker executor is not a production fallback;
+fixture execution exists only for the isolated acceptance harness.
 """
 
 from __future__ import annotations
@@ -85,12 +86,11 @@ async def execute_task(
     """Execute a task end-to-end.
 
     Flow:
-    1. Set up working directory
-    2. Run Docker container with Claude Code
-    3. Collect outputs
-    4. Verify outputs
-    5. Upload artifacts
-    6. Report results
+    1. Set up an attempt-local working directory
+    2. Run the single fixed Claude Code runtime in this Worker container
+    3. Apply deterministic output safety/finalize checks
+    4. Upload the artifact with lease/fencing protection
+    5. Report the result and clear the attempt directory
     """
     if output_base_dir is None:
         # Shared with the API server's ARTIFACT_DOWNLOAD_ROOT so artifacts
@@ -181,9 +181,9 @@ async def execute_task(
 
     from backend.code_agent.task_service import complete_task_attempt
 
-    # Execution success is not Task success.  Keep the Attempt open until the
-    # external Verifier and artifact publication gates have completed so a
-    # missing deliverable cannot leave a misleading succeeded Attempt.
+    # Execution success is not Task success. Keep the Attempt open until the
+    # deterministic artifact safety and lease/fencing gates have completed so
+    # a missing deliverable cannot leave a misleading succeeded Attempt.
     if not success:
         await complete_task_attempt(
             db_pool,
@@ -204,7 +204,8 @@ async def execute_task(
     if not success:
         return {"success": False, "error": error_message, "failure_code": failure_code}
 
-    # Verify outputs
+    # Deterministic output safety checks. There is no independent Verifier
+    # service in the unified architecture.
     await _report_status(redis_client, task_id, "running", {
         "phase": "verifying",
         "worker_id": worker_id,
@@ -223,7 +224,7 @@ async def execute_task(
             task_id=task_id,
             lease_token=lease_token,
             exit_code=0,
-            error_message=f"Verification failed: {failure_messages}",
+            error_message=f"Output validation failed: {failure_messages}",
             executor_image_digest=image_digest,
             failure_code="verification_failed",
         )
@@ -231,9 +232,7 @@ async def execute_task(
         return {
             "success": False,
             "error": f"Verification failed: {failure_messages}",
-            # Verification failures are deterministic — retrying won't help
-            # (design doc §35.2).
-            "failure_code": "verification_failed",
+            "failure_code": "output_validation_failed",
         }
 
     # Create artifacts
@@ -482,14 +481,12 @@ async def _run_docker_execution(
 ) -> AsyncIterator[Dict[str, Any]]:
     """Run the configured execution mode.
 
-    ``direct`` runs Claude Code in this Worker container.  ``docker`` remains
-    available only for legacy installations that provide a separately
-    controlled executor; acceptance uses the fixture executor.
+    ``direct`` runs Claude Code in this Worker container. ``fixture`` is
+    reserved for the isolated acceptance harness. Any legacy nested-Docker
+    mode fails closed instead of becoming a production fallback.
     """
-    from backend.code_agent.worker.docker_runtime import run_docker_task
-
     input_dir = None
-    executor_mode = os.getenv("CODE_AGENT_EXECUTOR_MODE", "docker").strip().lower()
+    executor_mode = os.getenv("CODE_AGENT_EXECUTOR_MODE", "direct").strip().lower()
 
     # Preferred path: assemble the task input directory from the uploaded
     # method source document + dataset snapshot (design doc §8.5).
@@ -561,8 +558,12 @@ async def _run_docker_execution(
             yield event
         return
 
-    gateway: Optional[Dict[str, str]] = None
-    if executor_mode in {"direct", "docker"}:
+    if executor_mode == "direct":
+        from backend.code_agent.worker.claude_runtime import run_claude_task
+
+        if input_dir is None:
+            input_dir = work_dir / "input"
+            input_dir.mkdir(parents=True, exist_ok=True)
         gateway = await _request_attempt_gateway(
             task_id=task_id,
             attempt_id=attempt_id,
@@ -572,20 +573,15 @@ async def _run_docker_execution(
             lease_token=lease_token,
             control_plane_url=control_plane_url,
         )
-
-    if executor_mode == "direct":
-        from backend.code_agent.worker.direct_runtime import run_direct_task
-
-        if input_dir is None:
-            input_dir = work_dir / "input"
-            input_dir.mkdir(parents=True, exist_ok=True)
-        async for event in run_direct_task(
-            task_id,
-            task_spec.get("task_spec_id", ""),
-            dataset.get("dataset_snapshot_id", "") if dataset else "",
-            input_dir=input_dir,
+        async for event in run_claude_task(
+            task_id=task_id,
+            task_spec_id=task_spec.get("task_spec_id", ""),
+            dataset_snapshot_id=dataset.get("dataset_snapshot_id", "") if dataset else "",
+            title=task_spec.get("title", ""),
+            goal=task_spec.get("research_question") or task_spec.get("goal") or "",
+            analysis_type=task_spec.get("analysis_type", "generic"),
+            case_dir=str(input_dir),
             output_dir=output_dir,
-            work_dir=work_dir,
             cancel_event=cancel_event,
             attempt_gateway_url=gateway["gateway_url"],
             attempt_gateway_token=gateway["gateway_token"],
@@ -594,20 +590,9 @@ async def _run_docker_execution(
             yield event
         return
 
-    # Run Docker
-    async for event in run_docker_task(
-        task_id=task_id,
-        task_spec_id=task_spec.get("task_spec_id", ""),
-        dataset_snapshot_id=dataset.get("dataset_snapshot_id", "") if dataset else "",
-        docker_image=docker_image,
-        case_dir=str(input_dir) if input_dir else None,
-        output_dir=str(output_dir),
-        cancel_event=cancel_event,
-        attempt_gateway_url=gateway["gateway_url"] if gateway else None,
-        attempt_gateway_token=gateway["gateway_token"] if gateway else None,
-        attempt_model_id=gateway["model_id"] if gateway else None,
-    ):
-        yield event
+    raise SecurityBoundaryError(
+        f"Unsupported executor mode {executor_mode!r}; only the unified direct runtime is production-safe"
+    )
 
 
 def _inside_upload_roots(path: Path) -> bool:
@@ -747,12 +732,15 @@ async def _download_remote_input(
 
 
 async def _get_image_digest(docker_image: str) -> Optional[str]:
-    """Resolve the image ID/digest for reproducibility records (design §25)."""
-    from backend.code_agent.worker.docker_runtime import get_image_digest
-    try:
-        return await get_image_digest(docker_image)
-    except Exception:
-        return None
+    """Read the immutable image digest supplied by deployment metadata.
+
+    The unified image has no Docker CLI and must not inspect a host daemon.
+    """
+    configured = (
+        os.getenv("WORKER_IMAGE_DIGEST", "").strip()
+        or os.getenv("CODE_AGENT_IMAGE_DIGEST", "").strip()
+    )
+    return configured or None
 
 
 async def _collect_outputs(output_dir: Path) -> list:
@@ -770,21 +758,36 @@ async def _collect_outputs(output_dir: Path) -> list:
 
 
 async def _verify_outputs(output_dir: Path, task_spec: Dict[str, Any]) -> Dict[str, Any]:
-    """Verify that required deliverables exist and are valid.
+    """Apply deterministic output checks before artifact finalization.
 
-    Uses the five-level verifier for comprehensive validation.
-    Verification is fail-closed: a verifier outage must not turn into a
-    successful task based only on file existence.
+    Scientific correctness belongs in the frozen TaskSpec/Case manifest and
+    downstream review. This function enforces only data-plane invariants:
+    output exists, declared required paths exist, and every candidate is a
+    regular file inside the output root.
     """
+    failures: list[dict[str, str]] = []
+    if not output_dir.exists() or not output_dir.is_dir():
+        return {"passed": False, "failures": [{"message": "output directory is missing"}]}
     try:
-        from backend.code_agent.verifier import verify_outputs
-        return verify_outputs(output_dir, task_spec)
-    except Exception as exc:
-        logger.error("Five-level verifier unavailable; refusing to publish output: %s", exc)
-        return {
-            "passed": False,
-            "failures": [{"message": "Output verification service unavailable"}],
-        }
+        collector = ArtifactCollector(
+            max_files=int(os.getenv("ARTIFACT_MAX_FILES", "5000")),
+            max_file_bytes=int(os.getenv("ARTIFACT_MAX_FILE_BYTES", str(512 * 1024 * 1024))),
+            max_total_bytes=int(os.getenv("ARTIFACT_MAX_TOTAL_BYTES", str(2 * 1024 * 1024 * 1024))),
+        )
+        files = list(collector._iter_files(output_dir))
+    except (OSError, SecurityBoundaryError) as exc:
+        return {"passed": False, "failures": [{"message": str(exc)}]}
+    if not files:
+        failures.append({"message": "Claude Code produced no output artifacts"})
+    spec_json = task_spec.get("spec_json") if isinstance(task_spec, dict) else None
+    required_outputs = spec_json.get("required_outputs", []) if isinstance(spec_json, dict) else []
+    present = {relative.as_posix() for _path, relative in files}
+    if isinstance(required_outputs, list):
+        for required in required_outputs:
+            required_name = str(required).strip().lstrip("/")
+            if required_name and required_name not in present:
+                failures.append({"message": f"required output is missing: {required_name}"})
+    return {"passed": not failures, "failures": failures}
 
 
 async def _create_artifacts(

@@ -158,6 +158,9 @@ async def run_claude_task(
     output_dir: Optional[str] = None,
     cancel_event: Optional[asyncio.Event] = None,
     timeout_seconds: Optional[float] = 12 * 60 * 60,
+    attempt_gateway_url: Optional[str] = None,
+    attempt_gateway_token: Optional[str] = None,
+    attempt_model_id: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Run one frozen task with the Claude Code CLI in this Worker container."""
     input_dir = Path(case_dir or f"/tmp/task-workdirs/{task_id}/input").resolve()
@@ -208,15 +211,21 @@ async def run_claude_task(
     runtime_env["LOGNAME"] = claude_user
     runtime_env.setdefault("XDG_CONFIG_HOME", f"{claude_home}/.config")
     runtime_env.setdefault("XDG_CACHE_HOME", f"{claude_home}/.cache")
+    # Only the short-lived capability for this Attempt may enter Claude's
+    # environment. Long-lived Worker/API/Provider credentials never do.
     attempt_env = {
-        "ATTEMPT_GATEWAY_URL": "ANTHROPIC_BASE_URL",
-        "ATTEMPT_GATEWAY_TOKEN": "ANTHROPIC_AUTH_TOKEN",
-        "ATTEMPT_MODEL_ID": "ANTHROPIC_MODEL",
+        "ANTHROPIC_BASE_URL": attempt_gateway_url or os.getenv("ATTEMPT_GATEWAY_URL", ""),
+        "ANTHROPIC_AUTH_TOKEN": attempt_gateway_token or os.getenv("ATTEMPT_GATEWAY_TOKEN", ""),
+        "ANTHROPIC_MODEL": attempt_model_id or os.getenv("ATTEMPT_MODEL_ID", ""),
     }
-    for source_name, target_name in attempt_env.items():
-        value = os.getenv(source_name, "").strip()
-        if value:
-            runtime_env[target_name] = value
+    if not all(str(value).strip() for value in attempt_env.values()):
+        yield {
+            "type": "error",
+            "message": "Attempt model gateway capability is missing",
+            "failure_code": "provider_unavailable",
+        }
+        return
+    runtime_env.update({key: str(value).strip() for key, value in attempt_env.items()})
 
     cmd = [
         "claude",

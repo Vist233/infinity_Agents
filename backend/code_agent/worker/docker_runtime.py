@@ -1,6 +1,8 @@
-"""Infinity Agent — Docker runtime for task execution.
+"""LEGACY nested-Docker runtime for historical task tests.
 
-Creates and manages Docker containers for isolated task execution.
+The unified production Worker never imports or starts this module. It runs
+Claude Code directly in the long-lived Worker container and never mounts a
+Docker socket.
 """
 
 from __future__ import annotations

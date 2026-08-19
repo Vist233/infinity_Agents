@@ -10,7 +10,7 @@ import pytest
 
 from agent.paperAgent import PAPER_AGENT_INSTRUCTIONS
 from agent.tools.task_tools import GoalDrivenTaskTools, MAX_TASK_INPUT_BYTES
-from backend.code_agent.worker.direct_runtime import _prompt
+from backend.code_agent.worker.claude_runtime import _goal_driven_prompt
 from backend.code_agent.worker.executor import _assert_frozen_input
 
 
@@ -97,7 +97,14 @@ def test_case_10_prompt_injection_is_treated_as_untrusted_data(tmp_path):
     document = json.loads(_tools(tmp_path).create_execution_document("note.md", content))
     assert (tmp_path / document["relative_path"]).read_text() == content
     assert "不可信证据" in PAPER_AGENT_INSTRUCTIONS
-    assert "embedded instruction" in _prompt("t", "s", "d", tmp_path / "input", tmp_path / "output")
+    prompt = _goal_driven_prompt(
+        spec_dir=tmp_path / "spec",
+        input_dir=tmp_path / "input",
+        work_dir=tmp_path / "work",
+        output_dir=tmp_path / "output",
+        logs_dir=tmp_path / "logs",
+    )
+    assert "embedded instruction" in prompt
 
 
 def test_case_11_worker_accepts_only_hash_matching_frozen_input(tmp_path):

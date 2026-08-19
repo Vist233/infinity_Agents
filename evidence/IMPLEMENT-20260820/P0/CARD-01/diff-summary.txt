@@ -1,0 +1,20 @@
+Modified:
+- backend/Dockerfile.worker
+- backend/code_agent/worker/claude_runtime.py
+- backend/code_agent/worker/cloudflare_worker.py (legacy marker)
+- backend/code_agent/worker/docker_runtime.py (legacy marker)
+- backend/code_agent/worker/executor.py
+- docker-compose.cloudflare-workers.yml
+- docker-compose.local.yml
+- tests/test_claude_runtime.py
+- tests/test_goal_driven_cases.py
+- .github/workflows/python-checks.yml
+
+Removed:
+- backend/Dockerfile.direct-worker
+- backend/code_agent/worker/direct_runtime.py
+- tests/test_direct_runtime.py
+
+Production reference scan: no Compose, backend, or GitHub workflow reference to
+`Dockerfile.direct-worker`, `direct_runtime`, `cloudflare_worker`, or `docker_runtime`
+outside the explicitly marked legacy modules.

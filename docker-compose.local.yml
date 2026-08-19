@@ -36,7 +36,7 @@ services:
     image: infinity-agent-worker:latest
     build:
       context: .
-      dockerfile: backend/Dockerfile.direct-worker
+      dockerfile: backend/Dockerfile.worker
     env_file: ${WORKER_ENV_FILE:-worker.env}
     environment:
       - WORKER_ID=worker-a
@@ -66,7 +66,7 @@ services:
     image: infinity-agent-worker:latest
     build:
       context: .
-      dockerfile: backend/Dockerfile.direct-worker
+      dockerfile: backend/Dockerfile.worker
     env_file: ${WORKER_ENV_FILE:-worker.env}
     environment:
       - WORKER_ID=worker-b
@@ -91,7 +91,7 @@ services:
     image: infinity-agent-worker:latest
     build:
       context: .
-      dockerfile: backend/Dockerfile.direct-worker
+      dockerfile: backend/Dockerfile.worker
     environment:
       - APP_ENV=${APP_ENV:-production}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
@@ -110,7 +110,7 @@ services:
     image: infinity-agent-worker:latest
     build:
       context: .
-      dockerfile: backend/Dockerfile.direct-worker
+      dockerfile: backend/Dockerfile.worker
     environment:
       - APP_ENV=${APP_ENV:-production}
       - DATABASE_URL=${REAPER_DATABASE_URL:?REAPER_DATABASE_URL is required for the Reaper service}

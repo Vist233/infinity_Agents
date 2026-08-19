@@ -1,0 +1,8 @@
+baseline commit: 4ec22503cf204eee1f56f686d02a0f51b7abd88
+baseline branch: cloudflare-deploy
+baseline production entries:
+- backend/Dockerfile.worker -> backend.code_agent.worker.cloudflare_worker
+- backend/Dockerfile.direct-worker -> backend.code_agent.worker.consumer
+- executor defaulted to docker compatibility path
+- direct_runtime.py contained a second simplified prompt
+worktree before card: clean

@@ -1,7 +1,8 @@
-# One local acceptance/persistent Worker connected to the Cloudflare control
-# plane. The image can be built locally or pulled from GHCR by setting
+# One local persistent Worker connected to the central PostgreSQL/Redis
+# cluster. The image can be built locally or pulled from GHCR by setting
 # WORKER_IMAGE=ghcr.io/<org-or-user>/infinity-agent-worker:v1.
-# This file intentionally does not start PostgreSQL, Redis, or a verifier.
+# This file intentionally does not start PostgreSQL, Redis, or a verifier;
+# those are administrator-managed central services.
 
 x-cloudflare-worker: &cloudflare-worker
   image: ${WORKER_IMAGE:-infinity-agent-worker:cloudflare}
@@ -9,7 +10,7 @@ x-cloudflare-worker: &cloudflare-worker
     context: .
     dockerfile: backend/Dockerfile.worker
   restart: unless-stopped
-  command: python -m backend.code_agent.worker.cloudflare_worker
+  command: ["python", "-m", "backend.code_agent.worker.consumer", "${WORKER_ID:-worker-default}"]
 
 services:
   worker-b:
@@ -18,16 +19,20 @@ services:
       - path: ${WORKER_ENV_FILE:-worker-b.cloudflare.env}
         required: false
     environment:
-      WORKER_WORK_ROOT: /worker-inputs
-      WORKER_OUTPUT_ROOT: /worker-outputs
-      WORKER_REDIS_REQUIRED: ${WORKER_REDIS_REQUIRED:-1}
-      WORKER_RECYCLE_AFTER_TASK: ${WORKER_RECYCLE_AFTER_TASK:-0}
+      WORKER_ID: ${WORKER_ID:?WORKER_ID must be supplied by the server-issued credential bundle}
+      WORKER_ENROLLMENT_REQUIRED: "1"
+      WORKER_CREDENTIAL: ${WORKER_CREDENTIAL:?WORKER_CREDENTIAL must be supplied by the server-issued credential bundle}
+      DATABASE_URL: ${WORKER_DATABASE_URL:?WORKER_DATABASE_URL must be supplied by the administrator}
+      REDIS_URL: ${WORKER_REDIS_URL:?WORKER_REDIS_URL must be supplied by the administrator}
+      REDIS_NAMESPACE: ${REDIS_NAMESPACE:?REDIS_NAMESPACE must be supplied by the administrator}
+      WORKER_CONTROL_PLANE_URL: ${WORKER_CONTROL_PLANE_URL:?WORKER_CONTROL_PLANE_URL must be supplied by the administrator}
+      DB_RLS_ENABLED: ${DB_RLS_ENABLED:-1}
+      DB_RLS_REQUIRE_CONTEXT: ${DB_RLS_REQUIRE_CONTEXT:-1}
+      DB_RLS_WORKER_ROLE: ${DB_RLS_WORKER_ROLE:-infinity_worker}
+      CODE_AGENT_EXECUTOR_MODE: direct
     volumes:
-      - worker_b_inputs:/worker-inputs
-      - worker_b_outputs:/worker-outputs
+      - worker_b_workspace:/workspace
 
 volumes:
-  worker_b_inputs:
-    name: infinity-agents-worker-b-inputs
-  worker_b_outputs:
-    name: infinity-agents-worker-b-outputs
+  worker_b_workspace:
+    name: infinity-agents-worker-b-workspace

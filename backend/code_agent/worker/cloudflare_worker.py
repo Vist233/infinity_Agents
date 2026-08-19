@@ -1,8 +1,13 @@
-"""Cloudflare-control-plane local Claude Code Worker.
+"""LEGACY Cloudflare-control-plane Worker compatibility client.
 
 This Worker runs on the user's machine and keeps all provider/Redis settings
 local.  Cloudflare D1 is reached only through the authenticated Worker Control
 API; it is not treated as a PostgreSQL endpoint.
+
+This module is retained only for migration fixtures and historical protocol
+tests. It is not referenced by any production Dockerfile or Compose file. The
+production Worker is ``consumer.py`` and connects to the unified
+PostgreSQL/Redis cluster.
 """
 
 from __future__ import annotations

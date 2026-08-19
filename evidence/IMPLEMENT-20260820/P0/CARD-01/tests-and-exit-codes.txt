@@ -1,0 +1,5 @@
+- `eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q tests/test_claude_runtime.py tests/test_goal_driven_cases.py tests/test_cloudflare_worker.py tests/test_goal_driven_worker_inputs.py`: exit 0, 24 passed.
+- `python3 -m compileall -q backend/code_agent/worker`: exit 0.
+- `git diff --check`: exit 0.
+- Changed-diff secret scan for common private-key/API-key patterns: no matches.
+- pyenv emitted a local rehash permission warning; it did not affect the selected Agent interpreter or test result.

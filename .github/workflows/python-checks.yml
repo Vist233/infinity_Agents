@@ -86,7 +86,7 @@ jobs:
       - name: Run test direct runtime
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_direct_runtime.py
+        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_claude_runtime.py
 
       - name: Run test fault injection
         env:

@@ -10,7 +10,7 @@ from backend.code_agent.worker.claude_runtime import run_claude_task
 def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch):
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "local-token")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "long-lived-provider-token")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "local-base")
     monkeypatch.setenv("ANTHROPIC_MODEL", "local-model")
     monkeypatch.setenv("WORKER_CREDENTIAL", "worker-secret")
@@ -32,6 +32,9 @@ def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch)
                 goal="Produce a reproducible result",
                 case_dir=str(input_dir),
                 output_dir=str(output_dir),
+                attempt_gateway_url="https://gateway.example/attempt/task-local",
+                attempt_gateway_token="attempt-token",
+                attempt_model_id="local-model",
             )
         ]
 
@@ -56,9 +59,9 @@ def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch)
     assert '"goal": "Produce a reproducible result"' in (input_dir.parent / "spec" / "task_spec.json").read_text()
     assert "MISSION" in prompt
     assert "Save every deliverable" in prompt
-    assert "local-token" not in args
-    assert kwargs["env"]["ANTHROPIC_AUTH_TOKEN"] == "local-token"
-    assert kwargs["env"]["ANTHROPIC_BASE_URL"] == "local-base"
+    assert "attempt-token" not in args
+    assert kwargs["env"]["ANTHROPIC_AUTH_TOKEN"] == "attempt-token"
+    assert kwargs["env"]["ANTHROPIC_BASE_URL"] == "https://gateway.example/attempt/task-local"
     assert kwargs["env"]["ANTHROPIC_MODEL"] == "local-model"
     assert "WORKER_CREDENTIAL" not in kwargs["env"]
     assert "REDIS_URL" not in kwargs["env"]
