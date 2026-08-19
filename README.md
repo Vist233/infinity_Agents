@@ -1,68 +1,57 @@
 # Infinity Agents
 
-Infinity Agents 是面向生命科学研究的 **Method-to-Result 工作台**。它的目标不是提供三个并列的聊天 Agent，而是把研究问题、论文方法、用户数据和可验证的计算结果连接成一条可追踪的工作流。
+Infinity Agents 是面向生命科学研究的 Method-to-Result 工作台。它不是多个并列聊天
+Agent，而是一条从研究问题、论文方法和数据到异步执行结果的完整链路。
+
+## 产品闭环
+
+```text
+研究问题
+→ Analysis 搜索、阅读和比较论文
+→ 整理 Method Document 并关联 Dataset Snapshot
+→ 用户确认，或在 Task Center 直接创建
+→ PostgreSQL Task + Redis 通知
+→ Docker Worker 内的 Goal-Driven Claude Code 异步执行
+→ Artifact 上传、校验和发布
+→ 用户在 Task Center 查看并下载结果
+```
+
+## 三个产品区域
+
+- **Analysis**：唯一主 Agent，负责论文研究、方法整理、执行文档和数据关联；
+- **任务执行中心**：任务创建、状态、Attempt、Worker、事件和结果下载，不是第二个 Agent；
+- **ImageJudge**：在本地使用参考图和自然语言规则处理图片批次，生成可复核的结构化分类结果，作为后续 Analysis 的数据输入。
+
+ImageJudge 当前是参考图分类工具，不宣称已经完成通用多性状数值提取、物理量标定或科学准确性证明。
+
+## Worker 架构
+
+平台服务器、管理员电脑和学生电脑上的 Worker 全部加入同一个 PostgreSQL/Redis 公共
+集群。超级管理员统一提供数据库、Redis、API、模型 Provider、Namespace 和公网地址；
+普通用户只能点击“创建”触发服务器签发 Worker credential，并查看该 credential 对应的
+Worker 状态；签发策略和签发密钥始终由超级管理员控制。
+
+同一集群不表示所有机器共用管理员密码：每个 Worker 使用独立、最小权限、可撤销的
+PostgreSQL、Redis ACL 和 Provider 机器凭证。
+
+一个 Worker credential 对应一个长期 Docker 容器。容器内直接运行 Claude Code，不使用
+Docker-in-Docker 或 Docker Socket；每个任务只接收冻结的 Method + Dataset，上传结果后
+清空本地目录并继续等待下一任务。
 
 ## 体验地址
 
 [打开 Infinity Agents](https://infinity.zhangyvjing.com)
 
-## 核心工作流
+## 当前文档
 
-```text
-研究问题
-  → Analysis 检索论文、阅读资料并整理方法
-  → 形成可读、可执行的 Method Document 与 Dataset 关联
-  → 用户确认关键科学选择
-  → 任务执行中心冻结并提交异步 Task
-  → Docker Worker 长时执行、排错和恢复
-  → Verifier 验收并发布可下载的 Artifact
-```
+- [统一 Worker 架构决议](docs/ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md)
+- [统一 Worker 实施计划](docs/UNIFIED_WORKER_IMPLEMENTATION_PLAN.md)
+- [Worker 当前差距详细报告](docs/WORKER_ARCHITECTURE_GAP_REPORT_2026-08-19.md)
+- [Worker 接入目标说明](docs/WORKER_ONBOARDING.md)
+- [本地开发](docs/LOCAL_DEVELOPMENT.md)
+- [ImageJudge 桌面端](image-judge/README.md)
+- [Cloudflare 部署分支说明](https://github.com/Vist233/infinity_Agents/tree/cloudflare-deploy)
 
-任务的事实输入是冻结后的 Method Document 和 Dataset Snapshot；聊天消息、Redis 消息或模型自述都不能替代任务状态和结果证据。
-
-## 产品结构
-
-### Analysis：唯一主 Agent
-
-Analysis 负责研究工作本身：
-
-- 检索和比较 PubMed、Europe PMC、arXiv 等公开来源；
-- 阅读论文、补充材料、PDF、网页和提取图片；
-- 提取软件版本、步骤、参数、输入输出和证据位置；
-- 关联用户数据集，整理执行文档和 TaskSpec；
-- 在用户明确确认后提交异步任务。
-
-Analysis 不在 Web/API 进程中安装 R/Python 包，也不长时间占用对话上下文执行代码。长时计算由独立的 Docker Worker 完成。
-
-### 任务执行中心：异步计算控制面
-
-任务执行中心不是第二个聊天 Agent，而是所有异步任务的控制与结果界面。它负责展示和管理：
-
-- queued、running、verifying、succeeded、failed 等任务状态；
-- Worker、Attempt、租约、事件和失败原因；
-- 经过验证的代码、日志、表格、图片、报告和 manifest；
-- Task 取消、重试以及属于当前用户的结果下载。
-
-### ImageJudge：本地图片数据生产工具
-
-ImageJudge 是 Infinity Agents 的桌面端图片数据入口。它在本地处理图片批次，使用参考图和自然语言规则完成参考图引导分类，生成可复核的结构化结果，并将结果作为后续 Analysis 和科研任务的数据输入。
-
-当前版本仍然是参考图分类器，主要输出分类、状态、复核标记和理由；它尚不宣称已经完成通用多性状数值提取、物理量标定或科学准确性证明。未来的性状提取能力必须建立在版本化 TraitDefinition、逐图 TraitObservation、标定和质量控制之上。
-
-## 运行边界与数据职责
-
-- **PostgreSQL** 是 Session、Resource、Task、Attempt、Event 和 Artifact 的事实源。
-- **Redis** 负责通知、队列协调、实时事件和短期缓存，不保存不可重建的任务事实。
-- **Docker Workers** 可以运行在本机或服务器上，负责隔离执行长时 Goal-driven 任务。
-- **ImageJudge 桌面端** 在本地管理图片和结构化结果；Web 不自动接收整份原图目录，用户选择的结构化输出才进入 Analysis。
-- **模型 Provider** 由用户或部署环境配置。使用远程视觉/语言模型时，实际发送范围取决于对应的 Provider 与隐私策略，不能笼统宣称所有数据永不离开设备。
-
-## 文档
-
-- [技术架构与本地运行](docs/LOCAL_DEVELOPMENT.md)
-- [ImageJudge 桌面端说明](image-judge/README.md)
-- [Cloudflare 部署说明](https://github.com/Vist233/infinity_Agents/blob/cloudflare-deploy/cloudflare-worker/README.md)
-- [Analysis Workspace 产品与系统设计](docs/ANALYSIS_WORKSPACE_SYSTEM_DESIGN.md)
-- [本地 MVP 实施与验收计划](docs/LOCAL_MVP_EXECUTION_AND_TEST_PLAN.md)
-
-`main` 是完整产品源码；`cloudflare-deploy` 在相同源码之上增加 Cloudflare Worker、Wrangler 配置和线上资源绑定。
+`main` 保存完整产品源码；`cloudflare-deploy` 在同一产品源码上增加 Cloudflare Worker、
+Wrangler 和线上资源绑定。任何线上部署都必须能够由 GitHub 中记录的 Git SHA 和固定
+Worker image digest 重建。

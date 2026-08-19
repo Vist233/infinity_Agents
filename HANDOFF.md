@@ -6,6 +6,14 @@
 
 > **当前权威实现**：Worker 使用 `backend/Dockerfile.direct-worker`，在 Worker 容器内直接启动 Claude Code；不挂载宿主机 Docker Socket，也不在容器内启动 Docker。网页任务接口使用登录会话与 CSRF，Worker 使用数据库保存摘要的持久凭证；凭证不是一次性 Token。远程 Worker 通过受凭证和租约保护的输入下载、产物上传接口与中心 API 交换文件。本文早期历史段落若与上述说明冲突，以当前代码、`worker.env.example` 和 `docs/WORKER_ONBOARDING.md` 为准。
 
+> **2026-08-20 目标架构更新**：当前代码尚未完成的统一 Worker 改造由
+> `docs/ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md` 和
+> `docs/UNIFIED_WORKER_IMPLEMENTATION_PLAN.md` 定义。全部 Worker 进入同一 PostgreSQL/Redis
+> 集群；超级管理员提供公共地址、密钥并控制凭证签发；普通用户只触发服务端生成
+> credential、查看对应 Worker 状态；
+> 无 Worker 信任分级、无独立 Verifier。本文后续 general/full、D1-only 或 Verifier 描述为
+> 旧实现事实，不得作为新实现目标。
+
 ---
 
 ## 1. 项目概述
@@ -292,12 +300,16 @@ Claude Code 子进程 SIGTERM（30s 宽限）→ SIGKILL → 状态置 cancelled
 | LLM 密钥透传用 `-e NAME`（不进容器 argv） | ✅ |
 | SSE 心跳 15s + 2h 连接上限 | ✅ |
 
-**生产部署必配**（详见 `docs/WORKER_ONBOARDING.md` 安全清单）：
-随机 `SESSION_COOKIE_SECRET`、`SECRET_STORE_KEK`、Redis 密码、数据库访问控制、
-`WORKER_ENROLLMENT_ADMIN_USER_IDS`、`SUPERUSER_USER_IDS`，以及每个 Worker 的持久凭证。只有
-认证角色为 `superuser`/`root` 或列在 `SUPERUSER_USER_IDS` 的用户能签发 full-trust Worker；
-其他用户自动得到 general-trust，不能通过请求体或 worker.env 提升。PostgreSQL、Redis
-不暴露公网；远程 Worker 还要配置 `WORKER_CONTROL_PLANE_URL`。
+**目标生产部署必配**（详见 `docs/WORKER_ONBOARDING.md`）：随机
+`SESSION_COOKIE_SECRET`、`SECRET_STORE_KEK`、Redis 密码、数据库访问控制，以及每个 Worker
+的独立持久凭证。超级管理员统一维护 PostgreSQL、Redis、Server/Artifact API、公共
+Namespace/Pool 和 Claude Provider 配置；普通用户只能触发服务端为自己生成 Worker ID 与
+持久 credential，并查看该 credential 对应 Worker 的状态。签发动作始终由服务器完成，
+客户端不能传入或覆盖基础设施地址、平台密钥、调度范围或信任等级。
+
+当前代码中的 `WORKER_ENROLLMENT_ADMIN_USER_IDS`、`SUPERUSER_USER_IDS`、`full/general`
+以及 owner-scoped claim 是待迁移的旧机制，不是目标权限模型。迁移完成前不得把现有
+general Worker 验收结果表述为统一公共集群已经完成。
 
 ---
 

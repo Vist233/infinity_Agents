@@ -1,191 +1,208 @@
-# 公共 Worker 集群实施计划
+# 统一公共 Worker 集群实施规则
 
-## 目标
+> 更新：2026-08-20
+> 权威架构：`ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md`
+> 本文替代旧的个人 Worker、可信/不可信 Worker 和固定 A/B Worker 设计。
 
-建立一个真正属于 Infinity Agents 平台的公共 Worker 集群，而不是绑定某个学生账号的个人 Worker。
+## 1. 目标
 
-公共机器上运行两个长期 Worker：
+Infinity Agents 只有一个公共 Worker 集群。平台服务器、管理员电脑和学生电脑上的全部
+Worker 都：
 
-```text
-公共 Worker Namespace
-├─ Worker A：服务端生成 ID + 独立持久 credential
-└─ Worker B：服务端生成 ID + 独立持久 credential
-```
+- 使用同一 Worker 镜像和协议；
+- 连接超级管理员提供的同一 PostgreSQL、Redis 和 Server API；
+- 进入同一公共 Namespace/Pool；
+- 使用相同 Goal-Driven Prompt 和任务执行能力；
+- 竞争同一类可执行任务；
+- 通过独立 credential、Session、lease 和 fencing 保证唯一性。
 
-用户只在公共机器本地填写 Claude Code 的：
+不存在个人私有 Worker Pool，也不存在 general/full、trusted/student 两类 Worker。
 
-```text
-ANTHROPIC_BASE_URL
-ANTHROPIC_MODEL
-ANTHROPIC_API_KEY 或 ANTHROPIC_AUTH_TOKEN
-```
+## 2. 管理权限
 
-这些模型配置不进入网页、不进入平台数据库、不进入 Worker credential，也不写入 Git。
+### 超级管理员
 
-## 为什么之前没有完成
+超级管理员统一配置和提供：
 
-当前实现把 Worker 注册和任务领取都设计成了“当前登录用户的个人 Worker”：
+- PostgreSQL 地址、数据库、TLS 和 Worker 角色策略；
+- Redis 地址、TLS、ACL、Namespace 和 Consumer Group；
+- Server API、Artifact API、Cloudflare 公网地址；
+- Worker image、protocol version 和公共 Pool；
+- `ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL`、API Key/Auth Token；
+- 任务调度、并发、租约和 Artifact 限制。
 
-1. `worker_registrations.user_id` 是必填的个人所有者字段；
-2. Worker 创建接口从当前登录用户生成注册记录；
-3. Worker 列表、credential 恢复、轮换、撤销都按当前用户过滤；
-4. Worker `poll` 查询条件是 `tasks.created_by = Worker.user_id`；
-5. 同一个 Namespace 只代表个人账号下的复用范围，不代表公共集群；
-6. 前端页面的文案也写成了“为当前账户创建 Worker”。
+### 普通用户和学生
 
-因此，之前即使填写同一个 Namespace，创建出来的仍然是个人 Worker，不能执行其他用户的任务。此前生成的 Windows 部署包建立在这个错误假设上，必须删除，不能继续使用。
+credential 由服务器依据超级管理员维护的策略统一签发。普通用户/学生只能：
 
-## 实施顺序
+1. 点击“创建”，请求服务端生成一个新的 Worker ID 和持久 credential；
+2. 复制本次 credential；
+3. 查看该 credential 所在 Worker 的连接、ready、协议、任务和错误状态。
 
-### 1. 建立平台公共 Worker 身份
+普通用户/学生不能在创建请求中提交或修改：
 
-新增平台级公共 Worker 配置/服务主体，至少包括：
+- Namespace/Pool；
+- PostgreSQL/Redis/API 地址；
+- Provider/model/key；
+- Worker 信任等级；
+- 任务范围或 dispatch policy；
+- 公共密钥和平台 Secret。
 
-- `pool_id` 或 `worker_group_id`：公共集群唯一 ID；
-- `namespace`：平台级公共 Namespace，不能由普通用户随意创建；
-- `status`：active、draining、revoked；
-- `allowed_task_classes`：公共 Worker 可以领取的任务类型；
-- `trust_level`：由平台配置和服务端权限决定，客户端不能自报；
-- `created_at`、`updated_at`、审计事件。
+credential 的 `created_by` 只用于审计和控制谁能查看这条 credential 的状态，不把该
+Worker 变成创建者的私有执行节点。
 
-公共 Namespace 的所有权不再使用普通用户 `user_id` 表示。若需要记录创建人，只保留审计字段，不把创建人作为任务访问边界。
+普通用户没有配置权，不等于能够对机器所有者隐藏容器中的 Secret。超级管理员必须为每个
+Worker 提供独立、窄权限、可撤销的数据库身份、Redis ACL identity 和 Provider token，
+禁止把全局管理员密码或全局 Provider Key 分发到学生控制的主机。所有这些身份仍连接同一
+PostgreSQL/Redis 集群，不构成第二套 Worker 架构。
 
-### 2. 改造公共 Worker 注册
+## 3. 创建和凭证
 
-新增仅限平台管理员/部署操作使用的公共 Worker 注册接口：
+每次创建必须：
 
-```text
-POST /api/admin/worker-pools/{pool_id}/workers
-```
+- 服务端生成唯一 Worker ID；
+- 服务端生成独立、持久、可轮换、可撤销的 credential；
+- 使用超级管理员冻结的 Namespace/Pool；
+- credential 明文只在创建/取回的受控响应中显示；
+- 数据库保存 hash 和必要的加密副本；
+- 不设两个 Worker 上限；
+- 创建按钮始终为“创建”；
+- 同一 Namespace 可创建任意数量 Worker；
+- 同一个 credential 同时只允许一个 active instance。
 
-每次调用：
+用户只需为每个容器触发一次 credential 签发。第二、第三或第 N 个 Worker 都走相同流程，
+不能复制其他 Worker credential。
 
-- 由服务端生成唯一 Worker ID；
-- 由服务端生成独立持久 credential；
-- credential 明文只在创建响应中返回一次，数据库保存 hash + 加密副本；
-- 两个 Worker 使用同一公共 Namespace，但绝不共用 Worker ID 或 credential；
-- 信任等级由服务端生成；
-- 普通学生不能调用该接口，不能创建公共 Worker，不能读取公共 credential。
+## 4. Worker 认证上下文
 
-公共机器使用同一个公共 Namespace 和两组独立凭证：
-
-```text
-WORKER_NAMESPACE=<platform public namespace>
-WORKER_ID_A=<server generated>
-WORKER_CREDENTIAL_A=<persistent credential>
-WORKER_ID_B=<server generated>
-WORKER_CREDENTIAL_B=<persistent credential>
-```
-
-### 3. 改造 Worker 认证上下文
-
-认证后 Worker context 至少包含：
+服务端认证后上下文至少包含：
 
 ```text
 worker_id
-pool_id
+credential_id
+public_pool_id
 namespace
-trust_level
-allowed_task_classes
+protocol_version
+runtime_capability
+image_digest
+session_id
+ready_state
 ```
 
-Worker 请求不得从浏览器用户 session 推导身份。公共 Worker 只通过自己的持久 credential 认证。
+不包含由客户端自报的 trust level、owner task scope 或 Provider 配置。Worker 的
+PostgreSQL 身份和 Redis ACL 由中央签发服务按照超级管理员配置的集群策略生成。
 
-### 4. 改造任务可见性和领取
+## 5. 任务领取
 
-任务领取不能再使用：
-
-```sql
-t.created_by = worker.user_id
-```
-
-改为服务端授权判断：
+所有 Worker 从同一 Redis Stream/Consumer Group 获得 opaque task hint，再回 PostgreSQL
+进行最终 CAS claim。领取条件至少包括：
 
 ```text
-task.status = queued
-AND task.task_class 属于公共 Worker allowed_task_classes
-AND task.project/task 的执行策略允许公共集群
-AND task 没有有效 offer 或 lease
+Task.status = queued
+Worker credential/session = active
+Worker ready_state = ready
+Worker protocol/runtime = compatible
+Task 没有有效 lease
+CAS claim 成功
 ```
 
-任务的创建者仍然保留在 `created_by`，用于用户任务列表和审计；它不再限制公共 Worker 领取。
+任务创建者不限制哪个 Worker 可以领取。另一个 Worker 即使收到重复 Redis hint，也必须
+在 PostgreSQL CAS 失败后停止，不能产生第二个 active Attempt。
 
-建议新增明确字段：
+旧协议 Worker 可以保持注册记录和在线状态，但必须显示 incompatible，不能获得或接受新
+协议任务。
+
+## 6. Worker 本地配置
+
+超级管理员提供一份不进入 Git 的基础配置包，包含：
 
 ```text
-tasks.execution_scope = public_pool | owner_only | named_pool
-tasks.worker_pool_id = NULL | <public pool id>
+DATABASE_URL / per-Worker database identity
+REDIS_URL / per-Worker Redis ACL identity
+REDIS_NAMESPACE
+SERVER_API_BASE_URL
+ARTIFACT_API_BASE_URL
+ANTHROPIC_BASE_URL
+ANTHROPIC_MODEL
+ANTHROPIC_API_KEY 或 ANTHROPIC_AUTH_TOKEN（per-Worker、可撤销）
+WORKER_IMAGE / image digest
+WORKER_PROTOCOL_VERSION
 ```
 
-默认策略：
+普通用户只补入自己在网页生成的：
 
-- `public_pool`：公共 Worker 可领取；
-- `owner_only`：只允许用户自己的受信 Worker；
-- `named_pool`：只允许指定公共/机构 Worker Pool。
+```text
+WORKER_ID
+WORKER_CREDENTIAL
+WORKER_INSTANCE_ID
+```
 
-没有明确 scope 的旧任务必须迁移为安全默认值，不能自动扩大为公共可见。
+基础配置和 credential 都是本地 Secret，不进入网页 Local Storage、Git、镜像或 Artifact。
+机器所有者可读取本机 Docker Secret，因此这些值必须是 Worker 级最小权限凭证，不能是
+全局管理凭证。
 
-### 5. 任务数据安全边界
+## 7. Docker 运行
 
-公共机器属于受信执行域，但仍然不能获得数据库、Redis 或 Cloudflare parent credential。
-
-服务端按 Attempt 下发精确资源：
-
-- 只下发该任务允许的数据；
-- 每次资源访问绑定 `task_id + attempt_id + fencing_epoch`；
-- Artifact 上传进入 quarantine；
-- Verifier 发布后用户才能下载最终 Artifact；
-- Worker 不能自己把任务改成最终 succeeded。
-
-### 6. 前端调整
-
-普通用户页面不显示“创建公共 Worker”。
-
-管理员/平台运维入口显示：
-
-- 公共 Worker Pool；
-- 公共 Namespace；
-- Worker A/B 的服务端 ID；
-- 在线状态和最近心跳；
-- 信任等级；
-- 创建、轮换、撤销操作；
-- credential 仅在受控创建/轮换响应中显示。
-
-普通用户只看到“公共集群可用/不可用”，不能看到或复制公共 credential。
-
-### 7. 公共机器 Docker 部署
-
-只有公共 Worker 注册接口和数据库迁移完成后，才生成部署配置：
-
-- 两个 Worker 容器；
-- 不启动本地 Redis/PostgreSQL；
+- 一个长期容器对应一个 Worker ID；
+- 容器内直接运行 Claude Code；
+- 不安装 Docker CLI；
 - 不挂 Docker Socket；
 - 不使用 Docker-in-Docker；
-- Claude Code 直接在容器内执行；
-- 两个容器分别注入自己的 credential；
-- Claude 三项配置由机器管理员本地填写；
-- 容器重启后复用同一 credential 和 instance_id。
+- 不启动本地 PostgreSQL 或 Redis；
+- 完成任务后上传 Artifact、清空任务目录、继续轮询；
+- 容器重启后复用同一持久 credential；
+- Claude Code 使用超级管理员提供的 Provider 配置；普通用户不能在产品页面修改。
 
-### 8. 验收顺序
+## 8. Task 和 Artifact
 
-1. 管理员创建公共 Worker Pool；
-2. 创建 Worker A/B；
-3. A/B 使用同一 Namespace、不同 ID、不同 credential 成功 connect；
-4. 普通用户创建一个 `public_pool` 测试任务；
-5. A 或 B 能看到并领取该任务；
-6. 另一个 Worker 不能重复领取同一任务；
-7. 任务执行、心跳、Artifact 上传和 verifier 发布完成；
-8. 普通用户可以下载结果；
-9. `owner_only` 任务不能被公共 Worker 领取；
-10. 撤销一个 credential 后，该 Worker 不能 reconnect；
-11. 重启容器后仍能使用原 credential 恢复；
-12. 日志、Artifact、响应中没有模型 Key 或 Worker credential。
+每个 Task 的业务输入只有：
 
-## 当前禁止操作
+1. Method Document；
+2. Dataset Snapshot。
 
-- 不要从普通用户的“添加 Worker”页面创建公共 Worker；
-- 不要把 Namespace 写成 `infinity` 就认为它是公共 Namespace；
-- 不要让两个容器共用 credential；
-- 不要把 `created_by = 当前 Worker 用户` 改成一个更宽的临时 SQL 条件；
-- 不要把所有旧任务无条件开放给公共 Worker；
-- 不要继续使用旧的个人 Worker Windows 部署包。
+两者各自保持 25MB 上限。Worker 下载后校验 size/hash，使用平台固定 Goal-Driven Prompt
+执行。结果小文件流式上传，大文件 multipart 上传。
+
+不使用独立 Verifier。服务端 finalize 仍必须验证 current Attempt、lease、fencing、对象
+存在、大小、checksum、manifest 和 ZIP 基础完整性，然后原子发布 Artifact。
+
+## 9. 前端
+
+Worker 卡只要求用户点击“创建”，不要求填写 Namespace 或基础设施配置。创建后显示：
+
+- Worker 序号和 ID；
+- credential 取回/复制、轮换、撤销；
+- 在线/离线；
+- ready/degraded/incompatible；
+- protocol/image version；
+- 当前 Task 和最近错误。
+
+普通用户只能看到自己触发签发的 credential 状态和公开集群摘要，不能看到其他 credential
+明文或平台基础 Secret。超级管理员可查看整个公共集群。
+
+## 10. 验收
+
+1. 超级管理员配置一次公共 PostgreSQL/Redis/API/Provider；
+2. 学生点击“创建”，不填写 Namespace 或地址；
+3. 服务端返回唯一 Worker ID 和持久 credential；
+4. 学生用管理员基础配置 + 自己 credential 启动容器；
+5. Worker 进入同一公共 Pool 并显示 ready；
+6. 管理员和学生触发服务器签发的 Worker 执行能力相同；
+7. 创建第 3、4、N 个 Worker 均成功；
+8. 同一 credential 第二实例被拒绝；
+9. 旧协议 Worker 无法领取；
+10. Case 2、Case 3 完成并下载 Artifact；
+11. 每个任务后本地目录清空，Worker 继续在线；
+12. 用户不能通过 API body 修改 Namespace、Pool、地址、Provider 或信任等级；
+13. 日志、响应和 Artifact 不泄露平台 Secret 或 credential。
+
+## 11. 禁止事项
+
+- 不把创建人作为任务领取 owner 边界；
+- 不创建学生专用或管理员专用 Worker Pool；
+- 不接受客户端自报 trust level；
+- 不让普通用户填写 Namespace、数据库、Redis、Provider 或公网地址；
+- 不限制最多两个 Worker；
+- 不共用 credential；
+- 不恢复 D1-only/HTTPS-only 学生 Worker 旁路；
+- 不使用 Docker-in-Docker、Docker Socket 或独立 Verifier。

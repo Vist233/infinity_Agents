@@ -5,6 +5,14 @@
 > 设计依据：`HANDOFF.md`、当前仓库实现、`CodeExcuteGoalDriven/Infinity_Agent_产品设计与工程实施规范_v1.0.md` 与三组可行性实验。  
 > 范围：先完成本地产品与安全闭环；Cloudflare 是独立的远程第二阶段，不与本地实施和验收混写。
 
+> **2026-08-20 当前架构覆盖说明**：当前 Worker 产品合同已经由
+> [`ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md`](./ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md)
+> 更新。所有 Worker，包括学生电脑，统一直连超级管理员提供的 PostgreSQL/Redis 集群；
+> Worker 不再分可信/不可信等级；超级管理员控制凭证签发，普通用户只触发服务器生成
+> Worker credential 和查看状态；容器内
+> 直接运行 Claude Code；独立 Verifier 已废弃。本文中与该 ADR 冲突的旧远程和 Verifier
+> 章节仅保留为设计历史。
+
 ## 0. 本版结论
 
 Infinity Agents 不是“三个 Agent 并排聊天”的产品。正确的产品结构是：

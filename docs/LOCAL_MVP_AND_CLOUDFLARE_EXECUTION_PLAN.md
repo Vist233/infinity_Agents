@@ -4,6 +4,13 @@
 > 日期：2026-08-09  
 > 原文件名保留用于兼容旧链接。
 
+当前 Worker 实施入口已经更新为：
+
+1. [`ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md`](./ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md)；
+2. [`UNIFIED_WORKER_IMPLEMENTATION_PLAN.md`](./UNIFIED_WORKER_IMPLEMENTATION_PLAN.md)。
+
+旧的本地/Cloudflare 双轨和不可信学生 Worker 路线不再执行。
+
 原文档把本地 MVP 与 Cloudflare 远程部署写在同一份文件中，容易让实现顺序和验收边界混淆。现在由以下互相衔接、职责独立的文档共同取代：
 
 1. [本地 MVP 实施与实时验收计划](./LOCAL_MVP_EXECUTION_AND_TEST_PLAN.md)

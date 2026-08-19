@@ -6,6 +6,13 @@
 > 开发模型执行规则：[`MODEL_IMPLEMENTATION_EXECUTION_RUNBOOK.md`](./MODEL_IMPLEMENTATION_EXECUTION_RUNBOOK.md)  
 > 范围：只定义本地产品、实现顺序、实时测试和发布门槛；不包含 Cloudflare 部署步骤。
 
+> **2026-08-20 当前架构覆盖说明**：Worker、任务事实源、Verifier、Task Center 创建入口和
+> Case 2/3 的现行合同见
+> [`ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md`](./ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md)。
+> 所有 Worker 使用同一 PostgreSQL/Redis 集群和同一镜像；超级管理员提供公共配置；普通
+> 用户只能触发服务器签发 credential 和查看对应 Worker 状态；独立 Verifier 已废弃。本文原有
+> Verifier、可信等级、固定 A/B/C 和子 Docker 描述不得覆盖该 ADR。
+
 ## 0. 交付目标与不可混淆的运行边界
 
 本地 MVP 的产品主线只有一条：

@@ -6,6 +6,13 @@
 > 配套文档：`docs/ANALYSIS_WORKSPACE_SYSTEM_DESIGN.md`、`docs/LOCAL_MVP_EXECUTION_AND_TEST_PLAN.md`、`docs/MODEL_IMPLEMENTATION_EXECUTION_RUNBOOK.md`  
 > 范围：本地 MVP 验收通过后的远程阶段；不替代本地阶段，也不把长时科研计算搬进 Cloudflare Worker。
 
+> **状态更新（2026-08-20）**：本文原设计的“不可信学生 Worker + HTTPS-only + D1 Task
+> 事实源”已被
+> [`ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md`](./ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md)
+> 覆盖，不再是当前实施路线。当前所有 Worker 统一加入 PostgreSQL/Redis 集群，Cloudflare
+> 只承载网页、认证入口和同源服务入口，不维护第二套 Task 事实。本文仅作为历史威胁模型
+> 和 Cloudflare 限制参考，禁止直接按 R0–R7 部署旧 Worker 协议。
+
 ## 0. 结论先行
 
 这个部署约束下，正确结构不是“Cloudflare Worker 远程控制学生电脑里的 Docker”，更不是“学生 Worker 直连数据库/Redis”。正确结构是：

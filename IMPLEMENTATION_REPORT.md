@@ -1,5 +1,11 @@
 # Infinity Agent — Implementation Report
 
+> **Status note (2026-08-20):** This file is a historical implementation report. Its Verifier,
+> trust-tier, and earlier Worker assertions do not define the current target. The active decision is
+> `docs/ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md`: one PostgreSQL/Redis Worker cluster, centrally
+> managed infrastructure and credential issuance, user-triggered credential creation/status only,
+> and no standalone Verifier.
+
 **Repository**: `/Users/zhangyvjing/icloud/code/infinity_Agents`
 
 ---

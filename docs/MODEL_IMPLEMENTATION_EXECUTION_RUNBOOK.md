@@ -5,6 +5,14 @@
 > 状态：供 GPT-5.6 Luna 或千问 Max **二选一**执行整个项目  
 > 范围：规定所选模型怎样从本地 MVP 一直执行到桌面分发和 Cloudflare 远程阶段；不重新定义产品。
 
+> **2026-08-20 当前架构覆盖说明**：Worker 实施必须以
+> [`ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md`](./ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md)
+> 和 [`UNIFIED_WORKER_IMPLEMENTATION_PLAN.md`](./UNIFIED_WORKER_IMPLEMENTATION_PLAN.md)
+> 为准。所有服务器、管理员电脑和学生电脑上的 Worker 进入同一个 PostgreSQL/Redis
+> 集群；不存在可信/不可信 Worker 双轨；取消独立 Verifier；Task Center 允许直接创建。
+> 本文中 D1-only 学生 Worker、Verifier 必须、每 Attempt 子 Docker 等旧段落只保留为历史，
+> 不再是当前执行要求。
+
 ## 0. 先把执行方式说死
 
 本项目不是“双模型协作”，也不是两个模型交替审查。
