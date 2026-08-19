@@ -298,6 +298,8 @@ class TestSubmitBundleCleanup:
             async def fetchrow(self, query, *args):
                 if "INSERT INTO TASKS" in query.upper():
                     return {"task_id": args[0], "status": "queued", "attempt_count": 0}
+                if "INSERT INTO TASK_EVENTS" in query.upper():
+                    return {"task_event_id": 1}
                 return None
 
         class FakePool:

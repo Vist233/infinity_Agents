@@ -437,9 +437,15 @@ async def submit_task_atomically(
 ) -> tuple[Task, bool]:
     """Freeze inputs and create exactly one Task + Outbox row in one tx.
 
-    This is the only submission path used by the authenticated Analysis
-    confirmation card.  The older ``create_task`` helper remains for unit and
-    migration compatibility but is not used by the acceptance API.
+    This is the only submission path used by authenticated Task Center and
+    Analysis submissions.  The Task, immutable idempotency record, lifecycle
+    event, and Redis Outbox hint are committed together.  If any insert fails,
+    PostgreSQL rolls back the complete submission instead of leaving a Task
+    without a durable notification (or an Outbox row for a missing Task).
+
+    The older ``create_task`` helper remains only for legacy fixture tests and
+    migration compatibility; production endpoints must use this function or
+    their equivalent upload-bundle transaction.
     """
     if not idempotency_key or len(idempotency_key) > 255:
         raise ValueError("a bounded idempotency key is required")
@@ -544,13 +550,28 @@ async def submit_task_atomically(
                 str(row["task_id"]),
                 fingerprint,
             )
+            task_event = await conn.fetchrow(
+                """
+                INSERT INTO task_events (task_id, task_attempt_id, event_type, event_data, created_at)
+                VALUES ($1::uuid, NULL, 'task_queued', $2::jsonb, NOW())
+                RETURNING task_event_id
+                """,
+                str(row["task_id"]),
+                json.dumps({"task_id": str(row["task_id"]), "status": "queued"}),
+            )
+            if not task_event:
+                raise RuntimeError("task lifecycle event was not created")
             await conn.execute(
                 """
                 INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, status, created_at)
                 VALUES ('task', $1::uuid, 'task_queued', $2::jsonb, 'pending', NOW())
                 """,
                 str(row["task_id"]),
-                json.dumps({"task_id": str(row["task_id"]), "status": "queued"}),
+                json.dumps({
+                    "task_id": str(row["task_id"]),
+                    "task_event_id": task_event["task_event_id"],
+                    "status": "queued",
+                }),
             )
     return Task(task_id=str(row["task_id"]), status=row["status"], attempt_count=row["attempt_count"], created_by=user_id, created_at=row["created_at"].isoformat()), True
 

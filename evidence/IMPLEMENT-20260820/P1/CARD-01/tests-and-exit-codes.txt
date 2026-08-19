@@ -1,0 +1,16 @@
+Baseline: 619c600
+
+Command:
+eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q tests/test_task_ownership.py tests/test_task_api.py tests/test_task_integration_pg.py
+Exit: 0
+Result: 34 passed, 3 skipped (the three PostgreSQL tests were skipped because DATABASE_URL is unset).
+
+Command:
+git diff --check
+Exit: 0
+
+Command:
+git diff --unified=0 | rg -n -i 'api[_-]?key|secret|token|password|credential|anthropic'
+Exit: 1 (no matches)
+
+Docker/PostgreSQL/Redis: not started or modified in this card. DATABASE_URL and REDIS_URL were unset in the shell; Docker socket inspection was unavailable inside the sandbox.

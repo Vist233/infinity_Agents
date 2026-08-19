@@ -4348,12 +4348,27 @@ async def submit_task_bundle_endpoint(
                     """,
                     idempotency_key.strip(), user.user_id, task_id, request_hash,
                 )
+                task_event = await conn.fetchrow(
+                    """
+                    INSERT INTO task_events (task_id, task_attempt_id, event_type, event_data, created_at)
+                    VALUES ($1::uuid, NULL, 'task_queued', $2::jsonb, NOW())
+                    RETURNING task_event_id
+                    """,
+                    task_id,
+                    json.dumps({"task_id": task_id, "status": "queued"}),
+                )
+                if not task_event:
+                    raise RuntimeError("task lifecycle event was not created")
                 await conn.execute(
                     """
                     INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, status)
                     VALUES ('task', $1::uuid, 'task_queued', $2::jsonb, 'pending')
                     """,
-                    task_id, json.dumps({"task_id": task_id, "status": "queued"}),
+                    task_id, json.dumps({
+                        "task_id": task_id,
+                        "task_event_id": task_event["task_event_id"],
+                        "status": "queued",
+                    }),
                 )
         return SubmitTaskBundleResponse(task_id=str(row["task_id"]), status=row["status"], attempt_count=int(row["attempt_count"] or 0))
     except HTTPException:
@@ -4647,12 +4662,27 @@ async def confirm_task_draft_endpoint(
                     """,
                     request.idempotency_key.strip(), user.user_id, task_id, request_hash,
                 )
+                task_event = await conn.fetchrow(
+                    """
+                    INSERT INTO task_events (task_id, task_attempt_id, event_type, event_data, created_at)
+                    VALUES ($1::uuid, NULL, 'task_queued', $2::jsonb, NOW())
+                    RETURNING task_event_id
+                    """,
+                    task_id,
+                    json.dumps({"task_id": task_id, "status": "queued"}),
+                )
+                if not task_event:
+                    raise RuntimeError("task lifecycle event was not created")
                 await conn.execute(
                     """
                     INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload, status)
                     VALUES ('task', $1::uuid, 'task_queued', $2::jsonb, 'pending')
                     """,
-                    task_id, json.dumps({"task_id": task_id, "status": "queued"}),
+                    task_id, json.dumps({
+                        "task_id": task_id,
+                        "task_event_id": task_event["task_event_id"],
+                        "status": "queued",
+                    }),
                 )
                 await conn.execute(
                     """
