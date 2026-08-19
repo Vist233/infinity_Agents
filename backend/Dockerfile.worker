@@ -19,8 +19,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV PATH="/opt/venv/bin:${PATH}"
 
-# Install the CLI in the image, never a provider credential.
-RUN npm install --global @anthropic-ai/claude-code
+# Install the CLI in the image, never a provider credential. The version is a
+# build input so the published digest is reproducible and can be revalidated
+# after a Claude Code upgrade.
+ARG CLAUDE_CODE_VERSION=2.1.226
+RUN npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+    && claude --version
 
 # Claude Code is deliberately a separate non-root child process. The
 # supervisor remains root so it can clean its own task volumes after upload.

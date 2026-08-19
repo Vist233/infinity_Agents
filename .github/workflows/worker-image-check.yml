@@ -1,0 +1,61 @@
+name: Worker image check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [cloudflare-deploy]
+    paths:
+      - "backend/Dockerfile.worker"
+      - "backend/**"
+      - "requirements.txt"
+      - "docker-compose.cloudflare-workers.yml"
+      - ".github/workflows/worker-image-check.yml"
+
+permissions:
+  contents: read
+
+env:
+  CLAUDE_CODE_VERSION: "2.1.226"
+
+jobs:
+  build-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build Worker image locally
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile.worker
+          platforms: linux/amd64
+          load: true
+          tags: infinity-agent-worker:ci
+          build-args: |
+            CLAUDE_CODE_VERSION=${{ env.CLAUDE_CODE_VERSION }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test runtime boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(docker run --rm --entrypoint claude infinity-agent-worker:ci --version)" = "2.1.226"
+          if docker run --rm --entrypoint sh infinity-agent-worker:ci -c 'command -v docker'; then
+            echo "Docker CLI must not be present in the Worker image" >&2
+            exit 1
+          fi
+          docker run --rm --entrypoint python infinity-agent-worker:ci -m compileall -q /app/backend
+
+      - name: Scan repository for committed secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if rg -n --hidden --glob '!.git/**' --glob '!*.lock' \
+            '(sk-[A-Za-z0-9]{20,}|ANTHROPIC_API_KEY=[^$<{[:space:]]+|postgres(ql)?://[^$<{[:space:]]+:[^$<{[:space:]]+@)' .; then
+            echo "secret-like literal found" >&2
+            exit 1
+          fi

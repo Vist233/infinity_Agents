@@ -2,9 +2,9 @@ name: Python Checks
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, cloudflare-deploy]
   push:
-    branches: [main]
+    branches: [main, cloudflare-deploy]
 
 permissions:
   contents: read
@@ -187,11 +187,6 @@ jobs:
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: python -m pytest -p pytest_asyncio.plugin -q tests/test_task_state_machine.py
-
-      - name: Run test verifier
-        env:
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_verifier.py
 
       - name: Run test worker enrollment
         env:

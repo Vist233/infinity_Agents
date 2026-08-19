@@ -11,6 +11,7 @@ def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch)
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "long-lived-provider-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "long-lived-api-key")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "local-base")
     monkeypatch.setenv("ANTHROPIC_MODEL", "local-model")
     monkeypatch.setenv("WORKER_CREDENTIAL", "worker-secret")
@@ -61,6 +62,7 @@ def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch)
     assert "Save every deliverable" in prompt
     assert "attempt-token" not in args
     assert kwargs["env"]["ANTHROPIC_AUTH_TOKEN"] == "attempt-token"
+    assert kwargs["env"].get("ANTHROPIC_API_KEY") is None
     assert kwargs["env"]["ANTHROPIC_BASE_URL"] == "https://gateway.example/attempt/task-local"
     assert kwargs["env"]["ANTHROPIC_MODEL"] == "local-model"
     assert "WORKER_CREDENTIAL" not in kwargs["env"]

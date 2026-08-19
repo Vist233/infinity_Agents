@@ -107,6 +107,31 @@ def test_case_10_prompt_injection_is_treated_as_untrusted_data(tmp_path):
     assert "embedded instruction" in prompt
 
 
+def test_goal_driven_prompt_has_one_complete_platform_contract(tmp_path):
+    prompt = _goal_driven_prompt(
+        spec_dir=tmp_path / "spec",
+        input_dir=tmp_path / "input",
+        work_dir=tmp_path / "work",
+        output_dir=tmp_path / "output",
+        logs_dir=tmp_path / "logs",
+    )
+    for heading in (
+        "SYSTEM ROLE",
+        "IMMUTABLE INPUTS",
+        "WRITABLE LOCATIONS",
+        "MISSION",
+        "PHASE PROTOCOL",
+        "FAILURE RULES",
+        "COMPLETION",
+    ):
+        assert heading in prompt
+    assert "BLOCKED_INPUT" in prompt
+    assert "DEPENDENCY_FAILURE" in prompt
+    assert "Do not change scientific parameters." in prompt
+    assert "Do not silently omit required steps." in prompt
+    assert "completion message is not proof of success" in prompt
+
+
 def test_case_11_worker_accepts_only_hash_matching_frozen_input(tmp_path):
     path = tmp_path / "dataset.zip"
     with zipfile.ZipFile(path, "w") as archive:

@@ -67,11 +67,17 @@ _SAFE_CHILD_ENV_KEYS = {
     "XDG_CONFIG_HOME",
     "XDG_CACHE_HOME",
 }
-_SAFE_CHILD_ENV_PREFIXES = ("ANTHROPIC_", "CLAUDE_CODE_")
+_SAFE_CHILD_ENV_PREFIXES = ("CLAUDE_CODE_",)
 
 
 def _claude_child_environment() -> dict[str, str]:
-    """Pass only provider/runtime settings, never Worker control-plane secrets."""
+    """Pass runtime flags, never long-lived Worker or provider credentials.
+
+    The short-lived Attempt capability is injected explicitly by
+    :func:`run_claude_task` after this allowlist is built.  In particular,
+    ``ANTHROPIC_API_KEY`` and an inherited ``ANTHROPIC_AUTH_TOKEN`` must not
+    leak from the supervisor into Claude Code.
+    """
     return {
         key: value
         for key, value in os.environ.items()
