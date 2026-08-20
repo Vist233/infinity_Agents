@@ -350,9 +350,9 @@ export default function TaskDetailPage() {
                   statusLabel: t(STATUS_LABELS[item.status]),
                 })) : undefined}
               />
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.push("/task-center")}>
-              <ArrowLeft size={16} />
-            </Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.push("/task-center/")}>
+                <ArrowLeft size={16} />
+              </Button>
             <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("tasks.detailTitle")}</div>
             {sseConnected && <span className="text-[10px] text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5">LIVE</span>}
           </div>

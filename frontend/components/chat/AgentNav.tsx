@@ -12,8 +12,8 @@ export type WorkspaceSection = AgentNavProps["active"];
 
 const items = [
   { id: "analysis", labelKey: "nav.analysis", path: "/", icon: FileText },
-  { id: "tasks", labelKey: "nav.tasks", path: "/task-center", icon: ListTodo },
-  { id: "traits", labelKey: "nav.imageJudge", path: "/image-judge", icon: Microscope },
+  { id: "tasks", labelKey: "nav.tasks", path: "/task-center/", icon: ListTodo },
+  { id: "traits", labelKey: "nav.imageJudge", path: "/image-judge/", icon: Microscope },
 ] as const;
 
 export function AgentNav({ onNavigate, active }: AgentNavProps) {
