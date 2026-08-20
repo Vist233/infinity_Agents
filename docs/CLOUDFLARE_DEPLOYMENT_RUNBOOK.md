@@ -1,8 +1,9 @@
 # Cloudflare 部署执行手册
 
-本文件是 `cloudflare-deploy` 分支的操作手册；架构取舍和阶段门槛以
-[`CLOUDFLARE_REMOTE_DEPLOYMENT_PLAN.md`](./CLOUDFLARE_REMOTE_DEPLOYMENT_PLAN.md)
-为准。主线 `main` 不包含 Cloudflare Worker 的发布产物和生产绑定。
+本文件是`cloudflare-deploy`分支的操作手册；当前架构和阶段门槛以
+[`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`](./ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md)
+和[`D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md`](./D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md)
+为准。主线`main`不包含Cloudflare Worker的发布产物和生产绑定。
 
 ## 发布边界
 
@@ -11,9 +12,9 @@
 - `frontend/out` 是静态资源；`cloudflare-worker/src/index.ts` 是动态入口。
 - Infinity Agents 的浏览器产品使用 Analysis/Coding 命名；ImageJudge 继续使用
   独立的 `/image-judge/*` 命名空间、D1、KV 和 Durable Object。
-- 当前任务事实源仍是中心 PostgreSQL，Redis 只负责通知、心跳和恢复；R2/D1
-  仅属于尚未完成的 Cloudflare Edge 适配层，不得与本地 PostgreSQL 任务事实源并行
-  运行。用户自有 Docker Worker 通过管理员提供的配置访问同一集群。
+- Cloudflare D1是Task/Attempt/Worker/Event/Outbox/Artifact metadata唯一事实源；R2保存
+  Method、Dataset和Artifact文件；ssh zhangbot Redis只负责可重建hint、presence和实时事件。
+  Docker Worker通过持久credential调用Cloudflare Worker HTTPS API访问D1/R2。
 - 任务中心提供直接创建任务卡，使用与 Agent confirmation 卡相同的
   TaskSpec/Task 上传与幂等路径，并将 `agent_confirmation=false`；Analysis
   对话中的 confirmation 卡仍保留为聊天入口。
@@ -24,16 +25,16 @@
 - 公共执行池固定为 `public-default` / `infinity-public`，可按需创建任意数量的独立持久
   Worker；普通用户只能触发服务器签发 credential 和查看该 Worker 状态，不能修改集群
   配置。Docker 执行实例在 Cloudflare Edge 外部运行，Edge 只提供控制面。
-- 当前本地 PostgreSQL-backed API 已按上述单一公共策略验收；Cloudflare Edge 目录中
-  仍有 D1 旧任务/注册实现，尚未完成到中央 PostgreSQL API 的认证代理。因此本手册的
-  Cloudflare 发布步骤在该代理合同完成并复验前保持阻断，不把本地验收当作线上部署通过。
+- 当前D1旧任务/注册实现仍包含trust分级，新的Worker v2 API和zhangbot Redis Relay尚未
+  完成。因此发布步骤保持阻断；旧PostgreSQL Case 2/3只证明Docker/Claude Runtime可复用，
+  不等于D1目标通过。
 - 公共池的两 Worker 配置和验收步骤见 [`CLOUDFLARE_PUBLIC_WORKER_POOL.md`](./CLOUDFLARE_PUBLIC_WORKER_POOL.md)。
 
 ## 每次发布
 
 ```sh
-# 当前门禁：中央 PostgreSQL API 代理和同源认证合同尚未完成时，不执行以下部署命令。
-# 先完成并验收该代理，再按此流程发布，避免把旧 D1 任务实现部署到公网。
+# 当前门禁：D1 canonical schema、Worker v2 API、zhangbot Redis Relay和D1/R2/Redis
+# Case 2/3尚未完成时，不执行以下部署命令。
 git switch cloudflare-deploy
 git pull --ff-only origin cloudflare-deploy
 
@@ -71,7 +72,7 @@ npx wrangler secret put IMAGE_JUDGE_DASHSCOPE_API_KEY
 公共 Worker 管理权限只根据服务端验证出的 Zhang Auth superuser 角色判断，
 不从浏览器字段或可配置的用户 ID 列表推导。当前不部署 verifier；执行 Worker
 只能发布自己持有有效租约、fencing epoch、checksum 和 manifest 绑定的 Artifact，
-控制面在同一 D1 batch 中将 Task、Attempt 和 Artifact 原子地标记为 succeeded/published。
+控制面使用D1条件更新和batch验证当前Attempt、lease、fencing和R2对象后发布Artifact。
 
 ## 发布后验收
 
@@ -92,20 +93,18 @@ curl -fsSI https://infinity.zhangyvjing.com/image-judge/
    401；Worker 认证响应带 `WWW-Authenticate: Bearer`。
 3. 首页可见 `Analysis`、`任务执行中心`、`Image Judge`，不再出现旧的
    `PaperAgent` 标签或旧的“发送给 PaperAgent”文案。
-4. 新 Worker 注册只提交 Namespace；持久 credential 原文不落盘到 D1，之后由
-   中央 PostgreSQL/Redis Worker 协议验证生命周期。同一 Namespace 下应能创建
+4. 新Worker注册不让普通用户提交Namespace或基础设施字段；服务端使用固定
+   `infinity-public`/`public-default`生成Worker ID和持久credential。同一Namespace下应能创建
    任意多个不同 Worker ID；同一凭证的第二个活动实例必须返回
-   `WORKER_ALREADY_CONNECTED`。旧 `/api/worker/v1/*` 只做 410 兼容回归。
-5. 超级用户公共 Worker 卡每次点击“创建”都能新增一个注册，没有两台上限；普通用户
-   看不到公共 Worker ID、credential 或其他用户任务。用户 Worker 空闲时优先
-   领取自己的任务，忙碌/离线时公共 Worker 才能回退领取。
+   `WORKER_ALREADY_CONNECTED`。旧`/api/worker/v1/*`只做410兼容回归，执行只走v2。
+5. 普通用户可触发签发任意数量Worker并查看自己触发签发的状态，但不能查看其他credential
+   明文。全部兼容Worker进入同一公共Pool并可领取任何用户Task；浏览器用户仍只能查看自己的Task。
 6. `ss -ltn` 在 `zhangbot` 上只允许 Redis loopback 监听；Cloudflare Worker
    源码和构建产物不得出现 Redis/Docker/6379 直连能力。
 
 ## macOS / Windows Worker 加入
 
-目标机器运行统一 Docker Worker 镜像，不再运行 Cloudflare Edge 的旧
-HTTPS poll 客户端。超级管理员提供 PostgreSQL、Redis、中央 API、Namespace、
+目标机器运行统一Docker Worker镜像。超级管理员提供Redis、Cloudflare Worker API、Namespace、
 Worker ID、持久 credential 和本地 Provider 配置；普通用户不能自行填写这些
 中心地址或全局密钥。
 
@@ -113,7 +112,7 @@ Worker ID、持久 credential 和本地 Provider 配置；普通用户不能自�
 export WORKER_IMAGE='infinity-agent-worker@sha256:<已核验 digest>'
 export WORKER_ID='<服务器签发的 Worker ID>'
 export WORKER_CREDENTIAL='<服务器签发的持久 credential>'
-export WORKER_DATABASE_URL='<管理员提供的 TLS PostgreSQL URL>'
+export WORKER_CONTROL_BASE_URL='https://infinity.zhangyvjing.com/api/worker/v2'
 export WORKER_REDIS_URL='<管理员提供的 Redis URL>'
 export REDIS_NAMESPACE='<管理员提供的 Namespace>'
 docker compose -f docker-compose.cloudflare-workers.yml up -d worker-b
@@ -127,8 +126,8 @@ account/API token，不运行旧的 Node HTTPS 控制客户端。Provider key、
 
 ## Redis 与后续 Relay
 
-`zhangbot` 上的 Redis 继续由本机用户级 systemd 服务运行，使用 loopback、
-ACL、AOF、内存上限和 `noeviction`。Cloudflare D1 Worker 不直接绑定 Redis；
-用户自有 Docker Worker 只在本地使用已配置的安全 Redis 地址做健康检查和任务
-运行配套。Relay 不能提供 raw Redis command、任务事实、用户身份或 Provider
-secret。
+`zhangbot`上的Redis继续由本机用户级systemd服务运行，使用ACL、AOF、内存上限和
+`noeviction`。Cloudflare Worker不能直接使用普通TCP Redis，因此只通过受认证的最小HTTPS
+Relay把D1 Outbox的opaque hint幂等写入Redis。Docker Worker使用窄ACL消费Stream并写
+presence。Relay不能提供raw Redis command、任务事实、用户身份、Method/Dataset、
+Artifact或Provider secret。

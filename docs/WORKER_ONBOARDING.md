@@ -1,7 +1,8 @@
 # Worker 接入与执行说明
 
-> 目标合同：`ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md`
-> 当前状态：目标架构文档已冻结，代码和 GHCR 镜像仍需按实施计划完成后才能作为正式交接使用。
+> 目标合同：`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`
+> 当前状态：本文下方PostgreSQL配置示例已失效。Worker v2 API、zhangbot Redis Relay和
+> GHCR镜像完成前，本文件不能作为正式安装说明。续作见`D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md`。
 
 ## 1. 一个统一集群
 

@@ -1,5 +1,9 @@
 # 公共 Worker 池运行说明
 
+> **状态：旧PostgreSQL接入说明，暂不可使用。** 当前接入合同见
+> `ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`；Worker v2 API、Redis Relay和GHCR镜像完成后
+> 必须重写本文的一键启动配置。
+
 公共 Worker 是统一 PostgreSQL/Redis 集群中的长期 Docker 执行节点。Cloudflare
 只提供网页、登录和公网入口，不是 Worker 的任务事实源，也不运行 Docker、Claude
 Code 或旧的 HTTPS poll 客户端。

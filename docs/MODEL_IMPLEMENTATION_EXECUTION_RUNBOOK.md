@@ -5,13 +5,11 @@
 > 状态：供 GPT-5.6 Luna 或千问 Max **二选一**执行整个项目  
 > 范围：规定所选模型怎样从本地 MVP 一直执行到桌面分发和 Cloudflare 远程阶段；不重新定义产品。
 
-> **2026-08-20 当前架构覆盖说明**：Worker 实施必须以
-> [`ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md`](./ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md)
-> 和 [`UNIFIED_WORKER_IMPLEMENTATION_PLAN.md`](./UNIFIED_WORKER_IMPLEMENTATION_PLAN.md)
-> 为准。所有服务器、管理员电脑和学生电脑上的 Worker 进入同一个 PostgreSQL/Redis
-> 集群；不存在可信/不可信 Worker 双轨；取消独立 Verifier；Task Center 允许直接创建。
-> 本文中 D1-only 学生 Worker、Verifier 必须、每 Attempt 子 Docker 等旧段落只保留为历史，
-> 不再是当前执行要求。
+> **2026-08-20 当前架构覆盖说明**：Worker实施必须以
+> [`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`](./ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md)、
+> [`D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md`](./D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md)
+> 和专用Goal-Driven Prompt为准。本文的执行卡、测试、checkpoint和单主Agent规则继续
+> 有效；PostgreSQL、RLS、信任分级、Verifier和子Docker阶段均不再定义当前目标。
 
 ## 0. 先把执行方式说死
 
@@ -371,12 +369,12 @@ SR7 G0–G9 全量生产同构验收
 
 - Cloudflare 只由平台管理员部署一次；
 - 学生/学校不部署 Cloudflare，也没有 Cloudflare 账户或 Token；
-- 所有 Docker Worker 都使用管理员签发的持久 Worker ID/credential，并配置管理员提供的 `WORKER_CONTROL_PLANE_URL`、`WORKER_DATABASE_URL`、`WORKER_REDIS_URL` 和 `REDIS_NAMESPACE`；不再使用一次性 enrollment token 或旧 Node HTTPS poll 客户端；
-- 中央 PostgreSQL 是 Task、Attempt、Worker、Event、Artifact 的唯一事实源；Redis 只保存通知、presence 和事件 hint；Cloudflare D1 不参与新任务事实写入；
-- Worker 直接下载 Method + Dataset，运行固定 Goal-Driven Claude Code，再以单文件或分片方式上传 Artifact；上传、SHA-256、manifest、lease/fencing 和 finalize 由中央 API/数据库检查；
+- 所有Docker Worker使用管理员签发的持久Worker ID/credential，并配置管理员提供的`WORKER_CONTROL_BASE_URL`、`WORKER_REDIS_URL`和`REDIS_NAMESPACE`；
+- D1是Task、Attempt、Worker、Event、Outbox、Artifact metadata唯一事实源，R2保存文件，Redis只保存hint/presence/实时事件；
+- Worker通过v2 HTTPS API下载Method + Dataset、上传Artifact；D1条件更新和R2对象检查完成lease/fencing/finalize；
 - 10 ms 只约束 Cloudflare Worker 的 CPU，不约束 2C2G Redis/Relay 或学生 Docker；
-- Redis 只绑定 loopback/Unix socket，不公开 6379；
-- 不区分可信/不可信 Worker；权限由管理员签发的最小数据库、Redis 和 Provider 凭证控制；
+- Cloudflare通过最小HTTPS Relay写zhangbot Redis，不公开raw Redis command；Worker只持有窄Redis ACL；
+- 不区分可信/不可信Worker；权限由平台credential、Worker API、lease/fencing和最小Redis/Provider凭证控制；
 - 不运行独立 Verifier；Worker 内置的确定性输出/归档安全检查不是独立服务；
 - 全部 G0–G9 同一版本通过后一次切换生产，否则不部署。
 

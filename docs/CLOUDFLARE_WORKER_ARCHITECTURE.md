@@ -1,9 +1,13 @@
 # Infinity Agents Cloudflare / Worker 架构解析
 
+> **状态：Superseded。** 本文的“中央PostgreSQL执行面”已经被
+> [`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`](./ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md)
+> 替代。当前D1是唯一事实源，R2保存文件，zhangbot Redis经HTTPS Relay提供通知，Docker
+> Worker使用Worker v2 HTTPS API。本文仅保留为迁移历史。
+
 > 更新：2026-08-20
 >
-> 本文描述当前冻结的目标架构和已确认的迁移边界。它不把尚未完成的中央 API 代理
-> 写成已上线能力，也不把旧 D1/HTTPS Worker 协议当作可运行方案。
+> 本文不再描述当前冻结目标。
 
 ## 1. 结论
 

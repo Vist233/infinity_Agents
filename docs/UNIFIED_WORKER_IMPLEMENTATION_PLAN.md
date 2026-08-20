@@ -1,5 +1,10 @@
 # Infinity Agents 统一 Worker 集群实施与验收计划
 
+> **状态：Superseded（2026-08-20）**
+> 不再执行本文的PostgreSQL事实源、RLS和Worker直连PostgreSQL阶段。当前续作计划是
+> [`D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md`](./D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md)。
+> 已完成的唯一Docker/Claude Runtime和Artifact逻辑可复用，其余按D1目标重新验收。
+
 > 版本：v1.0
 > 日期：2026-08-19
 > 权威架构：`ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md`

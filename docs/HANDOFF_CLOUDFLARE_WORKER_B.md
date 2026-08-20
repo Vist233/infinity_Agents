@@ -1,5 +1,9 @@
 # 统一 Docker Worker B 交接文档
 
+> **状态：已失效，禁止用于新机器。** 本文要求PostgreSQL URL，与当前D1唯一事实源架构
+> 冲突。待Worker v2 API、zhangbot Redis Relay和GHCR镜像完成后重新生成交接文档；当前
+> 依据是`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`。
+
 > 适用分支：`cloudflare-deploy`
 > 镜像：`ghcr.io/<org-or-user>/infinity-agent-worker:v1`
 > 目标机器：已安装 Docker Desktop 的 Windows 电脑

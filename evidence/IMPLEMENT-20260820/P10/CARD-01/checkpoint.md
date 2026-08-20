@@ -1,5 +1,9 @@
 # CHECKPOINT IMPLEMENT-20260820 / P10 / CARD-01
 
+> **已失效**：本审查只覆盖`0349a8c`。之后的`0ed4811`修改了Worker策略、数据库、Reaper、
+> 前端和测试；项目负责人又将事实源改为Cloudflare D1。因此本文件只能作为历史证据，
+> 最新断点见`evidence/IMPLEMENT-20260820/CONTINUATION_CHECKPOINT.md`。
+
 - review scope: read-only final review of the isolated `cloudflare-deploy`
   worktree after P9 acceptance and cleanup
 - implementation head reviewed: `0349a8c`

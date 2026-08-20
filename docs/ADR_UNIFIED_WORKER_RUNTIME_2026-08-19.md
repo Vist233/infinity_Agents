@@ -1,6 +1,11 @@
-# ADR：统一 Worker 集群的唯一运行架构
+# ADR：统一 PostgreSQL Worker 集群（已被替代）
 
-> 状态：Accepted
+> **状态：Superseded（2026-08-20）**
+> 当前权威架构是[`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`](./ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md)。
+> Cloudflare D1是唯一SQL事实源，zhangbot Redis负责通知/presence/事件，Docker Worker
+> 通过Cloudflare HTTPS API访问D1/R2。本文只保留为PostgreSQL阶段历史，不得继续实施。
+
+> 原状态：Accepted
 > 生效日期：2026-08-19
 > 决策者：项目负责人
 > 适用范围：平台服务器、项目负责人电脑和学生电脑上的全部 Infinity Agents Worker

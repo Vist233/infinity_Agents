@@ -1,5 +1,9 @@
 # Local PostgreSQL security profile
 
+> **状态：历史本地验收资料。** 当前生产目标不使用PostgreSQL/RLS，见
+> [`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`](./ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md)。
+> D1的用户隔离和Worker lease能力必须由固定HTTPS路由、prepared query和条件更新重新实现。
+
 > **2026-08-20 架构覆盖说明**：所有 Worker 使用同一公共执行策略。数据库中仍保留
 > `trust_level`、`required_trust_level` 等旧列，只为平滑迁移历史表结构；迁移会把它们
 > 固定为 `public`，运行时不读取它们，也不会向 API 或 Worker 暴露信任等级。任务的

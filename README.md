@@ -10,7 +10,7 @@ Agent，而是一条从研究问题、论文方法和数据到异步执行结果
 → Analysis 搜索、阅读和比较论文
 → 整理 Method Document 并关联 Dataset Snapshot
 → 用户确认，或在 Task Center 直接创建
-→ PostgreSQL Task + Redis 通知
+→ Cloudflare D1 Task + zhangbot Redis 通知
 → Docker Worker 内的 Goal-Driven Claude Code 异步执行
 → Artifact 上传、校验和发布
 → 用户在 Task Center 查看并下载结果
@@ -26,13 +26,15 @@ ImageJudge 当前是参考图分类工具，不宣称已经完成通用多性状
 
 ## Worker 架构
 
-平台服务器、管理员电脑和学生电脑上的 Worker 全部加入同一个 PostgreSQL/Redis 公共
-集群。超级管理员统一提供数据库、Redis、API、模型 Provider、Namespace 和公网地址；
+平台服务器、管理员电脑和学生电脑上的 Worker 全部加入同一个 D1/Redis 公共集群。
+Cloudflare D1 是任务唯一事实源，zhangbot Redis负责通知、presence和实时事件；Docker
+Worker通过受凭证保护的Cloudflare HTTPS API访问D1/R2。超级管理员统一提供Redis、API、
+模型Provider、Namespace和公网地址；
 普通用户只能点击“创建”触发服务器签发 Worker credential，并查看该 credential 对应的
 Worker 状态；签发策略和签发密钥始终由超级管理员控制。
 
 同一集群不表示所有机器共用管理员密码：每个 Worker 使用独立、最小权限、可撤销的
-PostgreSQL、Redis ACL 和 Provider 机器凭证。
+平台credential、Redis ACL和Provider机器凭证，不获得Cloudflare Account/D1管理Token。
 
 一个 Worker credential 对应一个长期 Docker 容器。容器内直接运行 Claude Code，不使用
 Docker-in-Docker 或 Docker Socket；每个任务只接收冻结的 Method + Dataset，上传结果后
@@ -44,8 +46,10 @@ Docker-in-Docker 或 Docker Socket；每个任务只接收冻结的 Method + Dat
 
 ## 当前文档
 
-- [统一 Worker 架构决议](docs/ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md)
-- [统一 Worker 实施计划](docs/UNIFIED_WORKER_IMPLEMENTATION_PLAN.md)
+- [当前 D1 + Redis Worker 架构决议](docs/ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md)
+- [当前续作实施计划](docs/D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md)
+- [续作 Goal-Driven Prompt](docs/D1_REDIS_WORKER_GOAL_DRIVEN_PROMPT_2026-08-20.md)
+- [旧 PostgreSQL Worker 架构（已被替代）](docs/ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md)
 - [Worker 当前差距详细报告](docs/WORKER_ARCHITECTURE_GAP_REPORT_2026-08-19.md)
 - [Worker 接入目标说明](docs/WORKER_ONBOARDING.md)
 - [本地开发](docs/LOCAL_DEVELOPMENT.md)

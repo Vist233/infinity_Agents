@@ -1,6 +1,6 @@
 # Infinity Agents — 工作区、图像示例与统一交互改造执行文档
 
-> 状态：前端与本地真实 Worker/Case 2–3 闸门已通过；Cloudflare Edge 到中央 PostgreSQL API 的认证代理仍是发布阻断项。
+> 状态：前端与PostgreSQL本地Worker/Case 2–3曾通过，但最新D1目标尚未验收。当前发布阻断项是D1 Worker v2 API、zhangbot Redis Relay和D1/R2/Redis Case 2–3。
 > 日期：2026-08-10
 > 适用分支：`cloudflare-deploy`；本地 `main` 的现有修改不在本轮规划中被覆盖。
 
@@ -13,7 +13,8 @@
 - Redis、PostgreSQL 或 Cloudflare 线上数据的清理；
 - 把图像示例误认为已经完成的通用性状提取能力。
 
-现有 Cloudflare 分支包含 Edge/D1 兼容实现，但它不能替代 PostgreSQL-backed 中央 API；本文件把本地统一实现作为验收基线，Cloudflare Edge 只在代理合同明确后发布。
+现有Cloudflare分支包含旧Edge/D1实现，但仍有trust分级和旧Worker注册协议。当前目标以
+`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`为准；本文件只继续约束UI，不定义Worker数据面。
 
 ## 1. 总目标
 

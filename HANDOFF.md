@@ -4,15 +4,19 @@
 > 分支：`cloudflare-deploy`
 > 本文是交接摘要；阶段性测试和未完成事项以 `evidence/IMPLEMENT-20260820/` 与当前执行计划为准。
 
+> **最新目标覆盖（2026-08-20）**：项目负责人确认“Cloudflare自带SQL”指D1。当前唯一
+> 目标由`docs/ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`和
+> `docs/D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md`定义：D1是Task/Attempt/Worker/
+> Event/Artifact metadata唯一事实源，R2保存文件，ssh zhangbot上的Redis保存可重建hint、
+> presence和实时事件；Docker Worker通过持久credential调用Cloudflare Worker HTTPS API，
+> 不直连PostgreSQL。本文后续PostgreSQL/RLS描述只记录`0ed4811`前后的本地实现事实，不能
+> 继续指导目标代码或发布。
+
 > **当前权威实现**：Worker 使用 `backend/Dockerfile.worker`，在 Worker 容器内直接启动 Claude Code；不挂载宿主机 Docker Socket，也不在容器内启动 Docker。网页任务接口使用登录会话与 CSRF，Worker 使用数据库保存摘要的持久凭证；凭证不是一次性 Token。远程 Worker 通过受凭证和租约保护的输入下载、产物上传接口与中心 API 交换文件。本文早期历史段落若与上述说明冲突，以当前代码、`worker.env.example` 和 `docs/WORKER_ONBOARDING.md` 为准。
 
-> **2026-08-20 目标架构更新**：当前代码尚未完成的统一 Worker 改造由
-> `docs/ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md` 和
-> `docs/UNIFIED_WORKER_IMPLEMENTATION_PLAN.md` 定义。全部 Worker 进入同一 PostgreSQL/Redis
-> 集群；超级管理员提供公共地址、密钥并控制凭证签发；普通用户只触发服务端生成
-> credential、查看对应 Worker 状态；
-> 无 Worker 信任分级、无独立 Verifier。本文后续 general/full、D1-only 或 Verifier 描述为
-> 旧实现事实，不得作为新实现目标。
+> `backend/Dockerfile.worker`、`backend/code_agent/worker/claude_runtime.py`、固定
+> Goal-Driven Prompt、无嵌套Docker、Artifact校验和任务后清理继续有效。此前PostgreSQL
+> Case 2/3只证明执行Runtime可用，必须在D1/R2 + zhangbot Redis目标链路重新验收。
 
 ---
 

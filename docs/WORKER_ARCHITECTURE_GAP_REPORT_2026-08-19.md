@@ -1,5 +1,11 @@
 # Infinity Agents Worker 架构、故障与整改详细报告
 
+> **状态更新（2026-08-20）**：本文记录的是PostgreSQL目标阶段的差距。最新决定已经改为
+> Cloudflare D1唯一事实源 + zhangbot Redis通知层，详见
+> [`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`](./ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md)
+> 和[`D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md`](./D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md)。
+> 本文中的PostgreSQL整改建议不再执行。
+
 > 日期：2026-08-19
 > 性质：现状审计与整改设计，不代表代码已经修复
 > 范围：Task 后端、Docker Worker、Redis、PostgreSQL、Cloudflare、Goal-Driven Runtime、Artifact 回传

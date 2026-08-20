@@ -1,11 +1,9 @@
 # 技术架构与本地运行
 
-> **2026-08-20 目标架构提示**：本页仍包含当前 Cloudflare/D1 和本地开发命令的实现说明。
-> Worker 的后续唯一目标以
-> [`ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md`](./ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md)
-> 为准：全部 Worker 加入同一 PostgreSQL/Redis 公共集群；超级管理员维护地址、平台密钥、
-> Namespace/Pool 和服务端签发策略；普通用户只能触发 credential 签发并查看对应 Worker
-> 状态。D1 不再作为新 Task 的第二事实源。
+> **2026-08-20 目标架构提示**：本页的PostgreSQL命令只用于旧本地实现。当前唯一目标见
+> [`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`](./ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md)：
+> D1是Task事实源，R2保存文件，zhangbot Redis负责hint/presence/事件，Docker Worker通过
+> Cloudflare Worker v2 HTTPS API访问D1/R2。
 
 ## 架构概览
 

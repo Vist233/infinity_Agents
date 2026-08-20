@@ -5,13 +5,11 @@
 > 设计依据：`HANDOFF.md`、当前仓库实现、`CodeExcuteGoalDriven/Infinity_Agent_产品设计与工程实施规范_v1.0.md` 与三组可行性实验。  
 > 范围：先完成本地产品与安全闭环；Cloudflare 是独立的远程第二阶段，不与本地实施和验收混写。
 
-> **2026-08-20 当前架构覆盖说明**：当前 Worker 产品合同已经由
-> [`ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md`](./ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md)
-> 更新。所有 Worker，包括学生电脑，统一直连超级管理员提供的 PostgreSQL/Redis 集群；
-> Worker 不再分可信/不可信等级；超级管理员控制凭证签发，普通用户只触发服务器生成
-> Worker credential 和查看状态；容器内
-> 直接运行 Claude Code；独立 Verifier 已废弃。本文中与该 ADR 冲突的旧远程和 Verifier
-> 章节仅保留为设计历史。
+> **2026-08-20 当前架构覆盖说明**：当前Worker合同由
+> [`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`](./ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md)
+> 定义。D1是任务唯一事实源，R2保存文件，zhangbot Redis保存hint/presence/事件，Docker
+> Worker通过Cloudflare HTTPS API访问D1/R2；无Worker信任分级和独立Verifier。本文冲突
+> 段落仅保留为设计历史。
 
 ## 0. 本版结论
 
@@ -812,13 +810,10 @@ Next.js + FastAPI/BFF :8008
 
 ## 10. Cloudflare 第二阶段边界
 
-> **当前路线（2026-08-20）**：本节下面保留的是原 Cloudflare/D1/HTTPS-only
-> 设计历史，不是当前 Worker 实施合同。当前合同由
-> `ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md` 和
-> `docs/UNIFIED_WORKER_IMPLEMENTATION_PLAN.md` 定义：PostgreSQL 是唯一 Task
-> 事实源，Redis 只做通知与 presence；所有 Worker 使用同一公共集群、服务器签发的
-> 持久 credential 和统一 Docker 镜像；不运行独立 Verifier；旧
-> `/api/worker/v1/*` 已关闭并返回 410。不要按下面旧图启动 Worker。
+> **当前路线（2026-08-20）**：本节旧信任分级和微服务图不再是实施合同。当前合同由
+> `ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`定义：D1唯一事实源、R2文件、zhangbot
+> Redis通知、统一公共Worker、持久credential、Worker v2 HTTPS API、统一Docker镜像、
+> 无独立Verifier。旧`/api/worker/v1/*`只保留410回归。
 
 Cloudflare 远程阶段只在本地 T0–T13 全部通过后开始。它把 Web、Analysis 编排和控制事实迁入 Cloudflare，但不把长时 Docker 科研计算搬进 Cloudflare Worker。
 

@@ -1,8 +1,12 @@
 # 统一公共 Worker 集群实施规则
 
 > 更新：2026-08-20
-> 权威架构：`ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md`
+> 状态：由`D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md`替代数据面实施细节
+> 权威架构：`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`
 > 本文替代旧的个人 Worker、可信/不可信 Worker 和固定 A/B Worker 设计。
+
+> 本文后续PostgreSQL直连和本地Secret配置属于旧实现。当前Worker通过Cloudflare Worker
+> v2 HTTPS API访问D1/R2，并使用zhangbot Redis窄ACL消费opaque hint。
 
 ## 1. 目标
 
