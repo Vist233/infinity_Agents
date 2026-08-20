@@ -683,19 +683,32 @@ async function startArtifact(taskId: string, request: Request, env: Env, context
   return json({ upload_id: uploadId, object_key: objectKey, part_size_bytes: MAX_PART_BYTES, expected_size_bytes: expectedSize }, 201);
 }
 
-function limitedHashStream(source: ReadableStream<Uint8Array>, maximumBytes: number): { stream: ReadableStream<Uint8Array>; result: () => { size: number; sha256: string } } {
-  const hash = new Sha256();
+async function readBoundedRequestBody(source: ReadableStream<Uint8Array>, maximumBytes: number): Promise<Uint8Array> {
+  const reader = source.getReader();
+  const chunks: Uint8Array[] = [];
   let size = 0;
-  const stream = source.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      const bytes = next.value instanceof Uint8Array ? next.value : new Uint8Array(next.value);
       size += bytes.byteLength;
-      if (size > maximumBytes) throw new Error("artifact part exceeds maximum size");
-      hash.update(bytes);
-      controller.enqueue(bytes);
-    },
-  }));
-  return { stream, result: () => ({ size, sha256: hash.digestHex() }) };
+      if (size > maximumBytes) {
+        await reader.cancel("artifact part exceeds maximum size");
+        throw new Error("artifact part exceeds maximum size");
+      }
+      chunks.push(bytes);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
 }
 
 async function artifactPart(uploadId: string, partText: string, request: Request, env: Env, context: WorkerContext): Promise<Response> {
@@ -713,10 +726,16 @@ async function artifactPart(uploadId: string, partText: string, request: Request
   if (auth instanceof Response || auth.attempt.attempt_id !== upload.attempt_id) return errorJson("Artifact lease is invalid", 409, "ATTEMPT_FENCING_REJECTED");
   if (!env.RESOURCE_BUCKET || !request.body) return errorJson("Artifact part body is required", 400, "INVALID_ARTIFACT_PART");
   try {
+    // R2's production multipart implementation is stricter than the local
+    // fake when it receives a transformed request stream. Read only one
+    // bounded part, hash the exact bytes, and pass that stable byte buffer to
+    // R2. The Worker client still streams the archive one part at a time, so
+    // memory is bounded by MAX_PART_BYTES rather than the full artifact.
+    const body = await readBoundedRequestBody(request.body, MAX_PART_BYTES);
+    const hash = new Sha256().update(body).digestHex();
+    const result = { size: body.byteLength, sha256: hash };
     const multipart = env.RESOURCE_BUCKET.resumeMultipartUpload(upload.object_key, upload.upload_id);
-    const limited = limitedHashStream(request.body, MAX_PART_BYTES);
-    const uploaded = await multipart.uploadPart(partNumber, limited.stream);
-    const result = limited.result();
+    const uploaded = await multipart.uploadPart(partNumber, body);
     if (result.size <= 0 || (contentLength > 0 && result.size !== contentLength)) return errorJson("Artifact part size is invalid", 400, "INVALID_ARTIFACT_PART");
     await env.DB.prepare(
       `INSERT OR REPLACE INTO artifact_upload_parts
@@ -724,7 +743,13 @@ async function artifactPart(uploadId: string, partText: string, request: Request
        VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
     ).bind(uploadId, partNumber, uploaded.etag, result.size, result.sha256, nowSeconds()).run();
     return json({ upload_id: uploadId, part_number: partNumber, etag: uploaded.etag, size_bytes: result.size, sha256: result.sha256 });
-  } catch {
+  } catch (error) {
+    console.error("Worker artifact part upload failed", {
+      task_id: upload.task_id,
+      attempt_id: upload.attempt_id,
+      part_number: partNumber,
+      message: error instanceof Error ? error.message.slice(0, 160) : String(error).slice(0, 160),
+    });
     return errorJson("Artifact part upload failed", 503, "ARTIFACT_UPLOAD_UNAVAILABLE");
   }
 }
