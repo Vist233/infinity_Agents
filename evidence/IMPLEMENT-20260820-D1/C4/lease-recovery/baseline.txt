@@ -1,0 +1,6 @@
+C4 lease-recovery follow-up baseline — 2026-08-20 Asia/Shanghai
+
+branch=cloudflare-deploy
+base_commit=0de98ce
+database_fact_source=cloudflare_d1
+remote_state=untouched

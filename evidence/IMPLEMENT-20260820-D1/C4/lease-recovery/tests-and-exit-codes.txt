@@ -1,0 +1,13 @@
+C4 lease-recovery command ledger
+
+1. `npm run check` in `cloudflare-worker`
+   exit 0 — TypeScript typecheck passed.
+
+2. `npm test -- --run` in `cloudflare-worker`
+   exit 0 — 13 test files, 55 tests passed.
+
+3. `git diff --check`
+   exit 0 — no whitespace errors.
+
+Coverage includes retry requeue, exhausted-attempt failure, cancellation after
+lease expiry, and the single scheduled D1 batch contract.

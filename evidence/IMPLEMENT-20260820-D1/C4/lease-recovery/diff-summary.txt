@@ -1,0 +1,7 @@
+# C4 lease-recovery diff summary
+
+- added `cloudflare-worker/src/lease-recovery.ts`;
+- added `cloudflare-worker/test/lease-recovery.test.ts`;
+- scheduled `recoverExpiredLeases` before `flushD1Outbox` in `src/index.ts`.
+
+No remote resource or production secret changed.

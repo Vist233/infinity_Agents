@@ -15,6 +15,7 @@ import { handleTaskApi } from "./tasks";
 import { handleUserSettings } from "./settings";
 import { handleWorkerV2 } from "./worker-v2";
 import { flushD1Outbox } from "./outbox-relay";
+import { recoverExpiredLeases } from "./lease-recovery";
 
 export { ImageJudgeUserConcurrencyLock } from "./image-judge";
 
@@ -171,6 +172,7 @@ export default {
     return errorJson("Not found", 404, "NOT_FOUND");
   },
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    await recoverExpiredLeases(env);
     await flushD1Outbox(env);
   },
 } satisfies ExportedHandler<Env>;
