@@ -1,7 +1,7 @@
 # Infinity Agents — Cloudflare Deploy 交接文档
 
 > 最后更新：2026-08-20
-> 当前分支：`cloudflare-deploy`（候选提交：`cc88c73`）
+> 当前分支：`cloudflare-deploy`（HEAD：`625b6c6`；线上代码候选：`cc88c73`）
 > 本文只描述当前 D1 目标架构。旧 PostgreSQL/RLS 文档、旧 Worker 协议和旧 Compose
 > 文件属于历史资料，不能作为新机器或生产部署说明。
 

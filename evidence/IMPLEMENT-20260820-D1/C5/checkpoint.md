@@ -1,6 +1,7 @@
 # C5 checkpoint — partial
 
-- Candidate commit: `cc88c73`
+- Current branch HEAD: `625b6c6` (checkpoint-only commits after the deployed code)
+- Deployed code candidate: `cc88c73`
 
 - Status: `PARTIAL`
 - D1 migration: passed remotely
