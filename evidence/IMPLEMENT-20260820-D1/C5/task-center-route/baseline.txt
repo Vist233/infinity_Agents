@@ -1,0 +1,4 @@
+branch: cloudflare-deploy
+baseline_commit: 424ccb5
+working_tree_before_card: clean
+observed_contract: frontend direct=true -> POST /api/tasks; Edge direct contract -> POST /api/tasks/direct

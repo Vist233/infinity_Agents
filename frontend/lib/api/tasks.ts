@@ -241,9 +241,10 @@ export async function createTask(input: {
   const payload = direct
     ? { ...body, agent_confirmation: false, submission_source: "task_center" as const }
     : body;
-  // The central API has one task creation endpoint. Task Center is identified
-  // in the request body, rather than by a second D1-only route.
-  return requestJson(`${getApiBase()}/api/tasks`, {
+  // The Edge keeps the Agent-confirmation and direct Task Center contracts
+  // separate. Direct creation must reach the dedicated route so the server
+  // can enforce agent_confirmation=false at the routing boundary.
+  return requestJson(`${getApiBase()}${direct ? "/api/tasks/direct" : "/api/tasks"}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

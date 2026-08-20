@@ -1,0 +1,10 @@
+`npm run test:unit` (frontend): exit 0; 12 files, 43 tests passed
+`npm run typecheck` (frontend, after build generated .next/types): exit 0
+`npm run lint` (frontend): exit 0
+`npm run build` (frontend): exit 0
+`npm run test:e2e -- e2e/code-agent.spec.ts` (local Playwright): exit 0; 6 tests passed
+`git diff --check`: exit 0
+scoped credential-shaped literal scan: exit 0
+
+The first parallel typecheck invocation was not used as a gate because it raced the build and saw
+missing generated `.next/types`; the sequential rerun after build passed.

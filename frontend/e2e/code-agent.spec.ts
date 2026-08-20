@@ -122,19 +122,22 @@ test("Task Center submits files directly without a preview call", async ({ page 
   const requestedUrls: string[] = [];
   page.on("request", (request) => requestedUrls.push(request.url()));
 
-  await page.route("**/api/tasks*", async (route) => {
+  await page.route("**/api/tasks", async (route) => {
     const request = route.request();
-    const url = new URL(request.url());
-    if (request.method() === "GET" && url.pathname === "/api/tasks") {
+    if (request.method() === "GET") {
       await route.fulfill({ status: 200, body: JSON.stringify({ tasks: MOCK_TASKS }), contentType: "application/json" });
       return;
     }
-    if (request.method() === "POST" && url.pathname === "/api/tasks") {
-      taskCreateBody = request.postDataJSON() as Record<string, unknown>;
-      await route.fulfill({ status: 201, body: JSON.stringify({ task_id: "task-created", status: "queued" }), contentType: "application/json" });
+    await route.continue();
+  });
+  await page.route("**/api/tasks/direct", async (route) => {
+    const request = route.request();
+    if (request.method() !== "POST") {
+      await route.continue();
       return;
     }
-    await route.continue();
+    taskCreateBody = request.postDataJSON() as Record<string, unknown>;
+    await route.fulfill({ status: 201, body: JSON.stringify({ task_id: "task-created", status: "queued" }), contentType: "application/json" });
   });
   await page.route("**/api/projects/default", async (route) => {
     await route.fulfill({ status: 200, body: JSON.stringify({ project_id: "proj-1", name: "Default Project" }), contentType: "application/json" });

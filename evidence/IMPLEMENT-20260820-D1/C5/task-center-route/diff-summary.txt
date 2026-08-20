@@ -1,0 +1,5 @@
+- `frontend/lib/api/tasks.ts`: direct submissions now target `/api/tasks/direct`; Agent submissions
+  remain on `/api/tasks`.
+- `frontend/e2e/code-agent.spec.ts`: the direct-creation test only intercepts the dedicated route,
+  so a regression to the generic route fails instead of being silently accepted.
+- `frontend/lib/api/tasks.test.ts`: added route and payload assertions for both submission modes.
