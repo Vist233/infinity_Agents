@@ -1,0 +1,3 @@
+- Added the verified historical-failure diagnosis to `HANDOFF.md`.
+- No D1 row, status, Attempt, Artifact, Redis key, or Worker session was changed.
+

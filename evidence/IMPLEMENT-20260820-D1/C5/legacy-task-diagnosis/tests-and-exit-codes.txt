@@ -1,0 +1,5 @@
+Read-only D1 query for `worker_attempts` and `task_attempts` — exit 0
+Read-only D1 query for `task_events` — exit 0
+Result: task exists; event sequence is queued -> claimed -> failed; Attempt exists only
+in historical `worker_attempts`, not current v2 `task_attempts`.
+

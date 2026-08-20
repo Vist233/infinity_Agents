@@ -1,0 +1,5 @@
+baseline commit: d3d499f docs: record acceptance password hardening
+baseline branch: cloudflare-deploy
+baseline worktree: clean before this documentation card
+external operation: Cloudflare D1 read-only SELECT only
+

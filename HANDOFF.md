@@ -153,6 +153,10 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
    connect 被正确拒绝，证明“一 credential 对应一个 active instance”规则生效。
 5. D1 里原报告的 Task `4350c45b-fd0c-4771-b654-c6df32e95f9c` 仍真实存在，归属用户正确，
    但状态是旧链路留下的 `failed`，不是数据库不存在。
+   只读追查其事件序列为 `task_queued -> task_claimed -> task_failed`；对应 Attempt
+   `832d5c78-7990-4684-a5d9-76b6432bc22b` 只存在于历史 `worker_attempts` 表，在当前
+   v2 的 `task_attempts` 表中不存在。因此它不能作为 v2 Attempt/Artifact 证据，也不能
+   通过手工改状态重用；新的验收必须创建一条新的 queued Task 并由 v2 Worker 领取。
 6. Task Center 直接创建已修正为调用 `/api/tasks/direct`；本地 43 个单元测试和 6 个
    Playwright 用例通过，线上未认证请求返回 `401 UNAUTHENTICATED`。
 7. 已在本机用 `backend/Dockerfile.worker` 构建并启动 v2 Worker；Cloudflare D1 `connect`/
