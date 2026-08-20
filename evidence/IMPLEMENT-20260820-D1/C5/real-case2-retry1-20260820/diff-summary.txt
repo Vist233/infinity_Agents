@@ -1,0 +1,4 @@
+No production code was modified by this execution card.
+
+Evidence-only change:
+- records the real post-patch Case 2 task, Artifact and hash verification.

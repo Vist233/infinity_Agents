@@ -1,0 +1,7 @@
+branch=cloudflare-deploy
+baseline_commit=678fcec9dca53130c0560eb76a21cc5b3c563684
+worktree=clean before evidence write
+edge_version=04640878-bfb2-467d-a34e-b9538324ce26
+multipart_patch=e55aad5
+prior_case2=424ff7da-6903-42e8-9a55-b09c20033ccf failed before the patch was validated
+redis_relay=/v1/hints returns 503 because the shared Redis ACL remains unchanged; D1 poll fallback is in use

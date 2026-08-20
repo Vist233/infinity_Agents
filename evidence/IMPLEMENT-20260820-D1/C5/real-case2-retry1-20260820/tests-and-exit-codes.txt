@@ -1,0 +1,24 @@
+2026-08-20 real Case 2 retry evidence
+
+Task Center creation/upload: user-created Task `3666d0f1-4581-42e3-b81c-bf195288daa5`; no manual D1 mutation.
+D1 read-only status query: exit 0
+  Task: succeeded; attempt_count=1; Artifact `6cc37651-2bee-4803-a81c-04b6cfbd76fd`; published.
+  Attempt `940b483b-a8e6-43ef-a5a5-0598c3872005`: succeeded.
+  Artifact: `result.zip`, 1,234,445 bytes, SHA-256 `1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c`.
+  Multipart upload: completed, expected size 1,234,445 bytes.
+
+R2 download and verification: exit 0
+  `wrangler r2 object get` downloaded the published object to a local temporary file.
+  `shasum -a 256` = `1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c`.
+  `unzip -t` passed.
+  ZIP entries: `agent_completion.json`, two heatmap/tree PNGs, two histogram PNGs, `orchid_tree.nwk`, `report/summary.md`, `stats.json`, and `manifest.json`.
+
+Scientific artifact verification: exit 0
+  `stats.json` reports `num_sequences=94`, total length 67,518, mean GC 51.523191489361686, min/max length 572/789.
+  Biopython parsed `orchid_tree.nwk` successfully; terminal taxa=94.
+
+Worker cleanup and liveness query: exit 0
+  No files remained below the completed Task's workdir or `task-outputs`.
+  Worker is active; session `local-mac-public-worker-3` had a live lease after completion.
+
+Known failed command (not an acceptance failure): initial Worker status query used non-existent `workers.current_session_id`; D1 rejected it with `no such column`. The query was corrected after reading the D1 schema.

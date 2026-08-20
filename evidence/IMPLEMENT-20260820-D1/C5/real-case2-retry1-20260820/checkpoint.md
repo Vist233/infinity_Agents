@@ -1,0 +1,22 @@
+# CHECKPOINT IMPLEMENT-20260820-D1 / C5 / real-case2-retry1-20260820
+
+- baseline commit: `678fcec9dca53130c0560eb76a21cc5b3c563684`
+- current commit: pending evidence commit
+- branch: `cloudflare-deploy`
+- main Agent: Codex
+- sub Agent review: not run; the one allowed read-only review remains reserved for C7
+- completed outcome: **PASS** — the patched, real D1/R2 Case 2 path completed and published one verifiable Artifact.
+- real Task: `3666d0f1-4581-42e3-b81c-bf195288daa5` (`case2-retry1`), created through Task Center.
+- Task state: `succeeded`, one Attempt, one Artifact; no manual D1 task or Attempt writes.
+- Attempt: `940b483b-a8e6-43ef-a5a5-0598c3872005`, Worker `public-worker-75f39f88-f921-4929-9c8d-a9f0c1b57145`, status `succeeded`.
+- Artifact: `6cc37651-2bee-4803-a81c-04b6cfbd76fd`; R2 `result.zip`; size `1234445`; SHA-256 `1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c`; release state `published`.
+- scientific checks: 94 sequences; Biopython Newick parser succeeded with 94 terminal taxa; required report, scripts/result metadata, images and manifest are packaged.
+- multipart: one upload completed; the previous open-upload failure has been superseded by this fresh post-patch run.
+- cleanup: completed Task directory and temporary output directory were empty; the Worker remained online with an active v2 session.
+- Redis: Relay hint endpoint remains 503 because the zhangbot shared Redis ACL was not altered. The Worker used permitted D1 poll fallback. Redis recovery/Outbox replay is still not passed.
+- browser: the Task Center URL supplied by the user showed real claim events. Automated Chrome navigation timed out during post-completion viewing, so R2 download was used for byte-level artifact verification; browser C6 remains open.
+- tests: see `tests-and-exit-codes.txt`; all listed acceptance checks exited 0 except the explicitly documented corrected schema query.
+- secret scan: pending final repository scan.
+- rollback: no production-code rollback needed; evidence-only commit.
+- next exact card: derive/obtain the frozen Case 3 Dataset ZIP, then create and execute one fresh Task Center Case 3 task through the same D1/R2 Worker path.
+- external systems modified: only the user-authorized Task Center creation and normal Worker execution/upload path; no manual D1 mutation, Redis ACL change, deployment, or credential rotation.
