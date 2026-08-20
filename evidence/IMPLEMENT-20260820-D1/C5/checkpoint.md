@@ -1,6 +1,6 @@
 # C5 checkpoint — partial
 
-- Current branch HEAD: pending current local-Worker fix commit (checkpoint-only commits after the deployed code)
+- Current branch HEAD: `849d44f`
 - Deployed code candidate: `cc88c73`
 
 - Status: `PARTIAL`
@@ -18,7 +18,8 @@
 - Worker credential Namespace boundary: passed frontend unit/type/build gates and deployed; client
   recovery/rotation sends only Worker ID, while unauthenticated recovery returns 401
 - GHCR multi-architecture image: the previously published digest predates the local Worker crash
-  fix; it must be rebuilt and republished before Windows uses it.
+  fix; two uploads of the repaired image ended with registry `EOF`, so Windows must not use the old
+  digest until the repaired image is successfully republished.
 - Real Docker/Claude Case 2: blocked by the missing authenticated queued input; the local Worker
   is now available, but the online browser Task Center was client-blocked during this run
 - Real Docker/Claude Case 3: blocked by the same gate
