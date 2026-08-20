@@ -1,0 +1,10 @@
+# Diff summary — C5 / real-case2-20260820
+
+- Runtime fix under test: `e55aad5`, only `cloudflare-worker/src/worker-v2.ts`; it replaces the
+  transformed R2 multipart request stream with one bounded, hashed byte buffer per part and adds
+  bounded server-side diagnostics.
+- Evidence/documentation commit: `dc7c244`, updating `HANDOFF.md`, the D1 continuation plan and
+  this real Case 2 evidence card.
+- No D1 rows, R2 objects, Redis keys, credentials, containers or historical tasks were deleted or
+  manually rewritten by this evidence card.
+- `git diff --check`: passed.

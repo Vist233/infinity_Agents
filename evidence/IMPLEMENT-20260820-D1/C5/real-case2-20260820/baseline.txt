@@ -1,0 +1,12 @@
+run_id: IMPLEMENT-20260820-D1
+stage: C5
+card: real-case2-20260820
+branch: cloudflare-deploy
+baseline_before_multipart_fix: bf20eea
+multipart_fix_commit: e55aad5
+current_candidate_at_evidence_finalize: dc7c244b2df065ce7cea26753c3f83d7e94fa615
+worktree_at_evidence_finalize: clean
+remote_tracking_at_evidence_finalize: 825ba4024ea1c248c18c72d8b950453d8dd9d8ed
+external_task: 424ff7da-6903-42e8-9a55-b09c20033ccf
+external_task_mutation_in_this_card: none
+cloudflare_version_under_test: 04640878-bfb2-467d-a34e-b9538324ce26
