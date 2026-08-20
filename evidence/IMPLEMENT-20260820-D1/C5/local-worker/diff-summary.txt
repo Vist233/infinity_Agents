@@ -1,0 +1,9 @@
+Modified implementation: `backend/code_agent/worker/consumer_v2.py` initializes the advisory Relay
+hint list before each loop, so a Relay exception falls through to authoritative D1 polling.
+
+Added regression coverage: `tests/test_worker_consumer_v2.py` simulates a failing Relay and asserts
+that the Worker performs the fallback poll instead of raising `UnboundLocalError`.
+
+Updated records: `HANDOFF.md`, `evidence/IMPLEMENT-20260820-D1/C5/checkpoint.md`, and
+`worker.cloudflare.env.example` now record the D1-only SQL boundary, Relay ACL issue, local result,
+and the current GHCR multi-architecture digest.

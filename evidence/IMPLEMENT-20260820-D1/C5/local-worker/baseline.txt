@@ -1,0 +1,9 @@
+branch: cloudflare-deploy
+baseline_commit: b623530
+worktree_before_card: clean
+production_image_source: backend/Dockerfile.worker
+local_image: infinity-agent-worker:local-v2
+control_plane: https://infinity.zhangyvjing.com
+relay_health: HTTP 200 /health
+relay_hints: HTTP 503 REDIS_UNAVAILABLE (Redis api ACL mismatch)
+existing_worker_v1: stopped and container removed; image and old volumes preserved

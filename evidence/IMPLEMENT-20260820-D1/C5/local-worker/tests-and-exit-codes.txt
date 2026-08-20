@@ -1,0 +1,17 @@
+`docker build --progress=plain -t infinity-agent-worker:local-v2 -f backend/Dockerfile.worker .` -> exit 0
+
+`pytest -q tests/test_worker_consumer_v2.py tests/test_worker_v2_http_client.py tests/test_worker_v2_executor.py tests/test_redis_relay.py` -> exit 0; 6 passed
+
+`docker inspect infinity-agent-worker-b-v2 --format 'status={{.State.Status}} restarts={{.RestartCount}}'` -> `status=running restarts=0`
+
+Local container logs observed:
+
+- `POST /api/worker/v2/connect` -> HTTP 200
+- `POST /api/worker/v2/heartbeat` -> HTTP 200
+- `POST /api/worker/v2/poll` -> HTTP 200 (repeated)
+- Relay `GET /v1/hints` -> HTTP 503; process continued polling
+
+Read-only D1 session query observed the local Worker instance with `session_epoch=3`, a future
+`lease_expires_at`, and `disconnected_at=NULL`.
+
+`npx wrangler d1 execute ... --remote` -> exit 0; no rows were changed.

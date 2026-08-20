@@ -1,7 +1,7 @@
 # Infinity Agents — Cloudflare Deploy 交接文档
 
 > 最后更新：2026-08-20
-> 当前分支：`cloudflare-deploy`（HEAD：`625b6c6`；线上代码候选：`cc88c73`）
+> 当前分支：`cloudflare-deploy`（HEAD：`b623530`；线上代码候选：`cc88c73`）
 > 本文只描述当前 D1 目标架构。旧 PostgreSQL/RLS 文档、旧 Worker 协议和旧 Compose
 > 文件属于历史资料，不能作为新机器或生产部署说明。
 
@@ -157,6 +157,8 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
    Playwright 用例通过，线上未认证请求返回 `401 UNAUTHENTICATED`。
 7. 已在本机用 `backend/Dockerfile.worker` 构建并启动 v2 Worker；Cloudflare D1 `connect`/
    `poll` 成功，Relay 故障不会再导致 Worker 退出。对应回归测试覆盖了该故障路径。
+8. GitHub Actions `32354521182` 已成功发布修复后的 amd64/arm64 镜像；当前 v1 manifest
+   digest 为 `sha256:c20e098a2a96be9fb36480a8bcb922aab0d50087f80a68239f4fb26a333fd43c`。
 
 ## 7. C5 尚未完成的部分
 
@@ -170,8 +172,8 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
   不能通过手工改 D1 状态伪造重试。
 - 浏览器扩展和应用内浏览器都对线上域名返回客户端拦截，因而本次页面验收使用了 Edge API、
   D1 和 Relay 的协议级证据；不能把浏览器 UI 结果写成已通过。
-- 修复后的 Worker 镜像尚未重新发布 GHCR；命名 Tunnel、真实 Case 2/3、浏览器 C6 和最终
-  C7 code review 仍是发布门禁。
+- 修复后的 Worker 镜像已发布 GHCR；命名 Tunnel、真实 Case 2/3、浏览器 C6 和最终 C7
+  code review 仍是发布门禁。
 
 ## 8. 交接给下一位执行者的顺序
 
