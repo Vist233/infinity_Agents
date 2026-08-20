@@ -58,7 +58,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(docker run --rm --entrypoint claude infinity-agent-worker:ci --version)" = "2.1.226"
+          docker run --rm --entrypoint claude infinity-agent-worker:ci --version \
+            | grep -Eq "^${CLAUDE_CODE_VERSION}([[:space:]]|$)"
           if docker run --rm --entrypoint sh infinity-agent-worker:ci -c 'command -v docker'; then
             echo "Docker CLI must not be present in the Worker image" >&2
             exit 1
