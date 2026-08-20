@@ -50,7 +50,7 @@ services:
       - --user
       - worker_a
       - on
-      - ">${ACCEPTANCE_WORKER_A_REDIS_PASSWORD:-local-worker-a-redis-secret}"
+      - ">${ACCEPTANCE_WORKER_A_REDIS_PASSWORD}"
       - "~${ACCEPTANCE_REDIS_NAMESPACE}:stream:*"
       - "~${ACCEPTANCE_REDIS_NAMESPACE}:progress:*"
       - "~${ACCEPTANCE_REDIS_NAMESPACE}:worker:${ACCEPTANCE_WORKER_A_ID:-worker-a-${ACCEPTANCE_RUN_ID}}"
@@ -61,7 +61,7 @@ services:
       - --user
       - worker_b
       - on
-      - ">${ACCEPTANCE_WORKER_B_REDIS_PASSWORD:-local-worker-b-redis-secret}"
+      - ">${ACCEPTANCE_WORKER_B_REDIS_PASSWORD}"
       - "~${ACCEPTANCE_REDIS_NAMESPACE}:stream:*"
       - "~${ACCEPTANCE_REDIS_NAMESPACE}:progress:*"
       - "~${ACCEPTANCE_REDIS_NAMESPACE}:worker:${ACCEPTANCE_WORKER_B_ID:-worker-b-${ACCEPTANCE_RUN_ID}}"
@@ -71,8 +71,8 @@ services:
       - +@connection
     environment:
       REDIS_PASSWORD: ${ACCEPTANCE_REDIS_PASSWORD}
-      REDIS_WORKER_A_PASSWORD: ${ACCEPTANCE_WORKER_A_REDIS_PASSWORD:-local-worker-a-redis-secret}
-      REDIS_WORKER_B_PASSWORD: ${ACCEPTANCE_WORKER_B_REDIS_PASSWORD:-local-worker-b-redis-secret}
+      REDIS_WORKER_A_PASSWORD: ${ACCEPTANCE_WORKER_A_REDIS_PASSWORD}
+      REDIS_WORKER_B_PASSWORD: ${ACCEPTANCE_WORKER_B_REDIS_PASSWORD}
     volumes:
       - ./workspace/${ACCEPTANCE_RUN_ID}/.redis:/data
     healthcheck:
@@ -245,7 +245,7 @@ services:
       DB_RLS_ENABLED: "1"
       DB_RLS_REQUIRE_CONTEXT: "1"
       DB_RLS_WORKER_ROLE: infinity_worker
-      REDIS_URL: redis://worker_a:${ACCEPTANCE_WORKER_A_REDIS_PASSWORD:-local-worker-a-redis-secret}@redis:6379/0
+      REDIS_URL: redis://worker_a:${ACCEPTANCE_WORKER_A_REDIS_PASSWORD}@redis:6379/0
       REDIS_NAMESPACE: ${ACCEPTANCE_REDIS_NAMESPACE}
       CODE_AGENT_EXECUTOR_MODE: direct
       ARTIFACT_STORAGE_ROOT: ${ARTIFACT_STORAGE_ROOT}
@@ -282,7 +282,7 @@ services:
       DB_RLS_ENABLED: "1"
       DB_RLS_REQUIRE_CONTEXT: "1"
       DB_RLS_WORKER_ROLE: infinity_worker
-      REDIS_URL: redis://worker_b:${ACCEPTANCE_WORKER_B_REDIS_PASSWORD:-local-worker-b-redis-secret}@redis:6379/0
+      REDIS_URL: redis://worker_b:${ACCEPTANCE_WORKER_B_REDIS_PASSWORD}@redis:6379/0
       REDIS_NAMESPACE: ${ACCEPTANCE_REDIS_NAMESPACE}
       CODE_AGENT_EXECUTOR_MODE: direct
       ARTIFACT_STORAGE_ROOT: ${ARTIFACT_STORAGE_ROOT}
