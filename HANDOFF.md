@@ -1,7 +1,7 @@
 # Infinity Agents — Cloudflare Deploy 交接文档
 
 > 最后更新：2026-08-20
-> 当前分支：`cloudflare-deploy`；当前本地候选：`92221d5`；本次 Worker multipart
+> 当前分支：`cloudflare-deploy`；当前代码/验收基线：`972f5ee`；本次 Worker multipart
 > 运行时修复代码：`e55aad5`；已部署 Edge 版本：`04640878-bfb2-467d-a34e-b9538324ce26`
 > 本文只描述当前 D1 目标架构。旧 PostgreSQL/RLS 文档、旧 Worker 协议和旧 Compose
 > 文件属于历史资料，不能作为新机器或生产部署说明。
@@ -172,6 +172,12 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
 11. 本机 `infinity-agent-worker-b-v2` 正在运行；最新只读日志持续出现 D1 `poll/heartbeat 200`
     和 Relay `/v1/hints 503`。本机同时还有旧 P9 PostgreSQL 验收容器，它们不是当前 Worker，
     不得用于 C5 证据，也不得在没有用户授权时删除。
+12. 修复 `e55aad5` 后，真实 Case 2 已通过当前 D1/R2/v2 Worker 路径：Task
+    `3666d0f1-4581-42e3-b81c-bf195288daa5`、Attempt
+    `940b483b-a8e6-43ef-a5a5-0598c3872005`、Artifact
+    `6cc37651-2bee-4803-a81c-04b6cfbd76fd`；Artifact 为 1,234,445 bytes，SHA-256
+    `1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c`。下载 ZIP、
+    manifest、94 条序列统计、94-tip Newick、清理和 Worker 继续在线均已验证。
 
 ## 7. 当前真实阻塞
 
@@ -181,32 +187,32 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
 - 当前 Tunnel 是 Quick Tunnel，域名为临时地址，适合本次链路验收，不是常驻生产入口；常驻
   Worker 上线前必须改为管理员控制的命名 Cloudflare Tunnel，并把地址更新到 Edge 和 Windows
   交接配置。
-- 真实 Case 2/3 必须从网页/同源 Task API 创建 queued Task，使用真实 Method/Dataset，
-  再由可达的 Docker Worker 调用 Claude Code 并上传 R2 Artifact。Task
-  `424ff7da-6903-42e8-9a55-b09c20033ccf` 已完成这条真实路径，但 3 次 Attempt 均在
-  multipart/finalize 阶段 lease-expired，D1 最终为 failed；它不能被当作通过证据。
-- 当前继续 C5 的最小输入是修复后重新创建的一条真实 Case 2 Task。不能手工插入、修改 D1，
-  不能复用 `4350...`，也不能把 Claude 已生成报告或 Worker 在线状态冒充 Artifact 成功。
+- 真实 Case 2 已通过。首次失败 Task `424ff7da-6903-42e8-9a55-b09c20033ccf` 继续保留为
+  multipart/finalize 缺陷证据，成功证据只认修复后的新 Task `3666...`。
+- Case 3 原本用于证明 Scanpy/大结果科学工作负载覆盖；用户已明确要求本轮跳过。它的状态是
+  `DEFERRED_BY_OWNER`，不是 PASS。Cloudflare 收口可以继续，但 C7 必须把这项覆盖缺口写入
+  最终残余风险，不能声称 Case 2/3 均已验证。
 - Relay `/v1/hints` 的 503 已定位为 zhangbot Redis `api` 用户 ACL 缺少
   `infinity-public:*` 键模式和脚本权限。修改共享 ACL 属于外部状态变更，必须取得明确授权；
   在此之前 Worker 依靠 D1 poll 保持可用，但 Redis 恢复/Outbox 重放门禁不能标记通过。
 - 浏览器扩展和应用内浏览器都对线上域名返回客户端拦截，因而本次页面验收使用了 Edge API、
   D1 和 Relay 的协议级证据；不能把浏览器 UI 结果写成已通过。
-- 修复后的 Worker 镜像已发布 GHCR；命名 Tunnel、真实 Case 2/3、浏览器 C6 和最终 C7
+- 修复后的 Worker 镜像已发布 GHCR；命名 Tunnel、Redis 恢复、浏览器 C6 和最终 C7
   code review 仍是发布门禁。
 
 ## 8. 交接给下一位执行者的顺序
 
-1. 不重做 C0-C4，不重建当前本地 Worker。先确认 `cloudflare-deploy@b6d82c4`、
+1. 不重做 C0-C4，不重建当前本地 Worker。先确认 `cloudflare-deploy@972f5ee`、
    `infinity-agent-worker-b-v2` 仍在线且没有领取历史任务。
-2. 让用户在 Task Center 创建/提交真实 Case 2，并取得真实 Task ID；记录 Task、Attempt、Worker、D1 事件、Relay
-   hint、R2 object、大小和 SHA-256；确认目录清空后再跑 Case 3。
+2. 将 Case 2 证据冻结为 PASS；将 Case 3 记录为用户明确延期，不再为本轮创建 Case 3 Task。
 3. 取得明确授权后修复 zhangbot Redis `api` ACL，再执行关闭/恢复 Redis，确认 D1 Outbox
    重试、Worker D1 poll 和任务终态不丢失；验证大结果走
    multipart、旧 lease 不能完成、取消不会发布 Artifact。
 4. 在可用的真实浏览器会话中完成 C6；客户端拦截不能记为网页通过。
 5. 配置命名 Tunnel，替换所有临时 Relay URL；随后才执行最后的
    Cloudflare/浏览器验收。
+6. Cloudflare 的 C7 checkpoint、最终提交、线上回归全部完成后，才按照
+   `docs/POST_CLOUDFLARE_MAIN_LOCAL_POSTGRESQL_PLAN_2026-08-20.md` 启动 `main` 纯本地版本。
 
 ## 9. 禁止的绕过方式
 

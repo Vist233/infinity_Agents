@@ -1,0 +1,11 @@
+branch: cloudflare-deploy
+baseline_head: 972f5ee
+worktree_before: clean
+case2_task: 3666d0f1-4581-42e3-b81c-bf195288daa5
+case2_attempt: 940b483b-a8e6-43ef-a5a5-0598c3872005
+case2_artifact: 6cc37651-2bee-4803-a81c-04b6cfbd76fd
+case2_artifact_size: 1234445
+case2_artifact_sha256: 1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c
+case3_status: DEFERRED_BY_OWNER
+worker: infinity-agent-worker-b-v2 running
+relay: hints HTTP 503; D1 fallback active

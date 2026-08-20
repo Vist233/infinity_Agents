@@ -1,7 +1,7 @@
 # CHECKPOINT IMPLEMENT-20260820-D1 / C5 / real-case2-retry1-20260820
 
 - baseline commit: `678fcec9dca53130c0560eb76a21cc5b3c563684`
-- current commit: pending evidence commit
+- evidence commit: `972f5ee`
 - branch: `cloudflare-deploy`
 - main Agent: Codex
 - sub Agent review: not run; the one allowed read-only review remains reserved for C7
@@ -16,7 +16,7 @@
 - Redis: Relay hint endpoint remains 503 because the zhangbot shared Redis ACL was not altered. The Worker used permitted D1 poll fallback. Redis recovery/Outbox replay is still not passed.
 - browser: the Task Center URL supplied by the user showed real claim events. Automated Chrome navigation timed out during post-completion viewing, so R2 download was used for byte-level artifact verification; browser C6 remains open.
 - tests: see `tests-and-exit-codes.txt`; all listed acceptance checks exited 0 except the explicitly documented corrected schema query.
-- secret scan: pending final repository scan.
+- secret scan: PASS；见同目录 `secret-scan.txt`。
 - rollback: no production-code rollback needed; evidence-only commit.
-- next exact card: derive/obtain the frozen Case 3 Dataset ZIP, then create and execute one fresh Task Center Case 3 task through the same D1/R2 Worker path.
+- next exact card: Case 3 已由用户明确延期；进入 C5R Redis恢复，或在ACL授权缺失时先推进独立C6。
 - external systems modified: only the user-authorized Task Center creation and normal Worker execution/upload path; no manual D1 mutation, Redis ACL change, deployment, or credential rotation.

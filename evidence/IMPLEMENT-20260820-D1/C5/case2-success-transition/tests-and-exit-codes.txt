@@ -1,0 +1,22 @@
+frontend: npm run test:unit — exit 0; 44 passed
+frontend: npm run typecheck — exit 0
+frontend: npm run lint — exit 0
+frontend: npm run build — exit 0
+cloudflare-worker: npm test — exit 0; 55 passed
+cloudflare-worker: npm run check — exit 0
+
+initial focused Python command — exit 4
+Reason: used non-existent backend/tests paths; no test executed and no pass was claimed.
+
+corrected focused Python command under pyenv shell Agent — exit 0; 6 passed
+full Python suite under pyenv shell Agent — exit 0; 330 passed, 45 skipped
+Note: pyenv printed a non-fatal rehash warning because the shim directory is not writable.
+
+docker ps read-only check — exit 0
+Result: infinity-agent-worker-b-v2 remained Up after Case 2.
+
+docker logs --tail 35 read-only check — exit 0
+Result: D1 poll/heartbeat remained HTTP 200; Relay hints remained HTTP 503; Worker continued polling.
+
+Existing frontend test warnings: React act(...) warnings in ImageJudge/task detail tests.
+Existing frontend build warning: baseline-browser-mapping data is stale.

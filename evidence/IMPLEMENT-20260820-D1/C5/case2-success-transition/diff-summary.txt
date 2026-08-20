@@ -1,0 +1,7 @@
+Documentation and planning only:
+
+- record Case 2 PASS and Case 3 DEFERRED_BY_OWNER;
+- move Cloudflare continuation to C5R/C6/C7;
+- add a post-C7 main-only local PostgreSQL migration plan;
+- update the Goal-Driven continuation prompt;
+- no application code or external runtime changed.

@@ -1,6 +1,6 @@
 # D1 + zhangbot Redis Worker 续作实施计划
 
-> 当前续作基线：`cloudflare-deploy@b6d82c4`（已只读核对 GitHub 远端）
+> 当前续作基线：`cloudflare-deploy@972f5ee`
 > 权威架构：`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`
 > 执行提示词：`D1_REDIS_WORKER_GOAL_DRIVEN_PROMPT_2026-08-20.md`
 > 原则：复用已通过的单一 Docker/Claude Runtime；替换错误的 PostgreSQL控制面，不同时维护两套生产链路。
@@ -55,20 +55,23 @@
   `worker_attempts`，不在 v2 `task_attempts`，不能复用；
 - 导航只有 Analysis、Task Center、ImageJudge；Task Center 保留直接创建任务和 Worker 管理；
 - 历史验收 Compose 的 Redis 密码已全部改为显式必填；
-- 真实 Case 2 已通过 Task Center 创建并执行：Task `424ff7da-6903-42e8-9a55-b09c20033ccf`
-  被本机 `infinity-agent-worker-b-v2` 领取了 3 次；Claude 实际生成了报告和执行中间文件，
-  但 3 次都在 Artifact multipart/finalize 阶段失去 lease，D1 最终为 `failed`，因此 Case 2
-  不能计为通过。证据见 `evidence/IMPLEMENT-20260820-D1/C5/real-case2-20260820/checkpoint.md`。
+- 首次真实 Case 2 Task `424ff7da-6903-42e8-9a55-b09c20033ccf` 暴露了 R2 multipart
+  分片稳定性问题；`e55aad5` 修复并部署后，新 Task
+  `3666d0f1-4581-42e3-b81c-bf195288daa5` 通过；
+- 成功 Attempt 为 `940b483b-a8e6-43ef-a5a5-0598c3872005`，Artifact 为
+  `6cc37651-2bee-4803-a81c-04b6cfbd76fd`，1,234,445 bytes，SHA-256
+  `1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c`；
+- 下载 ZIP、manifest、94 条序列统计、94-tip Newick、Worker 清理和继续在线均已验证；
+- Case 3 由用户明确延期，状态为 `DEFERRED_BY_OWNER`，不是 PASS，也不再阻塞本轮继续 C5R/C6/C7。
 
 ### 尚未完成
 
 - 取得共享服务修改授权后，修复 zhangbot Redis Relay ACL 并执行 Redis 停止/恢复和 Outbox 重放验收；
-- 修复并重新验收 D1/R2 真实 Case 2 的 Artifact multipart/finalize；之后再验收 Case 3；
+- Case 3 科学覆盖延期；必须作为 C7 残余风险记录，不能写成已通过；
 - C6 浏览器、Task Center、Worker UI 和移动端真实验收；
 - C7 只读 Code Review、最终同一候选版本回归；
 - 命名 Cloudflare Tunnel（当前 Quick Tunnel 只能用于临时链路验收）；
-- 真实 Docker/Claude Case 2/3、线上 C6 浏览器验收和 C7 最终审查；
-- 命名 Tunnel。当前 Quick Tunnel 只能用于临时验收。
+- 线上 C6 浏览器验收和 C7 最终审查。
 
 ## 2. 顺序实施
 
@@ -135,19 +138,25 @@ RLS claim 或旧 trust 路由。历史测试/迁移依赖的文件先锁定，C5
 
 验收：生产镜像中无PostgreSQL连接要求；只有一个consumer、一个Runtime、一个Dockerfile和一个Worker协议；旧路由只允许明确410迁移响应，最终无调用者。
 
-### C5：从当前阻塞点恢复真实 Case 2/3
+### C5：Case 2 通过，Case 3 用户延期
 
-前置条件：
+Case 2 已满足真实 Task Center 创建、D1 Attempt、Claude Code、R2 multipart、下载哈希、科学
+内容、工作区清理和 Worker 继续在线门禁，证据见
+`evidence/IMPLEMENT-20260820-D1/C5/real-case2-retry1-20260820/checkpoint.md`。
 
-1. 用户通过当前 Task Center 创建真实 Case 2 并提供 Task ID；
-2. 本机 `infinity-agent-worker-b-v2` 仍在线；
-3. 修复 Redis ACL 需要单独的明确授权，不得因为缺少授权停止 D1 fallback 的 Case 运行。
+Case 3 本轮不执行。它必须记录为用户接受的覆盖缺口，不能改写为 PASS，也不能删除原验收标准。
+本轮从这里直接进入 C5R；若将来恢复 Case 3，仍须验证 QC、cluster、marker、UMAP、h5ad、
+multipart、Artifact hash和清理。
 
-工作：使用线上 D1/R2、当前本机 Docker/Claude Code 执行；不能手工插入/修改 D1，不能复用
-`4350...`，不能使用旧 P9 PostgreSQL Worker。先完成 Case 2 的 Task/Attempt/Artifact/哈希/清理
-证据，再创建并完成 Case 3。Relay 仍为 503 时必须如实记录 fallback，不得宣称 Redis 门禁通过。
+### C5R：Redis Relay ACL与恢复
 
-验收：Case 2 包含 94 序列统计和可解析 Newick；Case 3 包含 QC、cluster、marker、UMAP 和 h5ad；Artifact hash 一致；大结果走 multipart；Worker 目录清空并继续在线；无手工改库、Fixture Executor 或 mock 冒充。当前真实失败点是 multipart 分片写入/完成后没有发布 Artifact，不能只看 Claude 报告或 Worker 在线状态判定通过；Redis 完整门禁另受 ACL 授权阻塞。
+工作：取得明确授权后，仅修复 zhangbot Redis `api` 用户对固定 `infinity-public:*` Relay
+合同所需的最小 ACL；验证 hint、D1 Outbox 重放、Redis 停止/恢复、幂等和无重复 Attempt。
+不得把 Redis变成 Task 事实源，不得暴露或轮换无关凭证，不得重启无关服务。
+
+验收：Relay hints恢复；Redis 停止时 D1 poll仍可用；恢复后 pending Outbox重放且不生成双
+Attempt；Redis无 Method、Dataset、Artifact、用户内容或 Secret。没有修改授权时标记外部阻塞，
+然后可先推进独立的 C6，但 C7不能把 Redis恢复写成通过。
 
 ### C6：前端和浏览器
 
@@ -161,6 +170,15 @@ RLS claim 或旧 trust 路由。历史测试/迁移依赖的文件先锁定，C5
 
 远程发布、GHCR、D1 迁移、Relay 部署和 `wrangler deploy` 必须保留可追溯的授权、版本和
 checkpoint；当前分支的 GHCR、D1 迁移、Relay 和 Edge 部署已记录在对应证据中。
+
+### C8：Cloudflare收口后启动main纯本地版本
+
+只有 C7 完成、`cloudflare-deploy` 工作区干净、最终线上版本和 rollback commit 已记录后，
+才能进入 C8。C8不在 `cloudflare-deploy` 内实现，而是严格按照
+`POST_CLOUDFLARE_MAIN_LOCAL_POSTGRESQL_PLAN_2026-08-20.md` 处理 `main`：以最终 Cloudflare
+产品/UI/Worker合同为源，替换 D1/R2/Workers/Quick Tunnel 为 PostgreSQL、本地对象目录、
+本地 API和本地 Redis，删除 Cloudflare活跃入口；不得把 D1和PostgreSQL做成双运行模式，
+不得合并会恢复 Chat Agent 的旧 `origin/main` 内容。
 
 ## 3. 每卡固定检查
 
