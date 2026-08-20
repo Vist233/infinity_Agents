@@ -1,7 +1,7 @@
 # CHECKPOINT IMPLEMENT-20260820-D1 / C5 / local-worker
 
 - baseline commit: `b623530`
-- current commit: pending Worker retry-fix commit
+- current Worker code commit: `a3bcc10`
 - main Agent: Codex
 - sub Agent review: pending final C7; no sub Agent was used for this local smoke card
 - completed outcome: local production v2 Worker stays online and continues D1 polling during Relay 503
