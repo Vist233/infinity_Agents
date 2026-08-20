@@ -1116,6 +1116,221 @@ async function handleRevokeEnrollment(workerId: string, request: Request, env: E
   return json({ worker_id: workerId, namespace, status: "revoked" });
 }
 
+// ---------------------------------------------------------------------------
+// Canonical D1 public-pool Worker browser surface.
+//
+// The functions above are retained temporarily as a migration ledger for the
+// old enrollment tables. Routes below never call them: v2 Workers and the
+// browser both use `workers` + `worker_sessions_runtime`. Trust levels,
+// caller-selected Namespace, and private Worker pools are not part of this
+// surface.
+
+type CanonicalWorkerRow = {
+  worker_id: string;
+  pool_id: string;
+  namespace: string;
+  created_by: string;
+  status: string;
+  protocol_version: string;
+  runtime_capability: string;
+  image_digest: string | null;
+  last_seen_at: number | null;
+  created_at: number;
+  revoked_at: number | null;
+  credential_ciphertext?: string | null;
+};
+
+async function canonicalPublicPool(env: Env): Promise<{ pool_id: string; namespace: string } | null> {
+  const policy = await env.DB.prepare(
+    "SELECT pool_id, namespace FROM worker_pool_policy WHERE policy_id = 1 AND mode = 'public'",
+  ).first<{ pool_id: string; namespace: string }>();
+  if (!policy) return null;
+  return policy;
+}
+
+function canonicalWorkerProjection(row: CanonicalWorkerRow, now = nowSeconds()): Record<string, unknown> {
+  return {
+    worker_id: row.worker_id,
+    pool_id: row.pool_id,
+    namespace: row.namespace,
+    status: row.status,
+    protocol_version: row.protocol_version,
+    runtime_capability: row.runtime_capability,
+    image_digest: row.image_digest,
+    presence: workerPresence(row.status, row.last_seen_at, now),
+    last_seen_at: iso(row.last_seen_at),
+    created_at: iso(row.created_at),
+    revoked_at: iso(row.revoked_at),
+    credential_available: Boolean(row.credential_ciphertext),
+  };
+}
+
+function canonicalNamespaceError(body: Record<string, unknown> | null): Response | null {
+  if (body && Object.prototype.hasOwnProperty.call(body, "namespace")) {
+    return errorJson("Namespace is assigned by the server", 400, "WORKER_NAMESPACE_SERVER_CONTROLLED");
+  }
+  return null;
+}
+
+async function issueCanonicalWorker(request: Request, env: Env, user: AuthedUser, actorAction: "created" = "created"): Promise<Response> {
+  const body = await jsonBody(request);
+  const namespaceError = canonicalNamespaceError(body);
+  if (namespaceError) return namespaceError;
+  const pool = await canonicalPublicPool(env);
+  if (!pool) return errorJson("Public Worker pool is not configured", 503, "PUBLIC_WORKER_POOL_UNAVAILABLE");
+  const workerId = `public-worker-${taskId()}`;
+  const credential = `wc_${taskId().replaceAll("-", "")}${taskId().replaceAll("-", "")}`;
+  const credentialHash = await sha256(credential);
+  let credentialCiphertext: string;
+  try {
+    credentialCiphertext = await encryptWorkerCredential(credential, env);
+  } catch {
+    return errorJson("Persistent Worker credential storage is not configured", 503, "WORKER_CREDENTIAL_STORAGE_UNAVAILABLE");
+  }
+  const now = nowSeconds();
+  try {
+    const result = await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO workers
+          (worker_id, pool_id, namespace, created_by, credential_hash,
+           credential_ciphertext, status, protocol_version, runtime_capability,
+           image_digest, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', '2',
+                 'goal-driven-claude-code', NULL, ?7, ?7)`,
+      ).bind(workerId, pool.pool_id, pool.namespace, user.userId, credentialHash, credentialCiphertext, now),
+      env.DB.prepare(
+        `INSERT INTO worker_admin_events
+          (event_id, action, worker_id, pool_id, actor_user_id, metadata_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, '{}', ?6)`,
+      ).bind(taskId(), actorAction, workerId, pool.pool_id, user.userId, now),
+    ]);
+    if ((result[0] as { meta?: { changes?: number } } | undefined)?.meta?.changes !== 1) throw new Error("Worker insert failed");
+  } catch {
+    return errorJson("Public Worker registration could not be saved", 503, "PUBLIC_WORKER_REGISTRATION_UNAVAILABLE");
+  }
+  return json({
+    worker_id: workerId,
+    worker_kind: "public",
+    namespace: pool.namespace,
+    pool_id: pool.pool_id,
+    worker_credential: credential,
+    credential_expires_at: null,
+    protocol_version: "2",
+    runtime_capability: "goal-driven-claude-code",
+    control_base_url: new URL(request.url).origin,
+    persistent: true,
+    one_time: false,
+  }, 201);
+}
+
+async function handleCanonicalWorkerList(env: Env, user: AuthedUser): Promise<Response> {
+  const pool = await canonicalPublicPool(env);
+  if (!pool) return errorJson("Public Worker pool is not configured", 503, "PUBLIC_WORKER_POOL_UNAVAILABLE");
+  const rows = await env.DB.prepare(
+    `SELECT worker_id, pool_id, namespace, created_by, status, protocol_version,
+            runtime_capability, image_digest, last_seen_at, created_at, revoked_at,
+            credential_ciphertext
+     FROM workers WHERE pool_id = ?1 AND created_by = ?2 ORDER BY created_at DESC`,
+  ).bind(pool.pool_id, user.userId).all<CanonicalWorkerRow>();
+  return json({ workers: (rows.results ?? []).map((row) => canonicalWorkerProjection(row)) });
+}
+
+async function handleCanonicalPool(env: Env, user: AuthedUser): Promise<Response> {
+  if (!operatorAllowed(user)) return forbiddenOperator();
+  const pool = await canonicalPublicPool(env);
+  if (!pool) return errorJson("Public Worker pool is not configured", 503, "PUBLIC_WORKER_POOL_UNAVAILABLE");
+  const rows = await env.DB.prepare(
+    `SELECT worker_id, pool_id, namespace, created_by, status, protocol_version,
+            runtime_capability, image_digest, last_seen_at, created_at, revoked_at,
+            credential_ciphertext
+     FROM workers WHERE pool_id = ?1 ORDER BY created_at ASC`,
+  ).bind(pool.pool_id).all<CanonicalWorkerRow>();
+  return json({
+    pool: { pool_id: pool.pool_id, kind: "public", namespace: pool.namespace, worker_count: rows.results?.length ?? 0 },
+    workers: (rows.results ?? []).map((row) => canonicalWorkerProjection(row)),
+  });
+}
+
+async function canonicalWorkerForActor(
+  workerId: string,
+  env: Env,
+  user: AuthedUser,
+  includeCredential = false,
+): Promise<CanonicalWorkerRow | null> {
+  const pool = await canonicalPublicPool(env);
+  if (!pool) return null;
+  const operator = operatorAllowed(user);
+  return env.DB.prepare(
+    `SELECT worker_id, pool_id, namespace, created_by, status, protocol_version,
+            runtime_capability, image_digest, last_seen_at, created_at, revoked_at,
+            credential_ciphertext
+     FROM workers
+     WHERE worker_id = ?1 AND pool_id = ?2 AND (?3 = 1 OR created_by = ?4)`,
+  ).bind(workerId, pool.pool_id, operator ? 1 : 0, user.userId).first<CanonicalWorkerRow>();
+}
+
+async function handleCanonicalCredential(workerId: string, request: Request, env: Env, user: AuthedUser): Promise<Response> {
+  const row = await canonicalWorkerForActor(workerId, env, user);
+  if (!row || row.status !== "active") return errorJson("Active Worker registration not found", 404, "ENROLLMENT_NOT_FOUND");
+  if (!row.credential_ciphertext) return errorJson("Worker credential is not recoverable", 409, "CREDENTIAL_NOT_RECOVERABLE");
+  const credential = await decryptWorkerCredential(row.credential_ciphertext, env);
+  if (!credential) return errorJson("Persistent Worker credential could not be decrypted", 503, "WORKER_CREDENTIAL_STORAGE_UNAVAILABLE");
+  await env.DB.prepare(
+    `INSERT INTO worker_admin_events
+      (event_id, action, worker_id, pool_id, actor_user_id, metadata_json, created_at)
+     VALUES (?1, 'credential_recovered', ?2, ?3, ?4, '{}', ?5)`,
+  ).bind(taskId(), row.worker_id, row.pool_id, user.userId, nowSeconds()).run();
+  return json({ worker_id: row.worker_id, pool_id: row.pool_id, namespace: row.namespace, worker_credential: credential, persistent: true, one_time: false });
+}
+
+async function handleCanonicalRotate(workerId: string, request: Request, env: Env, user: AuthedUser): Promise<Response> {
+  const body = await jsonBody(request);
+  const namespaceError = canonicalNamespaceError(body);
+  if (namespaceError) return namespaceError;
+  const row = await canonicalWorkerForActor(workerId, env, user);
+  if (!row) return errorJson("Worker registration not found", 404, "ENROLLMENT_NOT_FOUND");
+  if (row.status === "revoked") return errorJson("Revoked Worker cannot be rotated", 409, "ENROLLMENT_REVOKED");
+  const credential = `wc_${taskId().replaceAll("-", "")}${taskId().replaceAll("-", "")}`;
+  let ciphertext: string;
+  try { ciphertext = await encryptWorkerCredential(credential, env); } catch { return errorJson("Persistent Worker credential storage is not configured", 503, "WORKER_CREDENTIAL_STORAGE_UNAVAILABLE"); }
+  const now = nowSeconds();
+  const result = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE workers SET credential_hash = ?2, credential_ciphertext = ?3,
+          status = 'active', revoked_at = NULL, last_seen_at = NULL, updated_at = ?4
+       WHERE worker_id = ?1 AND status <> 'revoked'`,
+    ).bind(workerId, await sha256(credential), ciphertext, now),
+    env.DB.prepare(
+      `UPDATE worker_sessions_runtime SET disconnected_at = ?2, lease_expires_at = ?2
+       WHERE worker_id = ?1`,
+    ).bind(workerId, now),
+    env.DB.prepare(
+      `INSERT INTO worker_admin_events
+        (event_id, action, worker_id, pool_id, actor_user_id, metadata_json, created_at)
+       VALUES (?1, 'credential_rotated', ?2, ?3, ?4, '{}', ?5)`,
+    ).bind(taskId(), workerId, row.pool_id, user.userId, now),
+  ]);
+  if ((result[0] as { meta?: { changes?: number } } | undefined)?.meta?.changes !== 1) return errorJson("Worker credential rotation failed", 409, "ENROLLMENT_ROTATION_CONFLICT");
+  return json({ worker_id: workerId, pool_id: row.pool_id, namespace: row.namespace, worker_credential: credential, persistent: true, one_time: false });
+}
+
+async function handleCanonicalRevoke(workerId: string, env: Env, user: AuthedUser): Promise<Response> {
+  const row = await canonicalWorkerForActor(workerId, env, user);
+  if (!row) return errorJson("Worker registration not found", 404, "ENROLLMENT_NOT_FOUND");
+  const now = nowSeconds();
+  const result = await env.DB.batch([
+    env.DB.prepare("UPDATE workers SET revoked_at = ?2, status = 'revoked', updated_at = ?2 WHERE worker_id = ?1 AND status <> 'revoked'").bind(workerId, now),
+    env.DB.prepare("UPDATE worker_sessions_runtime SET disconnected_at = ?2, lease_expires_at = ?2 WHERE worker_id = ?1").bind(workerId, now),
+    env.DB.prepare(
+      `INSERT INTO worker_admin_events
+        (event_id, action, worker_id, pool_id, actor_user_id, metadata_json, created_at)
+       VALUES (?1, 'revoked', ?2, ?3, ?4, '{}', ?5)`,
+    ).bind(taskId(), workerId, row.pool_id, user.userId, now),
+  ]);
+  if ((result[0] as { meta?: { changes?: number } } | undefined)?.meta?.changes !== 1) return errorJson("Active Worker registration not found", 404, "ENROLLMENT_NOT_FOUND");
+  return json({ worker_id: workerId, pool_id: row.pool_id, namespace: row.namespace, status: "revoked" });
+}
+
 export async function handleTaskApi(request: Request, env: Env, user: AuthedUser): Promise<Response | null> {
   const url = new URL(request.url);
   const { pathname } = url;
@@ -1160,22 +1375,25 @@ export async function handleTaskApi(request: Request, env: Env, user: AuthedUser
 
   const artifactMatch = pathname.match(/^\/api\/artifacts\/([^/]+)$/);
   if (artifactMatch && method === "GET") return handleArtifact(decodeURIComponent(artifactMatch[1]), env, user);
-  if (method === "GET" && pathname === "/api/worker-enrollments") return handleListWorkerEnrollments(env, user);
-  if (method === "POST" && pathname === "/api/worker-enrollments") return handleWorkerEnrollment(request, env, user);
-  if (method === "GET" && pathname === "/api/admin/public-worker-pool") return handlePublicWorkerPool(env, user);
-  if (method === "POST" && pathname === "/api/admin/public-workers") return handleCreatePublicWorker(request, env, user);
+  if (method === "GET" && pathname === "/api/worker-enrollments") return handleCanonicalWorkerList(env, user);
+  if (method === "POST" && pathname === "/api/worker-enrollments") return issueCanonicalWorker(request, env, user);
+  if (method === "GET" && pathname === "/api/admin/public-worker-pool") return handleCanonicalPool(env, user);
+  if (method === "POST" && pathname === "/api/admin/public-workers") {
+    if (!operatorAllowed(user)) return forbiddenOperator();
+    return issueCanonicalWorker(request, env, user);
+  }
   const publicCredentialMatch = pathname.match(/^\/api\/admin\/public-workers\/([^/]+)\/credential$/);
-  if (publicCredentialMatch && method === "GET") return handlePublicWorkerCredential(decodeURIComponent(publicCredentialMatch[1]), request, env, user);
+  if (publicCredentialMatch && method === "GET") return handleCanonicalCredential(decodeURIComponent(publicCredentialMatch[1]), request, env, user);
   const publicRotateMatch = pathname.match(/^\/api\/admin\/public-workers\/([^/]+)\/rotate$/);
-  if (publicRotateMatch && method === "POST") return handleRotatePublicWorkerCredential(decodeURIComponent(publicRotateMatch[1]), request, env, user);
+  if (publicRotateMatch && method === "POST") return handleCanonicalRotate(decodeURIComponent(publicRotateMatch[1]), request, env, user);
   const publicRevokeMatch = pathname.match(/^\/api\/admin\/public-workers\/([^/]+)\/revoke$/);
-  if (publicRevokeMatch && method === "POST") return handleRevokePublicWorker(decodeURIComponent(publicRevokeMatch[1]), request, env, user);
+  if (publicRevokeMatch && method === "POST") return handleCanonicalRevoke(decodeURIComponent(publicRevokeMatch[1]), env, user);
   const credentialMatch = pathname.match(/^\/api\/worker-enrollments\/([^/]+)\/credential$/);
-  if (credentialMatch && method === "GET") return handleWorkerCredential(decodeURIComponent(credentialMatch[1]), request, env, user);
+  if (credentialMatch && method === "GET") return handleCanonicalCredential(decodeURIComponent(credentialMatch[1]), request, env, user);
   const rotateMatch = pathname.match(/^\/api\/worker-enrollments\/([^/]+)\/rotate$/);
-  if (rotateMatch && method === "POST") return handleRotateWorkerCredential(decodeURIComponent(rotateMatch[1]), request, env, user);
+  if (rotateMatch && method === "POST") return handleCanonicalRotate(decodeURIComponent(rotateMatch[1]), request, env, user);
   const revokeMatch = pathname.match(/^\/api\/worker-enrollments\/([^/]+)\/revoke$/);
-  if (revokeMatch && method === "POST") return handleRevokeEnrollment(decodeURIComponent(revokeMatch[1]), request, env, user);
+  if (revokeMatch && method === "POST") return handleCanonicalRevoke(decodeURIComponent(revokeMatch[1]), env, user);
 
   return null;
 }

@@ -1,0 +1,19 @@
+C2 command ledger
+
+1. `npm run check` in `cloudflare-worker`
+   exit 0 — TypeScript typecheck passed.
+
+2. `npm test -- --run` in `cloudflare-worker`
+   exit 0 — 11 test files, 53 tests passed.
+
+3. Covered protocol assertions
+   - persistent credential reverse handshake;
+   - one active session per Worker credential;
+   - public cross-user task claim;
+   - D1 claim CAS/fencing and second-accept conflict;
+   - heartbeat/renew and forged Namespace rejection;
+   - streamed multipart part and independent final artifact checksum;
+   - browser route authentication and canonical Worker issuance.
+
+4. `git diff --check`
+   exit 0 during the C2 verification.

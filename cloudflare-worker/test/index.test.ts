@@ -93,6 +93,15 @@ describe("Infinity Edge route composition", () => {
     expect(await response.json()).toMatchObject({ error: { code: "LEGACY_WORKER_PROTOCOL_DISABLED" } });
   });
 
+  it("routes Worker v2 through credential authentication instead of browser cookies", async () => {
+    const response = await worker.fetch(
+      new Request("https://app.test/api/worker/v2/heartbeat", { method: "POST" }),
+      testEnv(),
+    );
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ error: { code: "WORKER_AUTH_REQUIRED" } });
+  });
+
   it("rejects plaintext requests through the retired Worker protocol", async () => {
     const response = await worker.fetch(
       new Request("http://app.test/api/worker/v1/health"),

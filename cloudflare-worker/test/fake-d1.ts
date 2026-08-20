@@ -65,6 +65,23 @@ export interface PersistentWorkerRow {
   owner_user_id?: string | null;
 }
 
+export interface CanonicalWorkerRow {
+  worker_id: string;
+  pool_id: string;
+  namespace: string;
+  created_by: string;
+  status: string;
+  protocol_version: string;
+  runtime_capability: string;
+  image_digest: string | null;
+  last_seen_at: number | null;
+  created_at: number;
+  updated_at: number;
+  revoked_at: number | null;
+  credential_hash: string;
+  credential_ciphertext?: string | null;
+}
+
 export interface WorkerPoolRow {
   pool_id: string;
   kind: "public" | "user";
@@ -146,6 +163,8 @@ export class FakeD1 {
   chatRequestIdempotency = new Map<string, ChatRequestIdempotencyRow>();
   tasks = new Map<string, TaskRow>();
   workerRegistrations = new Map<string, PersistentWorkerRow>();
+  workers = new Map<string, CanonicalWorkerRow>();
+  workerPoolPolicy = { pool_id: "public-default", namespace: "infinity-public", mode: "public" as const };
   workerPools = new Map<string, WorkerPoolRow>();
   workerAdminEvents: WorkerAdminEventRow[] = [];
   workerSessions = new Map<string, WorkerSessionRow>();
@@ -211,7 +230,19 @@ class FakeStatement {
   }
 
   async first<T>(): Promise<T | null> {
-    const sql = this.sql;
+    const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("FROM worker_pool_policy")) {
+      return this.db.workerPoolPolicy as T;
+    }
+    if (sql.includes("FROM workers WHERE worker_id = ?1 AND pool_id = ?2")) {
+      const [workerId, poolId, operator, userId] = this.args as [string, string, number, string];
+      const row = this.db.workers.get(workerId);
+      return row && row.pool_id === poolId && (operator === 1 || row.created_by === userId) ? row as T : null;
+    }
+    if (sql.includes("FROM workers WHERE worker_id = ?1")) {
+      const [workerId] = this.args as [string];
+      return (this.db.workers.get(workerId) as T) ?? null;
+    }
     if (sql.includes("INSERT INTO daily_usage")) {
       // Atomic increment UPSERT ... RETURNING count.
       const [userId, day] = this.args as [string, string];
@@ -329,25 +360,80 @@ class FakeStatement {
   }
 
   async all<T>(): Promise<{ results: T[] }> {
-    if (this.sql.includes("FROM chat_messages")) {
+    const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("FROM chat_messages")) {
       const [sessionId] = this.args as [string];
       const rows = this.db.chatMessages
         .filter((m) => m.session_id === sessionId)
         .sort((a, b) => a.id - b.id);
       return { results: rows as unknown as T[] };
     }
-    if (this.sql.includes("FROM worker_registrations") && this.sql.includes("worker_kind = 'public'")) {
+    if (sql.includes("FROM worker_registrations") && sql.includes("worker_kind = 'public'")) {
       const [poolId] = this.args as [string];
       const rows = [...this.db.workerRegistrations.values()]
         .filter((row) => row.worker_kind === "public" && row.pool_id === poolId)
         .sort((left, right) => (left.created_at ?? 0) - (right.created_at ?? 0));
       return { results: rows as unknown as T[] };
     }
+    if (sql.includes("FROM workers WHERE pool_id = ?1 AND created_by = ?2")) {
+      const [poolId, userId] = this.args as [string, string];
+      const rows = [...this.db.workers.values()].filter((row) => row.pool_id === poolId && row.created_by === userId);
+      return { results: rows as unknown as T[] };
+    }
+    if (sql.includes("FROM workers WHERE pool_id = ?1")) {
+      const [poolId] = this.args as [string];
+      const rows = [...this.db.workers.values()].filter((row) => row.pool_id === poolId);
+      return { results: rows as unknown as T[] };
+    }
     return { results: [] };
   }
 
   async run(): Promise<{ meta: { changes: number } }> {
-    const sql = this.sql;
+    const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("INSERT INTO workers")) {
+      const [workerId, poolId, namespace, createdBy, credentialHash, credentialCiphertext, createdAt] = this.args as [string, string, string, string, string, string, number];
+      this.db.workers.set(workerId, {
+        worker_id: workerId,
+        pool_id: poolId,
+        namespace,
+        created_by: createdBy,
+        credential_hash: credentialHash,
+        credential_ciphertext: credentialCiphertext,
+        status: "active",
+        protocol_version: "2",
+        runtime_capability: "goal-driven-claude-code",
+        image_digest: null,
+        last_seen_at: null,
+        created_at: createdAt,
+        updated_at: createdAt,
+        revoked_at: null,
+      });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE workers SET credential_hash")) {
+      const [workerId, credentialHash, credentialCiphertext, updatedAt] = this.args as [string, string, string, number];
+      const row = this.db.workers.get(workerId);
+      if (!row || row.status === "revoked") return { meta: { changes: 0 } };
+      row.credential_hash = credentialHash;
+      row.credential_ciphertext = credentialCiphertext;
+      row.status = "active";
+      row.revoked_at = null;
+      row.last_seen_at = null;
+      row.updated_at = updatedAt;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE workers SET revoked_at")) {
+      const [workerId, revokedAt] = this.args as [string, number];
+      const row = this.db.workers.get(workerId);
+      if (!row || row.status === "revoked") return { meta: { changes: 0 } };
+      row.status = "revoked";
+      row.revoked_at = revokedAt;
+      row.updated_at = revokedAt;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE worker_sessions_runtime")) {
+      return { meta: { changes: 1 } };
+    }
     if (sql.includes("INSERT INTO chat_messages")) {
       const [sessionId, role, content] = this.args as [string, string, string];
       this.db.addMessage(sessionId, role, content);
@@ -433,6 +519,11 @@ class FakeStatement {
         const [eventId, workerId, poolId, actorUserId, createdAt] = this.args as [string, string, string, string, number];
         const action = sql.includes("credential_rotated") ? "credential_rotated" : "revoked";
         this.db.workerAdminEvents.push({ event_id: eventId, action, worker_id: workerId, pool_id: poolId, actor_user_id: actorUserId, metadata_json: "{}", created_at: createdAt });
+        return { meta: { changes: 1 } };
+      }
+      if (sql.includes("VALUES (?1, 'credential_recovered'")) {
+        const [eventId, workerId, poolId, actorUserId, createdAt] = this.args as [string, string, string, string, number];
+        this.db.workerAdminEvents.push({ event_id: eventId, action: "credential_recovered", worker_id: workerId, pool_id: poolId, actor_user_id: actorUserId, metadata_json: "{}", created_at: createdAt });
         return { meta: { changes: 1 } };
       }
       const [eventId, action, workerId, poolId, actorUserId, createdAt] = this.args as [string, string, string | null, string, string, number];

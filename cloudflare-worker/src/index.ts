@@ -13,6 +13,7 @@ import { currentDailyUsage } from "./quota";
 import { handleImageJudge } from "./image-judge";
 import { handleTaskApi } from "./tasks";
 import { handleUserSettings } from "./settings";
+import { handleWorkerV2 } from "./worker-v2";
 
 export { ImageJudgeUserConcurrencyLock } from "./image-judge";
 
@@ -85,9 +86,16 @@ export default {
       return handleLogout(request, env);
     }
 
-    // The old D1-only Worker protocol is intentionally closed. Unified
-    // Workers use the central PostgreSQL/Redis protocol and never write Task
-    // state to this edge Worker.
+    // Worker v2 is credential/session authenticated and deliberately bypasses
+    // the browser cookie/CSRF boundary. It uses D1 + R2 only; Redis hints are
+    // delivered through the separately authenticated Relay.
+    if (pathname.startsWith("/api/worker/v2/")) {
+      const workerResponse = await handleWorkerV2(request, env);
+      if (workerResponse) return workerResponse;
+    }
+
+    // The old D1-only Worker protocol is intentionally closed. There is no
+    // fallback to the historical PostgreSQL/RLS worker gateway here.
     if (pathname.startsWith("/api/worker/v1/")) {
       return errorJson("Legacy Worker protocol is disabled", 410, "LEGACY_WORKER_PROTOCOL_DISABLED");
     }

@@ -14,17 +14,17 @@ async function call(path: string, env: Parameters<typeof handleTaskApi>[1], user
 }
 
 describe("public Worker pool administration", () => {
-  it("keeps user registrations owner-scoped with server-generated identities", async () => {
+  it("issues a server-controlled public-pool credential without a Namespace form", async () => {
     const { env, db } = makeEnv({ WORKER_CREDENTIAL_ENCRYPTION_KEY: encryptionKey });
     const response = await call("/api/worker-enrollments", env, ordinary, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ namespace: "user-shared" }),
+      body: JSON.stringify({}),
     });
     expect(response.status).toBe(201);
     const payload = await response.json() as { worker_id: string; namespace: string };
-    const row = db.workerRegistrations.get(`${payload.worker_id}|${payload.namespace}`);
-    expect(row).toMatchObject({ worker_kind: "user", owner_user_id: "user-1", pool_id: null });
+    const row = db.workers.get(payload.worker_id);
+    expect(row).toMatchObject({ pool_id: "public-default", namespace: "infinity-public", created_by: "user-1", status: "active" });
   });
 
   it("allows only verified superusers to provision persistent public Workers", async () => {
@@ -65,7 +65,7 @@ describe("public Worker pool administration", () => {
     const listedPayload = await listed.json() as { workers: Array<Record<string, unknown>> };
     expect(listedPayload.workers).toHaveLength(3);
     expect(listedPayload.workers[0]).not.toHaveProperty("worker_credential");
-    expect(db.workerRegistrations.size).toBe(3);
+    expect(db.workers.size).toBe(3);
 
     const recovered = await call(`/api/admin/public-workers/${encodeURIComponent(firstPayload.worker_id)}/credential`, env, admin);
     expect(recovered.status).toBe(200);
@@ -76,7 +76,7 @@ describe("public Worker pool administration", () => {
     expect((await rotated.json() as { worker_credential: string }).worker_credential).not.toBe(firstPayload.worker_credential);
     const revoked = await call(`/api/admin/public-workers/${encodeURIComponent(firstPayload.worker_id)}/revoke`, env, admin, { method: "POST" });
     expect(revoked.status).toBe(200);
-    expect(db.workerRegistrations.get(`${firstPayload.worker_id}|${firstPayload.namespace}`)).toMatchObject({ status: "revoked" });
+    expect(db.workers.get(firstPayload.worker_id)).toMatchObject({ status: "revoked" });
     const recoveredAfterRevoke = await call(`/api/admin/public-workers/${encodeURIComponent(firstPayload.worker_id)}/credential`, env, admin);
     expect(recoveredAfterRevoke.status).toBe(404);
     expect(db.workerAdminEvents.map((event) => event.action)).toEqual([
@@ -113,10 +113,8 @@ describe("public Worker pool administration", () => {
     expect(payload.worker_credential).toMatch(/^wc_/);
     expect(payload.persistent).toBe(true);
     expect(payload.one_time).toBe(false);
-    expect(db.workerRegistrations.get(`${payload.worker_id}|${payload.namespace}`)).toMatchObject({
-      worker_kind: "public",
+    expect(db.workers.get(payload.worker_id)).toMatchObject({
       pool_id: "public-default",
-      owner_user_id: null,
       credential_ciphertext: expect.stringMatching(/^v1\./),
     });
   });

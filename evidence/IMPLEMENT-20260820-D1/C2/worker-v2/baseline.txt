@@ -1,0 +1,11 @@
+C2 baseline — 2026-08-20 Asia/Shanghai
+
+Starting commit: 66e5c42 (C1 canonical D1 schema).
+Branch: cloudflare-deploy.
+
+The local Cloudflare dependency tree was installed with npm ci before the C1
+verification. The production Worker typecheck has no Node runtime dependency;
+the schema test's Node imports are test-only and suppressed at the import site.
+
+The protocol tests use a D1-shaped fake and an R2 multipart fake. They cover the
+new canonical tables and endpoints without contacting any external service.

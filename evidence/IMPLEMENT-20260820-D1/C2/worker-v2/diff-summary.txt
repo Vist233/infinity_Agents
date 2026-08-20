@@ -1,0 +1,19 @@
+# C2 diff summary
+
+New runtime/control files:
+
+- `cloudflare-worker/src/worker-v2.ts`
+- `cloudflare-worker/src/sha256.ts`
+- `cloudflare-worker/test/worker-v2.test.ts`
+- `cloudflare-worker/test/sha256.test.ts`
+
+Updated:
+
+- `cloudflare-worker/src/index.ts`
+- `cloudflare-worker/src/tasks.ts`
+- `cloudflare-worker/test/fake-d1.ts`
+- `cloudflare-worker/test/public-workers.test.ts`
+- `cloudflare-worker/test/index.test.ts`
+
+The historical Python PostgreSQL Worker loop is not yet removed; that is a
+deliberate C4 gate after the new consumer is connected and tested.
