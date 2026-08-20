@@ -3,6 +3,7 @@ import type { Env } from "./env";
 const DEFAULT_BATCH_SIZE = 25;
 const MAX_BATCH_SIZE = 100;
 const MAX_ERROR_LENGTH = 240;
+const PUBLISHING_TIMEOUT_SECONDS = 300;
 const ALLOWED_EVENT_TYPES = new Set([
   "task_queued",
   "task_claimed",
@@ -106,34 +107,48 @@ async function publish(env: Env, event: RelayEvent): Promise<void> {
   if (!response.ok) throw new Error(`RELAY_HTTP_${response.status}`);
 }
 
-async function markPublished(env: Env, row: OutboxRow, now: number): Promise<void> {
-  await env.DB.prepare(
+async function markPublished(env: Env, row: OutboxRow, owner: string, now: number): Promise<boolean> {
+  const result = await env.DB.prepare(
     `UPDATE outbox_events
-     SET status = 'published', published_at = ?2, last_error = NULL
-     WHERE event_id = ?1 AND status = 'publishing'`,
-  ).bind(row.event_id, now).run();
+     SET status = 'published', published_at = ?2, last_error = NULL,
+         publishing_started_at = NULL, publishing_owner = NULL
+     WHERE event_id = ?1 AND status = 'publishing' AND publishing_owner = ?3`,
+  ).bind(row.event_id, now, owner).run();
+  return changed(result) === 1;
 }
 
-async function markRetry(env: Env, row: OutboxRow, now: number, error: unknown): Promise<void> {
+async function markRetry(env: Env, row: OutboxRow, owner: string, now: number, error: unknown): Promise<void> {
   const delay = Math.min(3600, 5 * (2 ** Math.min(Math.max(row.attempts, 0), 8)));
   await env.DB.prepare(
     `UPDATE outbox_events
-     SET status = 'pending', next_attempt_at = ?2, last_error = ?3
-     WHERE event_id = ?1 AND status = 'publishing'`,
-  ).bind(row.event_id, now + delay, errorText(error)).run();
+     SET status = 'pending', next_attempt_at = ?2, last_error = ?3,
+         publishing_started_at = NULL, publishing_owner = NULL
+     WHERE event_id = ?1 AND status = 'publishing' AND publishing_owner = ?4`,
+  ).bind(row.event_id, now + delay, errorText(error), owner).run();
 }
 
-async function markFailed(env: Env, row: OutboxRow, error: unknown): Promise<void> {
+async function markFailed(env: Env, row: OutboxRow, owner: string, error: unknown): Promise<void> {
   await env.DB.prepare(
     `UPDATE outbox_events
-     SET status = 'failed', last_error = ?2
-     WHERE event_id = ?1 AND status = 'publishing'`,
-  ).bind(row.event_id, errorText(error)).run();
+     SET status = 'failed', last_error = ?2, publishing_started_at = NULL,
+         publishing_owner = NULL
+     WHERE event_id = ?1 AND status = 'publishing' AND publishing_owner = ?3`,
+  ).bind(row.event_id, errorText(error), owner).run();
 }
 
 /** Flush a bounded batch. D1 owns the durable event; Redis is best-effort. */
 export async function flushD1Outbox(env: Env, now = nowSeconds()): Promise<number> {
   if (!env.REDIS_RELAY_URL || !env.REDIS_RELAY_PUBLISH_SECRET) return 0;
+  // A process can terminate after claiming an event and before publishing it.
+  // Requeue only expired claims; D1 remains authoritative and the Relay is
+  // idempotent by outbox idempotency_key.
+  await env.DB.prepare(
+    `UPDATE outbox_events
+     SET status = 'pending', publishing_started_at = NULL, publishing_owner = NULL,
+         next_attempt_at = ?1, last_error = 'stale publishing claim recovered'
+     WHERE status = 'publishing'
+       AND (publishing_started_at IS NULL OR publishing_started_at <= ?2)`,
+  ).bind(now, now - PUBLISHING_TIMEOUT_SECONDS).run();
   const pending = await env.DB.prepare(
     `SELECT event_id, idempotency_key, aggregate_type, aggregate_id,
             event_type, payload_json, attempts
@@ -144,20 +159,21 @@ export async function flushD1Outbox(env: Env, now = nowSeconds()): Promise<numbe
   ).bind(now, configuredBatchSize(env)).all<OutboxRow>();
   let published = 0;
   for (const row of pending.results ?? []) {
+    const publishingOwner = crypto.randomUUID();
     const claimed = await env.DB.prepare(
       `UPDATE outbox_events
-       SET status = 'publishing', attempts = attempts + 1
+       SET status = 'publishing', attempts = attempts + 1,
+           publishing_started_at = ?2, publishing_owner = ?3
        WHERE event_id = ?1 AND status = 'pending' AND next_attempt_at <= ?2`,
-    ).bind(row.event_id, now).run();
+    ).bind(row.event_id, now, publishingOwner).run();
     if (changed(claimed) !== 1) continue;
     try {
       const event = asRelayEvent(row, now);
       await publish(env, event);
-      await markPublished(env, row, now);
-      published += 1;
+      if (await markPublished(env, row, publishingOwner, now)) published += 1;
     } catch (error) {
-      if (error instanceof Error && error.message === "INVALID_OUTBOX_EVENT") await markFailed(env, row, error);
-      else await markRetry(env, row, now, error);
+      if (error instanceof Error && error.message === "INVALID_OUTBOX_EVENT") await markFailed(env, row, publishingOwner, error);
+      else await markRetry(env, row, publishingOwner, now, error);
     }
   }
   return published;

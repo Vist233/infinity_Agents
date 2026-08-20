@@ -11,6 +11,8 @@ type OutboxRow = {
   payload_json: string;
   status: string;
   attempts: number;
+  publishing_started_at?: number | null;
+  publishing_owner?: string | null;
 };
 
 class OutboxDb {
@@ -28,6 +30,19 @@ class OutboxDb {
         return { results: db.rows.filter((row) => row.status === "pending") as T[], success: true, meta: { changes: 0 } };
       },
       async run() {
+        if (sql.includes("stale publishing claim recovered")) {
+          const cutoff = Number(args[1]);
+          let changes = 0;
+          for (const candidate of db.rows) {
+            if (candidate.status === "publishing" && (candidate.publishing_started_at == null || candidate.publishing_started_at <= cutoff)) {
+              candidate.status = "pending";
+              candidate.publishing_started_at = null;
+              candidate.publishing_owner = null;
+              changes += 1;
+            }
+          }
+          return { success: true, meta: { changes } };
+        }
         const eventId = String(args[0]);
         const row = db.rows.find((candidate) => candidate.event_id === eventId);
         if (!row) return { success: true, meta: { changes: 0 } };
@@ -35,17 +50,26 @@ class OutboxDb {
           if (row.status !== "pending") return { success: true, meta: { changes: 0 } };
           row.status = "publishing";
           row.attempts += 1;
+          row.publishing_started_at = Number(args[1]);
+          row.publishing_owner = String(args[2]);
           return { success: true, meta: { changes: 1 } };
         }
         if (sql.includes("SET status = 'published'")) {
+          if (row.status !== "publishing" || row.publishing_owner !== String(args[2])) return { success: true, meta: { changes: 0 } };
           row.status = "published";
+          row.publishing_started_at = null;
+          row.publishing_owner = null;
           return { success: true, meta: { changes: 1 } };
         }
         if (sql.includes("SET status = 'failed'")) {
+          if (row.status !== "publishing" || row.publishing_owner !== String(args[2])) return { success: true, meta: { changes: 0 } };
           row.status = "failed";
+          row.publishing_owner = null;
           return { success: true, meta: { changes: 1 } };
         }
+        if (row.status !== "publishing" || row.publishing_owner !== String(args[3])) return { success: true, meta: { changes: 0 } };
         row.status = "pending";
+        row.publishing_owner = null;
         return { success: true, meta: { changes: 1 } };
       },
     };
@@ -113,6 +137,57 @@ describe("D1 outbox to Redis Relay", () => {
     await expect(flushD1Outbox(env, 1_700_000_000)).resolves.toBe(0);
     expect(db.rows[0].status).toBe("failed");
     expect(fetchSpy).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("recovers an expired publishing claim and republishes it once", async () => {
+    const db = new OutboxDb([{
+      event_id: "event-stale",
+      idempotency_key: "task-queued:task-stale",
+      aggregate_type: "task",
+      aggregate_id: "task-stale",
+      event_type: "task_queued",
+      payload_json: JSON.stringify({ task_id: "task-stale", pool_id: "public-default" }),
+      status: "publishing",
+      attempts: 1,
+      publishing_started_at: 1_699_999_000,
+    }]);
+    const { env } = makeEnv({
+      DB: db as unknown as ReturnType<typeof makeEnv>["env"]["DB"],
+      REDIS_RELAY_URL: "https://relay.test",
+      REDIS_RELAY_PUBLISH_SECRET: "relay-secret",
+    });
+    const fetchSpy = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    await expect(flushD1Outbox(env, 1_700_000_000)).resolves.toBe(1);
+    expect(db.rows[0]).toMatchObject({ status: "published", attempts: 2, publishing_started_at: null });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
+  it("does not let a stale publisher finish a newer claim", async () => {
+    const row: OutboxRow = {
+      event_id: "event-race",
+      idempotency_key: "task-queued:task-race",
+      aggregate_type: "task",
+      aggregate_id: "task-race",
+      event_type: "task_queued",
+      payload_json: JSON.stringify({ task_id: "task-race", pool_id: "public-default" }),
+      status: "pending",
+      attempts: 0,
+    };
+    const db = new OutboxDb([row]);
+    const { env } = makeEnv({
+      DB: db as unknown as ReturnType<typeof makeEnv>["env"]["DB"],
+      REDIS_RELAY_URL: "https://relay.test",
+      REDIS_RELAY_PUBLISH_SECRET: "relay-secret",
+    });
+    vi.stubGlobal("fetch", async () => {
+      row.publishing_owner = "newer-owner";
+      return new Response("{}", { status: 200 });
+    });
+    await expect(flushD1Outbox(env, 1_700_000_000)).resolves.toBe(0);
+    expect(row).toMatchObject({ status: "publishing", publishing_owner: "newer-owner" });
     vi.unstubAllGlobals();
   });
 });

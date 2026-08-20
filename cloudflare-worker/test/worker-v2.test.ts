@@ -47,6 +47,8 @@ type Task = {
   lease_worker_id: string | null;
   lease_token_hash: string | null;
   lease_expires_at: number | null;
+  result_artifact_id?: string | null;
+  cancel_requested_at?: number | null;
 };
 
 type Attempt = {
@@ -107,6 +109,36 @@ class RuntimeFakeStatement {
           && candidate.lease_expires_at > now && candidate.disconnected_at == null);
       return (row as T) ?? null;
     }
+    if (sql.includes("SELECT finalize_artifact_id FROM artifact_uploads")) {
+      const [uploadId, owner] = this.args as [string, string];
+      const row = this.db.artifactUploads.get(uploadId);
+      return row && row.finalize_owner === owner && row.status === "open" ? row as T : null;
+    }
+    if (sql.includes("FROM tasks t") && sql.includes("task-cancelled:")) {
+      const [taskId, attemptId, uploadId] = this.args as [string, string, string];
+      const task = this.db.tasks.get(taskId);
+      const attempt = this.db.attempts.get(attemptId);
+      const upload = this.db.artifactUploads.get(uploadId);
+      const consistent = task?.status === "cancelled" && task.result_artifact_id == null
+        && attempt?.status === "cancelled" && upload?.status === "aborted"
+        && !this.db.artifacts.has(uploadId)
+        && this.db.events.includes(`task-cancelled:${attemptId}`)
+        && this.db.outbox.includes(`task-cancelled:${attemptId}`);
+      return consistent ? ({ task_id: taskId } as T) : null;
+    }
+    if (sql.includes("FROM artifacts a") && sql.includes("JOIN artifact_uploads")) {
+      const [uploadId, artifactId] = this.args as [string, string];
+      const artifact = this.db.artifacts.get(uploadId);
+      const upload = this.db.artifactUploads.get(uploadId);
+      const task = artifact ? this.db.tasks.get(artifact.task_id) : null;
+      const attempt = artifact ? this.db.attempts.get(artifact.attempt_id) : null;
+      return artifact && upload?.status === "completed" && artifact.artifact_id === artifactId
+        && task?.status === "succeeded" && task.result_artifact_id === artifactId
+        && attempt?.status === "succeeded"
+        && this.db.events.includes(`task-succeeded:${artifact.attempt_id}`)
+        && this.db.outbox.includes(`task-succeeded:${artifact.attempt_id}`)
+        ? ({ artifact_id: artifactId } as T) : null;
+    }
     if (sql.includes("FROM artifact_uploads WHERE upload_id")) {
       const [uploadId, workerId] = this.args as [string, string];
       const row = this.db.artifactUploads.get(uploadId);
@@ -114,6 +146,12 @@ class RuntimeFakeStatement {
     }
     if (sql.includes("FROM artifacts WHERE upload_id")) {
       return (this.db.artifacts.get(String(this.args[0])) as T) ?? null;
+    }
+    if (sql.includes("FROM task_attempts") && sql.includes("status = 'succeeded'")) {
+      const [attemptId, taskId, workerId, sessionId, tokenHash] = this.args as [string, string, string, string, string];
+      const row = this.db.attempts.get(attemptId);
+      return row && row.task_id === taskId && row.worker_id === workerId && row.session_id === sessionId
+        && row.lease_token_hash === tokenHash && row.status === "succeeded" ? row as T : null;
     }
     if (sql.includes("FROM task_attempts")) {
       const [attemptId, taskId, workerId, sessionId, tokenHash, now] = this.args as [string, string, string, string, string, number];
@@ -175,7 +213,7 @@ class RuntimeFakeStatement {
     }
     if (sql.includes("INSERT INTO artifact_uploads")) {
       const [uploadId, taskId, attemptId, workerId, objectKey, name, kind, contentType, expectedSize, expectedSha, manifest, createdAt] = this.args as [string, string, string, string, string, string, string, string, number, string, string, number];
-      this.db.artifactUploads.set(uploadId, { upload_id: uploadId, task_id: taskId, attempt_id: attemptId, worker_id: workerId, object_key: objectKey, name, kind, content_type: contentType, expected_size_bytes: expectedSize, expected_sha256: expectedSha, manifest_json: manifest, status: "open", created_at: createdAt });
+      this.db.artifactUploads.set(uploadId, { upload_id: uploadId, task_id: taskId, attempt_id: attemptId, worker_id: workerId, object_key: objectKey, name, kind, content_type: contentType, expected_size_bytes: expectedSize, expected_sha256: expectedSha, manifest_json: manifest, status: "open", finalize_owner: null, finalize_started_at: null, finalize_artifact_id: null, created_at: createdAt });
       this.db.artifactParts.set(uploadId, new Map());
       return { meta: { changes: 1 } };
     }
@@ -186,15 +224,36 @@ class RuntimeFakeStatement {
       this.db.artifactParts.set(uploadId, parts);
       return { meta: { changes: 1 } };
     }
-    if (sql.includes("UPDATE artifact_uploads SET status = 'completed'")) {
-      const [uploadId, completedAt] = this.args as [string, number];
+    if (sql.includes("UPDATE artifact_uploads") && sql.includes("SET finalize_owner")) {
+      if (sql.includes("SET finalize_owner = NULL")) {
+        const [uploadId, owner] = this.args as [string, string];
+        const row = this.db.artifactUploads.get(uploadId);
+        if (!row || row.status !== "open" || row.finalize_owner !== owner) return { meta: { changes: 0 } };
+        row.finalize_owner = null;
+        row.finalize_started_at = null;
+        return { meta: { changes: 1 } };
+      }
+      const [uploadId, owner, startedAt, , , , , , artifactId, staleBefore] = this.args as [string, string, number, string, string, string, string, string, string, number];
       const row = this.db.artifactUploads.get(uploadId);
-      if (!row || row.status !== "open") return { meta: { changes: 0 } };
+      const task = row ? this.db.tasks.get(row.task_id) : null;
+      if (!row || !task || task.cancel_requested_at != null || row.status !== "open" || (row.finalize_owner && row.finalize_started_at > staleBefore)) return { meta: { changes: 0 } };
+      row.finalize_owner = owner;
+      row.finalize_started_at = startedAt;
+      row.finalize_artifact_id ??= artifactId;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE artifact_uploads SET status = 'completed'")) {
+      const [uploadId, completedAt, , , , owner, artifactId] = this.args as [string, number, string, string, string, string, string];
+      const row = this.db.artifactUploads.get(uploadId);
+      const task = row ? this.db.tasks.get(row.task_id) : null;
+      if (!row || task?.status !== "succeeded" || task.result_artifact_id !== artifactId || !["open", "completed"].includes(row.status) || (row.status === "open" && row.finalize_owner !== owner) || row.finalize_artifact_id !== artifactId) return { meta: { changes: 0 } };
       row.status = "completed";
+      row.finalize_owner = null;
+      row.finalize_started_at = null;
       row.completed_at = completedAt;
       return { meta: { changes: 1 } };
     }
-    if (sql.includes("INSERT INTO artifacts")) {
+    if (sql.includes("INTO artifacts")) {
       const [artifactId, taskId, name, kind, objectKey, size, sha256, contentType, createdAt, attemptId, workerId, manifest, uploadId] = this.args as [string, string, string, string, string, number, string, string, number, string, string, string, string];
       const upload = this.db.artifactUploads.get(uploadId);
       if (!upload || upload.status !== "completed") return { meta: { changes: 0 } };
@@ -204,14 +263,40 @@ class RuntimeFakeStatement {
     if (sql.includes("UPDATE task_attempts SET status = 'succeeded'")) {
       const [attemptId] = this.args as [string];
       const row = this.db.attempts.get(attemptId);
-      if (!row || !["claimed", "running"].includes(row.status)) return { meta: { changes: 0 } };
+      if (!row || !["claimed", "running", "succeeded"].includes(row.status)) return { meta: { changes: 0 } };
       row.status = "succeeded";
       return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE task_attempts SET status = 'cancelled'")) {
+      const [attemptId] = this.args as [string];
+      const row = this.db.attempts.get(attemptId);
+      if (!row || !["claimed", "running", "succeeded"].includes(row.status)) return { meta: { changes: 0 } };
+      row.status = "cancelled";
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE tasks SET status = 'cancelled'")) {
+      const [taskId, attemptId] = this.args as [string, string];
+      const row = this.db.tasks.get(taskId);
+      if (!row || row.active_attempt_id !== attemptId || row.cancel_requested_at == null || !["claimed", "running"].includes(row.status)) return { meta: { changes: 0 } };
+      row.status = "cancelled";
+      row.result_artifact_id = null;
+      row.active_attempt_id = null;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE artifact_uploads SET status = 'aborted'")) {
+      const row = this.db.artifactUploads.get(String(this.args[0]));
+      if (!row || !["open", "completed"].includes(row.status)) return { meta: { changes: 0 } };
+      row.status = "aborted";
+      row.finalize_owner = null;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("DELETE FROM artifacts WHERE upload_id")) {
+      return { meta: { changes: this.db.artifacts.delete(String(this.args[0])) ? 1 : 0 } };
     }
     if (sql.includes("UPDATE tasks SET status = 'succeeded'")) {
       const [taskId, artifactId] = this.args as [string, string];
       const row = this.db.tasks.get(taskId);
-      if (!row || !row.active_attempt_id || row.status === "succeeded") return { meta: { changes: 0 } };
+      if (!row || !row.active_attempt_id || row.cancel_requested_at != null || !["claimed", "running", "succeeded"].includes(row.status)) return { meta: { changes: 0 } };
       row.status = "succeeded";
       (row as any).result_artifact_id = artifactId;
       return { meta: { changes: 1 } };
@@ -236,8 +321,8 @@ class RuntimeFakeStatement {
       this.db.attempts.set(attemptId, { attempt_id: attemptId, task_id: taskId, worker_id: workerId, session_id: sessionId, attempt_number: attemptNumber, fencing_epoch: epoch, lease_token_hash: tokenHash, lease_expires_at: lease, status: "claimed" });
       return { meta: { changes: 1 } };
     }
-    if (sql.includes("INSERT INTO task_events")) { this.db.events.push(String(this.args[0])); return { meta: { changes: 1 } }; }
-    if (sql.includes("INSERT INTO outbox_events")) { this.db.outbox.push(String(this.args[0])); return { meta: { changes: 1 } }; }
+    if (sql.includes("INTO task_events")) { this.db.events.push(String(this.args[0])); return { meta: { changes: 1 } }; }
+    if (sql.includes("INTO outbox_events")) { this.db.outbox.push(String(this.args[1])); return { meta: { changes: 1 } }; }
     if (sql.includes("UPDATE task_attempts SET lease_expires_at")) {
       const [attemptId, taskId, workerId, sessionId, tokenHash, lease, now] = this.args as [string, string, string, string, string, number, number];
       const row = this.db.attempts.get(attemptId);
@@ -262,6 +347,8 @@ class MemoryBucket {
   readonly objects = new Map<string, Uint8Array>();
   readonly uploads = new Map<string, { key: string; parts: Map<number, Uint8Array> }>();
   private sequence = 0;
+  failCompleteOnce = false;
+  onStoredGet: (() => void) | null = null;
 
   async createMultipartUpload(key: string): Promise<any> {
     const uploadId = `upload-${++this.sequence}`;
@@ -284,6 +371,10 @@ class MemoryBucket {
         return { partNumber, etag: `${uploadId}-${partNumber}-${hashText(new TextDecoder().decode(bytes)).slice(0, 12)}` };
       },
       complete: async (parts: Array<{ partNumber: number; etag: string }>) => {
+        if (this.failCompleteOnce) {
+          this.failCompleteOnce = false;
+          throw new Error("simulated uncertain multipart completion");
+        }
         const chunks = parts.map((part) => upload.parts.get(part.partNumber) ?? new Uint8Array());
         const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
         const result = new Uint8Array(total);
@@ -298,6 +389,9 @@ class MemoryBucket {
   async get(key: string): Promise<any> {
     const bytes = this.objects.get(key);
     if (!bytes) return null;
+    const callback = this.onStoredGet;
+    this.onStoredGet = null;
+    callback?.();
     return { body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } }), writeHttpMetadata() {} };
   }
 
@@ -457,14 +551,95 @@ describe("Worker v2 control plane", () => {
     const partPayload = await uploaded!.json() as { etag: string };
 
     const completeHeaders = new Headers(startHeaders);
+    const uploadRow = db.artifactUploads.get(startedPayload.upload_id)!;
+    const taskUnderTest = db.tasks.get("task-artifact")!;
+    taskUnderTest.cancel_requested_at = Date.now();
+    const cancelledFinalize = await handleWorkerV2(new Request(`https://app.test/api/worker/v2/artifacts/${startedPayload.upload_id}/complete`, {
+      method: "POST",
+      headers: completeHeaders,
+      body: JSON.stringify({ attempt_id: accepted.attempt_id, lease_token: accepted.lease_token, parts: [{ part_number: 1, etag: partPayload.etag }] }),
+    }), envFor(db, bucket));
+    expect(cancelledFinalize?.status).toBe(409);
+    taskUnderTest.cancel_requested_at = null;
+    uploadRow.finalize_owner = "dead-finalizer";
+    uploadRow.finalize_started_at = 1;
+    uploadRow.finalize_artifact_id = "stable-artifact-id";
+    bucket.failCompleteOnce = true;
+    const failedOnce = await handleWorkerV2(new Request(`https://app.test/api/worker/v2/artifacts/${startedPayload.upload_id}/complete`, {
+      method: "POST",
+      headers: completeHeaders,
+      body: JSON.stringify({ attempt_id: accepted.attempt_id, lease_token: accepted.lease_token, parts: [{ part_number: 1, etag: partPayload.etag }] }),
+    }), envFor(db, bucket));
+    expect(failedOnce?.status).toBe(503);
+    expect(uploadRow.finalize_owner).toBeNull();
+
     const completed = await handleWorkerV2(new Request(`https://app.test/api/worker/v2/artifacts/${startedPayload.upload_id}/complete`, {
       method: "POST",
       headers: completeHeaders,
       body: JSON.stringify({ attempt_id: accepted.attempt_id, lease_token: accepted.lease_token, parts: [{ part_number: 1, etag: partPayload.etag }] }),
     }), envFor(db, bucket));
     expect(completed?.status).toBe(201);
-    expect(await completed?.json()).toMatchObject({ status: "published", file_size_bytes: bytes.byteLength });
+    expect(await completed?.json()).toMatchObject({ artifact_id: "stable-artifact-id", status: "published", file_size_bytes: bytes.byteLength });
     expect(db.tasks.get("task-artifact")?.status).toBe("succeeded");
+    expect(bucket.objects.size).toBe(1);
+
+    const duplicate = await handleWorkerV2(new Request(`https://app.test/api/worker/v2/artifacts/${startedPayload.upload_id}/complete`, {
+      method: "POST",
+      headers: completeHeaders,
+      body: JSON.stringify({ attempt_id: accepted.attempt_id, lease_token: accepted.lease_token, parts: [{ part_number: 1, etag: partPayload.etag }] }),
+    }), envFor(db, bucket));
+    expect(duplicate?.status).toBe(200);
+    expect(await duplicate?.json()).toMatchObject({ status: "published", duplicate: true });
+    expect(bucket.objects.size).toBe(1);
+
+    // Simulate an interrupted D1 metadata batch after Artifact/Attempt were
+    // published but before the Task transition. The same fenced caller must
+    // reconcile instead of reporting a false duplicate or deleting R2.
+    const taskRow = db.tasks.get("task-artifact")!;
+    taskRow.status = "running";
+    taskRow.result_artifact_id = null;
+    db.events.length = 0;
+    db.outbox.length = 0;
+    const reconciled = await handleWorkerV2(new Request(`https://app.test/api/worker/v2/artifacts/${startedPayload.upload_id}/complete`, {
+      method: "POST",
+      headers: completeHeaders,
+      body: JSON.stringify({ attempt_id: accepted.attempt_id, lease_token: accepted.lease_token, parts: [{ part_number: 1, etag: partPayload.etag }] }),
+    }), envFor(db, bucket));
+    expect(reconciled?.status).toBe(201);
+    expect(taskRow.status).toBe("succeeded");
+    expect(taskRow.result_artifact_id).toBe("stable-artifact-id");
+    expect(db.events).toContain(`task-succeeded:${accepted.attempt_id}`);
+    expect(db.outbox).toContain(`task-succeeded:${accepted.attempt_id}`);
+    expect(bucket.objects.size).toBe(1);
+
+    // Cancellation that arrives after finalize ownership/R2 completion but
+    // before the D1 success decision must win and remove only the unpublished
+    // second object.
+    taskRow.status = "running";
+    taskRow.active_attempt_id = accepted.attempt_id;
+    taskRow.result_artifact_id = null;
+    taskRow.cancel_requested_at = null;
+    db.attempts.get(accepted.attempt_id)!.status = "running";
+    const startedAfterReset = await handleWorkerV2(new Request("https://app.test/api/worker/v2/tasks/task-artifact/artifacts/start", {
+      method: "POST",
+      headers: startHeaders,
+      body: JSON.stringify({ name: "cancelled.zip", kind: "result", content_type: "application/zip", expected_size_bytes: bytes.byteLength, expected_sha256: hashText(new TextDecoder().decode(bytes)), manifest: {} }),
+    }), envFor(db, bucket));
+    const secondUpload = await startedAfterReset!.json() as { upload_id: string };
+    const secondPart = await handleWorkerV2(new Request(`https://app.test/api/worker/v2/artifacts/${secondUpload.upload_id}/parts/1`, {
+      method: "PUT", headers: partHeaders, body: bytes,
+    }), envFor(db, bucket));
+    const secondPartPayload = await secondPart!.json() as { etag: string };
+    bucket.onStoredGet = () => { taskRow.cancel_requested_at = Date.now(); };
+    const cancelledAfterClaim = await handleWorkerV2(new Request(`https://app.test/api/worker/v2/artifacts/${secondUpload.upload_id}/complete`, {
+      method: "POST",
+      headers: completeHeaders,
+      body: JSON.stringify({ attempt_id: accepted.attempt_id, lease_token: accepted.lease_token, parts: [{ part_number: 1, etag: secondPartPayload.etag }] }),
+    }), envFor(db, bucket));
+    expect(cancelledAfterClaim?.status).toBe(409);
+    expect(await cancelledAfterClaim?.json()).toMatchObject({ error: { code: "TASK_CANCELLED_DURING_FINALIZE" } });
+    expect(taskRow.status).toBe("cancelled");
+    expect(db.artifactUploads.get(secondUpload.upload_id)?.status).toBe("aborted");
     expect(bucket.objects.size).toBe(1);
   });
 });

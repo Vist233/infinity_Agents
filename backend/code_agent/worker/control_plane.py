@@ -15,7 +15,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Mapping
+from typing import Any, AsyncIterator, Callable, Mapping
 from urllib.parse import urlparse
 
 import httpx
@@ -313,7 +313,20 @@ class WorkerV2Client:
         )
         return response.json()
 
-    async def upload_artifact_part(self, claim: ClaimedTask, upload_id: str, part_number: int, path: Path, offset: int, length: int) -> dict[str, Any]:
+    async def upload_artifact_part(
+        self,
+        claim: ClaimedTask,
+        upload_id: str,
+        part_number: int,
+        path: Path,
+        offset: int,
+        length: int,
+        *,
+        progress_check: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
+        check = progress_check or (lambda: None)
+        digest = hashlib.sha256()
+
         class FilePart(httpx.AsyncByteStream):
             async def __aiter__(self_nonlocal) -> AsyncIterator[bytes]:
                 handle = await asyncio.to_thread(path.open, "rb")
@@ -321,10 +334,12 @@ class WorkerV2Client:
                     await asyncio.to_thread(handle.seek, offset)
                     remaining = length
                     while remaining:
+                        check()
                         chunk = await asyncio.to_thread(handle.read, min(1024 * 1024, remaining))
                         if not chunk:
                             raise ControlPlaneError("artifact changed during upload")
                         remaining -= len(chunk)
+                        digest.update(chunk)
                         yield chunk
                 finally:
                     await asyncio.to_thread(handle.close)
@@ -332,16 +347,7 @@ class WorkerV2Client:
             async def aclose(self_nonlocal) -> None:
                 return None
 
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            handle.seek(offset)
-            remaining = length
-            while remaining:
-                chunk = handle.read(min(1024 * 1024, remaining))
-                if not chunk:
-                    raise ControlPlaneError("artifact changed while hashing")
-                remaining -= len(chunk)
-                digest.update(chunk)
+        check()
         headers = self._headers(attempt_id=claim.attempt_id, lease_token=claim.lease_token)
         headers.update({"content-type": "application/octet-stream", "content-length": str(length)})
         response = await self._request(

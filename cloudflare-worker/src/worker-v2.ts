@@ -90,6 +90,9 @@ interface ArtifactUploadRow {
   expected_sha256: string;
   manifest_json: string;
   status: "open" | "completed" | "aborted";
+  finalize_owner: string | null;
+  finalize_started_at: number | null;
+  finalize_artifact_id: string | null;
 }
 
 interface ArtifactPartRow {
@@ -507,6 +510,28 @@ async function authenticateAttempt(
   return { attempt, leaseTokenHash };
 }
 
+async function authenticateSucceededAttempt(
+  request: Request,
+  env: Env,
+  context: WorkerContext,
+  taskId: string,
+  body: Record<string, unknown> | null,
+): Promise<{ attempt: AttemptRow; leaseTokenHash: string } | Response> {
+  const attemptId = request.headers.get("x-worker-attempt-id")?.trim() || stringValue(body, "attempt_id");
+  const leaseToken = request.headers.get("x-worker-lease-token")?.trim() || stringValue(body, "lease_token");
+  if (!attemptId || !leaseToken) return errorJson("Attempt and lease credentials are required", 401, "ATTEMPT_AUTH_REQUIRED");
+  const leaseTokenHash = hashText(leaseToken);
+  const attempt = await env.DB.prepare(
+    `SELECT attempt_id, task_id, worker_id, session_id, fencing_epoch,
+            lease_expires_at, status
+     FROM task_attempts
+     WHERE attempt_id = ?1 AND task_id = ?2 AND worker_id = ?3
+       AND session_id = ?4 AND lease_token_hash = ?5 AND status = 'succeeded'`,
+  ).bind(attemptId, taskId, context.worker.worker_id, context.session.session_id, leaseTokenHash).first<AttemptRow>();
+  if (!attempt) return errorJson("Attempt finalize credentials are invalid", 409, "ATTEMPT_FENCING_REJECTED");
+  return { attempt, leaseTokenHash };
+}
+
 async function renewTask(taskId: string, request: Request, env: Env, context: WorkerContext): Promise<Response> {
   const body = await bodyJson(request);
   const forbidden = rejectClientControlledFields(body);
@@ -718,8 +743,10 @@ async function artifactPart(uploadId: string, partText: string, request: Request
   if (contentLength > MAX_PART_BYTES) return errorJson("Artifact part is too large", 413, "ARTIFACT_PART_TOO_LARGE");
   const upload = await env.DB.prepare(
     `SELECT upload_id, task_id, attempt_id, worker_id, object_key, name, kind,
-            content_type, expected_size_bytes, expected_sha256, manifest_json, status
-     FROM artifact_uploads WHERE upload_id = ?1 AND worker_id = ?2 AND status = 'open'`,
+            content_type, expected_size_bytes, expected_sha256, manifest_json, status,
+            finalize_owner, finalize_started_at
+     FROM artifact_uploads WHERE upload_id = ?1 AND worker_id = ?2
+       AND status = 'open' AND finalize_owner IS NULL`,
   ).bind(uploadId, context.worker.worker_id).first<ArtifactUploadRow>();
   if (!upload) return errorJson("Artifact upload not found", 404, "ARTIFACT_UPLOAD_NOT_FOUND");
   const auth = await authenticateAttempt(request, env, context, upload.task_id, null);
@@ -760,18 +787,36 @@ async function completeArtifact(uploadId: string, request: Request, env: Env, co
   if (forbidden) return forbidden;
   const upload = await env.DB.prepare(
     `SELECT upload_id, task_id, attempt_id, worker_id, object_key, name, kind,
-            content_type, expected_size_bytes, expected_sha256, manifest_json, status
+            content_type, expected_size_bytes, expected_sha256, manifest_json, status,
+            finalize_owner, finalize_started_at, finalize_artifact_id
      FROM artifact_uploads WHERE upload_id = ?1 AND worker_id = ?2`,
   ).bind(uploadId, context.worker.worker_id).first<ArtifactUploadRow>();
   if (!upload) return errorJson("Artifact upload not found", 404, "ARTIFACT_UPLOAD_NOT_FOUND");
-  if (upload.status === "completed") {
-    const existing = await env.DB.prepare("SELECT artifact_id, name, file_size_bytes, checksum_sha256 FROM artifacts WHERE upload_id = ?1").bind(uploadId).first<Record<string, unknown>>();
-    if (!existing) return errorJson("Completed artifact metadata is missing", 503, "ARTIFACT_FINALIZE_INCONSISTENT");
-    return json({ artifact_id: existing?.artifact_id, name: existing?.name, file_size_bytes: existing?.file_size_bytes, checksum_sha256: existing?.checksum_sha256, status: "published", duplicate: true });
+  const existing = await env.DB.prepare("SELECT artifact_id, name, file_size_bytes, checksum_sha256 FROM artifacts WHERE upload_id = ?1").bind(uploadId).first<Record<string, unknown>>();
+  if (existing) {
+    const consistent = await env.DB.prepare(
+      `SELECT a.artifact_id
+       FROM artifacts a
+       JOIN artifact_uploads u ON u.upload_id = a.upload_id
+       JOIN tasks t ON t.task_id = a.task_id
+       JOIN task_attempts ta ON ta.attempt_id = a.attempt_id
+       WHERE u.upload_id = ?1 AND u.status = 'completed'
+         AND a.artifact_id = ?2 AND a.release_state = 'published'
+         AND ta.status = 'succeeded' AND t.status = 'succeeded'
+         AND t.result_artifact_id = a.artifact_id
+         AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_event_id = 'task-succeeded:' || a.attempt_id)
+         AND EXISTS (SELECT 1 FROM outbox_events o WHERE o.idempotency_key = 'task-succeeded:' || a.attempt_id)`,
+    ).bind(uploadId, existing.artifact_id).first<{ artifact_id: string }>();
+    if (consistent) {
+      return json({ artifact_id: existing.artifact_id, name: existing.name, file_size_bytes: existing.file_size_bytes, checksum_sha256: existing.checksum_sha256, status: "published", duplicate: true });
+    }
   }
-  const auth = await authenticateAttempt(request, env, context, upload.task_id, body);
+  let auth = await authenticateAttempt(request, env, context, upload.task_id, body);
+  if (auth instanceof Response && existing) auth = await authenticateSucceededAttempt(request, env, context, upload.task_id, body);
   if (auth instanceof Response || auth.attempt.attempt_id !== upload.attempt_id) return errorJson("Artifact lease is invalid", 409, "ATTEMPT_FENCING_REJECTED");
-  if (upload.status !== "open" || !env.RESOURCE_BUCKET) return errorJson("Artifact upload is not open", 409, "ARTIFACT_UPLOAD_CLOSED");
+  if (!env.RESOURCE_BUCKET || (upload.status !== "open" && !(upload.status === "completed" && existing))) {
+    return errorJson("Artifact upload is not open", 409, "ARTIFACT_UPLOAD_CLOSED");
+  }
   const rawParts = await env.DB.prepare(
     "SELECT part_number, etag, part_size_bytes, part_sha256 FROM artifact_upload_parts WHERE upload_id = ?1 ORDER BY part_number ASC",
   ).bind(uploadId).all<ArtifactPartRow>();
@@ -785,28 +830,86 @@ async function completeArtifact(uploadId: string, request: Request, env: Env, co
   if (parts.some((part, index) => part.partNumber !== storedParts[index].part_number || part.etag !== storedParts[index].etag)) {
     return errorJson("Artifact part list does not match", 400, "ARTIFACT_PARTS_MISMATCH");
   }
-  let objectKey = upload.object_key;
+  let finalizeOwner: string | null = null;
+  const finalizeStartedAt = nowSeconds();
+  const proposedArtifactId = crypto.randomUUID();
+  let artifactId = typeof existing?.artifact_id === "string" ? existing.artifact_id : upload.finalize_artifact_id;
+  if (upload.status === "open") {
+    finalizeOwner = crypto.randomUUID();
+    const claimed = await env.DB.prepare(
+    `UPDATE artifact_uploads
+     SET finalize_owner = ?2, finalize_started_at = ?3,
+         finalize_artifact_id = COALESCE(finalize_artifact_id, ?9)
+     WHERE upload_id = ?1 AND task_id = ?4 AND attempt_id = ?5
+       AND worker_id = ?6 AND status = 'open'
+       AND (finalize_owner IS NULL OR finalize_started_at <= ?10)
+       AND EXISTS (
+         SELECT 1 FROM task_attempts a JOIN tasks t ON t.active_attempt_id = a.attempt_id
+         WHERE a.attempt_id = ?5 AND a.task_id = ?4 AND a.worker_id = ?6
+           AND a.session_id = ?7 AND a.lease_token_hash = ?8
+           AND a.status IN ('claimed', 'running') AND a.lease_expires_at > ?3
+           AND t.status IN ('claimed', 'running') AND t.lease_token_hash = ?8
+           AND t.cancel_requested_at IS NULL
+       )`,
+    ).bind(uploadId, finalizeOwner, finalizeStartedAt, upload.task_id, upload.attempt_id,
+      context.worker.worker_id, context.session.session_id, auth.leaseTokenHash,
+      proposedArtifactId, finalizeStartedAt - 3600).run();
+    if (changed(claimed) !== 1) {
+      return errorJson("Artifact finalize is already in progress", 409, "ARTIFACT_FINALIZE_IN_PROGRESS");
+    }
+    const claimedUpload = await env.DB.prepare(
+      "SELECT finalize_artifact_id FROM artifact_uploads WHERE upload_id = ?1 AND finalize_owner = ?2 AND status = 'open'",
+    ).bind(uploadId, finalizeOwner).first<{ finalize_artifact_id: string | null }>();
+    artifactId = claimedUpload?.finalize_artifact_id ?? null;
+  }
+  if (!artifactId) {
+    if (finalizeOwner) await env.DB.prepare(
+        "UPDATE artifact_uploads SET finalize_owner = NULL, finalize_started_at = NULL WHERE upload_id = ?1 AND finalize_owner = ?2 AND status = 'open'",
+      ).bind(uploadId, finalizeOwner).run();
+    return errorJson("Artifact finalize claim is inconsistent", 503, "ARTIFACT_FINALIZE_INCONSISTENT");
+  }
+
+  const objectKey = upload.object_key;
   try {
-    const multipart = env.RESOURCE_BUCKET.resumeMultipartUpload(upload.object_key, upload.upload_id);
-    await multipart.complete(parts);
-    const object = await env.RESOURCE_BUCKET.get(objectKey);
+    let object = await env.RESOURCE_BUCKET.get(objectKey);
+    if (!object) {
+      const multipart = env.RESOURCE_BUCKET.resumeMultipartUpload(upload.object_key, upload.upload_id);
+      await multipart.complete(parts);
+      object = await env.RESOURCE_BUCKET.get(objectKey);
+    }
     if (!object || !object.body) throw new Error("completed artifact is missing");
     const measured = await hashReadableStream(object.body, artifactLimit(env));
     if (measured.size !== upload.expected_size_bytes || measured.sha256 !== upload.expected_sha256) {
       await env.RESOURCE_BUCKET.delete(objectKey);
+      await env.DB.prepare(
+        `UPDATE artifact_uploads
+         SET status = 'aborted', finalize_owner = NULL, finalize_started_at = NULL
+         WHERE upload_id = ?1 AND finalize_owner = ?2 AND status = 'open'`,
+      ).bind(uploadId, finalizeOwner).run();
       return errorJson("Artifact checksum or size does not match", 409, "ARTIFACT_VALIDATION_FAILED");
     }
-    const artifactId = crypto.randomUUID();
     const now = nowSeconds();
     const payload = JSON.stringify({ task_id: upload.task_id, attempt_id: upload.attempt_id, artifact_id: artifactId, status: "succeeded" });
-    const results = await env.DB.batch([
+    await env.DB.batch([
       env.DB.prepare(
-        `UPDATE artifact_uploads SET status = 'completed', completed_at = ?2
+        `UPDATE tasks SET status = 'succeeded', result_artifact_id = ?2,
+             lease_expires_at = ?3, updated_at = ?3, finished_at = ?3,
+             error_message = NULL
+         WHERE task_id = ?1 AND active_attempt_id = ?4
+           AND lease_worker_id = ?5 AND lease_epoch = ?6
+           AND lease_token_hash = ?7 AND status IN ('claimed', 'running', 'succeeded')
+           AND cancel_requested_at IS NULL`,
+      ).bind(upload.task_id, artifactId, now, upload.attempt_id, context.worker.worker_id, auth.attempt.fencing_epoch, auth.leaseTokenHash),
+      env.DB.prepare(
+        `UPDATE artifact_uploads SET status = 'completed', completed_at = COALESCE(completed_at, ?2),
+             finalize_owner = NULL, finalize_started_at = NULL
          WHERE upload_id = ?1 AND task_id = ?3 AND attempt_id = ?4
-           AND worker_id = ?5 AND status = 'open'`,
-      ).bind(uploadId, now, upload.task_id, upload.attempt_id, context.worker.worker_id),
+           AND worker_id = ?5 AND finalize_artifact_id = ?7
+           AND ((status = 'open' AND finalize_owner = ?6) OR status = 'completed')
+           AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?3 AND status = 'succeeded' AND result_artifact_id = ?7)`,
+      ).bind(uploadId, now, upload.task_id, upload.attempt_id, context.worker.worker_id, finalizeOwner, artifactId),
       env.DB.prepare(
-        `INSERT INTO artifacts
+        `INSERT OR IGNORE INTO artifacts
           (artifact_id, task_id, name, kind, object_key, file_size_bytes,
            checksum_sha256, content_type, created_at, attempt_id, worker_id,
            status, manifest_json, release_state, upload_id, released_at)
@@ -815,41 +918,119 @@ async function completeArtifact(uploadId: string, request: Request, env: Env, co
          WHERE EXISTS (SELECT 1 FROM artifact_uploads WHERE upload_id = ?13 AND status = 'completed')`,
       ).bind(artifactId, upload.task_id, upload.name, upload.kind, objectKey, measured.size, measured.sha256, upload.content_type, now, upload.attempt_id, context.worker.worker_id, upload.manifest_json, uploadId),
       env.DB.prepare(
-        `UPDATE task_attempts SET status = 'succeeded', updated_at = ?7, finished_at = ?7
+        `UPDATE task_attempts SET status = 'succeeded', updated_at = ?6, finished_at = ?6
          WHERE attempt_id = ?1 AND task_id = ?2 AND worker_id = ?3
            AND session_id = ?4 AND lease_token_hash = ?5
-           AND status IN ('claimed', 'running') AND lease_expires_at > ?6`,
-      ).bind(upload.attempt_id, upload.task_id, context.worker.worker_id, context.session.session_id, auth.leaseTokenHash, now, now),
+           AND status IN ('claimed', 'running', 'succeeded')
+           AND EXISTS (SELECT 1 FROM artifacts WHERE upload_id = ?7 AND artifact_id = ?8 AND release_state = 'published')
+           AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND status = 'succeeded' AND result_artifact_id = ?8)`,
+      ).bind(upload.attempt_id, upload.task_id, context.worker.worker_id, context.session.session_id, auth.leaseTokenHash, now, uploadId, artifactId),
       env.DB.prepare(
-        `UPDATE tasks SET status = 'succeeded', result_artifact_id = ?2,
-             lease_expires_at = ?3, updated_at = ?3, finished_at = ?3,
-             error_message = NULL
-         WHERE task_id = ?1 AND active_attempt_id = ?4
-           AND lease_worker_id = ?5 AND lease_epoch = ?6
-           AND lease_token_hash = ?7 AND status IN ('claimed', 'running')`,
-      ).bind(upload.task_id, artifactId, now, upload.attempt_id, context.worker.worker_id, auth.attempt.fencing_epoch, auth.leaseTokenHash),
-      env.DB.prepare(
-        `INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
+        `INSERT OR IGNORE INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
          SELECT ?1, ?2, 'task_succeeded', ?3, ?4
          WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND status = 'succeeded' AND result_artifact_id = ?5)`,
-      ).bind(crypto.randomUUID(), upload.task_id, payload, now, artifactId),
+      ).bind(`task-succeeded:${upload.attempt_id}`, upload.task_id, payload, now, artifactId),
       env.DB.prepare(
-        `INSERT INTO outbox_events
+        `INSERT OR IGNORE INTO outbox_events
           (event_id, idempotency_key, aggregate_type, aggregate_id, event_type,
            payload_json, status, attempts, next_attempt_at, created_at)
          SELECT ?1, ?2, 'task', ?3, 'task_succeeded', ?4, 'pending', 0, ?5, ?5
          WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?3 AND status = 'succeeded' AND result_artifact_id = ?6)`,
       ).bind(crypto.randomUUID(), `task-succeeded:${upload.attempt_id}`, upload.task_id, payload, now, artifactId),
     ]);
-    if (changed(results[0]) !== 1 || changed(results[1]) !== 1 || changed(results[2]) !== 1 || changed(results[3]) !== 1) {
-      await env.RESOURCE_BUCKET.delete(objectKey);
-      return errorJson("Artifact finalize lost the active lease", 409, "ATTEMPT_FENCING_REJECTED");
+    const reconciled = await env.DB.prepare(
+      `SELECT a.artifact_id
+       FROM artifacts a
+       JOIN artifact_uploads u ON u.upload_id = a.upload_id
+       JOIN tasks t ON t.task_id = a.task_id
+       JOIN task_attempts ta ON ta.attempt_id = a.attempt_id
+       WHERE u.upload_id = ?1 AND u.status = 'completed'
+         AND a.artifact_id = ?2 AND a.release_state = 'published'
+         AND ta.status = 'succeeded' AND t.status = 'succeeded'
+         AND t.result_artifact_id = a.artifact_id
+         AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_event_id = 'task-succeeded:' || a.attempt_id)
+         AND EXISTS (SELECT 1 FROM outbox_events o WHERE o.idempotency_key = 'task-succeeded:' || a.attempt_id)`,
+    ).bind(uploadId, artifactId).first<{ artifact_id: string }>();
+    if (!reconciled) {
+      const cancellation = await env.DB.prepare(
+        "SELECT status, cancel_requested_at FROM tasks WHERE task_id = ?1",
+      ).bind(upload.task_id).first<{ status: string; cancel_requested_at: number | null }>();
+      if (cancellation?.cancel_requested_at != null || cancellation?.status === "cancelled") {
+        const cancelledPayload = JSON.stringify({ task_id: upload.task_id, attempt_id: upload.attempt_id, status: "cancelled", reason: "cancelled_during_finalize" });
+        await env.DB.batch([
+          env.DB.prepare(
+            `UPDATE task_attempts SET status = 'cancelled', error_code = 'cancelled',
+                 error_message = 'Task cancelled during Artifact finalize', updated_at = ?6, finished_at = ?6
+             WHERE attempt_id = ?1 AND task_id = ?2 AND worker_id = ?3
+               AND session_id = ?4 AND lease_token_hash = ?5
+               AND status IN ('claimed', 'running', 'succeeded')`,
+          ).bind(upload.attempt_id, upload.task_id, context.worker.worker_id, context.session.session_id, auth.leaseTokenHash, now),
+          env.DB.prepare(
+            `UPDATE tasks SET status = 'cancelled', result_artifact_id = NULL,
+                 active_attempt_id = NULL, lease_worker_id = NULL, lease_token_hash = NULL,
+                 lease_expires_at = NULL, updated_at = ?3, finished_at = ?3
+             WHERE task_id = ?1 AND active_attempt_id = ?2
+               AND status IN ('claimed', 'running') AND cancel_requested_at IS NOT NULL`,
+          ).bind(upload.task_id, upload.attempt_id, now),
+          env.DB.prepare(
+            `UPDATE artifact_uploads SET status = 'aborted', finalize_owner = NULL,
+                 finalize_started_at = NULL
+             WHERE upload_id = ?1 AND attempt_id = ?2 AND status IN ('open', 'completed')
+               AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?3 AND status = 'cancelled')`,
+          ).bind(uploadId, upload.attempt_id, upload.task_id),
+          env.DB.prepare(
+            `DELETE FROM artifacts WHERE upload_id = ?1
+             AND EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND status = 'cancelled')`,
+          ).bind(uploadId, upload.task_id),
+          env.DB.prepare(
+            `INSERT OR IGNORE INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
+             SELECT ?1, ?2, 'task_cancelled', ?3, ?4
+             WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND status = 'cancelled')`,
+          ).bind(`task-cancelled:${upload.attempt_id}`, upload.task_id, cancelledPayload, now),
+          env.DB.prepare(
+            `INSERT OR IGNORE INTO outbox_events
+              (event_id, idempotency_key, aggregate_type, aggregate_id, event_type,
+               payload_json, status, attempts, next_attempt_at, created_at)
+             SELECT ?1, ?2, 'task', ?3, 'task_cancelled', ?4, 'pending', 0, ?5, ?5
+             WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?3 AND status = 'cancelled')`,
+          ).bind(crypto.randomUUID(), `task-cancelled:${upload.attempt_id}`, upload.task_id, cancelledPayload, now),
+        ]);
+        const cancellationReconciled = await env.DB.prepare(
+          `SELECT t.task_id
+           FROM tasks t
+           JOIN task_attempts ta ON ta.task_id = t.task_id
+           JOIN artifact_uploads u ON u.task_id = t.task_id AND u.attempt_id = ta.attempt_id
+           WHERE t.task_id = ?1 AND ta.attempt_id = ?2 AND u.upload_id = ?3
+             AND t.status = 'cancelled' AND t.result_artifact_id IS NULL
+             AND ta.status = 'cancelled' AND u.status = 'aborted'
+             AND NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.upload_id = u.upload_id)
+             AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_event_id = 'task-cancelled:' || ta.attempt_id)
+             AND EXISTS (SELECT 1 FROM outbox_events o WHERE o.idempotency_key = 'task-cancelled:' || ta.attempt_id)`,
+        ).bind(upload.task_id, upload.attempt_id, uploadId).first<{ task_id: string }>();
+        if (!cancellationReconciled) {
+          return errorJson("Artifact cancellation metadata is inconsistent", 503, "ARTIFACT_FINALIZE_INCONSISTENT");
+        }
+        try { await env.RESOURCE_BUCKET.delete(objectKey); } catch { /* orphan cleanup can retry */ }
+        return errorJson("Task was cancelled during Artifact finalize", 409, "TASK_CANCELLED_DURING_FINALIZE");
+      }
+      if (finalizeOwner) {
+        await env.DB.prepare(
+          "UPDATE artifact_uploads SET finalize_owner = NULL, finalize_started_at = NULL WHERE upload_id = ?1 AND finalize_owner = ?2 AND status = 'open'",
+        ).bind(uploadId, finalizeOwner).run();
+      }
+      return errorJson("Artifact finalize metadata is inconsistent", 503, "ARTIFACT_FINALIZE_INCONSISTENT");
     }
     return json({ artifact_id: artifactId, name: upload.name, file_size_bytes: measured.size, checksum_sha256: measured.sha256, status: "published" }, 201);
   } catch {
-    if (objectKey) {
-      try { await env.RESOURCE_BUCKET.delete(objectKey); } catch { /* best effort cleanup */ }
-    }
+    // Release this claim but keep any immutable R2 object. A retry first
+    // checks and hashes that object, then idempotently reconciles D1 using the
+    // persisted finalize_artifact_id.
+    try {
+      if (!finalizeOwner) throw new Error("completed finalize reconciliation failed");
+      await env.DB.prepare(
+        "UPDATE artifact_uploads SET finalize_owner = NULL, finalize_started_at = NULL WHERE upload_id = ?1 AND finalize_owner = ?2 AND status = 'open'",
+      ).bind(uploadId, finalizeOwner).run();
+    } catch { /* best effort; stale claims are fenced and can be taken over */ }
     return errorJson("Artifact finalize failed", 503, "ARTIFACT_FINALIZE_UNAVAILABLE");
   }
 }

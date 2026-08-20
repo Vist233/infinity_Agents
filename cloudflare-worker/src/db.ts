@@ -1,5 +1,6 @@
 import type { Env } from "./env";
 import { nowSeconds } from "./http";
+import { decryptAuthToken, encryptAuthToken, isEncryptedAuthToken } from "./auth-token-crypto";
 
 export interface AuthSessionRow {
   sid: string;
@@ -11,6 +12,9 @@ export interface AuthSessionRow {
   created_at: number;
   last_used_at: number;
   revoked_at: number | null;
+  refresh_owner: string | null;
+  refresh_started_at: number | null;
+  token_version: number;
 }
 
 export interface UserSettingsRow {
@@ -71,17 +75,43 @@ export interface OwnedTaskRow {
 
 // --- auth sessions ---
 
-export async function insertAuthSession(env: Env, row: Omit<AuthSessionRow, "revoked_at">): Promise<void> {
+export async function insertAuthSession(
+  env: Env,
+  row: Omit<AuthSessionRow, "revoked_at" | "refresh_owner" | "refresh_started_at" | "token_version">,
+): Promise<void> {
+  const [accessToken, refreshToken] = await Promise.all([
+    encryptAuthToken(row.access_token, env, row.sid, "access"),
+    encryptAuthToken(row.refresh_token, env, row.sid, "refresh"),
+  ]);
   await env.DB.prepare(
     `INSERT INTO auth_sessions (sid, user_id, email, access_token, access_expires_at, refresh_token, created_at, last_used_at, revoked_at)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL)`
   )
-    .bind(row.sid, row.user_id, row.email, row.access_token, row.access_expires_at, row.refresh_token, row.created_at, row.last_used_at)
+    .bind(row.sid, row.user_id, row.email, accessToken, row.access_expires_at, refreshToken, row.created_at, row.last_used_at)
     .run();
 }
 
 export async function getAuthSession(env: Env, sid: string): Promise<AuthSessionRow | null> {
-  return env.DB.prepare("SELECT * FROM auth_sessions WHERE sid = ?1 AND revoked_at IS NULL").bind(sid).first<AuthSessionRow>();
+  const row = await env.DB.prepare("SELECT * FROM auth_sessions WHERE sid = ?1 AND revoked_at IS NULL").bind(sid).first<AuthSessionRow>();
+  if (!row) return null;
+  const legacyAccess = !isEncryptedAuthToken(row.access_token);
+  const legacyRefresh = !isEncryptedAuthToken(row.refresh_token);
+  const [accessToken, refreshToken] = await Promise.all([
+    decryptAuthToken(row.access_token, env, sid, "access"),
+    decryptAuthToken(row.refresh_token, env, sid, "refresh"),
+  ]);
+  if (legacyAccess || legacyRefresh) {
+    const [encryptedAccess, encryptedRefresh] = await Promise.all([
+      encryptAuthToken(accessToken, env, sid, "access"),
+      encryptAuthToken(refreshToken, env, sid, "refresh"),
+    ]);
+    await env.DB.prepare(
+      `UPDATE auth_sessions SET access_token = ?2, refresh_token = ?3
+       WHERE sid = ?1 AND revoked_at IS NULL
+         AND access_token = ?4 AND refresh_token = ?5`,
+    ).bind(sid, encryptedAccess, encryptedRefresh, row.access_token, row.refresh_token).run();
+  }
+  return { ...row, access_token: accessToken, refresh_token: refreshToken };
 }
 
 export async function updateAuthSessionTokens(
@@ -89,17 +119,60 @@ export async function updateAuthSessionTokens(
   sid: string,
   accessToken: string,
   accessExpiresAt: number,
-  refreshToken: string
-): Promise<void> {
-  await env.DB.prepare(
-    "UPDATE auth_sessions SET access_token = ?2, access_expires_at = ?3, refresh_token = ?4, last_used_at = ?5 WHERE sid = ?1"
+  refreshToken: string,
+  refreshOwner: string,
+): Promise<boolean> {
+  const [encryptedAccessToken, encryptedRefreshToken] = await Promise.all([
+    encryptAuthToken(accessToken, env, sid, "access"),
+    encryptAuthToken(refreshToken, env, sid, "refresh"),
+  ]);
+  const result = await env.DB.prepare(
+    `UPDATE auth_sessions
+     SET access_token = ?2, access_expires_at = ?3, refresh_token = ?4,
+         last_used_at = ?5, refresh_owner = NULL, refresh_started_at = NULL,
+         token_version = token_version + 1
+     WHERE sid = ?1 AND revoked_at IS NULL AND refresh_owner = ?6`
   )
-    .bind(sid, accessToken, accessExpiresAt, refreshToken, nowSeconds())
+    .bind(sid, encryptedAccessToken, accessExpiresAt, encryptedRefreshToken, nowSeconds(), refreshOwner)
     .run();
+  return Number(result.meta.changes ?? 0) === 1;
+}
+
+export async function claimAuthSessionRefresh(
+  env: Env,
+  sid: string,
+  owner: string,
+  startedAt: number,
+): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `UPDATE auth_sessions SET refresh_owner = ?2, refresh_started_at = ?3
+     WHERE sid = ?1 AND revoked_at IS NULL
+       AND (refresh_owner IS NULL OR refresh_started_at <= ?4)`,
+  ).bind(sid, owner, startedAt, startedAt - 120).run();
+  return Number(result.meta.changes ?? 0) === 1;
+}
+
+export async function releaseAuthSessionRefresh(env: Env, sid: string, owner: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE auth_sessions SET refresh_owner = NULL, refresh_started_at = NULL
+     WHERE sid = ?1 AND revoked_at IS NULL AND refresh_owner = ?2`,
+  ).bind(sid, owner).run();
+}
+
+export async function revokeAuthSessionRefreshOwner(env: Env, sid: string, owner: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE auth_sessions
+     SET revoked_at = ?3, access_token = '', refresh_token = '',
+         refresh_owner = NULL, refresh_started_at = NULL
+     WHERE sid = ?1 AND revoked_at IS NULL AND refresh_owner = ?2`,
+  ).bind(sid, owner, nowSeconds()).run();
 }
 
 export async function revokeAuthSession(env: Env, sid: string): Promise<void> {
-  await env.DB.prepare("UPDATE auth_sessions SET revoked_at = ?2 WHERE sid = ?1").bind(sid, nowSeconds()).run();
+  await env.DB.prepare(
+    `UPDATE auth_sessions SET revoked_at = ?2, access_token = '', refresh_token = '',
+       refresh_owner = NULL, refresh_started_at = NULL WHERE sid = ?1`,
+  ).bind(sid, nowSeconds()).run();
 }
 
 // Worker control requests authenticate with a machine credential, so keep a

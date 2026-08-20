@@ -586,35 +586,59 @@ function safeJson(value: string): Record<string, unknown> {
   }
 }
 
-async function handleTaskEventStream(task: TaskRow, env: Env): Promise<Response> {
-  const result = await env.DB.prepare(
-    "SELECT task_event_id, event_type, event_data, created_at FROM task_events WHERE task_id = ?1 ORDER BY created_at ASC LIMIT 200"
-  ).bind(task.task_id).all<{ task_event_id: string; event_type: string; event_data: string; created_at: number }>();
-  const lines = (result.results ?? []).map((event) =>
-    `id: ${event.task_event_id}\nevent: update\ndata: ${JSON.stringify({
-      event_type: event.event_type,
-      event_data: safeJson(event.event_data),
-      created_at: iso(event.created_at),
-    })}\n\n`
-  );
-  lines.push(`event: task_state\ndata: ${JSON.stringify({ status: task.status })}\n\n`);
-  lines.push(": keep-alive\n\n");
-  return new Response(lines.join(""), { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" } });
-}
-
 async function handleCancelTask(task: TaskRow, env: Env): Promise<Response> {
-  if (["succeeded", "failed", "cancelled", "timeout"].includes(task.status)) {
+  if (task.status === "cancelled") {
+    return json({ task_id: task.task_id, status: "cancelled", duplicate: true });
+  }
+  if (["succeeded", "failed", "timeout"].includes(task.status)) {
     return errorJson(`Cannot cancel task in status: ${task.status}`, 409, "TASK_NOT_CANCELLABLE");
   }
   const now = nowSeconds();
+  if (task.status === "queued") {
+    const payload = JSON.stringify({ task_id: task.task_id, status: "cancelled", pool_id: "public-default" });
+    const results = await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE tasks SET status = 'cancelled', finished_at = ?2, updated_at = ?2
+         WHERE task_id = ?1 AND status = 'queued' AND active_attempt_id IS NULL`,
+      ).bind(task.task_id, now),
+      env.DB.prepare(
+        `INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
+         SELECT ?1, ?2, 'task_cancelled', ?3, ?4
+         WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND status = 'cancelled' AND updated_at = ?4)`,
+      ).bind(taskId(), task.task_id, payload, now),
+      env.DB.prepare(
+        `INSERT INTO outbox_events
+          (event_id, idempotency_key, aggregate_type, aggregate_id, event_type,
+           payload_json, status, attempts, next_attempt_at, created_at)
+         SELECT ?1, ?2, 'task', ?3, 'task_cancelled', ?4, 'pending', 0, ?5, ?5
+         WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?3 AND status = 'cancelled' AND updated_at = ?5)`,
+      ).bind(crypto.randomUUID(), `task-cancelled:${task.task_id}`, task.task_id, payload, now),
+    ]);
+    if ((results[0].meta?.changes ?? 0) !== 1) return errorJson("Task could not be cancelled", 409, "TASK_NOT_CANCELLABLE");
+    return json({ task_id: task.task_id, status: "cancelled" });
+  }
+
+  // A live Worker owns the Attempt. Request cancellation and let that Worker
+  // close the Attempt through the fenced v2 endpoint. Lease recovery closes
+  // it if the Worker disappears, so no active Attempt is orphaned.
   const result = await env.DB.prepare(
-    "UPDATE tasks SET status = 'cancelled', finished_at = ?2, updated_at = ?2 WHERE task_id = ?1 AND status IN ('queued', 'claimed', 'running')"
+    `UPDATE tasks SET cancel_requested_at = ?2, updated_at = ?2
+     WHERE task_id = ?1 AND status IN ('claimed', 'running') AND cancel_requested_at IS NULL`,
   ).bind(task.task_id, now).run();
-  if ((result.meta?.changes ?? 0) !== 1) return errorJson("Task could not be cancelled", 409, "TASK_NOT_CANCELLABLE");
+  if ((result.meta?.changes ?? 0) !== 1) {
+    const current = await env.DB.prepare(
+      "SELECT status, cancel_requested_at FROM tasks WHERE task_id = ?1",
+    ).bind(task.task_id).first<{ status: string; cancel_requested_at: number | null }>();
+    if (current && ["claimed", "running"].includes(current.status) && current.cancel_requested_at != null) {
+      return json({ task_id: task.task_id, status: current.status, cancel_requested: true, duplicate: true });
+    }
+    return errorJson("Task could not be cancelled", 409, "TASK_NOT_CANCELLABLE");
+  }
   await env.DB.prepare(
-    "INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at) VALUES (?1, ?2, 'task_cancelled', ?3, ?4)"
-  ).bind(taskId(), task.task_id, JSON.stringify({ task_id: task.task_id, status: "cancelled" }), now).run();
-  return json({ task_id: task.task_id, status: "cancelled" });
+    `INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
+     VALUES (?1, ?2, 'task_cancel_requested', ?3, ?4)`,
+  ).bind(taskId(), task.task_id, JSON.stringify({ task_id: task.task_id, status: task.status }), now).run();
+  return json({ task_id: task.task_id, status: task.status, cancel_requested: true });
 }
 
 async function handleArtifact(artifactId: string, env: Env, user: AuthedUser): Promise<Response> {
@@ -924,7 +948,6 @@ export async function handleTaskApi(request: Request, env: Env, user: AuthedUser
     if (!suffix && method === "GET") return json(publicTask(current));
     if (suffix === "cancel" && method === "POST") return handleCancelTask(current, env);
     if (suffix === "events" && method === "GET") return handleTaskEvents(current, env);
-    if (suffix === "events/stream" && method === "GET") return handleTaskEventStream(current, env);
     if (suffix === "artifacts" && method === "GET") {
       const result = await env.DB.prepare(
         "SELECT artifact_id, name, kind, file_size_bytes, checksum_sha256, created_at FROM artifacts WHERE task_id = ?1 AND status = 'published' ORDER BY created_at DESC"

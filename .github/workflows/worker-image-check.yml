@@ -71,7 +71,7 @@ jobs:
         run: |
           set -euo pipefail
           if rg -n --hidden --glob '!.git/**' --glob '!*.lock' \
-            '(sk-[A-Za-z0-9]{20,}|ANTHROPIC_API_KEY=[^$<{[:space:]]+|postgres(ql)?://[^$<{[:space:]]+:[^$<{[:space:]]+@)' .; then
+            '(sk-[A-Za-z0-9_-]{20,}|wc_[A-Fa-f0-9]{40,}|gh[pousr]_[A-Za-z0-9]{20,}|ANTHROPIC_(API_KEY|AUTH_TOKEN)=[A-Za-z0-9_-]{24,}|postgres(ql)?://[^$<{[:space:]]+:[^$<{[:space:]@]{20,}@|redis(s)?://[^$<{[:space:]@]*:[^$<{[:space:]@]{20,}@|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----)' .; then
             echo "secret-like literal found" >&2
             exit 1
           fi

@@ -17,14 +17,13 @@ vi.mock("@/lib/api/auth", () => ({
 vi.mock("@/lib/api/tasks", () => ({
   artifactDownloadUrl: (artifactId: string) => `/api/artifacts/${artifactId}`,
   cancelTask: vi.fn(),
-  downloadArtifact: vi.fn().mockResolvedValue(undefined),
   getJson: vi.fn(),
   getTaskArtifacts: vi.fn(),
   listTasks: vi.fn(),
 }));
 
 import { getCurrentUser } from "@/lib/api/auth";
-import { downloadArtifact, getJson, listTasks } from "@/lib/api/tasks";
+import { getJson, listTasks } from "@/lib/api/tasks";
 
 describe("Task detail downloads", () => {
   beforeEach(() => {
@@ -68,12 +67,10 @@ describe("Task detail downloads", () => {
       render(<LanguageProvider><TaskDetailPage /></LanguageProvider>);
     });
 
-    const download = await screen.findByRole("button", { name: "查看" });
+    const download = await screen.findByRole("link", { name: "查看" });
     expect(screen.getByText("case-2-artifacts.zip")).toBeDefined();
-    await act(async () => {
-      fireEvent.click(download);
-    });
-    expect(downloadArtifact).toHaveBeenCalledWith("artifact-1", "case-2-artifacts.zip");
+    expect(download.getAttribute("href")).toBe("/api/artifacts/artifact-1");
+    expect(download.hasAttribute("download")).toBe(true);
   });
 
   it("shows only login actions and no task creation to unauthenticated users", async () => {

@@ -114,6 +114,27 @@ def test_artifact_archive_is_deterministic(tmp_path: Path):
     assert first.checksum_sha256 == second.checksum_sha256
 
 
+def test_artifact_collection_can_be_cancelled_mid_stream(tmp_path: Path):
+    root = tmp_path / "output"
+    root.mkdir()
+    (root / "large.bin").write_bytes(b"x" * (4 * 1024 * 1024))
+    archive = tmp_path / "cancelled.zip"
+    checks = 0
+
+    def cancel_during_collection() -> None:
+        nonlocal checks
+        checks += 1
+        if checks >= 5:
+            raise RuntimeError("cancelled during collection")
+
+    with pytest.raises(RuntimeError, match="cancelled during collection"):
+        ArtifactCollector().collect(root, archive, progress_check=cancel_during_collection)
+
+    assert checks >= 5
+    assert not archive.exists()
+    assert not list(tmp_path.glob("artifact-*.zip"))
+
+
 def test_resource_broker_uses_opaque_ids_and_authorization(tmp_path: Path):
     source = tmp_path / "dataset.csv"
     source.write_text("gene,value\nA,1\n")

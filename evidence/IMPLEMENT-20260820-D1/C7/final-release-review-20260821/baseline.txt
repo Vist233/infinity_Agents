@@ -1,0 +1,11 @@
+branch: cloudflare-deploy
+baseline_commit: 6cd22c1
+release_candidate_status: uncommitted at evidence creation
+case_2_task_id: 3666d0f1-4581-42e3-b81c-bf195288daa5
+case_2_attempt_id: 940b483b-a8e6-43ef-a5a5-0598c3872005
+case_2_artifact_id: 6cc37651-2bee-4803-a81c-04b6cfbd76fd
+case_2_artifact_size: 1234445
+case_2_artifact_sha256: 1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c
+case_3_status: DEFERRED_BY_OWNER
+previous_edge_version: 67959a41-63f2-41da-a284-56ded203d6c4
+named_relay_url: https://relay.zhangyvjing.com

@@ -99,3 +99,45 @@ async def test_worker_v2_client_uses_server_bound_headers_and_streams_r2_contrac
     assert destination.read_bytes() == payload
     assert completed["artifact_id"] == "artifact-1"
     assert "/api/worker/v2/connect" in observed["paths"]  # type: ignore[operator]
+
+
+@pytest.mark.asyncio
+async def test_artifact_part_upload_can_be_cancelled_between_stream_chunks(tmp_path: Path) -> None:
+    archive = tmp_path / "large.zip"
+    archive.write_bytes(b"x" * (3 * 1024 * 1024))
+    checks = 0
+
+    def cancel_after_first_chunk() -> None:
+        nonlocal checks
+        checks += 1
+        if checks >= 2:
+            raise RuntimeError("cancelled during upload")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await request.aread()
+        raise AssertionError("cancelled upload must not complete the request")
+
+    client = WorkerV2Client(
+        base_url="https://localhost",
+        worker_id="public-worker",
+        credential="persistent-worker-credential",
+        instance_id="windows-public-worker",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    client.session = type("Session", (), {
+        "session_id": "session-1", "session_epoch": 1,
+        "pool_id": "public-default", "namespace": "infinity-public",
+        "lease_expires_at": 9999999999,
+    })()
+    claim = ClaimedTask(
+        task_id="task-1", task_spec_id="spec-1", dataset_snapshot_id="dataset-1",
+        method_source_id=None, title="Large", attempt_id="attempt-1",
+        lease_token="lease-1", fencing_epoch=1, lease_expires_at=9999999999,
+    )
+    with pytest.raises(RuntimeError, match="cancelled during upload"):
+        await client.upload_artifact_part(
+            claim, "upload-1", 1, archive, 0, archive.stat().st_size,
+            progress_check=cancel_after_first_chunk,
+        )
+    assert checks == 2
+    await client.close()

@@ -116,6 +116,7 @@
   // wrangler secret put STEPFUN_API_KEY
   // wrangler secret put ZHANG_AUTH_CLIENT_SECRET
   // wrangler secret put WORKER_CREDENTIAL_ENCRYPTION_KEY
+  // wrangler secret put AUTH_SESSION_ENCRYPTION_KEY
   // wrangler secret put REDIS_RELAY_PUBLISH_SECRET
   // wrangler secret put IMAGE_JUDGE_ZHANG_AUTH_CLIENT_SECRET
   // wrangler secret put IMAGE_JUDGE_TOKEN_SIGNING_SECRET

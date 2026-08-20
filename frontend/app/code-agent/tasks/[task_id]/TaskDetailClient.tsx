@@ -11,7 +11,7 @@ import { ArrowLeft, RefreshCw, Download, PlayCircle, CheckCircle2, XCircle, Cloc
 import { useRouter, useParams } from "next/navigation";
 import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
 import { getCurrentUser } from "@/lib/api/auth";
-import { getJson, cancelTask, downloadArtifact, listTasks, taskEventStreamUrl, type TaskItem } from "@/lib/api/tasks";
+import { artifactDownloadUrl, getJson, cancelTask, listTasks, type TaskItem } from "@/lib/api/tasks";
 
 type TaskStatus = "draft" | "queued" | "claimed" | "running" | "succeeded" | "failed" | "cancelled" | "timeout";
 
@@ -98,11 +98,6 @@ function formatBytes(bytes: number | null) {
   return `${size.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-function artifactDownloadFilename(name: string) {
-  const normalized = name.trim() || "artifact";
-  return /\.zip$/i.test(normalized) ? normalized : `${normalized}.zip`;
-}
-
 function taskIdFromBrowserPath(pathname: string): string | null {
   const match = pathname.match(/^\/(?:code-agent|task-center)\/tasks\/([^/]+)\/?$/);
   if (!match) return null;
@@ -133,26 +128,26 @@ export default function TaskDetailPage() {
   const [cancelling, setCancelling] = useState(false);
   const [cancelSuccess, setCancelSuccess] = useState(false);
   const eventsEndRef = useRef<HTMLDivElement>(null);
-  const [liveEvents, setLiveEvents] = useState<TaskEvent[]>([]);
-  const [sseConnected, setSseConnected] = useState(false);
   const [taskList, setTaskList] = useState<TaskItem[]>([]);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [eventsError, setEventsError] = useState<string | null>(null);
   const [artifactsError, setArtifactsError] = useState<string | null>(null);
   const [taskListError, setTaskListError] = useState<string | null>(null);
-  const [downloadingArtifactId, setDownloadingArtifactId] = useState<string | null>(null);
   const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated" | "error">("checking");
   const [authError, setAuthError] = useState<string | null>(null);
   const detailRequestRef = useRef(0);
+  const detailInFlightRef = useRef<{ taskId: string | null; promise: Promise<void> } | null>(null);
 
-  const loadDetail = useCallback(async () => {
+  const loadDetail = useCallback((silent = false): Promise<void> => {
+    const current = detailInFlightRef.current;
+    if (current?.taskId === taskId) return current.promise;
     const requestId = ++detailRequestRef.current;
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError(null);
     setEventsError(null);
     setArtifactsError(null);
     setTaskListError(null);
-    try {
+    const promise = (async () => {
+      try {
       const taskData = await getJson<TaskDetail>(`${getApiBase()}/api/tasks/${taskId}`);
       const [eventsResult, artifactsResult, taskListResult] = await Promise.allSettled([
         getJson<TaskEvent[] | { events?: TaskEvent[] }>(`${getApiBase()}/api/tasks/${taskId}/events`),
@@ -180,12 +175,18 @@ export default function TaskDetailPage() {
         setTaskList([]);
         setTaskListError(taskListResult.reason instanceof Error ? taskListResult.reason.message : String(taskListResult.reason));
       }
-    } catch (err) {
-      if (requestId !== detailRequestRef.current) return;
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      if (requestId === detailRequestRef.current) setLoading(false);
-    }
+      } catch (err) {
+        if (requestId !== detailRequestRef.current) return;
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (requestId === detailRequestRef.current && !silent) setLoading(false);
+      }
+    })();
+    detailInFlightRef.current = { taskId, promise };
+    void promise.finally(() => {
+      if (detailInFlightRef.current?.promise === promise) detailInFlightRef.current = null;
+    });
+    return promise;
   }, [taskId]);
 
   useEffect(() => {
@@ -216,80 +217,26 @@ export default function TaskDetailPage() {
   }, [authStatus, taskId, loadDetail]);
 
   useEffect(() => {
-    setLiveEvents([]);
-    setSseConnected(false);
-    setDownloadError(null);
     setCancelSuccess(false);
   }, [taskId]);
 
+  const currentTaskStatus = task?.status;
+
   useEffect(() => {
     if (authStatus !== "authenticated" || !taskId) return;
-    let active = true;
-    let es: EventSource | null = null;
-    let timer: ReturnType<typeof setInterval> | null = null;
-    let failures = 0;
-    try {
-      // taskEventStreamUrl builds the correct same-origin URL (and carries
-      // the optional api_key query param — EventSource cannot set headers).
-      es = new EventSource(taskEventStreamUrl(taskId));
-      es.onopen = () => {
-        if (!active) return;
-        failures = 0;
-        setSseConnected(true);
-      };
-      es.onerror = () => {
-        if (!active) return;
-        setSseConnected(false);
-        failures += 1;
-        // A persistently failing stream (e.g. 404) would otherwise reconnect
-        // forever and flood the console — fall back to polling after a few
-        // attempts.
-        if (failures >= 3 && es) {
-          es.close();
-          es = null;
-          if (!timer) timer = setInterval(loadDetail, 3000);
-        }
-      };
-      es.addEventListener("task_state", (e) => {
-        if (!active) return;
-        const data = JSON.parse((e as MessageEvent).data);
-        if (data.status) {
-          const nextStatus = data.status as TaskStatus;
-          setTask((prev) => prev ? { ...prev, status: nextStatus } : prev);
-          setTaskList((prev) => prev.map((item) => item.task_id === taskId ? { ...item, status: nextStatus } : item));
-        }
-      });
-      es.addEventListener("update", (e) => {
-        if (!active) return;
-        const data = JSON.parse((e as MessageEvent).data);
-        setLiveEvents((prev) => [...prev, { ...data, task_event_id: Date.now(), event_type: data.event_type || "update", created_at: new Date().toISOString() }]);
-      });
-      es.addEventListener("task_terminal", () => {
-        if (!active) return;
-        es?.close();
-        void loadDetail();
-      });
-    } catch {
-      timer = setInterval(loadDetail, 3000);
-    }
-    return () => {
-      active = false;
-      es?.close();
-      if (timer) clearInterval(timer);
+    if (currentTaskStatus && ["succeeded", "failed", "cancelled", "timeout"].includes(currentTaskStatus)) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const pollAfterPreviousCompletes = async () => {
+      await loadDetail(true);
+      if (!cancelled) timer = setTimeout(() => { void pollAfterPreviousCompletes(); }, 3000);
     };
-  }, [authStatus, taskId, loadDetail]);
-
-  const handleDownload = async (artifact: Artifact) => {
-    setDownloadError(null);
-    setDownloadingArtifactId(artifact.artifact_id);
-    try {
-      await downloadArtifact(artifact.artifact_id, artifactDownloadFilename(artifact.name));
-    } catch (err) {
-      setDownloadError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setDownloadingArtifactId(null);
-    }
-  };
+    timer = setTimeout(() => { void pollAfterPreviousCompletes(); }, 3000);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [authStatus, taskId, currentTaskStatus, loadDetail]);
 
   const handleCancel = async () => {
     if (!task || !taskId) return;
@@ -300,7 +247,7 @@ export default function TaskDetailPage() {
     try {
       await cancelTask(taskId);
       setCancelSuccess(true);
-      loadDetail();
+      void loadDetail(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -315,6 +262,10 @@ export default function TaskDetailPage() {
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
       <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
         <AgentNav active="tasks" onNavigate={(path) => router.push(path)} />
+        {authStatus === "authenticated" && <Button variant="outline" className="mt-3 w-full justify-start gap-2 rounded-xl" onClick={() => router.push("/task-center/")}>
+          <PlayCircle size={16} />
+          {t("tasks.newTask")}
+        </Button>}
         <div className="mt-3 px-2 text-xs font-semibold uppercase tracking-widest text-zinc-400">{t("tasks.title")}</div>
         {authStatus === "authenticated" && <ScrollArea className="mt-2 min-h-0 flex-1">
           <div className="space-y-1 pr-1">
@@ -349,12 +300,12 @@ export default function TaskDetailPage() {
                   title: item.title,
                   statusLabel: t(STATUS_LABELS[item.status]),
                 })) : undefined}
+                onNewTask={authStatus === "authenticated" ? () => router.push("/task-center/") : undefined}
               />
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.push("/task-center/")}>
                 <ArrowLeft size={16} />
               </Button>
             <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("tasks.detailTitle")}</div>
-            {sseConnected && <span className="text-[10px] text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5">LIVE</span>}
           </div>
           {authStatus === "unauthenticated" ? <Button type="button" size="sm" className="gap-2" onClick={redirectToLogin}>
             <LogIn size={15} />
@@ -366,7 +317,7 @@ export default function TaskDetailPage() {
                 {t("tasks.cancel")}
               </Button>
             )}
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={loadDetail} disabled={loading}>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { void loadDetail(); }} disabled={loading}>
               <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
               {t("composer.retry")}
             </Button>
@@ -455,18 +406,13 @@ export default function TaskDetailPage() {
                     {t("tasks.loadArtifactsFailed").replace("{{message}}", artifactsError)}
                   </div>
                 )}
-                {downloadError && (
-                  <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
-                    {t("tasks.downloadFailed").replace("{{message}}", downloadError)}
-                  </div>
-                )}
                 {artifacts.length === 0 ? (
                   <div className="rounded-2xl border border-[var(--hairline)] bg-white/80 px-4 py-8 text-center text-sm text-zinc-400">
                     {t("tasks.detailNoArtifacts")}
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-[var(--hairline)] bg-white/80 overflow-hidden">
-                    <table className="w-full text-sm">
+                  <div className="rounded-2xl border border-[var(--hairline)] bg-white/80 overflow-x-auto">
+                    <table className="min-w-[680px] w-full text-sm">
                       <thead>
                         <tr className="border-b border-[var(--hairline)] bg-zinc-50/60 text-left">
                           <th className="px-4 py-3 font-medium text-zinc-500">{t("tasks.titleColumn")}</th>
@@ -485,16 +431,11 @@ export default function TaskDetailPage() {
                             <td className="px-4 py-3 text-xs text-zinc-600">{formatBytes(a.file_size_bytes)}</td>
                             <td className="px-4 py-3 font-mono text-xs text-zinc-500">{a.checksum_sha256 ? a.checksum_sha256.slice(0, 12) + "..." : "-"}</td>
                             <td className="px-4 py-3">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 px-2 text-xs gap-1"
-                                disabled={downloadingArtifactId === a.artifact_id}
-                                aria-busy={downloadingArtifactId === a.artifact_id}
-                                onClick={() => { void handleDownload(a); }}
-                              >
-                                {downloadingArtifactId === a.artifact_id ? <RefreshCw size={14} className="animate-spin" /> : <Download size={14} />}
-                                {t("tasks.view")}
+                              <Button asChild variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1">
+                                <a href={artifactDownloadUrl(a.artifact_id)} download>
+                                  <Download size={14} />
+                                  {t("tasks.view")}
+                                </a>
                               </Button>
                             </td>
                           </tr>
@@ -512,7 +453,7 @@ export default function TaskDetailPage() {
                     {t("tasks.loadEventsFailed").replace("{{message}}", eventsError)}
                   </div>
                 )}
-                {events.length === 0 && liveEvents.length === 0 ? (
+                {events.length === 0 ? (
                   <div className="rounded-2xl border border-[var(--hairline)] bg-white/80 px-4 py-8 text-center text-sm text-zinc-400">
                     {t("tasks.detailNoEvents")}
                   </div>
@@ -524,13 +465,6 @@ export default function TaskDetailPage() {
                           <div key={evt.task_event_id} className="flex items-start gap-3 text-xs">
                             <span className="font-mono text-zinc-400 whitespace-nowrap">{formatDate(evt.created_at)}</span>
                             <span className="font-medium text-zinc-700 bg-zinc-100 rounded px-1.5 py-0.5 whitespace-nowrap">{evt.event_type}</span>
-                            <pre className="text-zinc-600 flex-1 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(evt.event_data)}</pre>
-                          </div>
-                        ))}
-                        {liveEvents.map((evt) => (
-                          <div key={`live-${evt.task_event_id}`} className="flex items-start gap-3 text-xs">
-                            <span className="font-mono text-emerald-500 whitespace-nowrap">LIVE</span>
-                            <span className="font-medium text-zinc-700 bg-emerald-50 rounded px-1.5 py-0.5 whitespace-nowrap">{evt.event_type}</span>
                             <pre className="text-zinc-600 flex-1 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(evt.event_data)}</pre>
                           </div>
                         ))}

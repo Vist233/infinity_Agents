@@ -38,6 +38,12 @@ export async function recoverExpiredLeases(env: Pick<Env, "DB">, now = Math.floo
      WHERE t.execution_pool_id = 'public-default'
        AND t.status IN ('claimed', 'running')
        AND a.status IN ('claimed', 'running')
+       AND NOT EXISTS (
+         SELECT 1 FROM artifact_uploads u
+         WHERE u.attempt_id = a.attempt_id AND u.status = 'open'
+           AND u.finalize_owner IS NOT NULL
+           AND u.finalize_started_at > ?1 - 3600
+       )
        AND t.lease_expires_at <= ?1
        AND a.lease_expires_at <= ?1
      ORDER BY t.lease_expires_at ASC, t.task_id ASC

@@ -64,10 +64,15 @@ Secret 通过 Wrangler 交互式输入，不写入代码、`.env`、前端变量
 npx wrangler secret put STEPFUN_API_KEY
 npx wrangler secret put ZHANG_AUTH_CLIENT_SECRET
 npx wrangler secret put WORKER_CREDENTIAL_ENCRYPTION_KEY
+npx wrangler secret put AUTH_SESSION_ENCRYPTION_KEY
 npx wrangler secret put IMAGE_JUDGE_ZHANG_AUTH_CLIENT_SECRET
 npx wrangler secret put IMAGE_JUDGE_TOKEN_SIGNING_SECRET
 npx wrangler secret put IMAGE_JUDGE_DASHSCOPE_API_KEY
 ```
+
+`AUTH_SESSION_ENCRYPTION_KEY` 是必需的独立 32-byte base64url AES-GCM 密钥。部署前运行
+`npx wrangler secret list`，确认清单同时包含 `AUTH_SESSION_ENCRYPTION_KEY`、
+`WORKER_CREDENTIAL_ENCRYPTION_KEY` 和认证 Provider Secret；清单缺项时不得部署。
 
 公共 Worker 管理权限只根据服务端验证出的 Zhang Auth superuser 角色判断，
 不从浏览器字段或可配置的用户 ID 列表推导。当前不部署 verifier；执行 Worker

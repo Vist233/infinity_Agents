@@ -46,6 +46,10 @@ export interface TaskRow {
   max_attempts?: number;
   created_at?: number;
   dispatch_policy?: string;
+  active_attempt_id?: string | null;
+  cancel_requested_at?: number | null;
+  updated_at?: number;
+  finished_at?: number | null;
 }
 
 export interface PersistentWorkerRow {
@@ -278,6 +282,9 @@ class FakeStatement {
       const row = this.db.chatRequestIdempotency.get(`${userId}|${clientRequestId}`);
       return (row as T) ?? null;
     }
+    if (sql.includes("SELECT status, cancel_requested_at FROM tasks")) {
+      return (this.db.tasks.get(String(this.args[0])) as T) ?? null;
+    }
     if (sql.includes("FROM tasks WHERE task_id")) {
       const [taskId, userId] = this.args as [string, string];
       const row = this.db.tasks.get(taskId);
@@ -390,6 +397,26 @@ class FakeStatement {
 
   async run(): Promise<{ meta: { changes: number } }> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("UPDATE tasks SET status = 'cancelled'")) {
+      const [taskId, now] = this.args as [string, number];
+      const row = this.db.tasks.get(taskId);
+      if (!row || row.status !== "queued" || row.active_attempt_id) return { meta: { changes: 0 } };
+      row.status = "cancelled";
+      row.updated_at = now;
+      row.finished_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE tasks SET cancel_requested_at")) {
+      const [taskId, now] = this.args as [string, number];
+      const row = this.db.tasks.get(taskId);
+      if (!row || !["claimed", "running"].includes(row.status) || row.cancel_requested_at != null) return { meta: { changes: 0 } };
+      row.cancel_requested_at = now;
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT INTO task_events") || sql.includes("INSERT INTO outbox_events")) {
+      return { meta: { changes: 1 } };
+    }
     if (sql.includes("INSERT INTO workers")) {
       const [workerId, poolId, namespace, createdBy, credentialHash, credentialCiphertext, createdAt] = this.args as [string, string, string, string, string, string, number];
       this.db.workers.set(workerId, {
@@ -726,6 +753,7 @@ export function makeEnv(overrides: Partial<Env> = {}): { env: Env; db: FakeD1 } 
     DAILY_QUOTA: "20",
     STEPFUN_API_KEY: "sk-test",
     ZHANG_AUTH_CLIENT_SECRET: "secret-test",
+    AUTH_SESSION_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     ...overrides
   } as Env;
   return { env, db };

@@ -1,6 +1,6 @@
 // Task Execution API client. All calls share the same-origin runtime base
 // (see lib/runtime-config) so local and deployed frontends behave alike.
-import { getApiBase, redirectToLogin, withCsrfHeader } from "@/lib/runtime-config";
+import { getApiBase, withCsrfHeader } from "@/lib/runtime-config";
 
 export type TaskStatus =
   | "draft"
@@ -375,39 +375,4 @@ export async function cancelTask(taskId: string): Promise<{ status: string }> {
 
 export function artifactDownloadUrl(artifactId: string): string {
   return `${getApiBase()}/api/artifacts/${artifactId}`;
-}
-
-/** Download an artifact via fetch+Blob with the session cookie attached. */
-export async function downloadArtifact(artifactId: string, filename = "artifact.zip"): Promise<void> {
-  const res = await fetch(artifactDownloadUrl(artifactId), {
-    credentials: "include",
-    headers: withCsrfHeader(),
-  });
-  if (res.status === 401) {
-    redirectToLogin();
-    throw new Error("Authentication required");
-  }
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try {
-      const payload = await res.json();
-      if (payload && typeof payload.detail === "string") detail = payload.detail;
-    } catch {
-      // Keep the HTTP fallback for non-JSON errors.
-    }
-    throw new Error(detail);
-  }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-export function taskEventStreamUrl(taskId: string): string {
-  // EventSource sends same-origin cookies, so no shared task token is put in
-  // the URL or browser history.
-  return `${getApiBase()}/api/tasks/${taskId}/events/stream`;
 }

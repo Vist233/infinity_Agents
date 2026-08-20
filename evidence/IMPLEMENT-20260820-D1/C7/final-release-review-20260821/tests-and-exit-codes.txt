@@ -1,0 +1,41 @@
+C7 final candidate command ledger
+
+1. cloudflare-worker: `npm test -- --run`
+   exit 0 — 14 files, 63 tests passed.
+
+2. cloudflare-worker: `npm run check`
+   exit 0 — TypeScript passed.
+
+3. repository: `pyenv shell Agent; pytest -q`
+   exit 0 — 333 passed, 45 environment/optional-integration skips.
+
+4. frontend: `npm run test:unit`
+   exit 0 — 12 files, 44 tests passed.
+
+5. frontend: `npm run typecheck && npm run lint && npm run build`
+   exit 0 — typecheck, lint and Next.js production build passed.
+
+6. frontend: `npm run test:e2e`
+   exit 0 — Playwright 11/11 desktop/mobile interaction tests passed.
+   The first sandboxed launch was denied permission to bind 127.0.0.1:3000; the
+   authorized rerun passed and this was not a product failure.
+
+7. clean local D1: `wrangler d1 migrations apply ... --local --persist-to <temp>`
+   exit 0 — migrations 0001 through 0015 all applied from an empty database.
+
+8. Worker image: `docker build -f backend/Dockerfile.worker -t infinity-agent-worker:c7 .`
+   exit 0 — final local image built; Claude Code 2.1.226.
+
+9. one-shot image boundary check
+   exit 0 — `c7-container-boundary=PASS`; asyncpg/redis/Docker CLI/socket,
+   old consumer/executor/reaper and verifier absent; UID 10001 can write runtime logs.
+
+10. `git diff --check`
+    exit 0.
+
+11. expanded committed-secret scan
+    exit 0 — no matching credential or private-key literal.
+
+12. production preflight
+    exit 0 — Cloudflare OAuth login valid; `https://infinity.zhangyvjing.com/`
+    returned 200 and `https://relay.zhangyvjing.com/health` returned 200.

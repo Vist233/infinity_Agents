@@ -67,3 +67,47 @@ describe("browser task isolation", () => {
     expect(await other?.json()).toMatchObject({ error: { code: "TASK_NOT_FOUND" } });
   });
 });
+
+describe("task cancellation state machine", () => {
+  it("cancels an unclaimed queued task immediately", async () => {
+    const { env, db } = makeEnv();
+    db.seedTask("task-queued", user.userId);
+    const response = await handleTaskApi(
+      new Request("https://app.test/api/tasks/task-queued/cancel", { method: "POST" }),
+      env,
+      user,
+    );
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toMatchObject({ task_id: "task-queued", status: "cancelled" });
+    expect(db.tasks.get("task-queued")?.status).toBe("cancelled");
+    const duplicate = await handleTaskApi(
+      new Request("https://app.test/api/tasks/task-queued/cancel", { method: "POST" }),
+      env,
+      user,
+    );
+    expect(await duplicate?.json()).toMatchObject({ status: "cancelled", duplicate: true });
+  });
+
+  it("requests fenced Worker cancellation without orphaning a live Attempt", async () => {
+    const { env, db } = makeEnv();
+    db.seedTask("task-running", user.userId, "Running task", "running");
+    const task = db.tasks.get("task-running")!;
+    task.active_attempt_id = "attempt-1";
+    const response = await handleTaskApi(
+      new Request("https://app.test/api/tasks/task-running/cancel", { method: "POST" }),
+      env,
+      user,
+    );
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toMatchObject({ task_id: "task-running", status: "running", cancel_requested: true });
+    expect(task.status).toBe("running");
+    expect(task.cancel_requested_at).toBeTypeOf("number");
+
+    const duplicate = await handleTaskApi(
+      new Request("https://app.test/api/tasks/task-running/cancel", { method: "POST" }),
+      env,
+      user,
+    );
+    expect(await duplicate?.json()).toMatchObject({ cancel_requested: true, duplicate: true });
+  });
+});

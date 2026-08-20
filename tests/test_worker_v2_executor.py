@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -37,7 +38,9 @@ class FakeWorkerClient:
         self._size = int(kwargs["size"])
         return {"upload_id": "upload-1", "part_size_bytes": 16 * 1024 * 1024}
 
-    async def upload_artifact_part(self, _claim, _upload_id, part_number, _path, _offset, length):
+    async def upload_artifact_part(self, _claim, _upload_id, part_number, _path, _offset, length, *, progress_check=None):
+        if progress_check:
+            progress_check()
         self.uploaded.append((part_number, length))
         return {"etag": f"etag-{part_number}"}
 
@@ -83,3 +86,29 @@ async def test_d1_executor_uploads_result_and_clears_attempt_directory(tmp_path:
     assert client.finished == []
     assert not (work_root / claim.task_id / claim.attempt_id).exists()
     assert archive is None
+
+
+@pytest.mark.asyncio
+async def test_artifact_publish_stops_before_start_when_cancelled(tmp_path: Path) -> None:
+    archive = tmp_path / "result.zip"
+    archive.write_bytes(b"result")
+    client = FakeWorkerClient(tmp_path)
+    claim = ClaimedTask(
+        task_id="task-cancel", task_spec_id="spec", dataset_snapshot_id="dataset",
+        method_source_id=None, title="Cancel", attempt_id="attempt-cancel",
+        lease_token="lease", fencing_epoch=1, lease_expires_at=100,
+    )
+    cancel = asyncio.Event()
+    cancel.set()
+    with pytest.raises(executor_v2.TaskCancelledDuringPublish):
+        await executor_v2._upload_result(
+            client,
+            claim,
+            archive,
+            {},
+            hashlib.sha256(archive.read_bytes()).hexdigest(),
+            cancel,
+            asyncio.Event(),
+        )
+    assert not hasattr(client, "_checksum")
+    assert client.uploaded == []

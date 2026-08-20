@@ -9,7 +9,6 @@ client and no verifier stage.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import shutil
@@ -21,6 +20,10 @@ from backend.code_agent.worker.control_plane import ClaimedTask, ControlPlaneErr
 from backend.security import ArtifactCollector, SecurityBoundaryError
 
 logger = logging.getLogger(__name__)
+
+
+class TaskCancelledDuringPublish(ControlPlaneError):
+    """Cancellation won before the Artifact reached its fenced finalize."""
 
 
 def _safe_name(value: Any, fallback: str) -> str:
@@ -88,13 +91,24 @@ async def _download_inputs(client: WorkerV2Client, claim: ClaimedTask, spec: Map
         )
 
 
-async def _upload_result(client: WorkerV2Client, claim: ClaimedTask, archive: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
+def _require_publishable(cancel: asyncio.Event, lost: asyncio.Event) -> None:
+    if lost.is_set():
+        raise ControlPlaneError("Worker lease was lost during Artifact publication")
+    if cancel.is_set():
+        raise TaskCancelledDuringPublish("Task cancelled during Artifact publication")
+
+
+async def _upload_result(
+    client: WorkerV2Client,
+    claim: ClaimedTask,
+    archive: Path,
+    manifest: Mapping[str, Any],
+    checksum: str,
+    cancel: asyncio.Event,
+    lost: asyncio.Event,
+) -> dict[str, Any]:
+    _require_publishable(cancel, lost)
     size = archive.stat().st_size
-    digest = hashlib.sha256()
-    with archive.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    checksum = digest.hexdigest()
     started = await client.start_artifact(
         claim,
         name="result.zip",
@@ -112,13 +126,23 @@ async def _upload_result(client: WorkerV2Client, claim: ClaimedTask, archive: Pa
     offset = 0
     part_number = 1
     while offset < size:
+        _require_publishable(cancel, lost)
         length = min(part_size, size - offset)
-        uploaded = await client.upload_artifact_part(claim, upload_id, part_number, archive, offset, length)
+        uploaded = await client.upload_artifact_part(
+            claim,
+            upload_id,
+            part_number,
+            archive,
+            offset,
+            length,
+            progress_check=lambda: _require_publishable(cancel, lost),
+        )
         parts.append({"part_number": part_number, "etag": str(uploaded.get("etag") or "")})
         if not parts[-1]["etag"]:
             raise ControlPlaneError("D1 Worker v2 returned an empty artifact ETag")
         offset += length
         part_number += 1
+    _require_publishable(cancel, lost)
     completed = await client.complete_artifact(claim, upload_id, parts)
     if str(completed.get("checksum_sha256") or checksum).lower() != checksum:
         raise ControlPlaneError("D1 Worker v2 returned an invalid artifact checksum")
@@ -177,13 +201,31 @@ async def execute_claim(client: WorkerV2Client, claim: ClaimedTask) -> dict[str,
             max_file_bytes=int(os.getenv("ARTIFACT_MAX_FILE_BYTES", str(512 * 1024 * 1024))),
             max_total_bytes=int(os.getenv("ARTIFACT_MAX_TOTAL_BYTES", str(2 * 1024 * 1024 * 1024))),
         )
-        collected = collector.collect(
+        collected = await asyncio.to_thread(
+            collector.collect,
             output_dir,
             archive,
             metadata={"task_id": claim.task_id, "attempt_id": claim.attempt_id},
+            progress_check=lambda: _require_publishable(cancel, lost),
         )
-        completed = await _upload_result(client, claim, archive, collected.manifest)
+        _require_publishable(cancel, lost)
+        completed = await _upload_result(
+            client,
+            claim,
+            archive,
+            collected.manifest,
+            collected.checksum_sha256,
+            cancel,
+            lost,
+        )
         return {"success": True, "artifact_id": completed.get("artifact_id"), "checksum_sha256": collected.checksum_sha256}
+    except TaskCancelledDuringPublish as exc:
+        if not lost.is_set():
+            try:
+                await client.finish(claim, cancelled=True, error_code="cancelled", error_message=str(exc))
+            except Exception:
+                logger.warning("D1 Worker v2 failed to record task cancellation for %s", claim.task_id)
+        return {"success": False, "cancelled": True, "error": str(exc)}
     except Exception as exc:
         if not lost.is_set():
             try:

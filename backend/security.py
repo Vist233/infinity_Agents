@@ -19,7 +19,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Optional
+from typing import Callable, Iterable, Iterator, Optional
 from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger(__name__)
@@ -57,13 +57,21 @@ def reject_secret_content(data: bytes, *, label: str = "output") -> None:
             raise SecurityBoundaryError(f"{label} contains credential-like content")
 
 
-def reject_secret_file(path: Path, *, label: str = "output", chunk_size: int = 1024 * 1024) -> None:
+def reject_secret_file(
+    path: Path,
+    *,
+    label: str = "output",
+    chunk_size: int = 1024 * 1024,
+    progress_check: Optional[Callable[[], None]] = None,
+) -> None:
     """Scan an entire file for credential-like content without loading it all."""
 
+    check = progress_check or (lambda: None)
     overlap = b""
     try:
         with path.open("rb") as handle:
             while True:
+                check()
                 chunk = handle.read(chunk_size)
                 if not chunk:
                     break
@@ -241,12 +249,19 @@ class ArtifactCollector:
         self.max_file_bytes = max_file_bytes
         self.max_total_bytes = max_total_bytes
 
-    def _iter_files(self, output_root: Path) -> list[tuple[Path, str]]:
+    def _iter_files(
+        self,
+        output_root: Path,
+        *,
+        progress_check: Optional[Callable[[], None]] = None,
+    ) -> list[tuple[Path, str]]:
+        check = progress_check or (lambda: None)
         root = output_root.resolve()
         if not root.is_dir() or root.is_symlink():
             raise SecurityBoundaryError("output root must be a real directory")
         files: list[tuple[Path, str]] = []
         for path in sorted(root.rglob("*")):
+            check()
             relative = path.relative_to(root)
             safe_relative_path(relative.as_posix())
             info = path.lstat()
@@ -266,8 +281,17 @@ class ArtifactCollector:
                 raise SecurityBoundaryError("output file count exceeds limit")
         return files
 
-    def collect(self, output_root: Path, archive_path: Path, *, metadata: Optional[dict] = None) -> CollectedArtifact:
-        files = self._iter_files(output_root)
+    def collect(
+        self,
+        output_root: Path,
+        archive_path: Path,
+        *,
+        metadata: Optional[dict] = None,
+        progress_check: Optional[Callable[[], None]] = None,
+    ) -> CollectedArtifact:
+        check = progress_check or (lambda: None)
+        check()
+        files = self._iter_files(output_root, progress_check=check)
         total = sum(path.stat().st_size for path, _ in files)
         if total > self.max_total_bytes:
             raise SecurityBoundaryError("total output size exceeds limit")
@@ -278,7 +302,8 @@ class ArtifactCollector:
         try:
             with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 for path, relative in files:
-                    reject_secret_file(path, label=relative)
+                    check()
+                    reject_secret_file(path, label=relative, progress_check=check)
                     digest_hasher = hashlib.sha256()
                     size = 0
                     info = zipfile.ZipInfo(relative)
@@ -286,6 +311,7 @@ class ArtifactCollector:
                     info.compress_type = zipfile.ZIP_DEFLATED
                     with path.open("rb") as source, archive.open(info, "w") as destination:
                         while True:
+                            check()
                             chunk = source.read(1024 * 1024)
                             if not chunk:
                                 break
@@ -305,6 +331,7 @@ class ArtifactCollector:
         checksum_hasher = hashlib.sha256()
         with archive_path.open("rb") as archive_file:
             for chunk in iter(lambda: archive_file.read(1024 * 1024), b""):
+                check()
                 checksum_hasher.update(chunk)
         checksum = checksum_hasher.hexdigest()
         return CollectedArtifact(archive_path, manifest, checksum, len(files), total)

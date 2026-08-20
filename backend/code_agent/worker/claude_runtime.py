@@ -236,6 +236,7 @@ async def run_claude_task(
     _lock_input_tree(spec_dir)
     _grant_task_tree_to_claude(agent_work_dir)
     _grant_task_tree_to_claude(out_dir)
+    _grant_task_tree_to_claude(logs_dir)
     prompt = _goal_driven_prompt(
         spec_dir=spec_dir,
         input_dir=input_dir,

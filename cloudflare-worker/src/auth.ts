@@ -1,7 +1,16 @@
 import type { Env } from "./env";
 import { SESSION_COOKIE, CSRF_COOKIE, OAUTH_STATE_COOKIE, AUTH_CALLBACK_PATH } from "./env";
 import { clearCookie, errorJson, json, nowSeconds, parseCookies, sameOrigin, serializeCookie } from "./http";
-import { getAuthSession, insertAuthSession, revokeAuthSession, updateAuthSessionTokens, upsertUserAccessRole } from "./db";
+import {
+  claimAuthSessionRefresh,
+  getAuthSession,
+  insertAuthSession,
+  releaseAuthSessionRefresh,
+  revokeAuthSession,
+  revokeAuthSessionRefreshOwner,
+  updateAuthSessionTokens,
+  upsertUserAccessRole,
+} from "./db";
 import { verifyAccessToken } from "./jwt";
 import { verifyIdToken } from "./jwt";
 
@@ -233,10 +242,7 @@ export async function resolveUser(
   // Refresh proactively if the access token is expired or about to expire.
   if (session.access_expires_at - nowSeconds() <= 30) {
     const refreshed = await refreshSession(env, session.sid, session.refresh_token);
-    if (!refreshed) {
-      await revokeAuthSession(env, sid);
-      return null;
-    }
+    if (refreshed !== "refreshed") return null;
   }
 
   const current = await getAuthSession(env, sid);
@@ -260,33 +266,75 @@ export async function resolveUser(
   }
 }
 
-async function refreshSession(env: Env, sid: string, refreshToken: string): Promise<boolean> {
+async function refreshSession(
+  env: Env,
+  sid: string,
+  refreshToken: string,
+): Promise<"refreshed" | "pending" | "failed"> {
+  const owner = randomToken(24);
+  const claimed = await claimAuthSessionRefresh(env, sid, owner, nowSeconds());
+  if (!claimed) {
+    // A concurrent request owns rotation. Wait briefly for its committed token
+    // instead of sending the same one-time refresh token to the provider.
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const current = await getAuthSession(env, sid);
+      if (!current) return "failed";
+      if (current.access_expires_at - nowSeconds() > 30) return "refreshed";
+      if (!current.refresh_owner) return "pending";
+    }
+    return "pending";
+  }
   const basic = btoa(`${env.ZHANG_AUTH_CLIENT_ID}:${env.ZHANG_AUTH_CLIENT_SECRET}`);
-  const res = await fetch(`${env.ZHANG_AUTH_BASE_URL.replace(/\/$/, "")}/token`, {
-    method: "POST",
-    headers: {
-      authorization: `Basic ${basic}`,
-      "content-type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }).toString(),
-  });
-  const payload = (await res.json()) as {
+  let res: Response;
+  try {
+    res = await fetch(`${env.ZHANG_AUTH_BASE_URL.replace(/\/$/, "")}/token`, {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${basic}`,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }).toString(),
+    });
+  } catch {
+    await releaseAuthSessionRefresh(env, sid, owner);
+    return "pending";
+  }
+  let payload: {
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
   };
-  if (!res.ok || !payload.access_token || !payload.refresh_token) {
-    return false;
+  try {
+    payload = (await res.json()) as typeof payload;
+  } catch {
+    await releaseAuthSessionRefresh(env, sid, owner);
+    return "pending";
+  }
+  if (!res.ok) {
+    if (res.status >= 400 && res.status < 500) {
+      await revokeAuthSessionRefreshOwner(env, sid, owner);
+      return "failed";
+    }
+    await releaseAuthSessionRefresh(env, sid, owner);
+    return "pending";
+  }
+  if (!payload.access_token || !payload.refresh_token) {
+    await releaseAuthSessionRefresh(env, sid, owner);
+    return "pending";
   }
   let exp = nowSeconds() + (payload.expires_in ?? 900);
   try {
     const verified = await verifyAccessToken(payload.access_token, env);
     exp = verified.exp;
   } catch {
-    return false;
+    await releaseAuthSessionRefresh(env, sid, owner);
+    return "pending";
   }
-  await updateAuthSessionTokens(env, sid, payload.access_token, exp, payload.refresh_token);
-  return true;
+  const updated = await updateAuthSessionTokens(env, sid, payload.access_token, exp, payload.refresh_token, owner);
+  if (updated) return "refreshed";
+  const current = await getAuthSession(env, sid);
+  return current && current.access_expires_at - nowSeconds() > 30 ? "refreshed" : "pending";
 }
 
 /** POST /auth/logout */
