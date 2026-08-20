@@ -233,7 +233,7 @@ async function authenticateSession(request: Request, env: Env): Promise<WorkerCo
     return errorJson("Worker session binding is invalid", 403, "WORKER_SESSION_MISMATCH");
   }
   const epochHeader = request.headers.get("x-worker-session-epoch");
-  if (epochHeader && Number(epochHeader) !== session.session_epoch) {
+  if (!epochHeader || !/^\d+$/.test(epochHeader) || Number(epochHeader) !== session.session_epoch) {
     return errorJson("Worker session epoch is stale", 409, "WORKER_SESSION_STALE");
   }
   return { worker: loaded.row, policy, session, credentialHash: loaded.hash };
@@ -312,13 +312,41 @@ async function connectWorker(request: Request, env: Env): Promise<Response> {
     });
   }
 
-  const sessionId = newToken("ws");
+  // `task_attempts.session_id` is an immutable historical foreign key.  Do
+  // not delete an expired session row when a Worker reconnects: a completed
+  // Attempt may still reference it.  The schema deliberately keeps one row
+  // per Worker, so rotate the epoch and binding in place while retaining the
+  // stable session_id.  The persistent credential, instance binding and
+  // incremented epoch fence every stale client.
+  const sessionId = current?.session_id ?? newToken("ws");
   const sessionEpoch = (current?.session_epoch ?? 0) + 1;
   const leaseExpiresAt = now + SESSION_TTL_SECONDS;
   try {
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM worker_sessions_runtime WHERE worker_id = ?1").bind(workerId),
-      env.DB.prepare(
+    const sessionWrite = current
+      ? env.DB.prepare(
+        `UPDATE worker_sessions_runtime
+         SET pool_id = ?4, namespace = ?5, instance_id = ?6,
+             protocol_version = ?7, runtime_capability = ?8, image_digest = ?9,
+             session_secret_hash = ?10, session_epoch = ?11,
+             connected_at = ?12, last_seen_at = ?12,
+             lease_expires_at = ?13, disconnected_at = NULL
+         WHERE worker_id = ?1 AND session_id = ?2 AND session_epoch = ?3`,
+      ).bind(
+        workerId,
+        sessionId,
+        current.session_epoch,
+        policy.pool_id,
+        policy.namespace,
+        instanceId,
+        PROTOCOL_VERSION,
+        RUNTIME_CAPABILITY,
+        imageDigest,
+        hashText(sessionId),
+        sessionEpoch,
+        now,
+        leaseExpiresAt,
+      )
+      : env.DB.prepare(
         `INSERT INTO worker_sessions_runtime
           (session_id, worker_id, pool_id, namespace, instance_id,
            protocol_version, runtime_capability, image_digest,
@@ -338,9 +366,14 @@ async function connectWorker(request: Request, env: Env): Promise<Response> {
         sessionEpoch,
         now,
         leaseExpiresAt,
-      ),
+      );
+    const results = await env.DB.batch([
+      sessionWrite,
       env.DB.prepare("UPDATE workers SET last_seen_at = ?2, updated_at = ?2 WHERE worker_id = ?1 AND status = 'active'").bind(workerId, now),
     ]);
+    if (changed(results[0]) !== 1) {
+      return errorJson("Worker session was superseded", 409, "WORKER_SESSION_STALE");
+    }
   } catch {
     return errorJson("Worker session could not be created", 503, "WORKER_SESSION_UNAVAILABLE");
   }

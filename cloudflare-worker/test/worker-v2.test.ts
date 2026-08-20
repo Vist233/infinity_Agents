@@ -197,6 +197,26 @@ class RuntimeFakeStatement {
       });
       return { meta: { changes: 1 } };
     }
+    if (sql.includes("UPDATE worker_sessions_runtime") && sql.includes("SET pool_id")) {
+      const [workerId, sessionId, expectedEpoch, poolId, namespace, instanceId, protocol, runtime, image, secretHash, epoch, connected, lease] = this.args as [string, string, number, string, string, string, string, string, string | null, string, number, number, number];
+      const row = this.db.sessions.get(workerId);
+      if (!row || row.session_id !== sessionId || row.session_epoch !== expectedEpoch) return { meta: { changes: 0 } };
+      Object.assign(row, {
+        pool_id: poolId,
+        namespace,
+        instance_id: instanceId,
+        protocol_version: protocol,
+        runtime_capability: runtime,
+        image_digest: image,
+        session_secret_hash: secretHash,
+        session_epoch: epoch,
+        connected_at: connected,
+        last_seen_at: connected,
+        lease_expires_at: lease,
+        disconnected_at: null,
+      });
+      return { meta: { changes: 1 } };
+    }
     if (sql.includes("UPDATE worker_sessions_runtime") && sql.includes("SET last_seen_at")) {
       const [sessionId, workerId, secretHash, now, lease] = this.args as [string, string, string, number, number];
       const row = [...this.db.sessions.values()].find((candidate) => candidate.session_id === sessionId && candidate.worker_id === workerId);
@@ -465,6 +485,42 @@ describe("Worker v2 control plane", () => {
     const second = await connect(db, "worker-b", credential, "machine-b");
     expect(second.response.status).toBe(409);
     expect(await second.response.json()).toMatchObject({ error: { code: "WORKER_ALREADY_CONNECTED" } });
+  });
+
+  it("rebinds an expired session without deleting Attempt history", async () => {
+    const db = new RuntimeFakeD1();
+    const credential = "wc_test-persistent-credential";
+    db.workers.set("worker-b", {
+      worker_id: "worker-b", pool_id: "public-default", namespace: "infinity-public", created_by: "user-a",
+      credential_hash: hashText(credential), status: "active", protocol_version: "2", runtime_capability: "goal-driven-claude-code", image_digest: null, last_seen_at: null,
+    });
+    const first = await connect(db, "worker-b", credential, "machine-a");
+    expect(first.response.status).toBe(201);
+    const originalSessionId = first.session.session_id;
+    const originalEpoch = first.session.session_epoch;
+    db.attempts.set("attempt-history", {
+      attempt_id: "attempt-history", task_id: "task-history", worker_id: "worker-b",
+      session_id: originalSessionId, attempt_number: 1, fencing_epoch: 1,
+      lease_token_hash: "historical", lease_expires_at: 0, status: "succeeded",
+    });
+    first.session.lease_expires_at = 0;
+
+    const reconnected = await connect(db, "worker-b", credential, "machine-b");
+
+    expect(reconnected.response.status).toBe(201);
+    expect(reconnected.session.session_id).toBe(originalSessionId);
+    expect(reconnected.session.session_epoch).toBe(originalEpoch + 1);
+    expect(reconnected.session.instance_id).toBe("machine-b");
+    expect(db.attempts.get("attempt-history")?.session_id).toBe(originalSessionId);
+
+    const missingEpochHeaders = authHeaders("worker-b", credential, "machine-b", reconnected.session);
+    missingEpochHeaders.delete("x-worker-session-epoch");
+    const missingEpoch = await handleWorkerV2(new Request("https://app.test/api/worker/v2/heartbeat", {
+      method: "POST",
+      headers: missingEpochHeaders,
+    }), envFor(db));
+    expect(missingEpoch?.status).toBe(409);
+    expect(await missingEpoch?.json()).toMatchObject({ error: { code: "WORKER_SESSION_STALE" } });
   });
 
   it("lets a public Worker claim another user's queued task exactly once", async () => {
