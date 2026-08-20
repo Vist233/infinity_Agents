@@ -1,0 +1,10 @@
+1. `git status --short --branch` on cloudflare-deploy before migration
+   exit 0 — clean.
+2. `git merge-base cloudflare-deploy origin/main`
+   exit 1 / no output — unrelated histories; merge is prohibited by design.
+3. `git rev-list --left-right --count cloudflare-deploy...origin/main`
+   exit 0 — 116 / 26.
+4. navigation source search for Chat Agent after moving local main to be537fd
+   exit 0 — no Chat Agent route or navigation entry accepted.
+5. component and active-entry search
+   exit 0 — Cloudflare D1/R2/Relay path, legacy PostgreSQL v1 path and v2 Docker client identified; ownership recorded in docs/MAIN_LOCAL_COMPONENT_MAP_2026-08-21.md.

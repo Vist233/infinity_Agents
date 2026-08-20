@@ -1,0 +1,17 @@
+Cloudflare final runtime: 57f6fb9
+Cloudflare final evidence/head: be537fd
+Old origin/main: 16396ed (restores Chat Agent)
+Old local main: b5de906
+Merge base between cloudflare-deploy and origin/main: NONE
+Divergence before migration: cloudflare-deploy 116 commits, origin/main 26 commits
+
+Remote recovery tags:
+- cloudflare-c7-final-20260821 -> be537fd
+- pre-c8-origin-main-20260821 -> 16396ed
+- pre-c8-local-main-20260821 -> b5de906
+
+Local recovery branches:
+- codex/archive-origin-main-before-c8-20260821 -> 16396ed
+- codex/archive-local-main-before-c8-20260821 -> b5de906
+
+Local main was moved only after these references existed and now starts at be537fd.

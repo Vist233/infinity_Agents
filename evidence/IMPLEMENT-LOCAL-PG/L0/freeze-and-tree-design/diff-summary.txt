@@ -1,0 +1,6 @@
+Documentation/evidence only. No runtime code, database, remote Worker, Docker container or Cloudflare service changed during L0.
+
+Added:
+- authoritative component keep/port/delete map;
+- recoverable baseline references;
+- L0 execution evidence and checkpoint.
