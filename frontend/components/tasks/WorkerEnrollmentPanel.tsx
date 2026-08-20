@@ -88,8 +88,8 @@ export function WorkerEnrollmentPanel() {
     setCredentialError(null);
     try {
       const response = worker.credential_available
-        ? await getWorkerCredential(worker.worker_id, worker.namespace)
-        : await rotateWorkerCredential(worker.worker_id, worker.namespace);
+        ? await getWorkerCredential(worker.worker_id)
+        : await rotateWorkerCredential(worker.worker_id);
       await navigator.clipboard.writeText(response.worker_credential);
       setSavedCopiedWorkerId(worker.worker_id);
       await loadWorkers();

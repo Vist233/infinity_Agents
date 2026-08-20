@@ -1,0 +1,4 @@
+- `frontend/lib/api/tasks.ts`: removed the Namespace argument and query parameter from credential
+  recovery and rotation helpers.
+- `frontend/components/tasks/WorkerEnrollmentPanel.tsx`: calls those helpers with only Worker ID.
+- `frontend/lib/api/tasks.test.ts`: asserts both URLs contain no client-supplied Namespace.

@@ -264,15 +264,15 @@ export async function listWorkerEnrollments(): Promise<WorkerRegistration[]> {
   return data.workers || [];
 }
 
-export async function getWorkerCredential(workerId: string, namespace: string): Promise<WorkerEnrollmentResponse> {
+export async function getWorkerCredential(workerId: string): Promise<WorkerEnrollmentResponse> {
   return requestJson<WorkerEnrollmentResponse>(
-    `${getApiBase()}/api/worker-enrollments/${encodeURIComponent(workerId)}/credential?namespace=${encodeURIComponent(namespace)}`,
+    `${getApiBase()}/api/worker-enrollments/${encodeURIComponent(workerId)}/credential`,
   );
 }
 
-export async function rotateWorkerCredential(workerId: string, namespace: string): Promise<WorkerEnrollmentResponse> {
+export async function rotateWorkerCredential(workerId: string): Promise<WorkerEnrollmentResponse> {
   return requestJson<WorkerEnrollmentResponse>(
-    `${getApiBase()}/api/worker-enrollments/${encodeURIComponent(workerId)}/rotate?namespace=${encodeURIComponent(namespace)}`,
+    `${getApiBase()}/api/worker-enrollments/${encodeURIComponent(workerId)}/rotate`,
     { method: "POST" },
   );
 }

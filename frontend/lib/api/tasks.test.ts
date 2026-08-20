@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTask } from "./tasks";
+import { createTask, getWorkerCredential, rotateWorkerCredential } from "./tasks";
 
 const input = {
   project_id: "project-1",
@@ -53,5 +53,21 @@ describe("createTask route selection", () => {
       "/api/tasks",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("does not send Namespace as a client-controlled credential parameter", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ worker_id: "worker-1", worker_credential: "credential" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getWorkerCredential("worker-1");
+    await rotateWorkerCredential("worker-1");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/worker-enrollments/worker-1/credential");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/worker-enrollments/worker-1/rotate");
   });
 });

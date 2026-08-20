@@ -1,0 +1,4 @@
+branch: cloudflare-deploy
+baseline_commit: 0fa4534
+working_tree_before_card: clean
+observed_issue: credential recovery/rotation client appended server-returned Namespace to the URL

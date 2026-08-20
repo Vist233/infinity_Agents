@@ -1,0 +1,6 @@
+`npm run test:unit` (frontend): exit 0; 12 files, 44 tests passed
+`npm run typecheck` (frontend): exit 0
+`npm run lint` (frontend): exit 0
+`npm run build` (frontend): exit 0
+`git diff --check`: exit 0
+scoped credential-shaped literal scan: exit 0
