@@ -1,0 +1,6 @@
+Edge `npm test`: exit 0, 55 tests / 13 files passed
+Edge `npm run check`: exit 0
+Edge `npm run deploy`: exit 0, version `04640878-bfb2-467d-a34e-b9538324ce26`
+D1 read-only queries: exit 0; Task final status `failed`, no published Artifact
+Worker process check: exit 0; `infinity-agent-worker-b-v2` remained online
+Browser Task Center inspection: authenticated failed Task detail visible; no new upload submitted

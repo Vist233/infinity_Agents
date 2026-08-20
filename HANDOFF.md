@@ -182,10 +182,11 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
   Worker 上线前必须改为管理员控制的命名 Cloudflare Tunnel，并把地址更新到 Edge 和 Windows
   交接配置。
 - 真实 Case 2/3 必须从网页/同源 Task API 创建 queued Task，使用真实 Method/Dataset，
-  再由可达的 Docker Worker 调用 Claude Code 并上传 R2 Artifact。现有 Task 是失败历史记录，
-  不能通过手工改 D1 状态伪造重试。
-- 线上 D1 当前没有新的 queued Task。继续 C5 的最小输入是一条由当前 Task Center 创建的真实
-  Case 2 Task ID；没有 Task ID 时不得手工插入、修改或复用 `4350...`。
+  再由可达的 Docker Worker 调用 Claude Code 并上传 R2 Artifact。Task
+  `424ff7da-6903-42e8-9a55-b09c20033ccf` 已完成这条真实路径，但 3 次 Attempt 均在
+  multipart/finalize 阶段 lease-expired，D1 最终为 failed；它不能被当作通过证据。
+- 当前继续 C5 的最小输入是修复后重新创建的一条真实 Case 2 Task。不能手工插入、修改 D1，
+  不能复用 `4350...`，也不能把 Claude 已生成报告或 Worker 在线状态冒充 Artifact 成功。
 - Relay `/v1/hints` 的 503 已定位为 zhangbot Redis `api` 用户 ACL 缺少
   `infinity-public:*` 键模式和脚本权限。修改共享 ACL 属于外部状态变更，必须取得明确授权；
   在此之前 Worker 依靠 D1 poll 保持可用，但 Redis 恢复/Outbox 重放门禁不能标记通过。

@@ -55,12 +55,15 @@
   `worker_attempts`，不在 v2 `task_attempts`，不能复用；
 - 导航只有 Analysis、Task Center、ImageJudge；Task Center 保留直接创建任务和 Worker 管理；
 - 历史验收 Compose 的 Redis 密码已全部改为显式必填；
-- Case 2/3 尚未标记通过，因为线上 D1 没有新的 queued Task。
+- 真实 Case 2 已通过 Task Center 创建并执行：Task `424ff7da-6903-42e8-9a55-b09c20033ccf`
+  被本机 `infinity-agent-worker-b-v2` 领取了 3 次；Claude 实际生成了报告和执行中间文件，
+  但 3 次都在 Artifact multipart/finalize 阶段失去 lease，D1 最终为 `failed`，因此 Case 2
+  不能计为通过。证据见 `evidence/IMPLEMENT-20260820-D1/C5/real-case2-20260820/checkpoint.md`。
 
 ### 尚未完成
 
 - 取得共享服务修改授权后，修复 zhangbot Redis Relay ACL 并执行 Redis 停止/恢复和 Outbox 重放验收；
-- D1/R2/Redis真实 Case 2/3；
+- 修复并重新验收 D1/R2 真实 Case 2 的 Artifact multipart/finalize；之后再验收 Case 3；
 - C6 浏览器、Task Center、Worker UI 和移动端真实验收；
 - C7 只读 Code Review、最终同一候选版本回归；
 - 命名 Cloudflare Tunnel（当前 Quick Tunnel 只能用于临时链路验收）；
@@ -144,7 +147,7 @@ RLS claim 或旧 trust 路由。历史测试/迁移依赖的文件先锁定，C5
 `4350...`，不能使用旧 P9 PostgreSQL Worker。先完成 Case 2 的 Task/Attempt/Artifact/哈希/清理
 证据，再创建并完成 Case 3。Relay 仍为 503 时必须如实记录 fallback，不得宣称 Redis 门禁通过。
 
-验收：Case 2 包含 94 序列统计和可解析 Newick；Case 3 包含 QC、cluster、marker、UMAP 和 h5ad；Artifact hash 一致；大结果走 multipart；Worker 目录清空并继续在线；无手工改库、Fixture Executor 或 mock 冒充。当前直接阻塞是新的真实 queued Task；Redis 完整门禁另受 ACL 授权阻塞。
+验收：Case 2 包含 94 序列统计和可解析 Newick；Case 3 包含 QC、cluster、marker、UMAP 和 h5ad；Artifact hash 一致；大结果走 multipart；Worker 目录清空并继续在线；无手工改库、Fixture Executor 或 mock 冒充。当前真实失败点是 multipart 分片写入/完成后没有发布 Artifact，不能只看 Claude 报告或 Worker 在线状态判定通过；Redis 完整门禁另受 ACL 授权阻塞。
 
 ### C6：前端和浏览器
 
