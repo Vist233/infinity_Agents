@@ -50,7 +50,7 @@
 - GHCR 已发布多架构镜像 `ghcr.io/vist233/infinity-agent-worker:v1`，生产模板已固定不可变
   digest；
 - 本机 `infinity-agent-worker-b-v2` 已连接线上 v2 控制面；D1 `poll/heartbeat` 持续返回 200，
-  Relay 503 不会使进程退出；
+  Relay `/v1/hints` 已恢复 200；受控 Redis 停止期间 D1 fallback 仍保持可用；
 - 历史 Task `4350c45b-fd0c-4771-b654-c6df32e95f9c` 的 Attempt 只存在旧
   `worker_attempts`，不在 v2 `task_attempts`，不能复用；
 - 导航只有 Analysis、Task Center、ImageJudge；Task Center 保留直接创建任务和 Worker 管理；
@@ -66,7 +66,8 @@
 
 ### 尚未完成
 
-- 取得共享服务修改授权后，修复 zhangbot Redis Relay ACL 并执行 Redis 停止/恢复和 Outbox 重放验收；
+- C5R 已在授权后完成：Redis Relay ACL 最小修复、Redis 停止/恢复、D1 fallback、Outbox 重放、
+  无重复 Attempt 与 Redis 内容边界扫描均已记录；
 - Case 3 科学覆盖延期；必须作为 C7 残余风险记录，不能写成已通过；
 - C6 浏览器、Task Center、Worker UI 和移动端真实验收；
 - C7 只读 Code Review、最终同一候选版本回归；
@@ -150,13 +151,11 @@ multipart、Artifact hash和清理。
 
 ### C5R：Redis Relay ACL与恢复
 
-工作：取得明确授权后，仅修复 zhangbot Redis `api` 用户对固定 `infinity-public:*` Relay
-合同所需的最小 ACL；验证 hint、D1 Outbox 重放、Redis 停止/恢复、幂等和无重复 Attempt。
-不得把 Redis变成 Task 事实源，不得暴露或轮换无关凭证，不得重启无关服务。
-
-验收：Relay hints恢复；Redis 停止时 D1 poll仍可用；恢复后 pending Outbox重放且不生成双
-Attempt；Redis无 Method、Dataset、Artifact、用户内容或 Secret。没有修改授权时标记外部阻塞，
-然后可先推进独立的 C6，但 C7不能把 Redis恢复写成通过。
+结果：已在授权后仅修复 zhangbot Redis `api` 用户对固定 `infinity-public:*` Relay 合同所需的
+最小 ACL，并授予 Relay 所需 Lua 脚本权限。Relay hints恢复；Redis 停止时 D1 poll/heartbeat
+仍可用；恢复后 10 条 pending Outbox 均一次发布且 Task Attempt 仍为 4；Redis 元数据扫描无
+Method、Dataset、Artifact、用户内容或 Secret。证据见
+`evidence/IMPLEMENT-20260820-D1/C5R/redis-acl-recovery-20260820/`。
 
 ### C6：前端和浏览器
 

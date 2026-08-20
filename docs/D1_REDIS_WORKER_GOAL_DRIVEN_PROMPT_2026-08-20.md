@@ -84,8 +84,8 @@ CLOUDFLARE IMMUTABLE ARCHITECTURE — C0-C7 ONLY
 
 CURRENT REALITY
 
-The verified implementation and Case 2 evidence baseline is cloudflare-deploy@972f5ee.
-Record the actual newer HEAD before editing; do not use an older hash as current state.
+The verified implementation, Case 2, and C5R evidence baseline is
+cloudflare-deploy@975457a0e7e8242bb34ff7d0e67f260425a148e4.
 
 - C0-C4 implementation is complete and must not be rebuilt.
 - Worker v2, canonical D1 schema, R2 Artifact multipart, the HTTPS Redis Relay,
@@ -94,9 +94,10 @@ Record the actual newer HEAD before editing; do not use an older hash as current
 - The Edge/D1 deployment and GHCR amd64/arm64 image are published and recorded in HANDOFF.md.
 - The local container infinity-agent-worker-b-v2 is the current v2 Worker. It is
   connected to the production control plane and receives poll/heartbeat 200.
-- Relay GET /v1/hints returns 503 because the zhangbot Redis api ACL lacks the
-  infinity-public:* key pattern and required scripting permission. The Worker
-  correctly continues D1 fallback polling. Redis recovery is not passed.
+- Relay GET /v1/hints returns 200 after the authorized minimal Redis api ACL correction.
+  A controlled Redis outage confirmed the Worker continues D1 fallback polling and
+  heartbeat; restored D1 Outbox replay published 10 pending entries once without a
+  duplicate Attempt. C5R is passed.
 - The local machine also contains historical P9 PostgreSQL acceptance containers.
   They are not the current Worker, are not C5 evidence, and must not be used or
   deleted without explicit user authorization.
@@ -116,13 +117,13 @@ Record the actual newer HEAD before editing; do not use an older hash as current
   inputs; no default Redis password remains.
 - Local frontend, Edge, Worker tests and builds passed on the recorded candidate,
   but online browser C6 is not passed because available browser clients blocked the site.
-- C5 Case 2 is passed. Redis ACL/recovery, online C6, named Tunnel, and C7 remain incomplete.
+- C5 Case 2 and C5R Redis recovery are passed. Online C6, named Tunnel, and C7 remain incomplete.
 
 MISSION
 
-Resume after the passed Case 2 card. Do not restart or relitigate C0-C4, rerun Case 2,
-or create Case 3. Proceed through C5R Redis recovery, C6 online product verification,
-named Tunnel closure, and C7 final review. One Execution Card has one observable
+Resume after the passed Case 2 and C5R cards. Do not restart or relitigate C0-C4, rerun Case 2,
+or create Case 3. Proceed through C6 online product verification, named Tunnel closure,
+and C7 final review. One Execution Card has one observable
 outcome. Finish, test, checkpoint, commit, and push each Cloudflare card only to
 origin/cloudflare-deploy before starting the next.
 
@@ -146,12 +147,13 @@ C5 CASE STATUS
 3. Never translate skipped/deferred into passed and never use old PostgreSQL Case 3 evidence.
 Gate: Case 2 IDs/hash/cleanup remain traceable and Case 3 appears in C7 residual risk.
 
-C5R REDIS RECOVERY — REQUIRES EXPLICIT AUTHORIZATION
-1. With authorization, make the smallest zhangbot Redis api ACL change needed for the
-   fixed infinity-public:* Relay contract and scripting operation.
-2. Do not expose or rotate unrelated Redis credentials and do not restart unrelated services.
-3. Verify hints, Redis stop/recovery, pending D1 Outbox replay, idempotency, and no double Attempt.
-Gate: Relay returns valid hints, Redis recovery loses no Task, and Redis contains no user inputs or secrets.
+C5R REDIS RECOVERY — PASSED
+1. Authorization was obtained; the smallest Redis api ACL change for the fixed
+   infinity-public:* Relay contract and scripting operation was applied.
+2. Redis was stopped briefly: Relay hints failed closed while D1 poll/heartbeat remained available.
+3. After recovery, all 10 pending D1 Outbox events published once, no Attempt was duplicated, and a
+   Redis key/field metadata scan found no user inputs, artifacts, user body, or secrets.
+Gate: passed. Evidence: evidence/IMPLEMENT-20260820-D1/C5R/redis-acl-recovery-20260820/.
 
 C6 PRODUCT VERIFICATION
 1. Task Center uses only the same-origin D1 API.

@@ -5,5 +5,5 @@
 - cause: Relay `/v1/hints` has a known HTTP 503 because the zhangbot Redis `api` ACL lacks the fixed `infinity-public:*` key permission and required script permission.
 - not performed: ACL changes, credential reads/writes/rotation, Redis restart/stop, Relay redeploy, D1/R2 mutation, Case 2 rerun, or Case 3 creation.
 - required authorization before resuming: permit the minimum ACL change only for the `api` user and fixed `infinity-public:*` Relay contract; preserve all unrelated ACL rules/credentials and do not restart unrelated services.
-- remaining C5R verification after authorization: valid hints, D1 poll during Redis stop, idempotent pending-Outbox replay after Redis recovery, no duplicate Attempt, and Redis content scan proving no inputs, artifacts, user contents, or secrets.
+- This authorization-blocked checkpoint is superseded by `../redis-acl-recovery-20260820/` after the owner authorized the minimal ACL change and all listed recovery gates passed.
 - next independent card: C6 browser acceptance.

@@ -1,8 +1,8 @@
 # Infinity Agents — Cloudflare Deploy 交接文档
 
 > 最后更新：2026-08-20
-> 当前分支：`cloudflare-deploy`；当前代码/验收基线：`972f5ee`；本次 Worker multipart
-> 运行时修复代码：`e55aad5`；已部署 Edge 版本：`04640878-bfb2-467d-a34e-b9538324ce26`
+> 当前分支：`cloudflare-deploy`；当前代码/验收基线：`975457a0e7e8242bb34ff7d0e67f260425a148e4`；本次 Worker multipart
+> 运行时修复代码：`e55aad5`；已部署 Edge 版本：`09680075-63b3-41cf-8254-cfcf21772272`
 > 本文只描述当前 D1 目标架构。旧 PostgreSQL/RLS 文档、旧 Worker 协议和旧 Compose
 > 文件属于历史资料，不能作为新机器或生产部署说明。
 
@@ -90,9 +90,9 @@ WORKER_RUNTIME_CAPABILITY=goal-driven-claude-code
 校验 Worker、Session、Attempt、lease token 和 fencing epoch。Redis 不可用时，Worker 仍然
 可以继续 D1 poll；Redis 不是第二个任务状态源。
 
-本地验收已实际验证这一降级路径：Relay `/v1/hints` 返回 503 时，v2 Worker 仍保持进程在线
-并继续收到 D1 `poll 200`。若要恢复 Redis 唤醒提示，zhangbot 的 Relay Redis 用户必须由管理员
-补充固定的 `infinity-public:*` 键模式和 Lua 脚本权限；不要把 Redis 管理密码放进 Worker。
+本地验收已实际验证这一降级路径：Redis 短暂停止时，Relay `/v1/hints` 返回 503，但 v2 Worker
+仍保持进程在线并继续收到 D1 `poll 200` 与 heartbeat `200`；恢复后 hint 重新返回 200。管理员已
+为 Relay Redis 用户补充固定的 `infinity-public:*` 键模式和 Lua 脚本权限；不要把 Redis 管理密码放进 Worker。
 
 ## 4. 容器配置
 
@@ -144,11 +144,11 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
    `worker_pool_policy`、`workers`、`worker_sessions_runtime`、`task_attempts`、
    `outbox_events` 和 Artifact multipart 表存在，策略为 `public-default / infinity-public`。
 2. 已将 Edge Worker 和静态前端部署到 `infinity.zhangyvjing.com`，当前版本为
-   `489d6721-1075-44cb-9b42-b77c233708a9`；`/health` 返回正常，未认证 v2、direct Task
+   `09680075-63b3-41cf-8254-cfcf21772272`；`/health` 返回正常，未认证 v2、direct Task
    和凭证恢复路由不会放行。
 3. 已在 zhangbot 用户目录安装 Relay，并交给用户级 systemd 管理；Redis 保持回环监听，
-   Relay 健康检查通过，但当前 `/v1/hints` 因 Redis `api` ACL 键模式不匹配返回 503，
-   等待管理员明确授权后修正共享服务 ACL。
+   Relay 健康检查和 `/v1/hints` 均通过。授权后仅扩展 Redis `api` 用户到固定
+   `infinity-public:*` 键模式并授予 Relay 所需 Lua 脚本权限；没有轮换或暴露其他凭证。
 4. 已使用公共 Worker 3 的持久 credential 完成 v2 `connect` 和 `poll` 协议验收；返回池、
    Namespace、协议能力正确，空队列返回 `next_poll_seconds=5`。换用不同 instance 的第二次
    connect 被正确拒绝，证明“一 credential 对应一个 active instance”规则生效。
@@ -161,7 +161,7 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
 6. Task Center 直接创建已修正为调用 `/api/tasks/direct`；本地 43 个单元测试和 6 个
    Playwright 用例通过，线上未认证请求返回 `401 UNAUTHENTICATED`。
 7. 已在本机用 `backend/Dockerfile.worker` 构建并启动 v2 Worker；Cloudflare D1 `connect`/
-   `poll` 成功，Relay 503 和一次控制面 TLS 短暂 EOF 都不会再导致 Worker 退出；会话过期会
+   `poll` 成功，Redis 短暂停止时 Relay 503 和一次控制面 TLS 短暂 EOF 都不会再导致 Worker 退出；会话过期会
    自动重连，凭证错误仍会停止。对应回归测试覆盖了这些故障路径。
 8. GitHub Actions `32355961608` 已成功发布最新修复后的 amd64/arm64 镜像；当前 v1
    manifest digest 为 `sha256:b0e0dcced7ddc0cc58e314e4aa49985a2a85cff7882ae69f7725d0febdf33e40`。
@@ -169,8 +169,9 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
    仍直接展示 `TaskCreationCard`、用户 Worker 管理和超级管理员公共 Worker 管理。
 10. 历史 `docker-compose.acceptance.yml` 已删除 Redis 默认密码，所有 Redis ACL 密码都必须
     通过显式环境变量提供。该 Compose 仍是 PostgreSQL 历史验收栈，不是 D1 v2 生产路径。
-11. 本机 `infinity-agent-worker-b-v2` 正在运行；最新只读日志持续出现 D1 `poll/heartbeat 200`
-    和 Relay `/v1/hints 503`。本机同时还有旧 P9 PostgreSQL 验收容器，它们不是当前 Worker，
+11. 本机 `infinity-agent-worker-b-v2` 正在运行；最新日志出现 D1 `poll/heartbeat 200` 和 Relay
+    `/v1/hints 200`。Redis 短暂停止时仍观察到 D1 `poll/heartbeat 200`，恢复后 D1 Outbox 的
+    10 条 pending 记录均一次性发布，Task Attempt 总数保持 4，没有重复 Attempt。本机同时还有旧 P9 PostgreSQL 验收容器，它们不是当前 Worker，
     不得用于 C5 证据，也不得在没有用户授权时删除。
 12. 修复 `e55aad5` 后，真实 Case 2 已通过当前 D1/R2/v2 Worker 路径：Task
     `3666d0f1-4581-42e3-b81c-bf195288daa5`、Attempt
@@ -192,12 +193,12 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
 - Case 3 原本用于证明 Scanpy/大结果科学工作负载覆盖；用户已明确要求本轮跳过。它的状态是
   `DEFERRED_BY_OWNER`，不是 PASS。Cloudflare 收口可以继续，但 C7 必须把这项覆盖缺口写入
   最终残余风险，不能声称 Case 2/3 均已验证。
-- Relay `/v1/hints` 的 503 已定位为 zhangbot Redis `api` 用户 ACL 缺少
-  `infinity-public:*` 键模式和脚本权限。修改共享 ACL 属于外部状态变更，必须取得明确授权；
-  在此之前 Worker 依靠 D1 poll 保持可用，但 Redis 恢复/Outbox 重放门禁不能标记通过。
+- C5R 已完成：Relay ACL 已在授权后最小化修复，Redis 停止/恢复、D1 fallback、Outbox 重放和
+  无重复 Attempt 均已有证据。Redis 内容边界扫描仅发现 `infinity:` / `infinity-public:` 下的
+  stream/string 元数据，stream 字段不含输入、Artifact、用户正文或 secret。
 - 浏览器扩展和应用内浏览器都对线上域名返回客户端拦截，因而本次页面验收使用了 Edge API、
   D1 和 Relay 的协议级证据；不能把浏览器 UI 结果写成已通过。
-- 修复后的 Worker 镜像已发布 GHCR；命名 Tunnel、Redis 恢复、浏览器 C6 和最终 C7
+- 修复后的 Worker 镜像已发布 GHCR；命名 Tunnel、浏览器 C6 和最终 C7
   code review 仍是发布门禁。
 
 ## 8. 交接给下一位执行者的顺序
@@ -205,11 +206,10 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
 1. 不重做 C0-C4，不重建当前本地 Worker。先确认 `cloudflare-deploy@972f5ee`、
    `infinity-agent-worker-b-v2` 仍在线且没有领取历史任务。
 2. 将 Case 2 证据冻结为 PASS；将 Case 3 记录为用户明确延期，不再为本轮创建 Case 3 Task。
-3. 取得明确授权后修复 zhangbot Redis `api` ACL，再执行关闭/恢复 Redis，确认 D1 Outbox
-   重试、Worker D1 poll 和任务终态不丢失；验证大结果走
-   multipart、旧 lease 不能完成、取消不会发布 Artifact。
+3. 保留已通过的 Redis 停止/恢复、D1 Outbox 重试、Worker D1 poll 和任务终态证据；不得把
+   Redis 再次变更为事实源。
 4. 在可用的真实浏览器会话中完成 C6；客户端拦截不能记为网页通过。
-5. 配置命名 Tunnel，替换所有临时 Relay URL；随后才执行最后的
+5. 配置命名 Tunnel，验证后替换临时 Relay URL；随后才执行最后的
    Cloudflare/浏览器验收。
 6. Cloudflare 的 C7 checkpoint、最终提交、线上回归全部完成后，才按照
    `docs/POST_CLOUDFLARE_MAIN_LOCAL_POSTGRESQL_PLAN_2026-08-20.md` 启动 `main` 纯本地版本。

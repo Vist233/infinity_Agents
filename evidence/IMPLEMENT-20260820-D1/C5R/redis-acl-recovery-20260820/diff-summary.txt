@@ -1,0 +1,8 @@
+External changes only
+- zhangbot Redis ACL: minimal Relay api principal expansion for the fixed infinity-public namespace and Lua scripting.
+- Cloudflare Worker secret: REDIS_RELAY_URL added from the already-running Worker configuration without disclosure.
+- Cloudflare Edge Worker deployment: version 09680075-63b3-41cf-8254-cfcf21772272, cron enabled.
+
+Repository changes
+- Evidence and handoff/continuation status updated to record the completed C5R gate.
+- No Worker protocol, D1 schema, Relay contract, or task records were manually changed.

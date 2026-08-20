@@ -1,0 +1,7 @@
+branch=cloudflare-deploy
+baseline_commit=975457a0e7e8242bb34ff7d0e67f260425a148e4
+case2_task_id=3666d0f1-4581-42e3-b81c-bf195288daa5
+case2_attempt_id=940b483b-a8e6-43ef-a5a5-0598c3872005
+case3_status=DEFERRED_BY_OWNER
+edge_version_after_recovery=09680075-63b3-41cf-8254-cfcf21772272
+worker=public-worker-75f39f88-f921-4929-9c8d-a9f0c1b57145

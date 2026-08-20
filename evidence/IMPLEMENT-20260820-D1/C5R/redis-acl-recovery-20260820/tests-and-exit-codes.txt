@@ -1,0 +1,23 @@
+Redis ACL authorization and relay validation
+- Redis api ACL retained its existing credential and gained only ~infinity-public:* plus +@scripting for the fixed Relay contract.
+- Redis and the zhangbot user Relay service were active after the correction.
+- Authenticated local Relay GET /v1/hints: HTTP 200.
+- The existing v2 Worker Relay hint request through the current temporary HTTPS endpoint: HTTP 200.
+
+Redis outage / D1 fallback
+- Redis was stopped for approximately 12 seconds; only infinity-redis.service was stopped.
+- During the interval the Relay hint request failed closed with HTTP 503, while Worker D1 poll requests returned HTTP 200 and Worker heartbeat requests returned HTTP 200.
+- Redis was restarted; Redis and Relay were active and Relay hints returned HTTP 200.
+
+Outbox replay / idempotency
+- Before scheduled replay: outbox_events pending=10; task_attempts total=4.
+- Production secret REDIS_RELAY_URL was configured without recording its value, then Edge version 09680075-63b3-41cf-8254-cfcf21772272 deployed with cron * * * * *.
+- After scheduled replay: outbox_events published=10; each published row attempts=1; task_attempts total=4.
+- Result: pending events were replayed once and no duplicate Attempt was created.
+
+Redis content-boundary metadata scan
+- key_count=11; key_types=stream,string.
+- Every key was within infinity: or infinity-public:.
+- Stream field names: created_at,event_id,event_type,idempotency_key,pool_id,task_id.
+- No key name or stream field name indicated Method, Dataset, Artifact, user body/content, or secret material.
+- Values were intentionally not printed or persisted in this evidence.
