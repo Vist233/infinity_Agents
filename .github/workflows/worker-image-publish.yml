@@ -16,7 +16,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/infinity-agent-worker
+  IMAGE_NAME: ghcr.io/vist233/infinity-agent-worker
   CLAUDE_CODE_VERSION: "2.1.226"
 
 jobs:
