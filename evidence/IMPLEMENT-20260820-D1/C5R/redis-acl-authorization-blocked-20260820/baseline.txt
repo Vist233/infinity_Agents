@@ -1,0 +1,8 @@
+branch: cloudflare-deploy
+baseline_head: 3c6cbae
+worktree_before: clean
+case2_status: PASS (frozen; no rerun)
+case3_status: DEFERRED_BY_OWNER
+relay_hints: HTTP 503 (previously evidenced)
+identified_cause: zhangbot Redis api ACL lacks fixed infinity-public:* key permission and required scripting permission
+external_changes_this_card: none

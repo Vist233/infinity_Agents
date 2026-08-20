@@ -1,0 +1,5 @@
+No Redis command was executed.
+
+Reason: changing the shared zhangbot Redis api ACL is an external shared-service mutation. The current task objective requires explicit authorization before that mutation; no separate explicit ACL authorization was supplied in this card.
+
+Previous non-mutating runtime evidence remains: Worker D1 poll/heartbeat continued while Relay GET /v1/hints returned 503.

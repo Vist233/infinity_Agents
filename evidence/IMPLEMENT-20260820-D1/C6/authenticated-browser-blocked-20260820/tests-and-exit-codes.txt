@@ -1,0 +1,11 @@
+frontend: npm run test:unit && npm run typecheck && npm run lint && npm run build — exit 0
+frontend unit result: 12 files, 44 tests passed
+cloudflare-worker: npm test && npm run check — exit 0
+Edge unit result: 13 files, 55 tests passed
+
+Browser attempt 1: claim existing authenticated Case 2 Task Center tab and read DOM — timed out after 30 seconds; browser control kernel reset.
+Browser attempt 2: reclaim the same authenticated tab and capture a lightweight screenshot — timed out after 30 seconds; browser control kernel reset.
+
+Result: deterministic C6 gates PASS; authenticated browser acceptance NOT PASSED. The timeout is not evidence of a successful page inspection.
+
+Non-failing existing warnings: React act(...) warnings in a few unit tests; baseline-browser-mapping data stale warning during build.
