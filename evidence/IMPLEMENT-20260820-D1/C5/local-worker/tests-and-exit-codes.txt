@@ -1,5 +1,8 @@
 `docker build --progress=plain -t infinity-agent-worker:local-v2 -f backend/Dockerfile.worker .` -> exit 0
 
+Published image verification: `ghcr.io/vist233/infinity-agent-worker:v1` -> multi-architecture
+manifest `sha256:b0e0dcced7ddc0cc58e314e4aa49985a2a85cff7882ae69f7725d0febdf33e40`
+
 `pytest -q tests/test_worker_consumer_v2.py tests/test_worker_v2_http_client.py tests/test_worker_v2_executor.py tests/test_redis_relay.py` -> exit 0; 7 passed
 
 `docker inspect infinity-agent-worker-b-v2 --format 'status={{.State.Status}} restarts={{.RestartCount}}'` -> `status=running restarts=0`

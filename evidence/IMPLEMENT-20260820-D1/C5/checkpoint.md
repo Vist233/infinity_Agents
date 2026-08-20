@@ -17,9 +17,9 @@
   uses `/api/tasks/direct`, while unauthenticated direct creation returns 401
 - Worker credential Namespace boundary: passed frontend unit/type/build gates and deployed; client
   recovery/rotation sends only Worker ID, while unauthenticated recovery returns 401
-- GHCR multi-architecture image: GitHub Actions run `32354521182` succeeded after the local Worker
-  crash fix; current `v1` manifest digest is
-  `sha256:c20e098a2a96be9fb36480a8bcb922aab0d50087f80a68239f4fb26a333fd43c`.
+- GHCR multi-architecture image: GitHub Actions run `32355961608` succeeded after the Worker
+  transport retry fix; current `v1` manifest digest is
+  `sha256:b0e0dcced7ddc0cc58e314e4aa49985a2a85cff7882ae69f7725d0febdf33e40`.
 - Real Docker/Claude Case 2: blocked by the missing authenticated queued input; the local Worker
   is now available, but the online browser Task Center was client-blocked during this run
 - Real Docker/Claude Case 3: blocked by the same gate

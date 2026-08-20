@@ -158,8 +158,8 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
 7. 已在本机用 `backend/Dockerfile.worker` 构建并启动 v2 Worker；Cloudflare D1 `connect`/
    `poll` 成功，Relay 503 和一次控制面 TLS 短暂 EOF 都不会再导致 Worker 退出；会话过期会
    自动重连，凭证错误仍会停止。对应回归测试覆盖了这些故障路径。
-8. GitHub Actions `32354521182` 已成功发布修复后的 amd64/arm64 镜像；当前 v1 manifest
-   digest 为 `sha256:c20e098a2a96be9fb36480a8bcb922aab0d50087f80a68239f4fb26a333fd43c`。
+8. GitHub Actions `32355961608` 已成功发布最新修复后的 amd64/arm64 镜像；当前 v1
+   manifest digest 为 `sha256:b0e0dcced7ddc0cc58e314e4aa49985a2a85cff7882ae69f7725d0febdf33e40`。
 
 ## 7. C5 尚未完成的部分
 
