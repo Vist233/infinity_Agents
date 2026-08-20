@@ -1,0 +1,7 @@
+`npm run test:unit` (frontend): exit 0; 12 files, 44 tests passed
+`npm run typecheck` (frontend): exit 0
+`npm run lint` (frontend): exit 0
+`npm run build` (frontend): exit 0 (same candidate before test-only mobile file)
+`npm run test:e2e -- e2e/code-agent.spec.ts e2e/mobile-workspace.spec.ts`: exit 0; 7 tests passed
+`git diff --check`: exit 0
+scoped credential-shaped literal scan: exit 0

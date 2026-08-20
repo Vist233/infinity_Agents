@@ -1,0 +1,5 @@
+branch: cloudflare-deploy
+baseline_commit: 6fc0c6e
+working_tree_before_card: clean
+desktop_suite: frontend/e2e/code-agent.spec.ts
+mobile_suite: frontend/e2e/mobile-workspace.spec.ts

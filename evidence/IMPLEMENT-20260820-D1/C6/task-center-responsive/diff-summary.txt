@@ -1,0 +1,5 @@
+- Added `frontend/e2e/mobile-workspace.spec.ts` with a real mobile viewport and touch settings.
+- Verified the mobile drawer exposes the task list, new-task action, and authenticated account
+  footer, then closes while leaving the Task Creation Card available.
+- Existing desktop tests still cover direct `/api/tasks/direct`, no preview request, task detail
+  URLs, unauthenticated actions, task history and artifact views.
