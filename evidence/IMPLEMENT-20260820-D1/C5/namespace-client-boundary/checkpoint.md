@@ -21,4 +21,6 @@
   browser C6 and final C7 review
 - rollback commit: `0fa4534`
 - next exact card: connect an actual remote Docker Worker and run Case 2 through D1/R2/Relay/Claude
-- external systems modified: none yet; deployment follows after this commit
+- external systems modified: GitHub `cloudflare-deploy` push and Cloudflare Edge deployment
+  `489d6721-1075-44cb-9b42-b77c233708a9`; post-deploy Edge/Relay health checks passed and
+  unauthenticated credential recovery returned 401

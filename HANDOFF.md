@@ -1,7 +1,7 @@
 # Infinity Agents — Cloudflare Deploy 交接文档
 
 > 最后更新：2026-08-20
-> 当前分支：`cloudflare-deploy`（候选提交：`3270d57`）
+> 当前分支：`cloudflare-deploy`（候选提交：`cc88c73`）
 > 本文只描述当前 D1 目标架构。旧 PostgreSQL/RLS 文档、旧 Worker 协议和旧 Compose
 > 文件属于历史资料，不能作为新机器或生产部署说明。
 
@@ -139,8 +139,8 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
    `worker_pool_policy`、`workers`、`worker_sessions_runtime`、`task_attempts`、
    `outbox_events` 和 Artifact multipart 表存在，策略为 `public-default / infinity-public`。
 2. 已将 Edge Worker 和静态前端部署到 `infinity.zhangyvjing.com`，当前版本为
-   `cf1bc7d5-7ec9-4c52-a68d-90e4dcb0d3c6`；`/health` 返回正常，未认证 v2 和 direct Task
-   路由不会放行。
+   `489d6721-1075-44cb-9b42-b77c233708a9`；`/health` 返回正常，未认证 v2、direct Task
+   和凭证恢复路由不会放行。
 3. 已在 zhangbot 用户目录安装 Relay，并交给用户级 systemd 管理；Redis 保持回环监听，
    Relay 本机健康检查通过，公网出站 Tunnel 健康检查通过。
 4. 已使用公共 Worker 3 的持久 credential 完成 v2 `connect` 和 `poll` 协议验收；返回池、

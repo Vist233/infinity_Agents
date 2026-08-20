@@ -1,14 +1,16 @@
 # C5 checkpoint — partial
 
-- Candidate commit: `3270d5774777b093d220d8aa6065013f7d272d1c`
+- Candidate commit: `cc88c73`
 
 - Status: `PARTIAL`
 - D1 migration: passed remotely
-- Edge v2 deployment: passed; latest version `cf1bc7d5-7ec9-4c52-a68d-90e4dcb0d3c6`
+- Edge v2 deployment: passed; latest version `489d6721-1075-44cb-9b42-b77c233708a9`
 - zhangbot Redis Relay: passed health and process boundary checks
 - Worker 3 persistent connect/poll: passed
 - Task Center direct-route repair: passed local unit/E2E gates and deployed; direct creation now
   uses `/api/tasks/direct`, while unauthenticated direct creation returns 401
+- Worker credential Namespace boundary: passed frontend unit/type/build gates and deployed; client
+  recovery/rotation sends only Worker ID, while unauthenticated recovery returns 401
 - GHCR multi-architecture image: published as `ghcr.io/vist233/infinity-agent-worker:v1`
   with manifest digest `sha256:16325edb2a6ad962cddaf003d937b8bdc77725857e2f817e4c8abd2fbab0d6c1`
 - Real Docker/Claude Case 2: blocked by missing reachable Worker host and real queued input
