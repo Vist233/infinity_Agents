@@ -156,7 +156,8 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
 6. Task Center 直接创建已修正为调用 `/api/tasks/direct`；本地 43 个单元测试和 6 个
    Playwright 用例通过，线上未认证请求返回 `401 UNAUTHENTICATED`。
 7. 已在本机用 `backend/Dockerfile.worker` 构建并启动 v2 Worker；Cloudflare D1 `connect`/
-   `poll` 成功，Relay 故障不会再导致 Worker 退出。对应回归测试覆盖了该故障路径。
+   `poll` 成功，Relay 503 和一次控制面 TLS 短暂 EOF 都不会再导致 Worker 退出；会话过期会
+   自动重连，凭证错误仍会停止。对应回归测试覆盖了这些故障路径。
 8. GitHub Actions `32354521182` 已成功发布修复后的 amd64/arm64 镜像；当前 v1 manifest
    digest 为 `sha256:c20e098a2a96be9fb36480a8bcb922aab0d50087f80a68239f4fb26a333fd43c`。
 

@@ -14,6 +14,8 @@ import os
 import sys
 from typing import Any
 
+import httpx
+
 from backend.code_agent.worker.control_plane import ControlPlaneError, RedisHintClient, WorkerV2Client
 from backend.code_agent.worker.executor_v2 import execute_claim
 
@@ -25,6 +27,56 @@ def _required(name: str) -> str:
     if not value:
         raise SystemExit(f"{name} is required")
     return value
+
+
+_SESSION_RECONNECT_CODES = {"WORKER_SESSION_INVALID", "WORKER_SESSION_STALE"}
+_FATAL_CONNECT_CODES = {"WORKER_AUTH_INVALID", "WORKER_ALREADY_CONNECTED"}
+
+
+def _retry_delay() -> float:
+    try:
+        value = float(os.getenv("WORKER_RETRY_DELAY_SECONDS", "5"))
+    except ValueError:
+        value = 5.0
+    return max(0.0, min(value, 60.0))
+
+
+def _is_transient_transport_error(exc: BaseException) -> bool:
+    return isinstance(exc, (httpx.HTTPError, OSError, asyncio.TimeoutError))
+
+
+async def _retry_pause() -> None:
+    await asyncio.sleep(_retry_delay())
+
+
+async def _connect_until_ready(client: WorkerV2Client, worker_id: str) -> None:
+    """Keep one credential alive through transient control-plane outages."""
+
+    while True:
+        try:
+            await client.connect()
+            return
+        except asyncio.CancelledError:
+            raise
+        except ControlPlaneError as exc:
+            if exc.code in _FATAL_CONNECT_CODES:
+                raise
+            if exc.status_code is not None and exc.status_code < 500:
+                raise
+            logger.warning("D1 Worker connect failed; retrying: %s", exc.code or type(exc).__name__)
+        except Exception as exc:
+            if not _is_transient_transport_error(exc):
+                raise
+            logger.warning("D1 Worker connect transport failed; retrying: %s", type(exc).__name__)
+        await _retry_pause()
+
+
+async def _reconnect(client: WorkerV2Client, worker_id: str) -> None:
+    # The old session must not be sent with the new handshake after a stale
+    # lease. The server will issue the next session epoch authoritatively.
+    client.session = None
+    logger.warning("Worker %s session is stale; reconnecting", worker_id)
+    await _connect_until_ready(client, worker_id)
 
 
 async def _heartbeat(client: WorkerV2Client, stop: asyncio.Event) -> None:
@@ -60,7 +112,7 @@ async def run_worker(worker_id: str) -> None:
     stop = asyncio.Event()
     heartbeat_task: asyncio.Task[Any] | None = None
     try:
-        await client.connect()
+        await _connect_until_ready(client, worker_id)
         heartbeat_task = asyncio.create_task(_heartbeat(client, stop))
         while not stop.is_set():
             hints: list[dict[str, Any]] = []
@@ -76,10 +128,21 @@ async def run_worker(worker_id: str) -> None:
             try:
                 tasks, next_poll_seconds = await client.poll()
             except ControlPlaneError as exc:
-                if exc.code in {"WORKER_SESSION_INVALID", "WORKER_SESSION_STALE", "WORKER_AUTH_INVALID", "WORKER_ALREADY_CONNECTED"}:
+                if exc.code in _FATAL_CONNECT_CODES:
                     raise
+                if exc.code in _SESSION_RECONNECT_CODES:
+                    await _reconnect(client, worker_id)
+                    continue
                 logger.warning("D1 Worker poll failed: %s", exc.code or type(exc).__name__)
-                await asyncio.sleep(5)
+                await _retry_pause()
+                continue
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if not _is_transient_transport_error(exc):
+                    raise
+                logger.warning("D1 Worker poll transport failed; retrying: %s", type(exc).__name__)
+                await _retry_pause()
                 continue
 
             if not tasks:
