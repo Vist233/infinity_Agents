@@ -21,7 +21,8 @@
 - Relay is a user-level systemd service named `infinity-redis-relay.service`, bound to
   `127.0.0.1:8090`; local `/health` and public Tunnel `/health` both returned HTTP 200.
 - Edge deployment completed with Cloudflare version
-  `68f3f892-b3af-49aa-96fa-aad0bb5ba02c`; `/health` returned HTTP 200.
+  `cf1bc7d5-7ec9-4c52-a68d-90e4dcb0d3c6`; `/health` returned HTTP 200. The deployed candidate is
+  recorded in the aggregate C5 checkpoint and includes the Task Center direct-route repair.
 - Unauthenticated `POST /api/worker/v2/connect` was rejected; no credential was printed.
 
 ## Boundary
