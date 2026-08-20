@@ -1,22 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { configuredTaskUploadLimit, DEFAULT_TASK_UPLOAD_LIMIT_BYTES, handleTaskApi, WORKER_ONLINE_WINDOW_SECONDS, taskSubmissionSourceError, workerPresence, workerTrustLevel } from "../src/tasks";
+import { configuredTaskUploadLimit, DEFAULT_TASK_UPLOAD_LIMIT_BYTES, handleTaskApi, WORKER_ONLINE_WINDOW_SECONDS, taskSubmissionSourceError, workerPresence } from "../src/tasks";
 import type { AuthedUser } from "../src/auth";
 import { makeEnv } from "./fake-d1";
 
 const user: AuthedUser = { userId: "user-1", email: null, sid: "sid-1" };
-
-describe("Worker trust assignment", () => {
-  it("gives only a superuser owner-level trust", () => {
-    expect(workerTrustLevel({ ...user, role: "superuser" })).toBe("owner_trusted");
-    expect(workerTrustLevel({ ...user, role: "super_admin" })).toBe("owner_trusted");
-  });
-
-  it("keeps ordinary and student accounts at institution trust", () => {
-    expect(workerTrustLevel({ ...user, role: "user" })).toBe("institution_trusted");
-    expect(workerTrustLevel({ ...user, role: "student" })).toBe("institution_trusted");
-    expect(workerTrustLevel(user)).toBe("institution_trusted");
-  });
-});
 
 describe("persistent Worker presence", () => {
   const now = 1_800_000_000;

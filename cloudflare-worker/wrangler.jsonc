@@ -55,8 +55,7 @@
     "IMAGE_JUDGE_MAX_IMAGE_BYTES": "10485760",
     "TASK_UPLOAD_MAX_BYTES": "26214400",
     "TASK_ARTIFACT_MAX_BYTES": "2147483648",
-    "PUBLIC_WORKER_POOL_ID": "public-default",
-    "PUBLIC_WORKER_NAMESPACE": "infinity-public"
+    "OUTBOX_RELAY_BATCH_SIZE": "25"
   },
 
   "d1_databases": [
@@ -117,6 +116,7 @@
   // wrangler secret put STEPFUN_API_KEY
   // wrangler secret put ZHANG_AUTH_CLIENT_SECRET
   // wrangler secret put WORKER_CREDENTIAL_ENCRYPTION_KEY
+  // wrangler secret put REDIS_RELAY_PUBLISH_SECRET
   // wrangler secret put IMAGE_JUDGE_ZHANG_AUTH_CLIENT_SECRET
   // wrangler secret put IMAGE_JUDGE_TOKEN_SIGNING_SECRET
   // wrangler secret put IMAGE_JUDGE_DASHSCOPE_API_KEY

@@ -76,18 +76,23 @@ _SAFE_CHILD_ENV_PREFIXES = ("CLAUDE_CODE_",)
 
 
 def _claude_child_environment() -> dict[str, str]:
-    """Pass runtime flags, never long-lived Worker or provider credentials.
+    """Pass runtime flags and the administrator-provided Claude settings.
 
-    The short-lived Attempt capability is injected explicitly by
-    :func:`run_claude_task` after this allowlist is built.  In particular,
-    ``ANTHROPIC_API_KEY`` and an inherited ``ANTHROPIC_AUTH_TOKEN`` must not
-    leak from the supervisor into Claude Code.
+    Control-plane credentials are never copied. The four ``ANTHROPIC_*``
+    values are the explicit provider configuration for this Worker and are
+    copied only to the non-root Claude child. A control-plane Attempt gateway
+    may override them for older isolated deployments.
     """
-    return {
+    environment = {
         key: value
         for key, value in os.environ.items()
         if key in _SAFE_CHILD_ENV_KEYS or key.startswith(_SAFE_CHILD_ENV_PREFIXES)
     }
+    for key in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"):
+        value = os.getenv(key, "").strip()
+        if value:
+            environment[key] = value
+    return environment
 
 
 def _goal_driven_prompt(
@@ -239,9 +244,9 @@ async def run_claude_task(
         logs_dir=logs_dir,
     )
 
-    # Keep the control-plane credential, Redis URL, and other Worker secrets
-    # out of the Claude process environment. Provider settings are the only
-    # secrets intentionally exposed to the CLI.
+    # Keep the control-plane credential, Relay token, and other Worker secrets
+    # out of the Claude process environment. The provider settings are the
+    # only credentials intentionally exposed to the non-root CLI.
     runtime_env = _claude_child_environment()
     claude_uid, claude_gid, claude_home, claude_user = _runtime_identity()
     runtime_env["HOME"] = claude_home
@@ -249,21 +254,30 @@ async def run_claude_task(
     runtime_env["LOGNAME"] = claude_user
     runtime_env.setdefault("XDG_CONFIG_HOME", f"{claude_home}/.config")
     runtime_env.setdefault("XDG_CACHE_HOME", f"{claude_home}/.cache")
-    # Only the short-lived capability for this Attempt may enter Claude's
-    # environment. Long-lived Worker/API/Provider credentials never do.
+    # A legacy Attempt gateway may override the provider values. In the D1
+    # Worker v2 path the provider values come from the explicit Worker env;
+    # Worker control-plane and Relay credentials never enter Claude's env.
     attempt_env = {
-        "ANTHROPIC_BASE_URL": attempt_gateway_url or os.getenv("ATTEMPT_GATEWAY_URL", ""),
-        "ANTHROPIC_AUTH_TOKEN": attempt_gateway_token or os.getenv("ATTEMPT_GATEWAY_TOKEN", ""),
-        "ANTHROPIC_MODEL": attempt_model_id or os.getenv("ATTEMPT_MODEL_ID", ""),
+        "ANTHROPIC_BASE_URL": attempt_gateway_url or os.getenv("ATTEMPT_GATEWAY_URL", "") or os.getenv("ANTHROPIC_BASE_URL", ""),
+        "ANTHROPIC_AUTH_TOKEN": attempt_gateway_token or os.getenv("ATTEMPT_GATEWAY_TOKEN", "") or os.getenv("ANTHROPIC_AUTH_TOKEN", ""),
+        "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", ""),
+        "ANTHROPIC_MODEL": attempt_model_id or os.getenv("ATTEMPT_MODEL_ID", "") or os.getenv("ANTHROPIC_MODEL", ""),
     }
-    if not all(str(value).strip() for value in attempt_env.values()):
+    if attempt_gateway_url or attempt_gateway_token:
+        # A gateway-scoped token replaces the direct provider key; do not
+        # leave both credentials in the child environment.
+        runtime_env.pop("ANTHROPIC_API_KEY", None)
+        attempt_env["ANTHROPIC_API_KEY"] = ""
+    if not attempt_env["ANTHROPIC_BASE_URL"].strip() or not attempt_env["ANTHROPIC_MODEL"].strip() or not (
+        attempt_env["ANTHROPIC_AUTH_TOKEN"].strip() or attempt_env["ANTHROPIC_API_KEY"].strip()
+    ):
         yield {
             "type": "error",
-            "message": "Attempt model gateway capability is missing",
+            "message": "Claude provider configuration is missing",
             "failure_code": "provider_unavailable",
         }
         return
-    runtime_env.update({key: str(value).strip() for key, value in attempt_env.items()})
+    runtime_env.update({key: str(value).strip() for key, value in attempt_env.items() if str(value).strip()})
 
     cmd = [
         "claude",

@@ -17,7 +17,7 @@
 - Method/Dataset冻结、25MB边界；
 - Artifact streaming/multipart、checksum、manifest、ZIP和清理逻辑；
 - Task详情真实 ID，禁止 `/api/tasks/preview`；
-- 本地 PostgreSQL栈真实运行 Case 2/3，证明 Claude Runtime能够完成两类任务。
+- 历史本地 PostgreSQL Case 2/3 只作为 Claude Runtime/Artifact 参考，不计入 D1 验收。
 
 ### 不能继续当作目标完成项
 
@@ -28,18 +28,23 @@
 - P9 PostgreSQL Case 2/3等于目标架构通过；
 - P10最终审查完成。
 
-### 尚未完成
+### C0–C4 已完成
 
 - D1 canonical Task/Attempt/Worker/Event/Outbox/Artifact schema；
-- 单一 public Worker策略迁移；
-- `/api/worker/v2/*` HTTPS控制/数据协议；
-- D1条件 claim、lease、fencing和幂等；
-- zhangbot HTTPS Redis Relay；
-- Docker Worker 的 Redis hint + HTTPS D1 API客户端；
-- R2输入/Artifact数据面；
+- 单一 `public-default / infinity-public` Worker 策略；
+- `/api/worker/v2/*` HTTPS 控制/数据协议和 D1 条件 claim、lease、fencing、幂等；
+- 本地固定合同的 zhangbot HTTPS Redis Relay 与 D1 outbox relay；
+- Docker Worker 的 Redis hint + HTTPS D1/R2 客户端；
+- `backend/Dockerfile.worker` 镜像边界、非 root Claude 子进程、multipart 上传和任务目录清理；
+- Cloudflare Edge 53 tests、Python 328 passed / 45 skipped、镜像构建和边界检查。
+
+### 尚未完成
+
+- zhangbot Redis Relay 的远程部署和真实故障恢复；
 - D1/R2/Redis真实 Case 2/3；
-- `0ed4811`之后的新P10审查；
-- GitHub/GHCR/Cloudflare发布。
+- C6 浏览器、Task Center、Worker UI 和移动端真实验收；
+- C7 只读 Code Review、最终同一候选版本回归；
+- GitHub/GHCR/Cloudflare 发布（必须另行获得明确授权）。
 
 ## 2. 顺序实施
 
@@ -84,7 +89,8 @@
 
 ### C3：zhangbot Redis Relay
 
-工作：在zhangbot部署最小非Docker Relay，接收签名的opaque Outbox事件并幂等XADD；Docker Worker使用窄Redis ACL消费公共Stream并报告presence。
+工作：实现并测试最小非 Docker Relay；取得远程授权后再在 zhangbot 部署，接收签名的
+opaque Outbox 事件并幂等 XADD；Docker Worker 使用窄 Relay hint 权限。
 
 验收：
 
@@ -95,9 +101,11 @@
 - Redis清空后可从D1恢复；
 - Redis中没有用户内容、Method、Dataset、Secret或Artifact。
 
-### C4：Docker Worker切换到D1 HTTPS协议
+### C4：Docker Worker切换到D1 HTTPS协议（已完成本地候选）
 
-工作：保留唯一Claude Runtime，把consumer/executor的数据面从PostgreSQL切换为Redis hint + Worker v2 HTTPS API；删除生产PostgreSQL client、RLS和旧D1 Worker trust路由。
+工作：保留唯一 Claude Runtime，把 consumer/executor 数据面从 PostgreSQL 切换为 Redis hint +
+Worker v2 HTTPS API；生产镜像和 Cloudflare Worker surface 不再包含旧 PostgreSQL client、
+RLS claim 或旧 trust 路由。历史测试/迁移依赖的文件先锁定，C5 后再按调用关系删除。
 
 验收：生产镜像中无PostgreSQL连接要求；只有一个consumer、一个Runtime、一个Dockerfile和一个Worker协议；旧路由只允许明确410迁移响应，最终无调用者。
 

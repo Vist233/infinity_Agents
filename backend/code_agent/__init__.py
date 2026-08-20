@@ -1,18 +1,8 @@
-"""Infinity Agents backend task and Worker package."""
-from backend.code_agent.models import TaskStatus, can_transition, Task, TaskSpec
-from backend.code_agent.task_service import (
-    create_task_spec, create_dataset_snapshot, create_task, get_task,
-    try_claim_task, update_task_status, create_task_event, get_task_events,
-    create_outbox_event, get_pending_outbox_events, create_artifact,
-)
-from backend.code_agent.redis_client import RedisClient
-from backend.code_agent.outbox import OutboxPublisher
-from backend.code_agent.worker import run_worker
+"""Infinity Agents task package.
 
-__all__ = [
-    "TaskStatus", "can_transition", "Task", "TaskSpec",
-    "create_task_spec", "create_dataset_snapshot", "create_task", "get_task",
-    "try_claim_task", "update_task_status", "create_task_event", "get_task_events",
-    "create_outbox_event", "get_pending_outbox_events", "create_artifact",
-    "RedisClient", "OutboxPublisher", "run_worker",
-]
+The D1 Worker image imports this package while deliberately not installing the
+legacy PostgreSQL/Redis application dependencies. Keep package import side
+effects empty; the web API imports its historical modules explicitly.
+"""
+
+__all__: list[str] = []

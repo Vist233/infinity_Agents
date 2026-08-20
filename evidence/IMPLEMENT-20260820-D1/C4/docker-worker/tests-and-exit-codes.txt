@@ -1,0 +1,37 @@
+C4 command ledger
+
+1. `npm run check` in `cloudflare-worker`
+   exit 0 — TypeScript typecheck passed.
+
+2. `npm test -- --run` in `cloudflare-worker`
+   exit 0 — 12 test files, 53 tests passed.
+
+3. `eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q`
+   exit 0 — 328 passed, 45 skipped.
+
+4. `python -m py_compile` on the v2 Worker modules
+   exit 0 — syntax compilation passed.
+
+5. `docker build --no-cache -f backend/Dockerfile.worker
+   -t infinity-agent-worker:v2-local .`
+   exit 0 — image built as
+   `sha256:c5bb1f3b731f61a9e53620aff1b983585b939e998c43d405bf9d3b36fcccdf9b`.
+
+6. Read-only image import/entrypoint check
+   exit 0 — `consumer_v2`, `control_plane`, and `executor_v2` import; Claude
+   Code reports `2.1.226 (Claude Code)`.
+
+7. Read-only image boundary check
+   exit 0 — `asyncpg=absent`, `redis=absent`, `docker=absent`, Docker socket
+   absent, and old `consumer.py`/`executor.py`/`reaper.py` absent from `/app`.
+
+8. `git diff --check`
+   exit 0 — no whitespace errors.
+
+9. `docker compose --env-file worker.cloudflare.env.example -f
+   docker-compose.cloudflare-workers.yml config` and the equivalent local
+   smoke-test command
+   exit 0 — both Compose files parse with the D1/Relay-only Worker service.
+
+These are local tests. They do not claim remote D1, R2, zhangbot Redis, or
+real Claude Case 2/3 acceptance.

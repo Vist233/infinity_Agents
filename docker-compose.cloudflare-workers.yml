@@ -1,4 +1,5 @@
-# One persistent Worker connected to the central PostgreSQL/Redis cluster.
+# One persistent Worker connected to Cloudflare D1/R2 through the HTTPS control
+# plane and to zhangbot Redis through the HTTPS Relay.
 # This deployment Compose file never builds from source. Supply either a local
 # smoke-test tag or an immutable GHCR reference, for example:
 # WORKER_IMAGE=ghcr.io/<org-or-user>/infinity-agent-worker@sha256:<digest>
@@ -8,7 +9,7 @@
 x-cloudflare-worker: &cloudflare-worker
   image: ${WORKER_IMAGE:?WORKER_IMAGE must be supplied as a local tag or pinned GHCR digest}
   restart: unless-stopped
-  command: ["python", "-m", "backend.code_agent.worker.consumer", "${WORKER_ID:-worker-default}"]
+  command: ["python", "-m", "backend.code_agent.worker.consumer_v2", "${WORKER_ID:-worker-default}"]
 
 services:
   worker-b:
@@ -19,18 +20,13 @@ services:
     environment:
       WORKER_ID: ${WORKER_ID:?WORKER_ID must be supplied by the server-issued credential bundle}
       WORKER_INSTANCE_ID: ${WORKER_INSTANCE_ID:?WORKER_INSTANCE_ID must be unique for this container}
-      WORKER_PROTOCOL_VERSION: ${WORKER_PROTOCOL_VERSION:-1}
-      WORKER_RUNTIME_CAPABILITY: ${WORKER_RUNTIME_CAPABILITY:-goal-driven-claude-code}
+      WORKER_PROTOCOL_VERSION: "2"
+      WORKER_RUNTIME_CAPABILITY: "goal-driven-claude-code"
       WORKER_IMAGE_DIGEST: ${WORKER_IMAGE_DIGEST:-}
-      WORKER_ENROLLMENT_REQUIRED: "1"
       WORKER_CREDENTIAL: ${WORKER_CREDENTIAL:?WORKER_CREDENTIAL must be supplied by the server-issued credential bundle}
-      DATABASE_URL: ${WORKER_DATABASE_URL:?WORKER_DATABASE_URL must be supplied by the administrator}
-      REDIS_URL: ${WORKER_REDIS_URL:?WORKER_REDIS_URL must be supplied by the administrator}
-      REDIS_NAMESPACE: ${REDIS_NAMESPACE:?REDIS_NAMESPACE must be supplied by the administrator}
       WORKER_CONTROL_PLANE_URL: ${WORKER_CONTROL_PLANE_URL:?WORKER_CONTROL_PLANE_URL must be supplied by the administrator}
-      DB_RLS_ENABLED: ${DB_RLS_ENABLED:-1}
-      DB_RLS_REQUIRE_CONTEXT: ${DB_RLS_REQUIRE_CONTEXT:-1}
-      DB_RLS_WORKER_ROLE: ${DB_RLS_WORKER_ROLE:-infinity_worker}
+      WORKER_RELAY_URL: ${WORKER_RELAY_URL:?WORKER_RELAY_URL must be supplied by the administrator}
+      WORKER_RELAY_HINT_TOKEN: ${WORKER_RELAY_HINT_TOKEN:?WORKER_RELAY_HINT_TOKEN must be supplied by the administrator}
       CODE_AGENT_EXECUTOR_MODE: direct
     volumes:
       - worker_b_workspace:/workspace

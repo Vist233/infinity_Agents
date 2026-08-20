@@ -1,9 +1,9 @@
-# Infinity Agents unified Worker image.
+# Infinity Agents D1 Worker v2 image.
 #
-# This is the only production Worker image. It connects directly to the
-# administrator-provided PostgreSQL and Redis cluster and runs the fixed
-# Goal-Driven Claude Code runtime in this long-lived container. There is
-# intentionally no Docker CLI, Docker daemon, or Docker socket.
+# The container has no PostgreSQL driver, Redis client, Docker CLI, Docker
+# daemon, Docker socket, or verifier. It talks to Cloudflare D1/R2 through the
+# HTTPS Worker v2 control plane and receives only fixed hints from the HTTPS
+# Redis Relay. Claude Code runs directly as the non-root `claude` user.
 FROM node:22-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -32,12 +32,19 @@ RUN groupadd --system --gid 10001 claude \
     && useradd --system --uid 10001 --gid 10001 --create-home --home-dir /home/claude claude
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.worker.txt .
+RUN pip install --no-cache-dir -r requirements.worker.txt
 
-COPY backend/ ./backend/
+COPY backend/__init__.py ./backend/__init__.py
+COPY backend/security.py ./backend/security.py
+COPY backend/code_agent/__init__.py ./backend/code_agent/__init__.py
+COPY backend/code_agent/worker/__init__.py ./backend/code_agent/worker/__init__.py
+COPY backend/code_agent/worker/claude_runtime.py ./backend/code_agent/worker/claude_runtime.py
+COPY backend/code_agent/worker/control_plane.py ./backend/code_agent/worker/control_plane.py
+COPY backend/code_agent/worker/executor_v2.py ./backend/code_agent/worker/executor_v2.py
+COPY backend/code_agent/worker/consumer_v2.py ./backend/code_agent/worker/consumer_v2.py
 RUN mkdir -p /workspace/task-workdirs /workspace/task-outputs \
-    && chown -R 10001:10001 /home/claude
+    && chown -R 10001:10001 /home/claude /workspace
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
@@ -48,4 +55,4 @@ ENV CLAUDE_RUNTIME_UID=10001
 ENV CLAUDE_RUNTIME_GID=10001
 ENV CLAUDE_RUNTIME_HOME=/home/claude
 
-CMD ["python", "-m", "backend.code_agent.worker.consumer", "worker-default"]
+CMD ["python", "-m", "backend.code_agent.worker.consumer_v2"]

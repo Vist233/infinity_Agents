@@ -136,15 +136,19 @@ pending，恢复后重放。Worker也可以低频调用受认证 poll 作为通�
 
 ## 9. 当前代码判定
 
-截至 `cloudflare-deploy@0ed4811`：
+截至当前 `cloudflare-deploy` C4 候选版本：
 
-- 唯一 Dockerfile、唯一 Claude Runtime、Goal-Driven Prompt、协议门禁、streaming/multipart、清理和 Case 2/3 本地执行证据可以复用；
-- 这些 Case 2/3使用的是本地 PostgreSQL栈，只证明执行 Runtime和Artifact流程，不证明目标 D1控制面；
-- `cloudflare-worker/src/tasks.ts` 仍有旧 D1 trust/task注册逻辑；
-- `/api/worker/v1/*` 已返回 410，但新的 `/api/worker/v2/*` D1协议尚未完成；
-- zhangbot Redis Relay 尚未完成；
-- PostgreSQL/RLS代码仍是当前本地活跃实现，迁移完成前不得部署为目标架构；
-- P10审查只覆盖到 `0349a8c`，已被之后的 `0ed4811` 和本 ADR失效。
+- 唯一 `backend/Dockerfile.worker` 已切换到 `consumer_v2`；唯一生产 Runtime 仍是
+  `backend/code_agent/worker/claude_runtime.py`；
+- `/api/worker/v2/*` 已实现 D1 session、CAS claim、lease/fencing、R2 input 和 multipart
+  Artifact finalize；旧 `/api/worker/v1/*` 不属于新协议；
+- `backend/redis_relay.py` 和 Edge outbox relay 已实现固定 HTTPS Relay 合同，但尚未部署
+  到 zhangbot；
+- 镜像内不包含 PostgreSQL/Redis 客户端、Docker CLI、Docker socket 或旧 Consumer；
+- 旧 Python PostgreSQL/RLS 文件和旧迁移表仍仅用于历史测试/迁移兼容，不能通过当前
+  `docker-compose.cloudflare-workers.yml` 作为生产 Worker 启动；C5 真实链路通过后再按调用
+  关系删除无依赖的历史文件；
+- C5 的真实 D1/R2/zhangbot Redis/Claude Case 2/3，以及 C6/C7 浏览器审查和发布仍未完成。
 
 ## 10. 发布门槛
 

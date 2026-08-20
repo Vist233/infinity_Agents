@@ -1,0 +1,11 @@
+C4 baseline — 2026-08-20 Asia/Shanghai
+
+branch=cloudflare-deploy
+base_commit=8da87b49b26d15ed2cd786e53a4e2e1e8e89914a
+base_commit_message=feat: add D1 outbox Redis relay
+database_fact_source=cloudflare_d1
+redis_role=zhangbot_https_relay_only
+remote_state=untouched
+
+The worktree was intentionally dirty with only the current C4 implementation
+and documentation changes. No unrelated user/agent files were overwritten.

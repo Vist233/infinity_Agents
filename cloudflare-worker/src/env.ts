@@ -38,8 +38,6 @@ export interface Env {
   RESOURCE_BUCKET?: R2Bucket;
   TASK_UPLOAD_MAX_BYTES?: string;
   TASK_ARTIFACT_MAX_BYTES?: string;
-  PUBLIC_WORKER_POOL_ID?: string;
-  PUBLIC_WORKER_NAMESPACE?: string;
   // D1 outbox delivery to the administrator-managed HTTPS Redis Relay.
   REDIS_RELAY_URL?: string;
   OUTBOX_RELAY_BATCH_SIZE?: string;

@@ -13,7 +13,7 @@ def test_claude_runtime_has_no_nested_docker_command():
     assert '"claude"' in source
 
 
-def test_child_environment_excludes_worker_and_provider_secrets(monkeypatch):
+def test_child_environment_excludes_worker_and_redis_secrets_but_keeps_provider_config(monkeypatch):
     monkeypatch.setenv("WORKER_CREDENTIAL", "worker-secret")
     monkeypatch.setenv("REDIS_URL", "redis://:redis-secret@example.test/0")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "long-lived-provider-key")
@@ -24,6 +24,6 @@ def test_child_environment_excludes_worker_and_provider_secrets(monkeypatch):
 
     assert "WORKER_CREDENTIAL" not in env
     assert "REDIS_URL" not in env
-    assert "ANTHROPIC_API_KEY" not in env
-    assert "ANTHROPIC_AUTH_TOKEN" not in env
+    assert env["ANTHROPIC_API_KEY"] == "long-lived-provider-key"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "long-lived-provider-token"
     assert env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"

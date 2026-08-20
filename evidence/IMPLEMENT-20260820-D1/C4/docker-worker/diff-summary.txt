@@ -1,0 +1,31 @@
+# C4 diff summary
+
+Runtime/data plane:
+
+- added `backend/code_agent/worker/control_plane.py`;
+- added `backend/code_agent/worker/consumer_v2.py`;
+- added `backend/code_agent/worker/executor_v2.py`;
+- updated `backend/code_agent/worker/claude_runtime.py` to pass only the
+  administrator-provided Claude provider settings to the non-root child;
+- removed package import side effects so the v2 image does not load old SQL or
+  Redis modules.
+
+Image/configuration:
+
+- `backend/Dockerfile.worker` now copies only the v2 runtime surface;
+- `requirements.worker.txt` contains only `httpx`;
+- `docker-compose.cloudflare-workers.yml`, `docker-compose.local.yml`,
+  `worker.cloudflare.env.example`, and `worker.env.example` use D1/Relay HTTPS
+  settings only.
+
+Edge/browser Worker surface:
+
+- old trust-level, user/private-pool, and legacy enrollment implementations were
+  removed from the active `tasks.ts` route surface;
+- the D1 policy table is the only source for `public-default/infinity-public`;
+- configurable duplicate public pool/Namespace vars were removed;
+- Cloudflare Worker tests were adjusted to the no-trust model.
+
+Documentation:
+
+- updated the D1 ADR status, continuation plan, and Windows onboarding.

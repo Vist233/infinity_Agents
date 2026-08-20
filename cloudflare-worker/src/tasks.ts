@@ -631,8 +631,6 @@ async function handleArtifact(artifactId: string, env: Env, user: AuthedUser): P
   return new Response(object.body, { headers });
 }
 
-export type WorkerTrustLevel = "owner_trusted" | "institution_trusted" | "student_untrusted";
-
 const SUPERUSER_ROLES = new Set([
   "superuser",
   "super_user",
@@ -645,15 +643,6 @@ const SUPERUSER_ROLES = new Set([
 export function isSuperuserRole(roleValue?: string | null): boolean {
   const role = String(roleValue ?? "user").trim().toLowerCase().replace(/\s+/g, "_");
   return SUPERUSER_ROLES.has(role);
-}
-
-/** Trust is assigned from the verified auth role, never from the browser. */
-export function workerTrustLevelFromRole(roleValue?: string | null): WorkerTrustLevel {
-  return isSuperuserRole(roleValue) ? "owner_trusted" : "institution_trusted";
-}
-
-export function workerTrustLevel(user: AuthedUser): WorkerTrustLevel {
-  return workerTrustLevelFromRole(user.role);
 }
 
 export function taskSubmissionSourceError(
@@ -675,296 +664,9 @@ function operatorAllowed(user: AuthedUser): boolean {
   return isSuperuserRole(user.role);
 }
 
-const PUBLIC_WORKER_PRINCIPAL = "system:public-workers";
-
-function publicPoolId(env: Env): string {
-  return env.PUBLIC_WORKER_POOL_ID?.trim() || "public-default";
-}
-
-function publicWorkerNamespace(env: Env): string {
-  return env.PUBLIC_WORKER_NAMESPACE?.trim() || "infinity-public";
-}
-
 function forbiddenOperator(): Response {
   return errorJson("Superuser access required", 403, "WORKER_ADMIN_FORBIDDEN");
 }
-
-async function recordPublicWorkerAdminEvent(
-  env: Env,
-  user: AuthedUser,
-  action: "created" | "credential_recovered" | "credential_rotated" | "revoked",
-  poolId: string,
-  workerId: string | null,
-): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO worker_admin_events
-      (event_id, action, worker_id, pool_id, actor_user_id, metadata_json, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, '{}', ?6)`
-  ).bind(taskId(), action, workerId, poolId, user.userId, nowSeconds()).run();
-}
-
-async function ensurePublicPool(env: Env, user: AuthedUser): Promise<{ pool_id: string; namespace: string } | null> {
-  const poolId = publicPoolId(env);
-  const namespace = publicWorkerNamespace(env);
-  const existing = await env.DB.prepare(
-    `SELECT pool_id, namespace, kind, status
-     FROM worker_pools WHERE pool_id = ?1`
-  ).bind(poolId).first<{ pool_id: string; namespace: string; kind: string; status: string }>();
-  if (existing) {
-    if (existing.kind !== "public" || existing.status === "revoked" || existing.namespace !== namespace) return null;
-    return { pool_id: existing.pool_id, namespace: existing.namespace };
-  }
-  const now = nowSeconds();
-  try {
-    await env.DB.prepare(
-      `INSERT INTO worker_pools
-        (pool_id, kind, namespace, owner_user_id, status, created_by, created_at, updated_at)
-       VALUES (?1, 'public', ?2, NULL, 'active', ?3, ?4, ?4)`
-    ).bind(poolId, namespace, user.userId, now).run();
-  } catch {
-    return null;
-  }
-  return { pool_id: poolId, namespace };
-}
-
-async function handleWorkerEnrollment(request: Request, env: Env, user: AuthedUser): Promise<Response> {
-  const body = await jsonBody(request);
-  const namespace = String(body?.namespace ?? "").trim();
-  if (!namespace || namespace.length > 120 || /\s/.test(namespace)) {
-    return errorJson("Invalid worker namespace", 400, "INVALID_ENROLLMENT");
-  }
-
-  // Namespace is a reusable execution scope. Each issuance represents another
-  // machine in that scope and receives its own server-generated identity.
-  const workerId = `worker-${taskId()}`;
-  const credential = `wc_${taskId().replaceAll("-", "")}${taskId().replaceAll("-", "")}`;
-  const credentialHash = await sha256(credential);
-  let credentialCiphertext: string;
-  try {
-    credentialCiphertext = await encryptWorkerCredential(credential, env);
-  } catch {
-    return errorJson("Persistent Worker credential storage is not configured", 503, "WORKER_CREDENTIAL_STORAGE_UNAVAILABLE");
-  }
-  const trustLevel = workerTrustLevel(user);
-  try {
-    await env.DB.prepare(
-      `INSERT INTO worker_registrations
-        (worker_id, namespace, user_id, credential_hash, credential_ciphertext, credential_expires_at,
-         trust_level, status, capabilities_json, created_at, worker_kind, pool_id, owner_user_id)
-       VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, 'active', '[]', ?7, 'user', NULL, ?3)`
-    ).bind(workerId, namespace, user.userId, credentialHash, credentialCiphertext, trustLevel, nowSeconds()).run();
-  } catch {
-    return errorJson("Worker registration could not be saved", 503, "WORKER_REGISTRATION_UNAVAILABLE");
-  }
-  return json({
-    worker_id: workerId,
-    namespace,
-    trust_level: trustLevel,
-    worker_credential: credential,
-    credential_expires_at: null,
-    control_base_url: new URL(request.url).origin,
-    persistent: true,
-    one_time: false,
-  }, 201);
-}
-
-async function handlePublicWorkerPool(env: Env, user: AuthedUser): Promise<Response> {
-  if (!operatorAllowed(user)) return forbiddenOperator();
-  const pool = await ensurePublicPool(env, user);
-  if (!pool) return errorJson("Public Worker pool is not configured", 503, "PUBLIC_WORKER_POOL_UNAVAILABLE");
-  const now = nowSeconds();
-  const rows = await env.DB.prepare(
-    `SELECT worker_id, namespace, trust_level, status, credential_expires_at,
-            last_seen_at, created_at, revoked_at, credential_ciphertext
-     FROM worker_registrations
-     WHERE worker_kind = 'public' AND pool_id = ?1
-     ORDER BY created_at ASC`
-  ).bind(pool.pool_id).all<WorkerRegistrationRow>();
-  return json({
-    pool: {
-      pool_id: pool.pool_id,
-      kind: "public",
-      namespace: pool.namespace,
-      worker_count: rows.results?.length ?? 0,
-    },
-    workers: (rows.results ?? []).map((row) => ({
-      ...publicWorkerRegistration(row, now),
-      worker_kind: "public",
-    })),
-  });
-}
-
-async function handleCreatePublicWorker(request: Request, env: Env, user: AuthedUser): Promise<Response> {
-  if (!operatorAllowed(user)) return forbiddenOperator();
-  const pool = await ensurePublicPool(env, user);
-  if (!pool) return errorJson("Public Worker pool is not configured", 503, "PUBLIC_WORKER_POOL_UNAVAILABLE");
-  const workerId = `public-worker-${taskId()}`;
-  const credential = `wc_${taskId().replaceAll("-", "")}${taskId().replaceAll("-", "")}`;
-  const credentialHash = await sha256(credential);
-  let credentialCiphertext: string;
-  try {
-    credentialCiphertext = await encryptWorkerCredential(credential, env);
-  } catch {
-    return errorJson("Persistent Worker credential storage is not configured", 503, "WORKER_CREDENTIAL_STORAGE_UNAVAILABLE");
-  }
-  const now = nowSeconds();
-  try {
-    const result = await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO worker_registrations
-          (worker_id, namespace, user_id, credential_hash, credential_ciphertext, credential_expires_at,
-           trust_level, status, capabilities_json, created_at, worker_kind, pool_id, owner_user_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL, 'owner_trusted', 'active', '[]', ?6, 'public', ?7, NULL)`
-      ).bind(workerId, pool.namespace, PUBLIC_WORKER_PRINCIPAL, credentialHash, credentialCiphertext, now, pool.pool_id),
-      env.DB.prepare(
-        `INSERT INTO worker_admin_events
-          (event_id, action, worker_id, pool_id, actor_user_id, metadata_json, created_at)
-         VALUES (?1, 'created', ?2, ?3, ?4, '{}', ?5)`
-      ).bind(taskId(), workerId, pool.pool_id, user.userId, now),
-    ]);
-    if (((result[0] as { meta?: { changes?: number } })?.meta?.changes ?? 0) !== 1) throw new Error("registration insert failed");
-  } catch {
-    return errorJson("Public Worker registration could not be saved", 503, "PUBLIC_WORKER_REGISTRATION_UNAVAILABLE");
-  }
-  return json({
-    worker_id: workerId,
-    worker_kind: "public",
-    namespace: pool.namespace,
-    pool_id: pool.pool_id,
-    trust_level: "owner_trusted",
-    worker_credential: credential,
-    credential_expires_at: null,
-    control_base_url: new URL(request.url).origin,
-    persistent: true,
-    one_time: false,
-  }, 201);
-}
-
-async function handlePublicWorkerCredential(workerId: string, request: Request, env: Env, user: AuthedUser): Promise<Response> {
-  if (!operatorAllowed(user)) return forbiddenOperator();
-  const pool = await ensurePublicPool(env, user);
-  if (!pool) return errorJson("Public Worker pool is not configured", 503, "PUBLIC_WORKER_POOL_UNAVAILABLE");
-  const row = await env.DB.prepare(
-    `SELECT worker_id, namespace, pool_id, credential_ciphertext
-     FROM worker_registrations
-     WHERE worker_id = ?1 AND namespace = ?2 AND pool_id = ?3
-       AND worker_kind = 'public' AND status = 'active' AND revoked_at IS NULL`
-  ).bind(workerId, pool.namespace, pool.pool_id).first<{
-    worker_id: string;
-    namespace: string;
-    pool_id: string;
-    credential_ciphertext: string | null;
-  }>();
-  if (!row) return errorJson("Active public Worker registration not found", 404, "PUBLIC_WORKER_NOT_FOUND");
-  if (!row.credential_ciphertext) return errorJson("Public Worker credential is not recoverable", 409, "CREDENTIAL_NOT_RECOVERABLE");
-  const credential = await decryptWorkerCredential(row.credential_ciphertext, env);
-  if (!credential) return errorJson("Persistent Worker credential could not be decrypted", 503, "WORKER_CREDENTIAL_STORAGE_UNAVAILABLE");
-  try {
-    await recordPublicWorkerAdminEvent(env, user, "credential_recovered", pool.pool_id, row.worker_id);
-  } catch {
-    return errorJson("Public Worker credential audit could not be recorded", 503, "WORKER_ADMIN_AUDIT_UNAVAILABLE");
-  }
-  return json({
-    worker_id: row.worker_id,
-    worker_kind: "public",
-    namespace: row.namespace,
-    pool_id: row.pool_id,
-    worker_credential: credential,
-    credential_expires_at: null,
-    persistent: true,
-    one_time: false,
-  });
-}
-
-async function handleRotatePublicWorkerCredential(workerId: string, request: Request, env: Env, user: AuthedUser): Promise<Response> {
-  if (!operatorAllowed(user)) return forbiddenOperator();
-  const pool = await ensurePublicPool(env, user);
-  if (!pool) return errorJson("Public Worker pool is not configured", 503, "PUBLIC_WORKER_POOL_UNAVAILABLE");
-  const current = await env.DB.prepare(
-    `SELECT worker_id, namespace, status
-     FROM worker_registrations
-     WHERE worker_id = ?1 AND namespace = ?2 AND pool_id = ?3 AND worker_kind = 'public'`
-  ).bind(workerId, pool.namespace, pool.pool_id).first<{ worker_id: string; namespace: string; status: string }>();
-  if (!current) return errorJson("Public Worker registration not found", 404, "PUBLIC_WORKER_NOT_FOUND");
-  if (current.status === "revoked") return errorJson("Revoked public Worker cannot be rotated", 409, "ENROLLMENT_REVOKED");
-  const credential = `wc_${taskId().replaceAll("-", "")}${taskId().replaceAll("-", "")}`;
-  let credentialCiphertext: string;
-  try {
-    credentialCiphertext = await encryptWorkerCredential(credential, env);
-  } catch {
-    return errorJson("Persistent Worker credential storage is not configured", 503, "WORKER_CREDENTIAL_STORAGE_UNAVAILABLE");
-  }
-  const now = nowSeconds();
-  const result = await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE worker_registrations
-       SET credential_hash = ?4, credential_ciphertext = ?5,
-           credential_expires_at = NULL, status = 'active', revoked_at = NULL,
-           last_seen_at = NULL
-       WHERE worker_id = ?1 AND namespace = ?2 AND pool_id = ?3 AND worker_kind = 'public' AND status <> 'revoked'`
-    ).bind(workerId, pool.namespace, pool.pool_id, await sha256(credential), credentialCiphertext),
-    env.DB.prepare(
-      `UPDATE worker_sessions SET disconnected_at = ?3, lease_expires_at = ?3
-       WHERE worker_id = ?1 AND namespace = ?2`
-    ).bind(workerId, pool.namespace, now),
-    env.DB.prepare(
-      `INSERT INTO worker_admin_events
-        (event_id, action, worker_id, pool_id, actor_user_id, metadata_json, created_at)
-       VALUES (?1, 'credential_rotated', ?2, ?3, ?4, '{}', ?5)`
-    ).bind(taskId(), workerId, pool.pool_id, user.userId, now),
-  ]);
-  if (((result[0] as { meta?: { changes?: number } })?.meta?.changes ?? 0) !== 1) return errorJson("Public Worker credential rotation failed", 409, "ENROLLMENT_ROTATION_CONFLICT");
-  return json({
-    worker_id: workerId,
-    worker_kind: "public",
-    namespace: pool.namespace,
-    pool_id: pool.pool_id,
-    worker_credential: credential,
-    credential_expires_at: null,
-    persistent: true,
-    one_time: false,
-  });
-}
-
-async function handleRevokePublicWorker(workerId: string, request: Request, env: Env, user: AuthedUser): Promise<Response> {
-  if (!operatorAllowed(user)) return forbiddenOperator();
-  const pool = await ensurePublicPool(env, user);
-  if (!pool) return errorJson("Public Worker pool is not configured", 503, "PUBLIC_WORKER_POOL_UNAVAILABLE");
-  const now = nowSeconds();
-  const result = await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE worker_registrations
-       SET revoked_at = ?3, status = 'revoked'
-       WHERE worker_id = ?1 AND namespace = ?2 AND pool_id = ?4
-         AND worker_kind = 'public' AND revoked_at IS NULL`
-    ).bind(workerId, pool.namespace, now, pool.pool_id),
-    env.DB.prepare(
-      `UPDATE worker_sessions SET disconnected_at = ?3, lease_expires_at = ?3
-       WHERE worker_id = ?1 AND namespace = ?2`
-    ).bind(workerId, pool.namespace, now),
-    env.DB.prepare(
-      `INSERT INTO worker_admin_events
-        (event_id, action, worker_id, pool_id, actor_user_id, metadata_json, created_at)
-       VALUES (?1, 'revoked', ?2, ?3, ?4, '{}', ?5)`
-    ).bind(taskId(), workerId, pool.pool_id, user.userId, now),
-  ]);
-  if (((result[0] as { meta?: { changes?: number } })?.meta?.changes ?? 0) !== 1) return errorJson("Active public Worker registration not found", 404, "PUBLIC_WORKER_NOT_FOUND");
-  return json({ worker_id: workerId, worker_kind: "public", namespace: pool.namespace, status: "revoked" });
-}
-
-type WorkerRegistrationRow = {
-  worker_id: string;
-  namespace: string;
-  trust_level: string;
-  status: string;
-  credential_expires_at: number | null;
-  last_seen_at: number | null;
-  created_at: number;
-  revoked_at: number | null;
-  credential_ciphertext?: string | null;
-  worker_kind?: string;
-  pool_id?: string | null;
-};
 
 export type WorkerPresence = "online" | "offline" | "never_seen";
 
@@ -978,152 +680,12 @@ export function workerPresence(
   return lastSeenAt >= now - WORKER_ONLINE_WINDOW_SECONDS ? "online" : "offline";
 }
 
-function publicWorkerRegistration(row: WorkerRegistrationRow, now = nowSeconds()): Record<string, unknown> {
-  return {
-    worker_id: row.worker_id,
-    namespace: row.namespace,
-    trust_level: row.trust_level,
-    status: row.status,
-    presence: workerPresence(row.status, row.last_seen_at, now),
-    credential_expires_at: iso(row.credential_expires_at),
-    last_seen_at: iso(row.last_seen_at),
-    created_at: iso(row.created_at),
-    revoked_at: iso(row.revoked_at),
-    credential_available: Boolean(row.credential_ciphertext),
-  };
-}
-
-async function handleListWorkerEnrollments(env: Env, user: AuthedUser): Promise<Response> {
-  const now = nowSeconds();
-  const persistent = await env.DB.prepare(
-    `SELECT worker_id, namespace, trust_level, status, credential_expires_at,
-            last_seen_at, created_at, revoked_at, credential_ciphertext
-     FROM worker_registrations WHERE user_id = ?1`
-  ).bind(user.userId).all<WorkerRegistrationRow>();
-  const legacy = await env.DB.prepare(
-    `SELECT worker_id, namespace, trust_level, status, credential_expires_at,
-            last_seen_at, created_at, revoked_at
-     FROM worker_enrollments WHERE user_id = ?1`
-  ).bind(user.userId).all<WorkerRegistrationRow>();
-  const persistentWorkers = (persistent.results ?? []).map((worker) => ({
-    ...worker,
-    trust_level: workerTrustLevel(user),
-  }));
-  const legacyWorkers = (legacy.results ?? []).map((worker) => ({
-    ...worker,
-    // Legacy rows predate verified role-derived trust. The current user role
-    // is authoritative for the browser projection until the normalization
-    // migration has completed on the remote D1 database.
-    trust_level: workerTrustLevel(user),
-  }));
-  const workers = [...persistentWorkers, ...legacyWorkers]
-    .map((worker) => publicWorkerRegistration(worker, now))
-    .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
-  return json({ workers });
-}
-
-async function handleWorkerCredential(workerId: string, request: Request, env: Env, user: AuthedUser): Promise<Response> {
-  const namespace = new URL(request.url).searchParams.get("namespace") || "";
-  if (!namespace) return errorJson("namespace is required", 400, "INVALID_ENROLLMENT");
-  const row = await env.DB.prepare(
-    `SELECT worker_id, namespace, credential_ciphertext
-     FROM worker_registrations
-     WHERE worker_id = ?1 AND namespace = ?2 AND user_id = ?3
-       AND status = 'active' AND revoked_at IS NULL`
-  ).bind(workerId, namespace, user.userId).first<{
-    worker_id: string;
-    namespace: string;
-    credential_ciphertext: string | null;
-  }>();
-  if (!row) return errorJson("Active Worker registration not found", 404, "ENROLLMENT_NOT_FOUND");
-  if (!row.credential_ciphertext) return errorJson("This Worker credential must be rotated before it can be recovered", 409, "CREDENTIAL_NOT_RECOVERABLE");
-  const credential = await decryptWorkerCredential(row.credential_ciphertext, env);
-  if (!credential) return errorJson("Persistent Worker credential could not be decrypted", 503, "WORKER_CREDENTIAL_STORAGE_UNAVAILABLE");
-  return json({
-    worker_id: row.worker_id,
-    namespace: row.namespace,
-    worker_credential: credential,
-    credential_expires_at: null,
-    persistent: true,
-    one_time: false,
-  });
-}
-
-async function handleRotateWorkerCredential(workerId: string, request: Request, env: Env, user: AuthedUser): Promise<Response> {
-  const namespace = new URL(request.url).searchParams.get("namespace") || "";
-  if (!namespace) return errorJson("namespace is required", 400, "INVALID_ENROLLMENT");
-  const current = await env.DB.prepare(
-    `SELECT worker_id, namespace, status FROM worker_registrations
-     WHERE worker_id = ?1 AND namespace = ?2 AND user_id = ?3`
-  ).bind(workerId, namespace, user.userId).first<{ worker_id: string; namespace: string; status: string }>();
-  if (!current) return errorJson("Worker registration not found", 404, "ENROLLMENT_NOT_FOUND");
-  if (current.status === "revoked") return errorJson("Revoked Worker registration cannot be rotated", 409, "ENROLLMENT_REVOKED");
-
-  const credential = `wc_${taskId().replaceAll("-", "")}${taskId().replaceAll("-", "")}`;
-  let credentialCiphertext: string;
-  try {
-    credentialCiphertext = await encryptWorkerCredential(credential, env);
-  } catch {
-    return errorJson("Persistent Worker credential storage is not configured", 503, "WORKER_CREDENTIAL_STORAGE_UNAVAILABLE");
-  }
-  const result = await env.DB.prepare(
-    `UPDATE worker_registrations
-     SET credential_hash = ?4, credential_ciphertext = ?5,
-         credential_expires_at = NULL, status = 'active', revoked_at = NULL,
-         last_seen_at = NULL
-     WHERE worker_id = ?1 AND namespace = ?2 AND user_id = ?3 AND status <> 'revoked'`
-  ).bind(workerId, namespace, user.userId, await sha256(credential), credentialCiphertext).run();
-  if ((result.meta?.changes ?? 0) !== 1) return errorJson("Worker credential rotation failed", 409, "ENROLLMENT_ROTATION_CONFLICT");
-  // Rotation changes the bearer credential immediately. Invalidate the old
-  // process session as well, so the new credential can connect without
-  // waiting for the previous 90-second lease to expire.
-  await env.DB.prepare(
-    `UPDATE worker_sessions
-     SET disconnected_at = ?3, lease_expires_at = ?3
-     WHERE worker_id = ?1 AND namespace = ?2`
-  ).bind(workerId, namespace, nowSeconds()).run();
-  return json({
-    worker_id: workerId,
-    namespace,
-    worker_credential: credential,
-    credential_expires_at: null,
-    persistent: true,
-    one_time: false,
-  });
-}
-
-async function handleRevokeEnrollment(workerId: string, request: Request, env: Env, user: AuthedUser): Promise<Response> {
-  const namespace = new URL(request.url).searchParams.get("namespace") || "";
-  if (!namespace) return errorJson("namespace is required", 400, "INVALID_ENROLLMENT");
-  const now = nowSeconds();
-  const canRevokeOtherUsers = operatorAllowed(user);
-  const persistent = await env.DB.prepare(
-    `UPDATE worker_registrations
-     SET revoked_at = ?3, status = 'revoked'
-     WHERE worker_id = ?1 AND namespace = ?2
-       AND (?4 = 1 OR user_id = ?5) AND revoked_at IS NULL`
-  ).bind(workerId, namespace, now, canRevokeOtherUsers ? 1 : 0, user.userId).run();
-  if ((persistent.meta?.changes ?? 0) === 1) return json({ worker_id: workerId, namespace, status: "revoked" });
-
-  const legacy = await env.DB.prepare(
-    `UPDATE worker_enrollments
-     SET revoked_at = ?3, status = 'revoked', credential_hash = NULL,
-         credential_expires_at = NULL
-     WHERE worker_id = ?1 AND namespace = ?2
-       AND (?4 = 1 OR user_id = ?5) AND revoked_at IS NULL`
-  ).bind(workerId, namespace, now, canRevokeOtherUsers ? 1 : 0, user.userId).run();
-  if ((legacy.meta?.changes ?? 0) !== 1) return errorJson("Active Worker enrollment not found", 404, "ENROLLMENT_NOT_FOUND");
-  return json({ worker_id: workerId, namespace, status: "revoked" });
-}
-
 // ---------------------------------------------------------------------------
 // Canonical D1 public-pool Worker browser surface.
 //
-// The functions above are retained temporarily as a migration ledger for the
-// old enrollment tables. Routes below never call them: v2 Workers and the
-// browser both use `workers` + `worker_sessions_runtime`. Trust levels,
-// caller-selected Namespace, and private Worker pools are not part of this
-// surface.
+// The browser and v2 Worker surfaces both use `workers` and
+// `worker_sessions_runtime`. The public pool is server-controlled; there are
+// no trust levels, caller-selected Namespace values, or private Worker pools.
 
 type CanonicalWorkerRow = {
   worker_id: string;
@@ -1255,7 +817,6 @@ async function canonicalWorkerForActor(
   workerId: string,
   env: Env,
   user: AuthedUser,
-  includeCredential = false,
 ): Promise<CanonicalWorkerRow | null> {
   const pool = await canonicalPublicPool(env);
   if (!pool) return null;
@@ -1269,7 +830,7 @@ async function canonicalWorkerForActor(
   ).bind(workerId, pool.pool_id, operator ? 1 : 0, user.userId).first<CanonicalWorkerRow>();
 }
 
-async function handleCanonicalCredential(workerId: string, request: Request, env: Env, user: AuthedUser): Promise<Response> {
+async function handleCanonicalCredential(workerId: string, env: Env, user: AuthedUser): Promise<Response> {
   const row = await canonicalWorkerForActor(workerId, env, user);
   if (!row || row.status !== "active") return errorJson("Active Worker registration not found", 404, "ENROLLMENT_NOT_FOUND");
   if (!row.credential_ciphertext) return errorJson("Worker credential is not recoverable", 409, "CREDENTIAL_NOT_RECOVERABLE");
@@ -1383,13 +944,13 @@ export async function handleTaskApi(request: Request, env: Env, user: AuthedUser
     return issueCanonicalWorker(request, env, user);
   }
   const publicCredentialMatch = pathname.match(/^\/api\/admin\/public-workers\/([^/]+)\/credential$/);
-  if (publicCredentialMatch && method === "GET") return handleCanonicalCredential(decodeURIComponent(publicCredentialMatch[1]), request, env, user);
+  if (publicCredentialMatch && method === "GET") return handleCanonicalCredential(decodeURIComponent(publicCredentialMatch[1]), env, user);
   const publicRotateMatch = pathname.match(/^\/api\/admin\/public-workers\/([^/]+)\/rotate$/);
   if (publicRotateMatch && method === "POST") return handleCanonicalRotate(decodeURIComponent(publicRotateMatch[1]), request, env, user);
   const publicRevokeMatch = pathname.match(/^\/api\/admin\/public-workers\/([^/]+)\/revoke$/);
   if (publicRevokeMatch && method === "POST") return handleCanonicalRevoke(decodeURIComponent(publicRevokeMatch[1]), env, user);
   const credentialMatch = pathname.match(/^\/api\/worker-enrollments\/([^/]+)\/credential$/);
-  if (credentialMatch && method === "GET") return handleCanonicalCredential(decodeURIComponent(credentialMatch[1]), request, env, user);
+  if (credentialMatch && method === "GET") return handleCanonicalCredential(decodeURIComponent(credentialMatch[1]), env, user);
   const rotateMatch = pathname.match(/^\/api\/worker-enrollments\/([^/]+)\/rotate$/);
   if (rotateMatch && method === "POST") return handleCanonicalRotate(decodeURIComponent(rotateMatch[1]), request, env, user);
   const revokeMatch = pathname.match(/^\/api\/worker-enrollments\/([^/]+)\/revoke$/);
