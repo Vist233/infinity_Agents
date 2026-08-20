@@ -9,3 +9,12 @@ Browser attempt 2: reclaim the same authenticated tab and capture a lightweight 
 Result: deterministic C6 gates PASS; authenticated browser acceptance NOT PASSED. The timeout is not evidence of a successful page inspection.
 
 Non-failing existing warnings: React act(...) warnings in a few unit tests; baseline-browser-mapping data stale warning during build.
+
+2026-08-20 re-verification at cloudflare-deploy@2232f0b6aa499901c3bf1e31f136f9cdb6b1e428
+frontend: npm run test:unit && npm run typecheck && npm run lint && npm run build — exit 0
+frontend unit result: 12 files, 44 tests passed.
+frontend: npm run test:e2e — exit 0; 11 local Playwright tests passed. These use controlled API mocks and do not replace the required live logged-browser acceptance.
+cloudflare-worker: npm test && npm run check — exit 0; 13 files, 55 tests passed.
+Python/Worker: eval "$(pyenv init - zsh)"; pyenv shell Agent; python -m pytest -q — exit 0; 330 passed, 45 skipped.
+Source boundary check: the only Worker v1 handling is the explicit 410 LEGACY_WORKER_PROTOCOL_DISABLED response. Direct Task Center creation calls /api/tasks/direct with agent_confirmation=false. The static preview route exists only as the Next export shell for dynamic task URLs; no /api/tasks/preview caller was found.
+Browser diagnostics: Chrome was running; the Codex extension was installed/enabled and the native-host manifest was correct. Two fresh attempts to claim/read the existing authenticated Case 2 page timed out at 30 seconds and reset browser control. No live UI state, download, signed-out state, or responsive assertion is claimed.
