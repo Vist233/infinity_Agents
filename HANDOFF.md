@@ -1,7 +1,7 @@
 # Infinity Agents — Cloudflare Deploy 交接文档
 
 > 最后更新：2026-08-20
-> 当前分支：`cloudflare-deploy`；当前本地候选：`dc7c244`；本次 Worker multipart
+> 当前分支：`cloudflare-deploy`；当前本地候选：`92221d5`；本次 Worker multipart
 > 运行时修复代码：`e55aad5`；已部署 Edge 版本：`04640878-bfb2-467d-a34e-b9538324ce26`
 > 本文只描述当前 D1 目标架构。旧 PostgreSQL/RLS 文档、旧 Worker 协议和旧 Compose
 > 文件属于历史资料，不能作为新机器或生产部署说明。

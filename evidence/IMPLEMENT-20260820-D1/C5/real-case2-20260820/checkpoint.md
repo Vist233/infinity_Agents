@@ -4,6 +4,7 @@
 - candidate before the multipart patch: `bf20eea`
 - multipart patch commit: `e55aad5`
 - deployed Edge version after the patch: `04640878-bfb2-467d-a34e-b9538324ce26`
+- current evidence commit: `92221d5`
 - main Agent: Codex
 - sub Agent review: not run; final read-only review is reserved for C7
 - real Task ID: `424ff7da-6903-42e8-9a55-b09c20033ccf`
@@ -23,6 +24,9 @@
 - tests after the multipart patch: Edge `npm test` 55/55 passed; Edge `npm run check` exit 0
 - browser: the failed Task detail was inspected in the authenticated Task Center; a new file upload retry
   was blocked by the Chrome extension's file-URL permission, so no new Task was created after this failure
+- local Docker runtime snapshot: `infinity-agent-worker-b-v2` was online and running
+  `backend.code_agent.worker.consumer_v2`; D1 poll/heartbeat returned 200, while Relay hint reads returned
+  503. The container had no Docker CLI and no `/var/run/docker.sock`; `claude --version` returned 2.1.226.
 - conclusion: Case 2 FAILED. The confirmed production gap is the R2 multipart part/finalize path and its
   failure cleanup/diagnostics. The patch in `e55aad5` is deployed but has not yet been validated by a new
   queued Task because browser file upload is blocked.

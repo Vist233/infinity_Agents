@@ -4,3 +4,6 @@ Edge `npm run deploy`: exit 0, version `04640878-bfb2-467d-a34e-b9538324ce26`
 D1 read-only queries: exit 0; Task final status `failed`, no published Artifact
 Worker process check: exit 0; `infinity-agent-worker-b-v2` remained online
 Browser Task Center inspection: authenticated failed Task detail visible; no new upload submitted
+Docker read-only snapshot: exit 0; Worker container online; `consumer_v2` process running
+Docker boundary check: exit 0; Docker CLI absent; `/var/run/docker.sock` absent; Claude Code 2.1.226
+Live control-plane snapshot: D1 poll/heartbeat HTTP 200; Redis Relay hint endpoint HTTP 503
