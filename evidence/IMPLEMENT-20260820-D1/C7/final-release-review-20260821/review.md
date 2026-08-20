@@ -23,3 +23,9 @@ The final incremental review explicitly confirmed:
    production Task chain was found.
 7. The final Docker image contains one `consumer_v2` runtime and no verifier, DinD,
    Docker socket, SQL client or Redis client.
+
+The final incremental rereview after 0016 confirmed P0/P1/P2/P3 all zero. It
+specifically checked immutable reconnect identity, exact live-session fencing for
+Task and Artifact mutations, conditional Worker `last_seen_at`, optional-but-fenced
+v2 epoch compatibility, and the TOCTOU test's zero Task/Attempt/Event/Outbox side
+effects. The reviewer made no file changes.

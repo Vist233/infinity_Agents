@@ -1,6 +1,6 @@
 # Cloudflare 收口后 main 纯本地 PostgreSQL 实施计划
 
-> 状态：`NOT_STARTED`。只有 `cloudflare-deploy` 的 C7 完成后才能执行。
+> 状态：`READY_TO_START`。`cloudflare-deploy` 的 C7 已完成；下一执行入口为 L0。
 > 来源：最终 Cloudflare 产品/UI/Worker合同，不以旧 `main` 或 `origin/main` 为实现基线。
 
 ## 1. 目标

@@ -1,0 +1,62 @@
+C7 production release evidence — 2026-08-21 Asia/Shanghai
+
+Source and CI
+- final Edge/session source: 57f6fb9 (cloudflare-deploy)
+- immutable Worker image source: febed00
+- intermediate reconnect fix b232f97 restored production availability but was
+  replaced because it mutated a historical Session row in place.
+- final read-only incremental review: PASS, P0/P1/P2/P3 all zero.
+- febed00 GitHub Actions: Frontend 32401076344 PASS; Python 32401076354 PASS;
+  Publish Worker image 32401076330 PASS; Worker image check 32401076288 PASS.
+
+Cloudflare
+- remote D1 migrations 0015 and 0016 applied successfully.
+- 0016 removes the single-row-per-Worker constraint, preserves historical Session
+  foreign keys, makes `(worker_id, session_epoch)` unique and permits only one
+  active non-disconnected Session per Worker.
+- final Edge version: 42b1ecaf-7a97-47d1-ae73-e6b4041fd900.
+- intermediate Edge versions: e59d6d63-74e1-4874-bfbc-503ac4b3ca09 and
+  2e82f3bd-4a6b-4186-82cf-fa8f180ab147.
+- pre-C7 rollback version: 67959a41-63f2-41da-a284-56ded203d6c4;
+  rollback source: 6cd22c1ae8e778744af2d1605e2f77135a990853.
+- final deploy reused the already-verified 162 static assets.
+
+Published Docker Worker
+- ghcr.io/vist233/infinity-agent-worker@sha256:c76aff2544dcbb93d641af5325ff694366b12d60585ec56c8037392668a89230
+- linux/amd64: sha256:ab734515ed0f07d4a3c5e771a85fcf901b0f0b38b5e871c9874f039e2a091c4d
+- linux/arm64: sha256:7d0361b2e58ece2479b18112ead9c57865ee0cef669b0bd73d74705f7d8132a2
+- formal local container: infinity-agent-worker-b-v2; persistent volume
+  infinity-agents-worker-b-v2-workspace; restart policy unless-stopped.
+
+Production defect and final correction
+- The first immutable-image restart failed because the old Edge reconnect path
+  deleted a Session row referenced by four historical Attempts.
+- b232f97 stopped the delete but reused and rewrote the historical Session identity.
+- 57f6fb9 plus migration 0016 gives every expired reconnect a new session_id and
+  epoch, retains the old row unchanged for historical Attempt references, and
+  fences accept, renew, input reads, multipart writes, final success/failure and
+  Worker last_seen updates against the exact live session/epoch/instance.
+- The v2 epoch header is compatibility-optional; when supplied, a stale value is
+  rejected. Persistent credential plus instance/session fencing remains mandatory.
+
+Case 2 and browser boundary
+- Case 2 Task 3666d0f1-4581-42e3-b81c-bf195288daa5 remains succeeded.
+- Artifact 6cc37651-2bee-4803-a81c-04b6cfbd76fd is published, 1,234,445 bytes,
+  SHA-256 1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c.
+- Case 3 remains DEFERRED_BY_OWNER and is not represented as PASS.
+- Static assets did not change after the C6 authenticated Chrome pass. C7 local
+  Playwright 11/11, live HTTP/API/D1 checks and the real Docker Worker loop are the
+  post-release evidence; the later Chrome inspection channel timeout is recorded
+  as an automation-surface limitation, not replaced with mock evidence.
+
+Final immutable reconnect and online regression
+- Formal Worker B was stopped without mutating D1 and restarted only after the
+  recorded lease expiry. `/connect` returned 201 and created epoch 6 with a new
+  session_id; epoch 5 retained its original identity and was marked disconnected.
+- All four historical Attempt references still point to the epoch-5 Session;
+  `PRAGMA foreign_key_check` returned no rows.
+- Relay hints and D1 poll/heartbeat returned 200 and the formal container remained
+  up with the same immutable image and persistent volume.
+- `/`, `/task-center/`, `/image-judge/`, `/health`, Relay `/health`, and the real
+  Case 2 detail returned 200; unauthenticated `/api/tasks` returned 401; Worker v1
+  poll returned 410.

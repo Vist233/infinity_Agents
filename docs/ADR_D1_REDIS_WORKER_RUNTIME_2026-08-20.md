@@ -149,7 +149,9 @@ pending，恢复后重放。Worker也可以低频调用受认证 poll 作为通�
   `docker-compose.cloudflare-workers.yml` 作为生产 Worker 启动；C5 真实链路通过后再按调用
   关系删除无依赖的历史文件；
 - C5 的真实 D1/R2/Claude Case 2、C5R Redis恢复、C6真实登录浏览器审查和命名 Tunnel
-  生产切换均已通过；Case 3由用户明确延期并记为 `DEFERRED_BY_OWNER`。C7发布收口仍未完成。
+  生产切换均已通过；Case 3由用户明确延期并记为 `DEFERRED_BY_OWNER`。C7 已由最终 Edge
+  `42b1ecaf-7a97-47d1-ae73-e6b4041fd900`、不可变 Session 迁移 `0016` 和不可变 Worker digest
+  `sha256:c76aff2544dcbb93d641af5325ff694366b12d60585ec56c8037392668a89230` 完成发布收口。
 
 ## 10. 发布门槛
 
@@ -163,4 +165,5 @@ pending，恢复后重放。Worker也可以低频调用受认证 poll 作为通�
 - 前端、后端/Edge、Docker和浏览器审查；
 - Git commit、checkpoint、GitHub、GHCR和Cloudflare版本可追溯。
 
-在这些门槛通过前，不部署 Cloudflare，不发布 GHCR，不宣称线上 Worker闭环完成。
+Cloudflare 门槛现已满足。该 ADR 的生产架构被冻结；后续纯本地版本只在 `main` 按独立计划
+实现，不在本分支增加 PostgreSQL 第二事实源。

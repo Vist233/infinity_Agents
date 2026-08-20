@@ -1,6 +1,6 @@
 # D1 + zhangbot Redis Worker 续作实施计划
 
-> 当前续作基线：`cloudflare-deploy@63d8a0f`（C6 通过前的代码候选；后续文档提交只增加证据）
+> 最终 Cloudflare 运行时基线：`cloudflare-deploy@57f6fb9`（C7 发布与线上回归已通过）
 > 权威架构：`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`
 > 执行提示词：`D1_REDIS_WORKER_GOAL_DRIVEN_PROMPT_2026-08-20.md`
 > 原则：复用已通过的单一 Docker/Claude Runtime；替换错误的 PostgreSQL控制面，不同时维护两套生产链路。
@@ -26,7 +26,7 @@
 - Docker Worker 只通过 Worker v2 HTTPS API 读写 D1/R2；
 - D1 Outbox 通过 zhangbot HTTPS Relay 发布可重建 Redis hint；
 - 历史 PostgreSQL Case 2/3 不能替代 D1/R2/Relay 的真实验收；
-- C7 最终只读审查尚未完成。
+- C7 已完成；下一执行入口是 C8 的 `main` 纯本地 PostgreSQL 计划。
 
 ### C0–C4 已完成，不得重做
 
@@ -64,17 +64,19 @@
 - 下载 ZIP、manifest、94 条序列统计、94-tip Newick、Worker 清理和继续在线均已验证；
 - Case 3 由用户明确延期，状态为 `DEFERRED_BY_OWNER`，不是 PASS，也不再阻塞本轮继续 C5R/C6/C7。
 
-### 尚未完成
+### Cloudflare 收口结果
 
 - C5R 已在授权后完成：Redis Relay ACL 最小修复、Redis 停止/恢复、D1 fallback、Outbox 重放、
   无重复 Attempt 与 Redis 内容边界扫描均已记录；
 - Case 3 科学覆盖延期；必须作为 C7 残余风险记录，不能写成已通过；
 - C6 已通过：真实登录 Chrome 完成 Analysis、Task Center、ImageJudge、Case 2 详情和 Artifact
   下载验收；旧超时由前一控制会话占用原标签页导致，不是产品或登录失败；
-- C7 只读 Code Review、最终同一候选版本回归；
+- C7 全量门禁、只读 Code Review、GHCR/Edge 发布和线上控制面回归已通过；
 - 命名 Cloudflare Tunnel 已通过并完成切换：`relay.zhangyvjing.com`、Cloudflare healthy/4
   connections、Edge/Worker 均已使用命名地址，旧 Quick Tunnel 已停止；
-- C7 最终审查和同一候选版本回归。
+- 正式镜像重启发现的 Session 外键缺陷最终由 `57f6fb9` + D1 `0016` 修复：过期重连创建新
+  Session，历史 Attempt 仍引用不可变旧 Session；Worker connect 201、hints/poll/heartbeat
+  持续 200。C7 已关闭，Case 3 仍是 `DEFERRED_BY_OWNER`。
 
 ## 2. 顺序实施
 
@@ -181,6 +183,12 @@ Method、Dataset、Artifact、用户内容或 Secret。证据见
 远程发布、GHCR、D1 迁移、Relay 部署和 `wrangler deploy` 必须保留可追溯的授权、版本和
 checkpoint；当前分支的 GHCR、D1 迁移、Relay 和 Edge 部署已记录在对应证据中。
 
+结果：**PASS**。最终 Edge 版本 `42b1ecaf-7a97-47d1-ae73-e6b4041fd900`；不可变 Worker
+镜像 digest `sha256:c76aff2544dcbb93d641af5325ff694366b12d60585ec56c8037392668a89230`。
+正式镜像首次重连揭示旧实现会删除被历史 Attempt 外键引用的 Session；最终 `57f6fb9` + `0016`
+保留旧 Session 并为过期重连生成新身份，所有状态写入由 live Session CAS 约束。证据见
+`evidence/IMPLEMENT-20260820-D1/C7/final-release-review-20260821/`。
+
 ### C6T：命名 Relay Tunnel
 
 结果：**PASS**。zhangbot 用户级 cloudflared、远程管理 ingress、单层 DNS/TLS、Edge Secret、
@@ -190,8 +198,8 @@ Docker Worker hints/poll/heartbeat 均已验证。双层域名因真实 TLS 不�
 
 ### C8：Cloudflare收口后启动main纯本地版本
 
-只有 C7 完成、`cloudflare-deploy` 工作区干净、最终线上版本和 rollback commit 已记录后，
-才能进入 C8。C8不在 `cloudflare-deploy` 内实现，而是严格按照
+C7 已完成，最终线上版本、rollback commit、镜像 digest 与延期风险均已记录。C8 现在可以开始。
+C8不在 `cloudflare-deploy` 内实现，而是严格按照
 `POST_CLOUDFLARE_MAIN_LOCAL_POSTGRESQL_PLAN_2026-08-20.md` 处理 `main`：以最终 Cloudflare
 产品/UI/Worker合同为源，替换 D1/R2/Workers/Quick Tunnel 为 PostgreSQL、本地对象目录、
 本地 API和本地 Redis，删除 Cloudflare活跃入口；不得把 D1和PostgreSQL做成双运行模式，

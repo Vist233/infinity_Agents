@@ -1,41 +1,49 @@
 C7 final candidate command ledger
 
-1. cloudflare-worker: `npm test -- --run`
-   exit 0 — 14 files, 63 tests passed.
+Final source candidate: cloudflare-deploy@57f6fb9
 
-2. cloudflare-worker: `npm run check`
-   exit 0 — TypeScript passed.
+1. cloudflare-worker: `npm test && npm run check`
+   exit 0 — 14 files, 66 tests passed; TypeScript passed.
 
-3. repository: `pyenv shell Agent; pytest -q`
+2. repository: `pyenv shell Agent; pytest -q`
    exit 0 — 333 passed, 45 environment/optional-integration skips.
 
-4. frontend: `npm run test:unit`
-   exit 0 — 12 files, 44 tests passed.
+3. frontend: `npm run test:unit && npm run typecheck && npm run lint && npm run build`
+   exit 0 — 12 files / 44 tests, typecheck, lint and production build passed.
 
-5. frontend: `npm run typecheck && npm run lint && npm run build`
-   exit 0 — typecheck, lint and Next.js production build passed.
+4. frontend: `npm run test:e2e`
+   exit 0 — Playwright 11/11 desktop/mobile interaction tests passed. The first
+   sandboxed launch could not bind 127.0.0.1:3000; the authorized rerun passed.
 
-6. frontend: `npm run test:e2e`
-   exit 0 — Playwright 11/11 desktop/mobile interaction tests passed.
-   The first sandboxed launch was denied permission to bind 127.0.0.1:3000; the
-   authorized rerun passed and this was not a product failure.
+5. clean local D1: `wrangler d1 migrations apply ... --local --persist-to <temp>`
+   exit 0 — migrations 0001 through 0016 applied from an empty database.
 
-7. clean local D1: `wrangler d1 migrations apply ... --local --persist-to <temp>`
-   exit 0 — migrations 0001 through 0015 all applied from an empty database.
+6. populated local D1 migration verification
+   exit 0 — 0016 preserved a historical task_attempts -> Worker Session reference;
+   `PRAGMA foreign_key_check` returned no rows; the one-active-session partial
+   unique index and `(worker_id, session_epoch)` uniqueness were present.
 
-8. Worker image: `docker build -f backend/Dockerfile.worker -t infinity-agent-worker:c7 .`
-   exit 0 — final local image built; Claude Code 2.1.226.
+7. `git diff --check`
+   exit 0.
 
-9. one-shot image boundary check
-   exit 0 — `c7-container-boundary=PASS`; asyncpg/redis/Docker CLI/socket,
-   old consumer/executor/reaper and verifier absent; UID 10001 can write runtime logs.
+8. final read-only incremental review
+   PASS — P0/P1/P2/P3 all zero after immutable Session, live-session fencing,
+   TOCTOU Task/Attempt/Event/Outbox assertions and conditional last_seen fixes.
 
-10. `git diff --check`
-    exit 0.
+9. GitHub Actions and immutable Worker image
+   PASS — febed00 Frontend/Python/publish/boundary workflows passed; immutable
+   multi-platform image index is c76aff2544dc... . Docker source was unchanged by
+   the Edge-only 57f6fb9 fix, so the published immutable image remains the candidate.
 
-11. expanded committed-secret scan
-    exit 0 — no matching credential or private-key literal.
+10. Cloudflare remote migration and deploy
+    exit 0 — remote 0016 applied; Edge version
+    42b1ecaf-7a97-47d1-ae73-e6b4041fd900 deployed. The first deploy request had a
+    transient Cloudflare API fetch failure; the immediate retry completed.
 
-12. production preflight
-    exit 0 — Cloudflare OAuth login valid; `https://infinity.zhangyvjing.com/`
-    returned 200 and `https://relay.zhangyvjing.com/health` returned 200.
+11. online control/data regression
+    exit 0 — root, Task Center, ImageJudge, Edge/Relay health and Case 2 detail
+    returned 200; unauthenticated Task API returned 401; Worker v1 returned 410.
+    After the prior lease expired, formal Worker B connected with 201, created a
+    new session_id at epoch 6, and continued hints/poll/heartbeat with 200. The
+    epoch-5 historical Session and four Attempt references remained intact;
+    `PRAGMA foreign_key_check` returned no rows.

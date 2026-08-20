@@ -1,8 +1,8 @@
 # Infinity Agents — Cloudflare Deploy 交接文档
 
-> 最后更新：2026-08-20
-> 当前分支：`cloudflare-deploy`；当前代码/验收基线：`975457a0e7e8242bb34ff7d0e67f260425a148e4`；本次 Worker multipart
-> 运行时修复代码：`e55aad5`；已部署 Edge 版本：`09680075-63b3-41cf-8254-cfcf21772272`
+> 最后更新：2026-08-21
+> 当前分支：`cloudflare-deploy`；C7 最终运行时代码：`57f6fb9`；已部署 Edge 版本：
+> `42b1ecaf-7a97-47d1-ae73-e6b4041fd900`；不可变 Worker 镜像：`sha256:c76aff2544dc...`
 > 本文只描述当前 D1 目标架构。旧 PostgreSQL/RLS 文档、旧 Worker 协议和旧 Compose
 > 文件属于历史资料，不能作为新机器或生产部署说明。
 
@@ -122,7 +122,8 @@ hint token 和控制面地址不会传给 Claude。固定 Goal-Driven Prompt 位
 
 - Edge：`cloudflare-worker/src/worker-v2.ts`、`src/lease-recovery.ts`、`src/outbox-relay.ts`、
   `src/index.ts`。
-- D1：`cloudflare-worker/migrations-infinity/0014_d1_worker_runtime.sql`。
+- D1：`cloudflare-worker/migrations-infinity/0014_d1_worker_runtime.sql`、
+  `0015_c7_runtime_hardening.sql`、`0016_immutable_worker_sessions.sql`。
 - Worker 客户端：`backend/code_agent/worker/control_plane.py`、`consumer_v2.py`、
   `executor_v2.py`。
 - Runtime：`backend/code_agent/worker/claude_runtime.py`。
@@ -180,7 +181,7 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
     `1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c`。下载 ZIP、
     manifest、94 条序列统计、94-tip Newick、清理和 Worker 继续在线均已验证。
 
-## 7. 当前真实阻塞
+## 7. Cloudflare C7 最终状态
 
 - 当前执行主机已经是本机 Docker，不再等待远程 Worker 主机；
   `infinity-agent-worker-b-v2` 已连接线上 D1 控制面并持续轮询。zhangbot 仍只运行 Redis 和
@@ -200,19 +201,31 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
 - C6 已在真实登录 Chrome 中通过：Analysis、Task Center、ImageJudge、真实 Case 2 详情、账户栏、
   Worker 管理和 Artifact 下载均已验证；下载 ZIP 与服务端 SHA-256 一致。此前两次超时是旧标签页
   被已失效的浏览器控制会话占用，新建标签页后立即成功，不是产品、登录或插件故障。
-- 修复后的 Worker 镜像已发布 GHCR；C6 与命名 Tunnel 已通过，最终 C7 code review 是剩余发布门禁。
+- C7 已完成代码、测试、发布和线上控制面回归。最终运行时源提交为 `57f6fb9`，Edge 版本为
+  `42b1ecaf-7a97-47d1-ae73-e6b4041fd900`；不可变 Worker 镜像为
+  `ghcr.io/vist233/infinity-agent-worker@sha256:c76aff2544dcbb93d641af5325ff694366b12d60585ec56c8037392668a89230`。
+- 正式镜像首次重启暴露了历史 Attempt 外键阻止删除 Worker Session 的生产缺陷。中间修复
+  `b232f97` 恢复了连接，但仍原地覆盖历史 Session；最终 `57f6fb9` + D1 `0016` 改为每次过期
+  重连生成新的 `session_id/session_epoch`，旧 Session 保持不可变。正式 Worker B 已真实验证
+  epoch 5 保留四个 Attempt 引用、epoch 6 新建、外键检查无错误，connect 201，命名 Relay hints、
+  D1 poll 和 heartbeat 持续 200。epoch header 缺省兼容，显式旧 epoch 会被拒绝。
+- C7 发布后的 Chrome 页面检查通道超时，但最终部署没有上传任何新静态资产；前端仍是 C6 真实
+  登录 Chrome 与 C7 Playwright 11/11 已验证的同一 162 个资产。未用 mock 替代浏览器，最终证据
+  由原 C6 登录验收、未变资产、线上 HTTP/API、D1 和真实 Docker Worker 共同组成。
+- Case 3 仍为 `DEFERRED_BY_OWNER`，是唯一接受的科学覆盖缺口；它不是 PASS。
 
-## 8. 交接给下一位执行者的顺序
+## 8. 下一阶段执行顺序
 
-1. 不重做 C0-C4，不重建当前本地 Worker。先确认 `cloudflare-deploy@972f5ee`、
-   `infinity-agent-worker-b-v2` 仍在线且没有领取历史任务。
+1. 不重做 C0-C7，不重建当前本地 Worker。以 `cloudflare-deploy@57f6fb9` 和 C7 最终 checkpoint
+   作为 Cloudflare 产品合同源。
 2. 将 Case 2 证据冻结为 PASS；将 Case 3 记录为用户明确延期，不再为本轮创建 Case 3 Task。
 3. 保留已通过的 Redis 停止/恢复、D1 Outbox 重试、Worker D1 poll 和任务终态证据；不得把
    Redis 再次变更为事实源。
-4. 保留已通过的 C6 真实浏览器证据，不再 claim 旧控制会话占用的标签页。
+4. 保留已通过的 C6 真实浏览器证据；C7 后端热修没有改变静态资产。
 5. 保留已通过的命名 Tunnel 证据；不要恢复 Quick Tunnel 或双层 Relay 域名。
-6. Cloudflare 的 C7 checkpoint、最终提交、线上回归全部完成后，才按照
-   `docs/POST_CLOUDFLARE_MAIN_LOCAL_POSTGRESQL_PLAN_2026-08-20.md` 启动 `main` 纯本地版本。
+6. 现在按照 `docs/POST_CLOUDFLARE_MAIN_LOCAL_POSTGRESQL_PLAN_2026-08-20.md` 启动 C8：从最终
+   Cloudflare 产品树构造 `main` 的纯本地 PostgreSQL + Redis + 本地对象存储版本，不 merge 会
+   恢复 Chat Agent 的旧 `origin/main`，也不保留 D1/PostgreSQL 双运行模式。
 
 ## 9. 禁止的绕过方式
 
