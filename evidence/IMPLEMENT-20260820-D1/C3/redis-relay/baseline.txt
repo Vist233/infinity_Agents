@@ -1,0 +1,5 @@
+branch=cloudflare-deploy
+base_commit=6d668f4
+remote_state=untouched
+database_fact_source=cloudflare_d1
+redis_role=zhangbot_https_relay_only

@@ -14,6 +14,7 @@ import { handleImageJudge } from "./image-judge";
 import { handleTaskApi } from "./tasks";
 import { handleUserSettings } from "./settings";
 import { handleWorkerV2 } from "./worker-v2";
+import { flushD1Outbox } from "./outbox-relay";
 
 export { ImageJudgeUserConcurrencyLock } from "./image-judge";
 
@@ -168,5 +169,8 @@ export default {
       return env.ASSETS.fetch(request);
     }
     return errorJson("Not found", 404, "NOT_FOUND");
+  },
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    await flushD1Outbox(env);
   },
 } satisfies ExportedHandler<Env>;

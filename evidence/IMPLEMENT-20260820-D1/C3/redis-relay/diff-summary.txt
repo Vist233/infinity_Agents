@@ -1,0 +1,7 @@
+C3 implementation summary
+
+- Added a minimal HTTPS Redis Relay; no browser-facing Redis connection exists.
+- Added scheduled D1 outbox delivery with fixed event projection and HMAC.
+- Added a standalone relay image definition for the zhangbot host.
+- Preserved D1 as the authoritative task/attempt/artifact store.
+- No PostgreSQL code was added to the new runtime path.

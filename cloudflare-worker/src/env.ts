@@ -40,6 +40,9 @@ export interface Env {
   TASK_ARTIFACT_MAX_BYTES?: string;
   PUBLIC_WORKER_POOL_ID?: string;
   PUBLIC_WORKER_NAMESPACE?: string;
+  // D1 outbox delivery to the administrator-managed HTTPS Redis Relay.
+  REDIS_RELAY_URL?: string;
+  OUTBOX_RELAY_BATCH_SIZE?: string;
   // AES-GCM key used to keep a recoverable copy of persistent Worker
   // credentials encrypted at rest. The raw key is configured as a secret.
   WORKER_CREDENTIAL_ENCRYPTION_KEY?: string;
@@ -49,6 +52,7 @@ export interface Env {
   IMAGE_JUDGE_ZHANG_AUTH_CLIENT_SECRET?: string;
   IMAGE_JUDGE_TOKEN_SIGNING_SECRET?: string;
   IMAGE_JUDGE_DASHSCOPE_API_KEY?: string;
+  REDIS_RELAY_PUBLISH_SECRET?: string;
 }
 
 export const SESSION_COOKIE = "ia_session";

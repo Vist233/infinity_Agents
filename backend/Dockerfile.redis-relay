@@ -1,0 +1,16 @@
+# Minimal administrator-managed HTTPS boundary for zhangbot Redis.
+# The Redis URL and both relay credentials are injected at runtime.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+COPY requirements.relay.txt .
+RUN pip install --no-cache-dir -r requirements.relay.txt
+
+COPY backend/redis_relay.py backend/redis_relay.py
+
+EXPOSE 8090
+CMD ["python", "-m", "backend.redis_relay"]

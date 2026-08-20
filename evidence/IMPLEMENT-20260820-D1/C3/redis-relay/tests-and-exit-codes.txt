@@ -1,0 +1,19 @@
+C3 command ledger
+
+1. `npm run check` in `cloudflare-worker`
+   exit 0 — TypeScript typecheck passed.
+
+2. `npm test -- --run` in `cloudflare-worker`
+   exit 0 — 12 test files, 55 tests passed.
+
+3. `eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q tests/test_redis_relay.py`
+   exit 0 — 3 tests passed.
+
+4. Covered assertions
+   - signed fixed-shape event acceptance;
+   - stale/invalid signature rejection;
+   - extra Redis key field rejection;
+   - atomic duplicate suppression contract;
+   - low-privilege fixed hint reads;
+   - Redis failure returns 503;
+   - D1 outbox signing/claim/publish/retry/quarantine behavior.
