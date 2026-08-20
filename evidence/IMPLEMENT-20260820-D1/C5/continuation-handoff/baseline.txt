@@ -1,0 +1,9 @@
+branch: cloudflare-deploy
+local_head: b6d82c405fa491519b1e4aa6ea91954b2341db17
+remote_head_read_only: b6d82c405fa491519b1e4aa6ea91954b2341db17
+worktree_before: clean
+current_v2_worker: infinity-agent-worker-b-v2 (running)
+d1_control_plane: poll/heartbeat HTTP 200 in recent container logs
+redis_relay_hints: HTTP 503 in recent container logs
+queued_case_2: none recorded; requires a newly created real Task ID
+legacy_task: 4350c45b-fd0c-4771-b654-c6df32e95f9c; failed via worker_attempts, not v2 task_attempts

@@ -1,0 +1,28 @@
+git ls-remote --heads origin cloudflare-deploy — exit 0
+Result: remote HEAD equals local b6d82c4.
+
+docker ps read-only inspection — exit 0
+Result: infinity-agent-worker-b-v2 is running. Historical P9 PostgreSQL acceptance containers also
+remain running and are explicitly excluded from current C5 evidence.
+
+docker logs --tail 40 infinity-agent-worker-b-v2 — exit 0
+Result: D1 poll/heartbeat return 200; Redis Relay hints return 503; Worker remains alive.
+
+frontend npm run test:unit — exit 0
+Result: 12 files, 44 tests passed. Existing React act(...) warnings remain in ImageJudge/task-detail tests.
+
+cloudflare-worker npm test — exit 0
+Result: 13 files, 55 tests passed.
+
+initial inline source-boundary assertion — exit 1
+Result: the audit command itself had an invalid JavaScript regular-expression escape; no product test ran.
+
+corrected source-boundary assertion — exit 0
+Result: navigation has exactly the required three destinations and no Chat Agent path; Task Center includes
+direct Task creation and both Worker panels; acceptance Compose has no default for the three Redis passwords.
+
+initial secret-scan shell expression — exit nonzero before scan
+Result: zsh interpreted a double-quoted `$[` fragment; no repository conclusion was drawn from this command.
+
+corrected staged-diff secret scan — exit 0
+Result: no Worker credential, Anthropic secret, Redis password value, or secret-shaped token matched.

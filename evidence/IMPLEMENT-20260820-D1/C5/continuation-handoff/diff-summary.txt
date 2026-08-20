@@ -1,0 +1,6 @@
+Documentation-only continuation update:
+
+- HANDOFF now records b6d82c4, the active local v2 Worker, old P9 container exclusion, and exact blockers.
+- Continuation plan now resumes at C5 and no longer waits for a separate remote Worker host.
+- Goal-Driven Prompt no longer reimplements C0-C4 and requires a new authentic Task ID.
+- No application source, D1 migration, Redis service, container, credential, or remote deployment changed.

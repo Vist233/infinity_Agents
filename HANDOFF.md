@@ -1,7 +1,8 @@
 # Infinity Agents — Cloudflare Deploy 交接文档
 
 > 最后更新：2026-08-20
-> 当前分支：`cloudflare-deploy`；本次 Worker 修复代码：`a3bcc10`；线上代码候选：`cc88c73`
+> 当前分支：`cloudflare-deploy`；本地与 GitHub 远端已核对到 `b6d82c4`；本次 Worker
+> 运行时修复代码：`a3bcc10`；已部署 Edge 候选：`cc88c73`
 > 本文只描述当前 D1 目标架构。旧 PostgreSQL/RLS 文档、旧 Worker 协议和旧 Compose
 > 文件属于历史资料，不能作为新机器或生产部署说明。
 
@@ -164,17 +165,30 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
    自动重连，凭证错误仍会停止。对应回归测试覆盖了这些故障路径。
 8. GitHub Actions `32355961608` 已成功发布最新修复后的 amd64/arm64 镜像；当前 v1
    manifest digest 为 `sha256:b0e0dcced7ddc0cc58e314e4aa49985a2a85cff7882ae69f7725d0febdf33e40`。
+9. 当前导航源码只有 Analysis、Task Center、ImageJudge，没有 Chat Agent 入口；Task Center
+   仍直接展示 `TaskCreationCard`、用户 Worker 管理和超级管理员公共 Worker 管理。
+10. 历史 `docker-compose.acceptance.yml` 已删除 Redis 默认密码，所有 Redis ACL 密码都必须
+    通过显式环境变量提供。该 Compose 仍是 PostgreSQL 历史验收栈，不是 D1 v2 生产路径。
+11. 本机 `infinity-agent-worker-b-v2` 正在运行；最新只读日志持续出现 D1 `poll/heartbeat 200`
+    和 Relay `/v1/hints 503`。本机同时还有旧 P9 PostgreSQL 验收容器，它们不是当前 Worker，
+    不得用于 C5 证据，也不得在没有用户授权时删除。
 
-## 7. C5 尚未完成的部分
+## 7. 当前真实阻塞
 
-- 当前 zhangbot 没有 Docker，也不是 Worker 主机；它只运行 Redis 和 Relay。`infinity` 与
-  `codex.mlamp.cn` 两个 SSH 目标当前不可达，因此还没有可执行 Worker 3 容器的远程主机。
+- 当前执行主机已经是本机 Docker，不再等待远程 Worker 主机；
+  `infinity-agent-worker-b-v2` 已连接线上 D1 控制面并持续轮询。zhangbot 仍只运行 Redis 和
+  Relay，不在 zhangbot 安装 Docker。
 - 当前 Tunnel 是 Quick Tunnel，域名为临时地址，适合本次链路验收，不是常驻生产入口；常驻
   Worker 上线前必须改为管理员控制的命名 Cloudflare Tunnel，并把地址更新到 Edge 和 Windows
   交接配置。
 - 真实 Case 2/3 必须从网页/同源 Task API 创建 queued Task，使用真实 Method/Dataset，
   再由可达的 Docker Worker 调用 Claude Code 并上传 R2 Artifact。现有 Task 是失败历史记录，
   不能通过手工改 D1 状态伪造重试。
+- 线上 D1 当前没有新的 queued Task。继续 C5 的最小输入是一条由当前 Task Center 创建的真实
+  Case 2 Task ID；没有 Task ID 时不得手工插入、修改或复用 `4350...`。
+- Relay `/v1/hints` 的 503 已定位为 zhangbot Redis `api` 用户 ACL 缺少
+  `infinity-public:*` 键模式和脚本权限。修改共享 ACL 属于外部状态变更，必须取得明确授权；
+  在此之前 Worker 依靠 D1 poll 保持可用，但 Redis 恢复/Outbox 重放门禁不能标记通过。
 - 浏览器扩展和应用内浏览器都对线上域名返回客户端拦截，因而本次页面验收使用了 Edge API、
   D1 和 Relay 的协议级证据；不能把浏览器 UI 结果写成已通过。
 - 修复后的 Worker 镜像已发布 GHCR；命名 Tunnel、真实 Case 2/3、浏览器 C6 和最终 C7
@@ -182,15 +196,15 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
 
 ## 8. 交接给下一位执行者的顺序
 
-1. 先取得真实 Worker 3 主机或让管理员在目标 Windows 机器启动 `worker-b`；不要在 zhangbot
-   上安装 Docker，也不要碰现有 Redis 服务。
-2. 用管理员签发的 Worker 3 credential 配置镜像和 Claude provider；同一 credential 不要在
-   第二台机器并发启动。
-3. 让用户在 Task Center 创建/提交真实 Case 2，记录 Task、Attempt、Worker、D1 事件、Relay
+1. 不重做 C0-C4，不重建当前本地 Worker。先确认 `cloudflare-deploy@b6d82c4`、
+   `infinity-agent-worker-b-v2` 仍在线且没有领取历史任务。
+2. 让用户在 Task Center 创建/提交真实 Case 2，并取得真实 Task ID；记录 Task、Attempt、Worker、D1 事件、Relay
    hint、R2 object、大小和 SHA-256；确认目录清空后再跑 Case 3。
-4. 关闭或恢复 Redis，确认 D1 Outbox 重试、Worker D1 poll 和任务终态不丢失；验证大结果走
+3. 取得明确授权后修复 zhangbot Redis `api` ACL，再执行关闭/恢复 Redis，确认 D1 Outbox
+   重试、Worker D1 poll 和任务终态不丢失；验证大结果走
    multipart、旧 lease 不能完成、取消不会发布 Artifact。
-5. 配置命名 Tunnel，替换所有临时 Relay URL；随后才发布 GHCR、推送 GitHub 和执行最后的
+4. 在可用的真实浏览器会话中完成 C6；客户端拦截不能记为网页通过。
+5. 配置命名 Tunnel，替换所有临时 Relay URL；随后才执行最后的
    Cloudflare/浏览器验收。
 
 ## 9. 禁止的绕过方式
