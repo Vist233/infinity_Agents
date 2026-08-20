@@ -89,6 +89,10 @@ WORKER_RUNTIME_CAPABILITY=goal-driven-claude-code
 校验 Worker、Session、Attempt、lease token 和 fencing epoch。Redis 不可用时，Worker 仍然
 可以继续 D1 poll；Redis 不是第二个任务状态源。
 
+本地验收已实际验证这一降级路径：Relay `/v1/hints` 返回 503 时，v2 Worker 仍保持进程在线
+并继续收到 D1 `poll 200`。若要恢复 Redis 唤醒提示，zhangbot 的 Relay Redis 用户必须由管理员
+补充固定的 `infinity-public:*` 键模式和 Lua 脚本权限；不要把 Redis 管理密码放进 Worker。
+
 ## 4. 容器配置
 
 生产 Compose 是仓库根目录的 `docker-compose.cloudflare-workers.yml`，模板是
@@ -142,7 +146,8 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
    `489d6721-1075-44cb-9b42-b77c233708a9`；`/health` 返回正常，未认证 v2、direct Task
    和凭证恢复路由不会放行。
 3. 已在 zhangbot 用户目录安装 Relay，并交给用户级 systemd 管理；Redis 保持回环监听，
-   Relay 本机健康检查通过，公网出站 Tunnel 健康检查通过。
+   Relay 健康检查通过，但当前 `/v1/hints` 因 Redis `api` ACL 键模式不匹配返回 503，
+   等待管理员明确授权后修正共享服务 ACL。
 4. 已使用公共 Worker 3 的持久 credential 完成 v2 `connect` 和 `poll` 协议验收；返回池、
    Namespace、协议能力正确，空队列返回 `next_poll_seconds=5`。换用不同 instance 的第二次
    connect 被正确拒绝，证明“一 credential 对应一个 active instance”规则生效。
@@ -150,6 +155,8 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
    但状态是旧链路留下的 `failed`，不是数据库不存在。
 6. Task Center 直接创建已修正为调用 `/api/tasks/direct`；本地 43 个单元测试和 6 个
    Playwright 用例通过，线上未认证请求返回 `401 UNAUTHENTICATED`。
+7. 已在本机用 `backend/Dockerfile.worker` 构建并启动 v2 Worker；Cloudflare D1 `connect`/
+   `poll` 成功，Relay 故障不会再导致 Worker 退出。对应回归测试覆盖了该故障路径。
 
 ## 7. C5 尚未完成的部分
 
@@ -163,7 +170,8 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
   不能通过手工改 D1 状态伪造重试。
 - 浏览器扩展和应用内浏览器都对线上域名返回客户端拦截，因而本次页面验收使用了 Edge API、
   D1 和 Relay 的协议级证据；不能把浏览器 UI 结果写成已通过。
-- GHCR 镜像发布、命名 Tunnel、真实 Case 2/3、浏览器 C6 和最终 C7 code review 仍是发布门禁。
+- 修复后的 Worker 镜像尚未重新发布 GHCR；命名 Tunnel、真实 Case 2/3、浏览器 C6 和最终
+  C7 code review 仍是发布门禁。
 
 ## 8. 交接给下一位执行者的顺序
 

@@ -63,6 +63,7 @@ async def run_worker(worker_id: str) -> None:
         await client.connect()
         heartbeat_task = asyncio.create_task(_heartbeat(client, stop))
         while not stop.is_set():
+            hints: list[dict[str, Any]] = []
             try:
                 # Hints are advisory only. D1 poll/claim is authoritative, so
                 # a Relay outage cannot lose or duplicate a task.

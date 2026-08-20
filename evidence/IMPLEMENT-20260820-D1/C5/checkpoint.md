@@ -1,20 +1,26 @@
 # C5 checkpoint — partial
 
-- Current branch HEAD: `625b6c6` (checkpoint-only commits after the deployed code)
+- Current branch HEAD: pending current local-Worker fix commit (checkpoint-only commits after the deployed code)
 - Deployed code candidate: `cc88c73`
 
 - Status: `PARTIAL`
 - D1 migration: passed remotely
 - Edge v2 deployment: passed; latest version `489d6721-1075-44cb-9b42-b77c233708a9`
-- zhangbot Redis Relay: passed health and process boundary checks
-- Worker 3 persistent connect/poll: passed
+- zhangbot Redis Relay: health endpoint and process boundary pass, but authenticated `/v1/hints`
+  currently returns `503 REDIS_UNAVAILABLE`; Redis user `api` lacks the `infinity-public:*` key
+  pattern and Lua scripting permission. The exact ACL correction is awaiting explicit authorization
+  before changing the shared service.
+- Local Worker 3 v2: image built from `backend/Dockerfile.worker`; `connect` returned `200`,
+  `poll` returned `200`, and the container remained running through the Relay outage. The first
+  run exposed and fixed an uninitialized-hints crash; the regression test now passes.
 - Task Center direct-route repair: passed local unit/E2E gates and deployed; direct creation now
   uses `/api/tasks/direct`, while unauthenticated direct creation returns 401
 - Worker credential Namespace boundary: passed frontend unit/type/build gates and deployed; client
   recovery/rotation sends only Worker ID, while unauthenticated recovery returns 401
-- GHCR multi-architecture image: published as `ghcr.io/vist233/infinity-agent-worker:v1`
-  with manifest digest `sha256:16325edb2a6ad962cddaf003d937b8bdc77725857e2f817e4c8abd2fbab0d6c1`
-- Real Docker/Claude Case 2: blocked by missing reachable Worker host and real queued input
+- GHCR multi-architecture image: the previously published digest predates the local Worker crash
+  fix; it must be rebuilt and republished before Windows uses it.
+- Real Docker/Claude Case 2: blocked by the missing authenticated queued input; the local Worker
+  is now available, but the online browser Task Center was client-blocked during this run
 - Real Docker/Claude Case 3: blocked by the same gate
 - Browser UI: not claimed; both available browser surfaces returned client-side blocking
 - GHCR: complete for the current image candidate; named Tunnel and final C7 publish gate remain
