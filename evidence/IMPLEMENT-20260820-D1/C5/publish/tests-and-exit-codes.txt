@@ -1,0 +1,6 @@
+`npm run build` (frontend): exit 0
+`GET https://infinity.zhangyvjing.com/health`: HTTP 200, `service=infinity-agents-edge`
+`POST https://infinity.zhangyvjing.com/api/tasks/direct` without browser auth: HTTP 401,
+  `UNAUTHENTICATED`
+`GET https://whatever-pool-terrace-remained.trycloudflare.com/health`: HTTP 200,
+  `service=infinity-redis-relay`

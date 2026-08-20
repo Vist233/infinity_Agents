@@ -1,0 +1,5 @@
+branch: cloudflare-deploy
+candidate_commit: f86b566
+github_remote: origin/cloudflare-deploy -> f86b566
+cloudflare_version: cf1bc7d5-7ec9-4c52-a68d-90e4dcb0d3c6
+worker_image_digest: sha256:16325edb2a6ad962cddaf003d937b8bdc77725857e2f817e4c8abd2fbab0d6c1

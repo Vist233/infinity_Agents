@@ -1,0 +1,4 @@
+- Published the already tested `f86b566` candidate to the authorized `cloudflare-deploy` branch.
+- Rebuilt the static frontend and deployed the Edge Worker to the existing custom domain.
+- Kept the temporary Relay URL only as a deployment variable; no temporary URL was committed to
+  the repository.
