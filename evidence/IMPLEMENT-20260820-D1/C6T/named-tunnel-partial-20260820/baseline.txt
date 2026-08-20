@@ -1,0 +1,8 @@
+branch: cloudflare-deploy
+baseline_head: 4526300
+worktree_before: clean
+cloudflare_account_id: 3cfba3bb2ec69798aa4881b05d80810f
+zone: zhangyvjing.com (active)
+existing_tunnels_before: 0
+requested_hostname: relay.infinity.zhangyvjing.com
+origin_service: http://127.0.0.1:8090

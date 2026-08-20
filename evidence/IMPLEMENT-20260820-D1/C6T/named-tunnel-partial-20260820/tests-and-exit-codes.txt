@@ -1,0 +1,17 @@
+wrangler whoami — exit 0
+Result: logged-in account has connectivity administration access.
+
+Cloudflare list tunnels — exit 0
+Result before creation: no existing tunnels.
+
+Cloudflare create tunnel — exit 0
+Result: first unused Tunnel was immediately deleted because its raw API response contained a credential field; a replacement was created with output filtering.
+
+Cloudflare put remote ingress configuration — exit 0
+Result: version 1 ingress maps relay.infinity.zhangyvjing.com to http://127.0.0.1:8090 and then http_status:404.
+
+Cloudflare DNS record lookup — HTTP 403 / API error 10000
+Result: current Wrangler OAuth can manage Connectivity but is rejected by the DNS API endpoint. No DNS record was created or changed.
+
+zhangbot cloudflared check — exit 127
+Result: cloudflared is not installed. No software installation was attempted because a working DNS route and connector token handoff are still pending.

@@ -1,0 +1,1 @@
+Evidence only. Cloudflare external state: one inactive named Tunnel and its remote ingress configuration were created; the first immediately deleted Tunnel had never connected or received DNS. No code, DNS, Redis, Relay service, D1/R2 record, Worker, credential file, or Edge secret changed.
