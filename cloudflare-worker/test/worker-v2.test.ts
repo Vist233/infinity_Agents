@@ -66,6 +66,7 @@ type Attempt = {
 class RuntimeFakeD1 {
   readonly workers = new Map<string, Worker>();
   readonly sessions = new Map<string, Session>();
+  readonly sessionHistory = new Map<string, Session>();
   readonly tasks = new Map<string, Task>();
   readonly attempts = new Map<string, Attempt>();
   readonly events: string[] = [];
@@ -74,6 +75,7 @@ class RuntimeFakeD1 {
   readonly artifactParts = new Map<string, Map<number, any>>();
   readonly artifacts = new Map<string, any>();
   readonly policy = { pool_id: "public-default", namespace: "infinity-public", mode: "public" as const };
+  afterTaskLoad: (() => void) | null = null;
 
   prepare(sql: string): RuntimeFakeStatement {
     return new RuntimeFakeStatement(this, sql);
@@ -104,7 +106,7 @@ class RuntimeFakeStatement {
     }
     if (sql.includes("FROM worker_sessions_runtime WHERE session_id")) {
       const [sessionId, workerId, now] = this.args as [string, string, number];
-      const row = [...this.db.sessions.values()].find((candidate) =>
+      const row = [...this.db.sessionHistory.values()].find((candidate) =>
         candidate.session_id === sessionId && candidate.worker_id === workerId
           && candidate.lease_expires_at > now && candidate.disconnected_at == null);
       return (row as T) ?? null;
@@ -148,20 +150,30 @@ class RuntimeFakeStatement {
       return (this.db.artifacts.get(String(this.args[0])) as T) ?? null;
     }
     if (sql.includes("FROM task_attempts") && sql.includes("status = 'succeeded'")) {
-      const [attemptId, taskId, workerId, sessionId, tokenHash] = this.args as [string, string, string, string, string];
+      const [attemptId, taskId, workerId, sessionId, tokenHash, now, epoch, instanceId] = this.args as [string, string, string, string, string, number, number, string];
       const row = this.db.attempts.get(attemptId);
+      const session = this.db.sessionHistory.get(sessionId);
       return row && row.task_id === taskId && row.worker_id === workerId && row.session_id === sessionId
-        && row.lease_token_hash === tokenHash && row.status === "succeeded" ? row as T : null;
+        && row.lease_token_hash === tokenHash && row.status === "succeeded"
+        && session?.worker_id === workerId && session.session_epoch === epoch && session.instance_id === instanceId
+        && session.disconnected_at == null && session.lease_expires_at > now ? row as T : null;
     }
     if (sql.includes("FROM task_attempts")) {
-      const [attemptId, taskId, workerId, sessionId, tokenHash, now] = this.args as [string, string, string, string, string, number];
+      const [attemptId, taskId, workerId, sessionId, tokenHash, now, epoch, instanceId] = this.args as [string, string, string, string, string, number, number, string];
       const row = this.db.attempts.get(attemptId);
+      const session = this.db.sessionHistory.get(sessionId);
       return row && row.task_id === taskId && row.worker_id === workerId && row.session_id === sessionId
         && row.lease_token_hash === tokenHash && ["claimed", "running"].includes(row.status)
-        && row.lease_expires_at > now ? row as T : null;
+        && row.lease_expires_at > now
+        && session?.worker_id === workerId && session.session_epoch === epoch && session.instance_id === instanceId
+        && session.disconnected_at == null && session.lease_expires_at > now ? row as T : null;
     }
     if (sql.includes("FROM tasks WHERE task_id")) {
-      return (this.db.tasks.get(String(this.args[0])) as T) ?? null;
+      const row = (this.db.tasks.get(String(this.args[0])) as T) ?? null;
+      const callback = this.db.afterTaskLoad;
+      this.db.afterTaskLoad = null;
+      callback?.();
+      return row;
     }
     if (sql.includes("FROM tasks") && sql.includes("status = 'queued'")) {
       const [poolId] = this.args as [string, number];
@@ -190,37 +202,30 @@ class RuntimeFakeStatement {
     }
     if (sql.includes("INSERT INTO worker_sessions_runtime")) {
       const [sessionId, workerId, poolId, namespace, instanceId, protocol, runtime, image, secretHash, epoch, connected, lease] = this.args as [string, string, string, string, string, string, string, string | null, string, number, number, number];
-      this.db.sessions.set(workerId, {
+      const session = {
         session_id: sessionId, worker_id: workerId, pool_id: poolId, namespace, instance_id: instanceId,
         protocol_version: protocol, runtime_capability: runtime, image_digest: image, session_secret_hash: secretHash,
         session_epoch: epoch, connected_at: connected, last_seen_at: connected, lease_expires_at: lease, disconnected_at: null,
-      });
+      };
+      this.db.sessions.set(workerId, session);
+      this.db.sessionHistory.set(sessionId, session);
       return { meta: { changes: 1 } };
     }
-    if (sql.includes("UPDATE worker_sessions_runtime") && sql.includes("SET pool_id")) {
-      const [workerId, sessionId, expectedEpoch, poolId, namespace, instanceId, protocol, runtime, image, secretHash, epoch, connected, lease] = this.args as [string, string, number, string, string, string, string, string, string | null, string, number, number, number];
-      const row = this.db.sessions.get(workerId);
-      if (!row || row.session_id !== sessionId || row.session_epoch !== expectedEpoch) return { meta: { changes: 0 } };
-      Object.assign(row, {
-        pool_id: poolId,
-        namespace,
-        instance_id: instanceId,
-        protocol_version: protocol,
-        runtime_capability: runtime,
-        image_digest: image,
-        session_secret_hash: secretHash,
-        session_epoch: epoch,
-        connected_at: connected,
-        last_seen_at: connected,
-        lease_expires_at: lease,
-        disconnected_at: null,
-      });
+    if (sql.includes("UPDATE worker_sessions_runtime") && sql.includes("SET disconnected_at")) {
+      const [workerId, sessionId, expectedEpoch, now] = this.args as [string, string, number, number];
+      const row = this.db.sessionHistory.get(sessionId);
+      if (!row || row.worker_id !== workerId || row.session_epoch !== expectedEpoch
+        || (row.disconnected_at == null && row.lease_expires_at > now)) return { meta: { changes: 0 } };
+      row.disconnected_at ??= now;
+      row.lease_expires_at = Math.min(row.lease_expires_at, now);
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE worker_sessions_runtime") && sql.includes("SET last_seen_at")) {
-      const [sessionId, workerId, secretHash, now, lease] = this.args as [string, string, string, number, number];
-      const row = [...this.db.sessions.values()].find((candidate) => candidate.session_id === sessionId && candidate.worker_id === workerId);
-      if (!row || row.session_secret_hash !== secretHash || row.lease_expires_at <= now || row.disconnected_at != null) return { meta: { changes: 0 } };
+      const [sessionId, workerId, secretHash, now, lease, epoch, instanceId] = this.args as [string, string, string, number, number, number, string];
+      const row = this.db.sessionHistory.get(sessionId);
+      if (!row || row.worker_id !== workerId || row.session_secret_hash !== secretHash
+        || row.session_epoch !== epoch || row.instance_id !== instanceId
+        || row.lease_expires_at <= now || row.disconnected_at != null) return { meta: { changes: 0 } };
       row.last_seen_at = now;
       row.lease_expires_at = lease;
       return { meta: { changes: 1 } };
@@ -228,6 +233,13 @@ class RuntimeFakeStatement {
     if (sql.includes("UPDATE workers SET last_seen_at")) {
       const row = this.db.workers.get(String(this.args[0]));
       if (!row || row.status !== "active") return { meta: { changes: 0 } };
+      if (this.args.length >= 5) {
+        const [, , sessionId, epoch, instanceId] = this.args as [string, number, string, number, string];
+        const session = this.db.sessionHistory.get(sessionId);
+        if (!session || session.worker_id !== row.worker_id || session.session_epoch !== epoch
+          || session.instance_id !== instanceId || session.disconnected_at != null
+          || session.lease_expires_at <= Number(this.args[1])) return { meta: { changes: 0 } };
+      }
       row.last_seen_at = Number(this.args[1]);
       return { meta: { changes: 1 } };
     }
@@ -314,17 +326,23 @@ class RuntimeFakeStatement {
       return { meta: { changes: this.db.artifacts.delete(String(this.args[0])) ? 1 : 0 } };
     }
     if (sql.includes("UPDATE tasks SET status = 'succeeded'")) {
-      const [taskId, artifactId] = this.args as [string, string];
+      const [taskId, artifactId, now, , workerId, , , sessionId, sessionEpoch, instanceId] = this.args as [string, string, number, string, string, number, string, string, number, string];
       const row = this.db.tasks.get(taskId);
-      if (!row || !row.active_attempt_id || row.cancel_requested_at != null || !["claimed", "running", "succeeded"].includes(row.status)) return { meta: { changes: 0 } };
+      const session = this.db.sessionHistory.get(sessionId);
+      if (!row || !row.active_attempt_id || row.cancel_requested_at != null || !["claimed", "running", "succeeded"].includes(row.status)
+        || session?.worker_id !== workerId || session.session_epoch !== sessionEpoch || session.instance_id !== instanceId
+        || session.disconnected_at != null || session.lease_expires_at <= now) return { meta: { changes: 0 } };
       row.status = "succeeded";
       (row as any).result_artifact_id = artifactId;
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE tasks") && sql.includes("SET status = 'claimed'")) {
-      const [taskId, attemptId, workerId, epoch, tokenHash, lease, now, poolId, expectedEpoch] = this.args as [string, string, string, number, string, number, number, string, number];
+      const [taskId, attemptId, workerId, epoch, tokenHash, lease, now, poolId, expectedEpoch, sessionId, sessionEpoch, instanceId] = this.args as [string, string, string, number, string, number, number, string, number, string, number, string];
       const row = this.db.tasks.get(taskId);
-      if (!row || row.status !== "queued" || row.execution_pool_id !== poolId || row.lease_epoch !== expectedEpoch) return { meta: { changes: 0 } };
+      const session = this.db.sessionHistory.get(sessionId);
+      if (!row || row.status !== "queued" || row.execution_pool_id !== poolId || row.lease_epoch !== expectedEpoch
+        || session?.worker_id !== workerId || session.session_epoch !== sessionEpoch || session.instance_id !== instanceId
+        || session.disconnected_at != null || session.lease_expires_at <= now) return { meta: { changes: 0 } };
       row.status = "claimed";
       row.attempt_count += 1;
       row.active_attempt_id = attemptId;
@@ -341,20 +359,40 @@ class RuntimeFakeStatement {
       this.db.attempts.set(attemptId, { attempt_id: attemptId, task_id: taskId, worker_id: workerId, session_id: sessionId, attempt_number: attemptNumber, fencing_epoch: epoch, lease_token_hash: tokenHash, lease_expires_at: lease, status: "claimed" });
       return { meta: { changes: 1 } };
     }
-    if (sql.includes("INTO task_events")) { this.db.events.push(String(this.args[0])); return { meta: { changes: 1 } }; }
-    if (sql.includes("INTO outbox_events")) { this.db.outbox.push(String(this.args[1])); return { meta: { changes: 1 } }; }
+    if (sql.includes("INTO task_events")) {
+      if (sql.includes("'task_claimed'")) {
+        const attempt = this.db.attempts.get(String(this.args.at(-1)));
+        if (!attempt || attempt.status !== "claimed") return { meta: { changes: 0 } };
+      }
+      this.db.events.push(String(this.args[0]));
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INTO outbox_events")) {
+      if (sql.includes("'task_claimed'")) {
+        const attempt = this.db.attempts.get(String(this.args.at(-1)));
+        if (!attempt || attempt.status !== "claimed") return { meta: { changes: 0 } };
+      }
+      this.db.outbox.push(String(this.args[1]));
+      return { meta: { changes: 1 } };
+    }
     if (sql.includes("UPDATE task_attempts SET lease_expires_at")) {
-      const [attemptId, taskId, workerId, sessionId, tokenHash, lease, now] = this.args as [string, string, string, string, string, number, number];
+      const [attemptId, taskId, workerId, sessionId, tokenHash, lease, now, sessionEpoch, instanceId] = this.args as [string, string, string, string, string, number, number, number, string];
       const row = this.db.attempts.get(attemptId);
-      if (!row || row.task_id !== taskId || row.worker_id !== workerId || row.session_id !== sessionId || row.lease_token_hash !== tokenHash || row.lease_expires_at <= now) return { meta: { changes: 0 } };
+      const session = this.db.sessionHistory.get(sessionId);
+      if (!row || row.task_id !== taskId || row.worker_id !== workerId || row.session_id !== sessionId || row.lease_token_hash !== tokenHash || row.lease_expires_at <= now
+        || session?.session_epoch !== sessionEpoch || session.instance_id !== instanceId
+        || session.disconnected_at != null || session.lease_expires_at <= now) return { meta: { changes: 0 } };
       row.lease_expires_at = lease;
       row.status = "running";
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE tasks SET status = CASE")) {
-      const [taskId, attemptId, workerId, tokenHash, epoch, lease, now] = this.args as [string, string, string, string, number, number, number];
+      const [taskId, attemptId, workerId, tokenHash, epoch, lease, now, sessionId, sessionEpoch, instanceId] = this.args as [string, string, string, string, number, number, number, string, number, string];
       const row = this.db.tasks.get(taskId);
-      if (!row || row.active_attempt_id !== attemptId || row.lease_worker_id !== workerId || row.lease_token_hash !== tokenHash || row.lease_epoch !== epoch || row.lease_expires_at == null || row.lease_expires_at <= now) return { meta: { changes: 0 } };
+      const session = this.db.sessionHistory.get(sessionId);
+      if (!row || row.active_attempt_id !== attemptId || row.lease_worker_id !== workerId || row.lease_token_hash !== tokenHash || row.lease_epoch !== epoch || row.lease_expires_at == null || row.lease_expires_at <= now
+        || session?.worker_id !== workerId || session.session_epoch !== sessionEpoch || session.instance_id !== instanceId
+        || session.disconnected_at != null || session.lease_expires_at <= now) return { meta: { changes: 0 } };
       row.status = "running";
       row.lease_expires_at = lease;
       return { meta: { changes: 1 } };
@@ -487,7 +525,7 @@ describe("Worker v2 control plane", () => {
     expect(await second.response.json()).toMatchObject({ error: { code: "WORKER_ALREADY_CONNECTED" } });
   });
 
-  it("rebinds an expired session without deleting Attempt history", async () => {
+  it("creates an immutable replacement session without deleting Attempt history", async () => {
     const db = new RuntimeFakeD1();
     const credential = "wc_test-persistent-credential";
     db.workers.set("worker-b", {
@@ -508,19 +546,79 @@ describe("Worker v2 control plane", () => {
     const reconnected = await connect(db, "worker-b", credential, "machine-b");
 
     expect(reconnected.response.status).toBe(201);
-    expect(reconnected.session.session_id).toBe(originalSessionId);
+    expect(reconnected.session.session_id).not.toBe(originalSessionId);
     expect(reconnected.session.session_epoch).toBe(originalEpoch + 1);
     expect(reconnected.session.instance_id).toBe("machine-b");
     expect(db.attempts.get("attempt-history")?.session_id).toBe(originalSessionId);
+    expect(db.sessionHistory.get(originalSessionId)).toMatchObject({
+      instance_id: "machine-a",
+      session_epoch: originalEpoch,
+      disconnected_at: expect.any(Number),
+    });
 
-    const missingEpochHeaders = authHeaders("worker-b", credential, "machine-b", reconnected.session);
-    missingEpochHeaders.delete("x-worker-session-epoch");
-    const missingEpoch = await handleWorkerV2(new Request("https://app.test/api/worker/v2/heartbeat", {
+    const staleEpochHeaders = authHeaders("worker-b", credential, "machine-b", reconnected.session);
+    staleEpochHeaders.set("x-worker-session-epoch", String(originalEpoch));
+    const staleEpoch = await handleWorkerV2(new Request("https://app.test/api/worker/v2/heartbeat", {
       method: "POST",
-      headers: missingEpochHeaders,
+      headers: staleEpochHeaders,
     }), envFor(db));
-    expect(missingEpoch?.status).toBe(409);
-    expect(await missingEpoch?.json()).toMatchObject({ error: { code: "WORKER_SESSION_STALE" } });
+    expect(staleEpoch?.status).toBe(409);
+    expect(await staleEpoch?.json()).toMatchObject({ error: { code: "WORKER_SESSION_STALE" } });
+
+    const compatibleHeaders = authHeaders("worker-b", credential, "machine-b", reconnected.session);
+    compatibleHeaders.delete("x-worker-session-epoch");
+    const compatible = await handleWorkerV2(new Request("https://app.test/api/worker/v2/heartbeat", {
+      method: "POST",
+      headers: compatibleHeaders,
+    }), envFor(db));
+    expect(compatible?.status).toBe(200);
+  });
+
+  it("atomically rejects a stale accept after authentication races a reconnect", async () => {
+    const db = new RuntimeFakeD1();
+    const credential = "wc_test-persistent-credential";
+    db.workers.set("worker-b", {
+      worker_id: "worker-b", pool_id: "public-default", namespace: "infinity-public", created_by: "user-a",
+      credential_hash: hashText(credential), status: "active", protocol_version: "2", runtime_capability: "goal-driven-claude-code", image_digest: null, last_seen_at: null,
+    });
+    db.tasks.set("task-race", {
+      task_id: "task-race", task_spec_id: "spec-race", dataset_snapshot_id: "dataset-race", method_source_id: null,
+      title: "Reconnect race", attempt_count: 0, max_attempts: 3, lease_epoch: 0, status: "queued",
+      execution_pool_id: "public-default", active_attempt_id: null, lease_worker_id: null,
+      lease_token_hash: null, lease_expires_at: null,
+    });
+    const connected = await connect(db, "worker-b", credential, "machine-a");
+    const oldSession = connected.session;
+    const oldHeaders = authHeaders("worker-b", credential, "machine-a", oldSession);
+    db.afterTaskLoad = () => {
+      oldSession.disconnected_at = 1;
+      oldSession.lease_expires_at = 0;
+      const replacement: Session = {
+        ...oldSession,
+        session_id: "ws_replacement-session",
+        instance_id: "machine-b",
+        session_secret_hash: hashText("ws_replacement-session"),
+        session_epoch: oldSession.session_epoch + 1,
+        connected_at: oldSession.connected_at + 1,
+        last_seen_at: oldSession.last_seen_at + 1,
+        lease_expires_at: oldSession.last_seen_at + 1000,
+        disconnected_at: null,
+      };
+      db.sessions.set("worker-b", replacement);
+      db.sessionHistory.set(replacement.session_id, replacement);
+    };
+
+    const raced = await handleWorkerV2(new Request("https://app.test/api/worker/v2/tasks/task-race/accept", {
+      method: "POST",
+      headers: oldHeaders,
+    }), envFor(db));
+
+    expect(raced?.status).toBe(409);
+    expect(await raced?.json()).toMatchObject({ error: { code: "TASK_CLAIM_CONFLICT" } });
+    expect(db.tasks.get("task-race")?.status).toBe("queued");
+    expect(db.attempts.size).toBe(0);
+    expect(db.events).toEqual([]);
+    expect(db.outbox).toEqual([]);
   });
 
   it("lets a public Worker claim another user's queued task exactly once", async () => {

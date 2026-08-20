@@ -17,6 +17,10 @@ const hardeningMigration = readFileSync(
   join(process.cwd(), "migrations-infinity", "0015_c7_runtime_hardening.sql"),
   "utf8",
 );
+const immutableSessionsMigration = readFileSync(
+  join(process.cwd(), "migrations-infinity", "0016_immutable_worker_sessions.sql"),
+  "utf8",
+);
 
 describe("canonical D1 Worker runtime schema", () => {
   it("uses the single public pool and D1-only data plane", () => {
@@ -51,5 +55,12 @@ describe("canonical D1 Worker runtime schema", () => {
     expect(hardeningMigration).toContain("token_version");
     expect(hardeningMigration).toContain("c7_artifact_upload_winners");
     expect(hardeningMigration).toContain("idx_artifacts_upload_unique");
+  });
+
+  it("keeps historical Worker sessions immutable with one active session", () => {
+    expect(immutableSessionsMigration).toContain("UNIQUE(worker_id, session_epoch)");
+    expect(immutableSessionsMigration).toContain("idx_worker_sessions_runtime_one_active");
+    expect(immutableSessionsMigration).toContain("WHERE disconnected_at IS NULL");
+    expect(immutableSessionsMigration).not.toContain("worker_id TEXT NOT NULL UNIQUE");
   });
 });

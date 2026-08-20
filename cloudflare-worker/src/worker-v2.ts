@@ -233,7 +233,7 @@ async function authenticateSession(request: Request, env: Env): Promise<WorkerCo
     return errorJson("Worker session binding is invalid", 403, "WORKER_SESSION_MISMATCH");
   }
   const epochHeader = request.headers.get("x-worker-session-epoch");
-  if (!epochHeader || !/^\d+$/.test(epochHeader) || Number(epochHeader) !== session.session_epoch) {
+  if (epochHeader && (!/^\d+$/.test(epochHeader) || Number(epochHeader) !== session.session_epoch)) {
     return errorJson("Worker session epoch is stale", 409, "WORKER_SESSION_STALE");
   }
   return { worker: loaded.row, policy, session, credentialHash: loaded.hash };
@@ -246,13 +246,23 @@ async function touchSession(env: Env, context: WorkerContext, now = nowSeconds()
       `UPDATE worker_sessions_runtime
        SET last_seen_at = ?4, lease_expires_at = ?5
        WHERE session_id = ?1 AND worker_id = ?2 AND session_secret_hash = ?3
+         AND session_epoch = ?6 AND instance_id = ?7
          AND lease_expires_at > ?4 AND disconnected_at IS NULL`,
-    ).bind(context.session.session_id, context.worker.worker_id, hashText(context.session.session_id), now, leaseExpiresAt),
+    ).bind(context.session.session_id, context.worker.worker_id, hashText(context.session.session_id), now, leaseExpiresAt,
+      context.session.session_epoch, context.session.instance_id),
     env.DB.prepare(
-      "UPDATE workers SET last_seen_at = ?2, updated_at = ?2 WHERE worker_id = ?1 AND status = 'active'",
-    ).bind(context.worker.worker_id, now),
+      `UPDATE workers SET last_seen_at = ?2, updated_at = ?2
+       WHERE worker_id = ?1 AND status = 'active'
+         AND EXISTS (
+           SELECT 1 FROM worker_sessions_runtime
+           WHERE session_id = ?3 AND worker_id = ?1 AND session_epoch = ?4
+             AND instance_id = ?5 AND disconnected_at IS NULL
+             AND lease_expires_at > ?2
+         )`,
+    ).bind(context.worker.worker_id, now, context.session.session_id,
+      context.session.session_epoch, context.session.instance_id),
   ]);
-  return changed(results[0]) === 1;
+  return changed(results[0]) === 1 && changed(results[1]) === 1;
 }
 
 async function connectWorker(request: Request, env: Env): Promise<Response> {
@@ -290,7 +300,8 @@ async function connectWorker(request: Request, env: Env): Promise<Response> {
             protocol_version, runtime_capability, image_digest,
             session_secret_hash, session_epoch, connected_at, last_seen_at,
             lease_expires_at, disconnected_at
-     FROM worker_sessions_runtime WHERE worker_id = ?1`,
+     FROM worker_sessions_runtime WHERE worker_id = ?1
+     ORDER BY session_epoch DESC LIMIT 1`,
   ).bind(workerId).first<SessionRow>();
   if (current && current.lease_expires_at > now && current.disconnected_at == null && current.instance_id !== instanceId) {
     return errorJson("This Worker credential already has an active instance", 409, "WORKER_ALREADY_CONNECTED");
@@ -312,41 +323,24 @@ async function connectWorker(request: Request, env: Env): Promise<Response> {
     });
   }
 
-  // `task_attempts.session_id` is an immutable historical foreign key.  Do
-  // not delete an expired session row when a Worker reconnects: a completed
-  // Attempt may still reference it.  The schema deliberately keeps one row
-  // per Worker, so rotate the epoch and binding in place while retaining the
-  // stable session_id.  The persistent credential, instance binding and
-  // incremented epoch fence every stale client.
-  const sessionId = current?.session_id ?? newToken("ws");
+  // Each reconnect gets a new immutable session identity. Historical Attempts
+  // retain their original session_id, while the partial unique index permits
+  // only one non-disconnected Session for a Worker.
+  const sessionId = newToken("ws");
   const sessionEpoch = (current?.session_epoch ?? 0) + 1;
   const leaseExpiresAt = now + SESSION_TTL_SECONDS;
   try {
-    const sessionWrite = current
-      ? env.DB.prepare(
+    const statements: D1PreparedStatement[] = [];
+    if (current) {
+      statements.push(env.DB.prepare(
         `UPDATE worker_sessions_runtime
-         SET pool_id = ?4, namespace = ?5, instance_id = ?6,
-             protocol_version = ?7, runtime_capability = ?8, image_digest = ?9,
-             session_secret_hash = ?10, session_epoch = ?11,
-             connected_at = ?12, last_seen_at = ?12,
-             lease_expires_at = ?13, disconnected_at = NULL
-         WHERE worker_id = ?1 AND session_id = ?2 AND session_epoch = ?3`,
-      ).bind(
-        workerId,
-        sessionId,
-        current.session_epoch,
-        policy.pool_id,
-        policy.namespace,
-        instanceId,
-        PROTOCOL_VERSION,
-        RUNTIME_CAPABILITY,
-        imageDigest,
-        hashText(sessionId),
-        sessionEpoch,
-        now,
-        leaseExpiresAt,
-      )
-      : env.DB.prepare(
+         SET disconnected_at = COALESCE(disconnected_at, ?4),
+             lease_expires_at = MIN(lease_expires_at, ?4)
+         WHERE worker_id = ?1 AND session_id = ?2 AND session_epoch = ?3
+           AND (disconnected_at IS NOT NULL OR lease_expires_at <= ?4)`,
+      ).bind(workerId, current.session_id, current.session_epoch, now));
+    }
+    statements.push(env.DB.prepare(
         `INSERT INTO worker_sessions_runtime
           (session_id, worker_id, pool_id, namespace, instance_id,
            protocol_version, runtime_capability, image_digest,
@@ -366,12 +360,22 @@ async function connectWorker(request: Request, env: Env): Promise<Response> {
         sessionEpoch,
         now,
         leaseExpiresAt,
-      );
-    const results = await env.DB.batch([
-      sessionWrite,
-      env.DB.prepare("UPDATE workers SET last_seen_at = ?2, updated_at = ?2 WHERE worker_id = ?1 AND status = 'active'").bind(workerId, now),
-    ]);
-    if (changed(results[0]) !== 1) {
+      ));
+    statements.push(env.DB.prepare(
+      `UPDATE workers SET last_seen_at = ?2, updated_at = ?2
+       WHERE worker_id = ?1 AND status = 'active'
+         AND EXISTS (
+           SELECT 1 FROM worker_sessions_runtime
+           WHERE session_id = ?3 AND worker_id = ?1 AND session_epoch = ?4
+             AND instance_id = ?5 AND disconnected_at IS NULL
+         )`,
+    ).bind(workerId, now, sessionId, sessionEpoch, instanceId));
+    const results = await env.DB.batch(statements);
+    const expiredIndex = current ? 0 : -1;
+    const insertedIndex = current ? 1 : 0;
+    const workerIndex = current ? 2 : 1;
+    if ((expiredIndex >= 0 && changed(results[expiredIndex]) !== 1)
+      || changed(results[insertedIndex]) !== 1 || changed(results[workerIndex]) !== 1) {
       return errorJson("Worker session was superseded", 409, "WORKER_SESSION_STALE");
     }
   } catch {
@@ -476,8 +480,16 @@ async function acceptTask(taskId: string, request: Request, env: Env, context: W
              lease_expires_at = ?6, updated_at = ?7
          WHERE task_id = ?1 AND status = 'queued'
            AND execution_pool_id = ?8 AND lease_epoch = ?9
-           AND cancel_requested_at IS NULL`,
-      ).bind(taskId, attemptId, context.worker.worker_id, fencingEpoch, leaseTokenHash, leaseExpiresAt, now, context.policy.pool_id, task.lease_epoch),
+           AND cancel_requested_at IS NULL
+           AND EXISTS (
+             SELECT 1 FROM worker_sessions_runtime s
+             WHERE s.session_id = ?10 AND s.worker_id = ?3
+               AND s.session_epoch = ?11 AND s.instance_id = ?12
+               AND s.disconnected_at IS NULL AND s.lease_expires_at > ?7
+           )`,
+      ).bind(taskId, attemptId, context.worker.worker_id, fencingEpoch, leaseTokenHash, leaseExpiresAt, now,
+        context.policy.pool_id, task.lease_epoch, context.session.session_id, context.session.session_epoch,
+        context.session.instance_id),
       env.DB.prepare(
         `INSERT INTO task_attempts
           (attempt_id, task_id, worker_id, session_id, attempt_number,
@@ -532,13 +544,17 @@ async function authenticateAttempt(
   if (!attemptId || !leaseToken) return errorJson("Attempt and lease credentials are required", 401, "ATTEMPT_AUTH_REQUIRED");
   const leaseTokenHash = hashText(leaseToken);
   const attempt = await env.DB.prepare(
-    `SELECT attempt_id, task_id, worker_id, session_id, fencing_epoch,
-            lease_expires_at, status
-     FROM task_attempts
-     WHERE attempt_id = ?1 AND task_id = ?2 AND worker_id = ?3
-       AND session_id = ?4 AND lease_token_hash = ?5
-       AND status IN ('claimed', 'running') AND lease_expires_at > ?6`,
-  ).bind(attemptId, taskId, context.worker.worker_id, context.session.session_id, leaseTokenHash, nowSeconds()).first<AttemptRow>();
+    `SELECT a.attempt_id, a.task_id, a.worker_id, a.session_id, a.fencing_epoch,
+            a.lease_expires_at, a.status
+     FROM task_attempts a
+     JOIN worker_sessions_runtime s ON s.session_id = a.session_id
+     WHERE a.attempt_id = ?1 AND a.task_id = ?2 AND a.worker_id = ?3
+       AND a.session_id = ?4 AND a.lease_token_hash = ?5
+       AND a.status IN ('claimed', 'running') AND a.lease_expires_at > ?6
+       AND s.worker_id = ?3 AND s.session_epoch = ?7 AND s.instance_id = ?8
+       AND s.disconnected_at IS NULL AND s.lease_expires_at > ?6`,
+  ).bind(attemptId, taskId, context.worker.worker_id, context.session.session_id, leaseTokenHash,
+    nowSeconds(), context.session.session_epoch, context.session.instance_id).first<AttemptRow>();
   if (!attempt) return errorJson("Attempt lease is invalid or expired", 409, "ATTEMPT_FENCING_REJECTED");
   return { attempt, leaseTokenHash };
 }
@@ -555,12 +571,16 @@ async function authenticateSucceededAttempt(
   if (!attemptId || !leaseToken) return errorJson("Attempt and lease credentials are required", 401, "ATTEMPT_AUTH_REQUIRED");
   const leaseTokenHash = hashText(leaseToken);
   const attempt = await env.DB.prepare(
-    `SELECT attempt_id, task_id, worker_id, session_id, fencing_epoch,
-            lease_expires_at, status
-     FROM task_attempts
-     WHERE attempt_id = ?1 AND task_id = ?2 AND worker_id = ?3
-       AND session_id = ?4 AND lease_token_hash = ?5 AND status = 'succeeded'`,
-  ).bind(attemptId, taskId, context.worker.worker_id, context.session.session_id, leaseTokenHash).first<AttemptRow>();
+    `SELECT a.attempt_id, a.task_id, a.worker_id, a.session_id, a.fencing_epoch,
+            a.lease_expires_at, a.status
+     FROM task_attempts a
+     JOIN worker_sessions_runtime s ON s.session_id = a.session_id
+     WHERE a.attempt_id = ?1 AND a.task_id = ?2 AND a.worker_id = ?3
+       AND a.session_id = ?4 AND a.lease_token_hash = ?5 AND a.status = 'succeeded'
+       AND s.worker_id = ?3 AND s.session_epoch = ?7 AND s.instance_id = ?8
+       AND s.disconnected_at IS NULL AND s.lease_expires_at > ?6`,
+  ).bind(attemptId, taskId, context.worker.worker_id, context.session.session_id, leaseTokenHash,
+    nowSeconds(), context.session.session_epoch, context.session.instance_id).first<AttemptRow>();
   if (!attempt) return errorJson("Attempt finalize credentials are invalid", 409, "ATTEMPT_FENCING_REJECTED");
   return { attempt, leaseTokenHash };
 }
@@ -578,15 +598,30 @@ async function renewTask(taskId: string, request: Request, env: Env, context: Wo
       `UPDATE task_attempts SET lease_expires_at = ?6, updated_at = ?6
        WHERE attempt_id = ?1 AND task_id = ?2 AND worker_id = ?3
          AND session_id = ?4 AND lease_token_hash = ?5
-         AND status IN ('claimed', 'running') AND lease_expires_at > ?7`,
-    ).bind(auth.attempt.attempt_id, taskId, context.worker.worker_id, context.session.session_id, auth.leaseTokenHash, leaseExpiresAt, now),
+         AND status IN ('claimed', 'running') AND lease_expires_at > ?7
+         AND EXISTS (
+           SELECT 1 FROM worker_sessions_runtime s
+           WHERE s.session_id = ?4 AND s.worker_id = ?3
+             AND s.session_epoch = ?8 AND s.instance_id = ?9
+             AND s.disconnected_at IS NULL AND s.lease_expires_at > ?7
+         )`,
+    ).bind(auth.attempt.attempt_id, taskId, context.worker.worker_id, context.session.session_id,
+      auth.leaseTokenHash, leaseExpiresAt, now, context.session.session_epoch, context.session.instance_id),
     env.DB.prepare(
       `UPDATE tasks SET status = CASE WHEN status = 'claimed' THEN 'running' ELSE status END,
           lease_expires_at = ?6, updated_at = ?6
        WHERE task_id = ?1 AND active_attempt_id = ?2 AND lease_worker_id = ?3
          AND lease_token_hash = ?4 AND lease_epoch = ?5
-         AND status IN ('claimed', 'running') AND lease_expires_at > ?7`,
-    ).bind(taskId, auth.attempt.attempt_id, context.worker.worker_id, auth.leaseTokenHash, auth.attempt.fencing_epoch, leaseExpiresAt, now),
+         AND status IN ('claimed', 'running') AND lease_expires_at > ?7
+         AND EXISTS (
+           SELECT 1 FROM worker_sessions_runtime s
+           WHERE s.session_id = ?8 AND s.worker_id = ?3
+             AND s.session_epoch = ?9 AND s.instance_id = ?10
+             AND s.disconnected_at IS NULL AND s.lease_expires_at > ?7
+         )`,
+    ).bind(taskId, auth.attempt.attempt_id, context.worker.worker_id, auth.leaseTokenHash,
+      auth.attempt.fencing_epoch, leaseExpiresAt, now, context.session.session_id,
+      context.session.session_epoch, context.session.instance_id),
   ]);
   if (changed(results[0]) !== 1 || changed(results[1]) !== 1) return errorJson("Attempt lease is stale", 409, "ATTEMPT_FENCING_REJECTED");
   return json({ task_id: taskId, attempt_id: auth.attempt.attempt_id, lease_expires_at: leaseExpiresAt, status: "running" });
@@ -611,8 +646,16 @@ async function taskSpec(taskId: string, request: Request, env: Env, context: Wor
      LEFT JOIN method_sources ms ON ms.method_source_id = t.method_source_id
      LEFT JOIN task_resources mr ON mr.resource_id = ms.resource_id
      WHERE t.task_id = ?1 AND t.active_attempt_id = ?2
-       AND t.lease_worker_id = ?3 AND t.lease_epoch = ?4`,
-  ).bind(taskId, auth.attempt.attempt_id, context.worker.worker_id, auth.attempt.fencing_epoch).first<Record<string, unknown>>();
+       AND t.lease_worker_id = ?3 AND t.lease_epoch = ?4
+       AND EXISTS (
+         SELECT 1 FROM worker_sessions_runtime ws
+         WHERE ws.session_id = ?5 AND ws.worker_id = ?3
+           AND ws.session_epoch = ?6 AND ws.instance_id = ?7
+           AND ws.disconnected_at IS NULL AND ws.lease_expires_at > ?8
+       )`,
+  ).bind(taskId, auth.attempt.attempt_id, context.worker.worker_id, auth.attempt.fencing_epoch,
+    context.session.session_id, context.session.session_epoch, context.session.instance_id,
+    nowSeconds()).first<Record<string, unknown>>();
   if (!row) return errorJson("Task spec is no longer available", 409, "ATTEMPT_FENCING_REJECTED");
   return json({
     task_id: taskId,
@@ -650,12 +693,22 @@ async function taskInput(taskId: string, resource: string, request: Request, env
       ? `SELECT tr.object_key, tr.logical_name, tr.content_type, tr.file_size_bytes, tr.file_hash_sha256
          FROM tasks t JOIN dataset_snapshots ds ON ds.dataset_snapshot_id = t.dataset_snapshot_id
          JOIN task_resources tr ON tr.resource_id = ds.resource_id
-         WHERE t.task_id = ?1 AND t.active_attempt_id = ?2 AND t.lease_worker_id = ?3 AND t.lease_epoch = ?4`
+         WHERE t.task_id = ?1 AND t.active_attempt_id = ?2 AND t.lease_worker_id = ?3 AND t.lease_epoch = ?4
+           AND EXISTS (SELECT 1 FROM worker_sessions_runtime ws
+             WHERE ws.session_id = ?5 AND ws.worker_id = ?3
+               AND ws.session_epoch = ?6 AND ws.instance_id = ?7
+               AND ws.disconnected_at IS NULL AND ws.lease_expires_at > ?8)`
       : `SELECT tr.object_key, tr.logical_name, tr.content_type, tr.file_size_bytes, tr.file_hash_sha256
          FROM tasks t JOIN method_sources ms ON ms.method_source_id = t.method_source_id
          JOIN task_resources tr ON tr.resource_id = ms.resource_id
-         WHERE t.task_id = ?1 AND t.active_attempt_id = ?2 AND t.lease_worker_id = ?3 AND t.lease_epoch = ?4`,
-  ).bind(taskId, auth.attempt.attempt_id, context.worker.worker_id, auth.attempt.fencing_epoch).first<{
+         WHERE t.task_id = ?1 AND t.active_attempt_id = ?2 AND t.lease_worker_id = ?3 AND t.lease_epoch = ?4
+           AND EXISTS (SELECT 1 FROM worker_sessions_runtime ws
+             WHERE ws.session_id = ?5 AND ws.worker_id = ?3
+               AND ws.session_epoch = ?6 AND ws.instance_id = ?7
+               AND ws.disconnected_at IS NULL AND ws.lease_expires_at > ?8)`,
+  ).bind(taskId, auth.attempt.attempt_id, context.worker.worker_id, auth.attempt.fencing_epoch,
+    context.session.session_id, context.session.session_epoch, context.session.instance_id,
+    nowSeconds()).first<{
     object_key: string;
     logical_name: string;
     content_type: string;
@@ -726,14 +779,27 @@ async function startArtifact(taskId: string, request: Request, env: Env, context
     return errorJson("Artifact multipart session could not be created", 503, "ARTIFACT_UPLOAD_UNAVAILABLE");
   }
   const uploadId = multipart.uploadId;
+  const createdAt = nowSeconds();
   try {
-    await env.DB.prepare(
+    const saved = await env.DB.prepare(
       `INSERT INTO artifact_uploads
         (upload_id, task_id, attempt_id, worker_id, object_key, name, kind,
          content_type, expected_size_bytes, expected_sha256, manifest_json,
          status, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'open', ?12)`,
-    ).bind(uploadId, taskId, auth.attempt.attempt_id, context.worker.worker_id, objectKey, name, kind, contentType, expectedSize, expectedSha, manifest, nowSeconds()).run();
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'open', ?12
+       WHERE EXISTS (
+         SELECT 1 FROM task_attempts a
+         JOIN worker_sessions_runtime s ON s.session_id = a.session_id
+         WHERE a.attempt_id = ?3 AND a.task_id = ?2 AND a.worker_id = ?4
+           AND a.session_id = ?13 AND a.lease_token_hash = ?14
+           AND a.status IN ('claimed', 'running') AND a.lease_expires_at > ?12
+           AND s.session_epoch = ?15 AND s.instance_id = ?16
+           AND s.disconnected_at IS NULL AND s.lease_expires_at > ?12
+       )`,
+    ).bind(uploadId, taskId, auth.attempt.attempt_id, context.worker.worker_id, objectKey, name, kind,
+      contentType, expectedSize, expectedSha, manifest, createdAt, context.session.session_id,
+      auth.leaseTokenHash, context.session.session_epoch, context.session.instance_id).run();
+    if (changed(saved) !== 1) throw new Error("stale Worker session");
   } catch {
     try { await multipart.abort(); } catch { /* best effort cleanup */ }
     return errorJson("Artifact multipart metadata could not be saved", 503, "ARTIFACT_UPLOAD_UNAVAILABLE");
@@ -797,11 +863,25 @@ async function artifactPart(uploadId: string, partText: string, request: Request
     const multipart = env.RESOURCE_BUCKET.resumeMultipartUpload(upload.object_key, upload.upload_id);
     const uploaded = await multipart.uploadPart(partNumber, body);
     if (result.size <= 0 || (contentLength > 0 && result.size !== contentLength)) return errorJson("Artifact part size is invalid", 400, "INVALID_ARTIFACT_PART");
-    await env.DB.prepare(
+    const partSavedAt = nowSeconds();
+    const saved = await env.DB.prepare(
       `INSERT OR REPLACE INTO artifact_upload_parts
         (upload_id, part_number, etag, part_size_bytes, part_sha256, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-    ).bind(uploadId, partNumber, uploaded.etag, result.size, result.sha256, nowSeconds()).run();
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6
+       WHERE EXISTS (
+         SELECT 1 FROM artifact_uploads u
+         JOIN task_attempts a ON a.attempt_id = u.attempt_id
+         JOIN worker_sessions_runtime s ON s.session_id = a.session_id
+         WHERE u.upload_id = ?1 AND u.status = 'open' AND u.finalize_owner IS NULL
+           AND a.worker_id = ?7 AND a.session_id = ?8 AND a.lease_token_hash = ?9
+           AND a.status IN ('claimed', 'running') AND a.lease_expires_at > ?6
+           AND s.session_epoch = ?10 AND s.instance_id = ?11
+           AND s.disconnected_at IS NULL AND s.lease_expires_at > ?6
+       )`,
+    ).bind(uploadId, partNumber, uploaded.etag, result.size, result.sha256, partSavedAt,
+      context.worker.worker_id, context.session.session_id, auth.leaseTokenHash,
+      context.session.session_epoch, context.session.instance_id).run();
+    if (changed(saved) !== 1) return errorJson("Artifact lease is stale", 409, "ATTEMPT_FENCING_REJECTED");
     return json({ upload_id: uploadId, part_number: partNumber, etag: uploaded.etag, size_bytes: result.size, sha256: result.sha256 });
   } catch (error) {
     console.error("Worker artifact part upload failed", {
@@ -877,16 +957,21 @@ async function completeArtifact(uploadId: string, request: Request, env: Env, co
        AND worker_id = ?6 AND status = 'open'
        AND (finalize_owner IS NULL OR finalize_started_at <= ?10)
        AND EXISTS (
-         SELECT 1 FROM task_attempts a JOIN tasks t ON t.active_attempt_id = a.attempt_id
+         SELECT 1 FROM task_attempts a
+         JOIN tasks t ON t.active_attempt_id = a.attempt_id
+         JOIN worker_sessions_runtime s ON s.session_id = a.session_id
          WHERE a.attempt_id = ?5 AND a.task_id = ?4 AND a.worker_id = ?6
            AND a.session_id = ?7 AND a.lease_token_hash = ?8
            AND a.status IN ('claimed', 'running') AND a.lease_expires_at > ?3
            AND t.status IN ('claimed', 'running') AND t.lease_token_hash = ?8
            AND t.cancel_requested_at IS NULL
+           AND s.session_epoch = ?11 AND s.instance_id = ?12
+           AND s.disconnected_at IS NULL AND s.lease_expires_at > ?3
        )`,
     ).bind(uploadId, finalizeOwner, finalizeStartedAt, upload.task_id, upload.attempt_id,
       context.worker.worker_id, context.session.session_id, auth.leaseTokenHash,
-      proposedArtifactId, finalizeStartedAt - 3600).run();
+      proposedArtifactId, finalizeStartedAt - 3600, context.session.session_epoch,
+      context.session.instance_id).run();
     if (changed(claimed) !== 1) {
       return errorJson("Artifact finalize is already in progress", 409, "ARTIFACT_FINALIZE_IN_PROGRESS");
     }
@@ -931,8 +1016,16 @@ async function completeArtifact(uploadId: string, request: Request, env: Env, co
          WHERE task_id = ?1 AND active_attempt_id = ?4
            AND lease_worker_id = ?5 AND lease_epoch = ?6
            AND lease_token_hash = ?7 AND status IN ('claimed', 'running', 'succeeded')
-           AND cancel_requested_at IS NULL`,
-      ).bind(upload.task_id, artifactId, now, upload.attempt_id, context.worker.worker_id, auth.attempt.fencing_epoch, auth.leaseTokenHash),
+           AND cancel_requested_at IS NULL
+           AND EXISTS (
+             SELECT 1 FROM worker_sessions_runtime s
+             WHERE s.session_id = ?8 AND s.worker_id = ?5
+               AND s.session_epoch = ?9 AND s.instance_id = ?10
+               AND s.disconnected_at IS NULL AND s.lease_expires_at > ?3
+           )`,
+      ).bind(upload.task_id, artifactId, now, upload.attempt_id, context.worker.worker_id,
+        auth.attempt.fencing_epoch, auth.leaseTokenHash, context.session.session_id,
+        context.session.session_epoch, context.session.instance_id),
       env.DB.prepare(
         `UPDATE artifact_uploads SET status = 'completed', completed_at = COALESCE(completed_at, ?2),
              finalize_owner = NULL, finalize_started_at = NULL
@@ -1084,15 +1177,31 @@ async function finishTask(taskId: string, request: Request, env: Env, context: W
           updated_at = ?8, finished_at = ?8
        WHERE attempt_id = ?1 AND task_id = ?2 AND worker_id = ?3
          AND session_id = ?4 AND lease_token_hash = ?9
-         AND status IN ('claimed', 'running') AND lease_expires_at > ?8`,
-    ).bind(auth.attempt.attempt_id, taskId, context.worker.worker_id, context.session.session_id, errorCode, errorText, target, now, auth.leaseTokenHash),
+         AND status IN ('claimed', 'running') AND lease_expires_at > ?8
+         AND EXISTS (
+           SELECT 1 FROM worker_sessions_runtime s
+           WHERE s.session_id = ?4 AND s.worker_id = ?3
+             AND s.session_epoch = ?10 AND s.instance_id = ?11
+             AND s.disconnected_at IS NULL AND s.lease_expires_at > ?8
+         )`,
+    ).bind(auth.attempt.attempt_id, taskId, context.worker.worker_id, context.session.session_id,
+      errorCode, errorText, target, now, auth.leaseTokenHash, context.session.session_epoch,
+      context.session.instance_id),
     env.DB.prepare(
       `UPDATE tasks SET status = ?5, error_message = ?6, lease_expires_at = ?7,
           updated_at = ?7, finished_at = ?7
        WHERE task_id = ?1 AND active_attempt_id = ?2 AND lease_worker_id = ?3
          AND lease_epoch = ?4 AND lease_token_hash = ?8
-         AND status IN ('claimed', 'running')`,
-    ).bind(taskId, auth.attempt.attempt_id, context.worker.worker_id, auth.attempt.fencing_epoch, target, errorText, now, auth.leaseTokenHash),
+         AND status IN ('claimed', 'running')
+         AND EXISTS (
+           SELECT 1 FROM worker_sessions_runtime s
+           WHERE s.session_id = ?9 AND s.worker_id = ?3
+             AND s.session_epoch = ?10 AND s.instance_id = ?11
+             AND s.disconnected_at IS NULL AND s.lease_expires_at > ?7
+         )`,
+    ).bind(taskId, auth.attempt.attempt_id, context.worker.worker_id, auth.attempt.fencing_epoch,
+      target, errorText, now, auth.leaseTokenHash, context.session.session_id,
+      context.session.session_epoch, context.session.instance_id),
     env.DB.prepare(
       `INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
        SELECT ?1, ?2, ?3, ?4, ?5
