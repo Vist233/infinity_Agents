@@ -1,0 +1,5 @@
+baseline commit: 7cd573c ci: accept Claude Code version output
+baseline branch: cloudflare-deploy
+baseline worktree: clean
+modified implementation files: docker-compose.acceptance.yml
+

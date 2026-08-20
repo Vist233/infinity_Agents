@@ -1,0 +1,4 @@
+docker compose --env-file .env.local.example -f docker-compose.acceptance.yml config --quiet — exit 0
+git diff --check — exit 0
+secret scan for hard-coded credential patterns — exit 0
+

@@ -1,0 +1,4 @@
+- Removed `local-worker-a-redis-secret` and `local-worker-b-redis-secret` defaults.
+- Worker A/B Redis passwords are now required from the ignored acceptance env file.
+- No current D1 Worker, Edge Worker, Redis Relay, D1, R2, or Docker runtime file changed.
+
