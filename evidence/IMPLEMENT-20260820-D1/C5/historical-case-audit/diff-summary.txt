@@ -1,0 +1,7 @@
+- Case 2 and Case 3 use `manual_case_acceptance` queued events and legacy Worker protocol
+  `cloudflare-claude-worker/1`.
+- Their frozen TaskSpec records have an empty `goal` and prompt version
+  `goal-driven-executor-v1`, not the current v2 task-specific Goal-Driven contract.
+- Their tasks retain `owner_then_public` dispatch metadata, and their published Artifacts have
+  `upload_id = NULL`; they do not prove the current v2 R2 multipart/finalize path.
+- The audit made no D1/R2/Redis changes.

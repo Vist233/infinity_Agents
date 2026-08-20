@@ -1,0 +1,5 @@
+branch: cloudflare-deploy
+baseline_commit: b21d6f1
+working_tree_before_card: clean
+read_only_target: Cloudflare D1 infinity-agents-db
+audited_tasks: 92e5138a-e400-46ee-9469-455b777d25bf (Case 2), d287fe38-746c-467e-b2d5-be6d0f33d8a3 (Case 3)

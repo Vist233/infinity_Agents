@@ -1,0 +1,4 @@
+Read-only `wrangler d1 execute infinity-agents-db --remote` audit: exit 0; 5 SELECT commands,
+rows_written=0 for every command.
+`git diff --check`: exit 0
+scoped credential-shaped literal scan: exit 0
