@@ -1,0 +1,8 @@
+`npm run check` (cloudflare-worker): exit 0
+`npm test -- --run` (cloudflare-worker): exit 0; 13 files, 55 tests passed
+`git diff --check`: exit 0
+credential-shaped literal scan (production source/config, examples/tests/docs excluded): exit 0
+
+The first broad scan intentionally matched documented placeholders and test fixtures; it was not
+used as the gate. The scoped scan above produced: `No credential-shaped literals in production
+source/config.`

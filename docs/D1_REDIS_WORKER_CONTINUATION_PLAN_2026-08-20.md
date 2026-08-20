@@ -1,6 +1,6 @@
 # D1 + zhangbot Redis Worker 续作实施计划
 
-> 基线：`cloudflare-deploy@a89954d`
+> 基线：`cloudflare-deploy@3983110`
 > 权威架构：`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`
 > 执行提示词：`D1_REDIS_WORKER_GOAL_DRIVEN_PROMPT_2026-08-20.md`
 > 原则：复用已通过的单一 Docker/Claude Runtime；替换错误的 PostgreSQL控制面，不同时维护两套生产链路。
@@ -19,14 +19,14 @@
 - Task详情真实 ID，禁止 `/api/tasks/preview`；
 - 历史本地 PostgreSQL Case 2/3 只作为 Claude Runtime/Artifact 参考，不计入 D1 验收。
 
-### 不能继续当作目标完成项
+### 当前架构判定
 
-- PostgreSQL是唯一事实源；
-- PostgreSQL RLS是生产权限边界；
-- Docker Worker直连 PostgreSQL；
-- PostgreSQL Outbox是目标队列源；
-- P9 PostgreSQL Case 2/3等于目标架构通过；
-- P10最终审查完成。
+- D1 是唯一事实源，使用 Cloudflare 原生 SQLite 语义；
+- D1 的固定认证路由和条件更新是生产权限边界；
+- Docker Worker 只通过 Worker v2 HTTPS API 读写 D1/R2；
+- D1 Outbox 通过 zhangbot HTTPS Relay 发布可重建 Redis hint；
+- 历史 PostgreSQL Case 2/3 不能替代 D1/R2/Relay 的真实验收；
+- C7 最终只读审查尚未完成。
 
 ### C0–C4 已完成
 
@@ -46,16 +46,18 @@
 - zhangbot Redis Relay 已以用户级 systemd 运行，Redis 仍为回环监听；临时 Quick Tunnel 的
   `/health` 已通过；
 - 不同 instance 复用同一 credential 会被拒绝，使用相同 instance 可恢复会话；
+- GHCR 已发布多架构镜像 `ghcr.io/vist233/infinity-agent-worker:v1`，生产模板已固定不可变
+  digest；
 - 还没有把真实 Docker/Claude Worker 放到可达的远程主机，也没有把 Case 2/3 标记为通过。
 
 ### 尚未完成
 
-- zhangbot Redis Relay 的远程部署和真实故障恢复；
+- zhangbot Redis Relay 的真实 Redis 停止/恢复和 Outbox 重放验收；
 - D1/R2/Redis真实 Case 2/3；
 - C6 浏览器、Task Center、Worker UI 和移动端真实验收；
 - C7 只读 Code Review、最终同一候选版本回归；
-- 命名 Cloudflare Tunnel、GHCR 发布、GitHub 发布、真实 Docker/Claude Case 2/3、C6 浏览器
-  验收和 C7 最终审查。
+- 命名 Cloudflare Tunnel（当前 Quick Tunnel 只能用于临时链路验收）；
+- 真实 Docker/Claude Case 2/3、C6 浏览器验收和 C7 最终审查。
 
 ## 2. 顺序实施
 
@@ -137,7 +139,8 @@ RLS claim 或旧 trust 路由。历史测试/迁移依赖的文件先锁定，C5
 
 主Agent先完成全量测试，再让一个只读子Agent检查多套代码、权限、状态机、Secret和浏览器。主Agent修复后重跑。每张卡写checkpoint并commit。
 
-只有获得明确授权后才允许push、发布GHCR、迁移remote D1、部署Relay或`wrangler deploy`。
+远程发布、GHCR、D1 迁移、Relay 部署和 `wrangler deploy` 必须保留可追溯的授权、版本和
+checkpoint；当前分支的 GHCR、D1 迁移、Relay 和 Edge 部署已记录在对应证据中。
 
 ## 3. 每卡固定检查
 

@@ -1,0 +1,5 @@
+- Replaced the stale PostgreSQL-target wording in the D1 continuation plan.
+- Recorded the already-published GHCR digest and separated the remaining C5 blockers.
+- Rewrote `cloudflare-worker/README.md` as a D1/R2/Relay/Worker-v2 deployment guide.
+- Removed instructions that asked a Worker operator to provide PostgreSQL, raw Redis, Namespace,
+  or Pool settings.

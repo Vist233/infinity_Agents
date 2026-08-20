@@ -1,0 +1,4 @@
+branch: cloudflare-deploy
+baseline_commit: 3983110eb6c182e7bdef5a360e6116b1178d16cf
+working_tree_before_card: clean
+scope: documentation alignment with Cloudflare D1-only architecture
