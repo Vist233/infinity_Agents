@@ -2,8 +2,9 @@
 
 > 当前合同：`docs/ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`
 > 当前镜像入口：`backend/Dockerfile.worker`
-> 当前状态：C4 的 D1/HTTPS Worker 本地实现已完成；真实 D1、R2、zhangbot Relay 和 Claude
-> Case 2/3 验收属于 C5，未获得远程操作授权前不修改线上环境。
+> 当前状态：D1 迁移、Edge v2、zhangbot Relay 和 Worker 3 的协议级 connect/poll 已完成；
+> 真实 Docker/Claude Case 2/3 仍属于 C5，必须在可达的 Worker 主机上完成，不能用旧
+> PostgreSQL 结果代替。
 
 ## 1. 唯一生产架构
 

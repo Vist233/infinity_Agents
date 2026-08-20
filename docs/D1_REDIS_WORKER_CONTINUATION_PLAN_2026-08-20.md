@@ -1,6 +1,6 @@
 # D1 + zhangbot Redis Worker 续作实施计划
 
-> 基线：`cloudflare-deploy@0ed4811`
+> 基线：`cloudflare-deploy@a89954d`
 > 权威架构：`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`
 > 执行提示词：`D1_REDIS_WORKER_GOAL_DRIVEN_PROMPT_2026-08-20.md`
 > 原则：复用已通过的单一 Docker/Claude Runtime；替换错误的 PostgreSQL控制面，不同时维护两套生产链路。
@@ -38,13 +38,24 @@
 - `backend/Dockerfile.worker` 镜像边界、非 root Claude 子进程、multipart 上传和任务目录清理；
 - Cloudflare Edge 53 tests、Python 328 passed / 45 skipped、镜像构建和边界检查。
 
+### C5 已开始（远程预生产）
+
+- 线上 D1 已应用 `0014_d1_worker_runtime.sql`，并确认 canonical 表及公共池策略；
+- Edge Worker 已部署到 `infinity.zhangyvjing.com`，v2 `/connect` 与 `/poll` 已用公共 Worker 3
+  持久 credential 通过协议级验收；
+- zhangbot Redis Relay 已以用户级 systemd 运行，Redis 仍为回环监听；临时 Quick Tunnel 的
+  `/health` 已通过；
+- 不同 instance 复用同一 credential 会被拒绝，使用相同 instance 可恢复会话；
+- 还没有把真实 Docker/Claude Worker 放到可达的远程主机，也没有把 Case 2/3 标记为通过。
+
 ### 尚未完成
 
 - zhangbot Redis Relay 的远程部署和真实故障恢复；
 - D1/R2/Redis真实 Case 2/3；
 - C6 浏览器、Task Center、Worker UI 和移动端真实验收；
 - C7 只读 Code Review、最终同一候选版本回归；
-- GitHub/GHCR/Cloudflare 发布（必须另行获得明确授权）。
+- 命名 Cloudflare Tunnel、GHCR 发布、GitHub 发布、真实 Docker/Claude Case 2/3、C6 浏览器
+  验收和 C7 最终审查。
 
 ## 2. 顺序实施
 
@@ -111,9 +122,10 @@ RLS claim 或旧 trust 路由。历史测试/迁移依赖的文件先锁定，C5
 
 ### C5：D1/R2/Redis真实Case 2/3
 
-工作：从网页/真实Task API上传Method+Dataset，使用本地或预生产D1/R2、zhangbot Redis和真实Docker/Claude Code执行。
+工作：从网页/真实Task API上传Method+Dataset，使用线上 D1/R2、zhangbot Redis Relay 和
+可达远程 Docker/Claude Code 执行；不能用手工 D1 插入或旧 PostgreSQL Worker。
 
-验收：Case 2包含94序列统计和可解析Newick；Case 3包含QC、cluster、marker、UMAP和h5ad；Artifact hash一致；大结果走multipart；Worker目录清空并继续在线；无手工改库、Fixture Executor或mock冒充。
+验收：Case 2包含94序列统计和可解析Newick；Case 3包含QC、cluster、marker、UMAP和h5ad；Artifact hash一致；大结果走multipart；Worker目录清空并继续在线；无手工改库、Fixture Executor或mock冒充。当前阻塞仅是可达的远程 Worker 主机和真实输入/登录任务创建。
 
 ### C6：前端和浏览器
 
