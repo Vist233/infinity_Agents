@@ -115,15 +115,16 @@ cloudflare-deploy@975457a0e7e8242bb34ff7d0e67f260425a148e4.
   no Chat Agent entry. Task Center retains direct task creation and Worker management.
 - Historical acceptance Compose Redis passwords are explicit required environment
   inputs; no default Redis password remains.
-- Local frontend, Edge, Worker tests and builds passed on the recorded candidate,
-  but online browser C6 is not passed because available browser clients blocked the site.
-- C5 Case 2 and C5R Redis recovery are passed. Online C6, named Tunnel, and C7 remain incomplete.
+- Local frontend, Edge, Worker tests and builds passed on the recorded candidate. Online C6 also
+  passed in a real authenticated Chrome session: the three product areas, Task Center controls,
+  real Case 2 detail and the downloaded Artifact were verified. The earlier timeouts were caused by
+  a stale browser-control session retaining the old tab, not by the product or authentication.
+- C5 Case 2, C5R Redis recovery, C6 and the production named Tunnel are passed. Only C7 remains incomplete.
 
 MISSION
 
-Resume after the passed Case 2 and C5R cards. Do not restart or relitigate C0-C4, rerun Case 2,
-or create Case 3. Proceed through C6 online product verification, named Tunnel closure,
-and C7 final review. One Execution Card has one observable
+Resume after the passed Case 2, C5R, C6 and C6T cards. Do not restart or relitigate C0-C4, rerun Case 2,
+or create Case 3. Proceed directly through C7 final review. One Execution Card has one observable
 outcome. Finish, test, checkpoint, commit, and push each Cloudflare card only to
 origin/cloudflare-deploy before starting the next.
 
@@ -161,6 +162,10 @@ C6 PRODUCT VERIFICATION
 3. Preserve real Task ID, left Task list, signed-out footer behavior, mobile layout, and Artifact download.
 Gate: frontend unit/typecheck/lint/build, Cloudflare Worker test/check, browser create/open/stream/download, no preview API, no worker/v1 call, no D1/PostgreSQL split.
 
+Status: passed. Evidence:
+evidence/IMPLEMENT-20260820-D1/C6/authenticated-browser-pass-20260821/.
+Do not rerun C6 by claiming the old browser tab; it was retained by a stale automation session.
+
 C7 FINAL REVIEW
 1. Run all deterministic and real integration gates on the same candidate commit.
 2. Start exactly one read-only sub-Agent to inspect architecture duplication, auth, D1 state transitions, Redis Relay, Secret exposure, Docker boundary, and browser flow.
@@ -168,6 +173,13 @@ C7 FINAL REVIEW
 4. Write the final checkpoint, commit, and push only to origin/cloudflare-deploy.
 Gate: no unresolved P0/P1 finding; Case 3 is the only owner-deferred scientific
 coverage item and is explicitly reported rather than counted as a pass.
+
+C6T NAMED TUNNEL — PASSED
+1. The only production Relay URL is https://relay.zhangyvjing.com.
+2. The Cloudflare Tunnel is healthy with four connections; zhangbot cloudflared and Relay user
+   services are active; Edge and the current Docker Worker use the named URL.
+3. The old Quick Tunnel is stopped. Do not restore it or the rejected nested hostname.
+Gate: passed. Evidence: evidence/IMPLEMENT-20260820-D1/C6T/named-tunnel-pass-20260821/.
 
 POST-CLOUDFLARE MAIN LOCAL POSTGRESQL PHASE
 1. Start only after the cloudflare-deploy C7 checkpoint, production version, rollback

@@ -1,0 +1,7 @@
+branch: cloudflare-deploy
+code_baseline_commit: 63d8a0f
+tunnel_name: infinity-redis-relay-prod
+tunnel_id: b2993c42-6074-40b7-9389-7c80ad9789a4
+final_hostname: relay.zhangyvjing.com
+edge_deployment_id_after_secret_change: 015fccb8-cb0b-49ab-9e2b-dd8f810df2ba
+edge_version_id_after_secret_change: 67959a41-63f2-41da-a284-56ded203d6c4

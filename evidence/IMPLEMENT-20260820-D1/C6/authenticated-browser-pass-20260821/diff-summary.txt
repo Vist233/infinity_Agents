@@ -1,0 +1,5 @@
+- Added no product code.
+- Recorded the successful authenticated production-browser pass that supersedes the earlier blocked card.
+- Updated handoff, ADR, continuation plan and Goal-Driven Prompt to advance from C6 to named Tunnel/C7.
+- Recorded the browser-control root cause: the existing Infinity tab was retained by a stale prior
+  automation session; a newly created tab worked immediately with the same Chrome login state.

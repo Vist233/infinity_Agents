@@ -1,0 +1,25 @@
+Recorded deterministic gates on candidate 63d8a0f:
+- frontend unit: exit 0; 44 passed
+- frontend typecheck: exit 0
+- frontend lint: exit 0
+- frontend build: exit 0
+- local controlled Playwright: exit 0; 11 passed
+- Cloudflare Edge unit: exit 0; 55 passed
+- Cloudflare Edge TypeScript check: exit 0
+- Python/Worker: exit 0; 330 passed, 45 skipped by their declared environment gates
+
+Authenticated production Chrome observations on 2026-08-21:
+- a new Chrome tab reused the existing authenticated session and loaded the real Task URL
+- Analysis, Task Center and ImageJudge loaded; navigation contained no Chat Agent entry
+- Task Center showed direct Task creation, Task history and Worker management
+- real Case 2 showed one succeeded Attempt, its event sequence and published result.zip
+- 390x844 live viewport exposed the responsive workspace-menu control
+- local Playwright's 11/11 suite remains the deterministic drawer/signed-out interaction proof
+
+Downloaded production Artifact checks:
+- shasum -a 256 result (1).zip: exit 0
+- SHA-256: 1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c
+- unzip -t result (1).zip: exit 0; no errors
+
+The browser automation client's download event was not emitted, but Chrome completed the download;
+the resulting file was independently located in the scoped Downloads directory and verified above.

@@ -1,0 +1,5 @@
+- Added no product source code.
+- Recorded production DNS, named Tunnel, zhangbot user service, Edge secret cutover and Docker Worker cutover.
+- Replaced the invalid two-label Relay hostname with relay.zhangyvjing.com before production cutover so
+  Cloudflare's zone certificate covers the hostname without an advanced nested-hostname certificate.
+- Superseded the earlier partial named-Tunnel checkpoint and advanced the release plan to C7.

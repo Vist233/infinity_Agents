@@ -1,5 +1,9 @@
 # CHECKPOINT IMPLEMENT-20260820-D1 / C6 / authenticated-browser-blocked-20260820
 
+> Historical failed attempt. Superseded by
+> `../authenticated-browser-pass-20260821/checkpoint.md`, which identifies the stale-tab ownership
+> failure and records the successful authenticated production-browser pass.
+
 - baseline candidate: `cloudflare-deploy@3c6cbae` before this evidence-only card; latest re-verification candidate: `cloudflare-deploy@2232f0b6aa499901c3bf1e31f136f9cdb6b1e428`.
 - deterministic gates: **PASS** — frontend 44 unit tests, typecheck, lint, build; 11 local controlled Playwright tests; Edge 55 unit tests and TypeScript check; Python/Worker 330 passed with 45 skipped.
 - static route boundary: Worker v1 has only the intentional `410 LEGACY_WORKER_PROTOCOL_DISABLED` compatibility route; no production caller was found. The static `preview` shell is an Assets export mechanism for dynamic Task URLs, not a preview Task API or data source.

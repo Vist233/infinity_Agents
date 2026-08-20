@@ -1,5 +1,8 @@
 # CHECKPOINT IMPLEMENT-20260820-D1 / C6T / named-tunnel-partial-20260820
 
+> Historical partial checkpoint. Superseded by `../named-tunnel-pass-20260821/checkpoint.md` after
+> production DNS, connector, Edge and Docker Worker cutover all passed.
+
 - baseline/current candidate: `cloudflare-deploy@4526300` before this evidence-only commit.
 - created named Tunnel: `infinity-redis-relay-prod` / `b2993c42-6074-40b7-9389-7c80ad9789a4`; remote-managed, currently **inactive**.
 - ingress version: `1`; only `relay.infinity.zhangyvjing.com -> http://127.0.0.1:8090`, then `http_status:404`.

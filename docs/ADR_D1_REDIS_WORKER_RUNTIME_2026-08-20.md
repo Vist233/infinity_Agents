@@ -148,8 +148,8 @@ pending，恢复后重放。Worker也可以低频调用受认证 poll 作为通�
 - 旧 Python PostgreSQL/RLS 文件和旧迁移表仍仅用于历史测试/迁移兼容，不能通过当前
   `docker-compose.cloudflare-workers.yml` 作为生产 Worker 启动；C5 真实链路通过后再按调用
   关系删除无依赖的历史文件；
-- C5 的真实 D1/R2/Claude Case 2 已通过；Case 3 由用户明确延期并记为
-  `DEFERRED_BY_OWNER`。zhangbot Redis恢复、C6浏览器审查和C7发布收口仍未完成。
+- C5 的真实 D1/R2/Claude Case 2、C5R Redis恢复、C6真实登录浏览器审查和命名 Tunnel
+  生产切换均已通过；Case 3由用户明确延期并记为 `DEFERRED_BY_OWNER`。C7发布收口仍未完成。
 
 ## 10. 发布门槛
 

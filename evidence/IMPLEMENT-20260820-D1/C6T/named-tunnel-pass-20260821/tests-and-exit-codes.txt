@@ -1,0 +1,27 @@
+DNS and public health:
+- authoritative DNS A lookup for relay.zhangyvjing.com: exit 0; Cloudflare proxy addresses returned
+- GET https://relay.zhangyvjing.com/health: exit 0; infinity-redis-relay status ok
+- GET https://infinity.zhangyvjing.com/health: exit 0; infinity-agents-edge status ok
+
+Tunnel and origin:
+- zhangbot infinity-cloudflared.service: enabled and active
+- zhangbot infinity-redis-relay.service: active
+- Cloudflare Tunnel API: status healthy; 4 connections
+- final remote-managed ingress version: 2
+- ingress: relay.zhangyvjing.com -> http://127.0.0.1:8090; fallback http_status:404
+- cloudflared: 2026.8.2 amd64, user-local binary, --token-file, no autoupdate
+
+Cutover:
+- wrangler secret put REDIS_RELAY_URL: exit 0
+- Edge deployment: 015fccb8-cb0b-49ab-9e2b-dd8f810df2ba
+- Edge version: 67959a41-63f2-41da-a284-56ded203d6c4 at 100%
+- replacement Docker Worker connect: HTTP 200
+- named Relay /v1/hints: repeated HTTP 200
+- Worker v2 poll and heartbeat: repeated HTTP 200
+- old Quick Tunnel process stopped only after named health and Worker traffic passed
+
+Safety checks:
+- Tunnel token stored only at zhangbot ~/.config/infinity-agents/cloudflared-token, mode 0600
+- systemd ExecStart uses --token-file; token is absent from process arguments and repository
+- Redis remains loopback-only; Relay remains 127.0.0.1:8090 origin
+- old Docker Worker container retained stopped as infinity-agent-worker-b-v2-quick-backup-20260821

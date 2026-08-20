@@ -185,9 +185,10 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
 - 当前执行主机已经是本机 Docker，不再等待远程 Worker 主机；
   `infinity-agent-worker-b-v2` 已连接线上 D1 控制面并持续轮询。zhangbot 仍只运行 Redis 和
   Relay，不在 zhangbot 安装 Docker。
-- 当前 Tunnel 是 Quick Tunnel，域名为临时地址，适合本次链路验收，不是常驻生产入口；常驻
-  Worker 上线前必须改为管理员控制的命名 Cloudflare Tunnel，并把地址更新到 Edge 和 Windows
-  交接配置。
+- 命名 Tunnel `infinity-redis-relay-prod` 已完成生产切换，固定地址为
+  `https://relay.zhangyvjing.com`；Cloudflare 状态 healthy/4 connections，zhangbot 用户级
+  `infinity-cloudflared.service` 已启用，Edge 与当前 Docker Worker 均已改用该地址。旧 Quick
+  Tunnel 进程已停止。
 - 真实 Case 2 已通过。首次失败 Task `424ff7da-6903-42e8-9a55-b09c20033ccf` 继续保留为
   multipart/finalize 缺陷证据，成功证据只认修复后的新 Task `3666...`。
 - Case 3 原本用于证明 Scanpy/大结果科学工作负载覆盖；用户已明确要求本轮跳过。它的状态是
@@ -196,10 +197,10 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
 - C5R 已完成：Relay ACL 已在授权后最小化修复，Redis 停止/恢复、D1 fallback、Outbox 重放和
   无重复 Attempt 均已有证据。Redis 内容边界扫描仅发现 `infinity:` / `infinity-public:` 下的
   stream/string 元数据，stream 字段不含输入、Artifact、用户正文或 secret。
-- 浏览器扩展和应用内浏览器都对线上域名返回客户端拦截，因而本次页面验收使用了 Edge API、
-  D1 和 Relay 的协议级证据；不能把浏览器 UI 结果写成已通过。
-- 修复后的 Worker 镜像已发布 GHCR；命名 Tunnel、浏览器 C6 和最终 C7
-  code review 仍是发布门禁。
+- C6 已在真实登录 Chrome 中通过：Analysis、Task Center、ImageJudge、真实 Case 2 详情、账户栏、
+  Worker 管理和 Artifact 下载均已验证；下载 ZIP 与服务端 SHA-256 一致。此前两次超时是旧标签页
+  被已失效的浏览器控制会话占用，新建标签页后立即成功，不是产品、登录或插件故障。
+- 修复后的 Worker 镜像已发布 GHCR；C6 与命名 Tunnel 已通过，最终 C7 code review 是剩余发布门禁。
 
 ## 8. 交接给下一位执行者的顺序
 
@@ -208,9 +209,8 @@ Docker 镜像或 v2 生产路径调用。C5 完成后再按调用图做有目标
 2. 将 Case 2 证据冻结为 PASS；将 Case 3 记录为用户明确延期，不再为本轮创建 Case 3 Task。
 3. 保留已通过的 Redis 停止/恢复、D1 Outbox 重试、Worker D1 poll 和任务终态证据；不得把
    Redis 再次变更为事实源。
-4. 在可用的真实浏览器会话中完成 C6；客户端拦截不能记为网页通过。
-5. 配置命名 Tunnel，验证后替换临时 Relay URL；随后才执行最后的
-   Cloudflare/浏览器验收。
+4. 保留已通过的 C6 真实浏览器证据，不再 claim 旧控制会话占用的标签页。
+5. 保留已通过的命名 Tunnel 证据；不要恢复 Quick Tunnel 或双层 Relay 域名。
 6. Cloudflare 的 C7 checkpoint、最终提交、线上回归全部完成后，才按照
    `docs/POST_CLOUDFLARE_MAIN_LOCAL_POSTGRESQL_PLAN_2026-08-20.md` 启动 `main` 纯本地版本。
 
