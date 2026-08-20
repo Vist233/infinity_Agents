@@ -1,0 +1,32 @@
+C0 baseline — 2026-08-20 Asia/Shanghai
+
+Repository
+  cwd: /Users/zhangyvjing/Code/infinity_Agents
+  branch: cloudflare-deploy
+  HEAD: be4024e docs: constrain continuation to cloudflare deploy
+  git status --porcelain=v1: clean
+  git diff --check: passed
+  tracked files: 461
+  repository files visible to rg --files: 397
+
+Required documents
+  Read in order: ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md,
+  D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md,
+  evidence/IMPLEMENT-20260820/CONTINUATION_CHECKPOINT.md,
+  ANALYSIS_WORKSPACE_SYSTEM_DESIGN.md,
+  MODEL_IMPLEMENTATION_EXECUTION_RUNBOOK.md,
+  LOCAL_MVP_EXECUTION_AND_TEST_PLAN.md, HANDOFF.md.
+
+Baseline tests
+  npm test -- --run (cloudflare-worker): exit 127; vitest is not installed.
+  npm run check (cloudflare-worker): exit 127; tsc is not installed.
+  pytest -q tests/test_goal_driven_worker_inputs.py
+    tests/test_worker_runtime_contract.py tests/test_worker_enrollment.py
+    tests/test_redis_workers.py tests/test_artifact_multipart_contract.py:
+    23 passed in 1.28s.
+
+Interpretation
+  The 23 Python contract tests are historical/local runtime evidence only.
+  They do not prove D1, the v2 HTTPS protocol, the zhangbot Relay, R2, or a
+  real Cloudflare deployment. The Cloudflare checks are blocked only by missing
+  local node dependencies and must be rerun after dependency bootstrap.

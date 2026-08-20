@@ -1,0 +1,16 @@
+C1 baseline and schema replay — 2026-08-20 Asia/Shanghai
+
+Starting point: C0 evidence on branch cloudflare-deploy; no application diff
+was present before the 0014 migration/task API changes.
+
+SQLite replay:
+  Python sqlite3 in-memory execution of every
+  cloudflare-worker/migrations-infinity/*.sql in lexical order.
+  Result: 0001 through 0014 all executed successfully; `all migrations ok`.
+
+Schema contract:
+  d1-runtime-schema.test.ts: 3 passed.
+
+Browser isolation:
+  tasks.test.ts includes a real handleTaskApi detail request for Alice and a
+  second request for Bob; Alice receives 200 and Bob receives TASK_NOT_FOUND.

@@ -1,0 +1,24 @@
+C0 command ledger
+
+1. `git diff --check`
+   exit 0 — no whitespace errors.
+
+2. `git status --porcelain=v1`
+   exit 0 — no modified or untracked files before C0 evidence.
+
+3. `npm test -- --run` in `cloudflare-worker`
+   exit 127 — `vitest: command not found`.
+
+4. `npm run check` in `cloudflare-worker`
+   exit 127 — `tsc: command not found`.
+
+5. `eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q
+   tests/test_goal_driven_worker_inputs.py tests/test_worker_runtime_contract.py
+   tests/test_worker_enrollment.py tests/test_redis_workers.py
+   tests/test_artifact_multipart_contract.py`
+   exit 0 — 23 passed in 1.28s.
+
+6. `git grep -nE '(sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|wc_[A-Za-z0-9]{32,})'
+   -- ':!package-lock.json'`
+   exit 0 with no matches. This is a pattern scan, not proof that all secrets
+   are absent from external environments.

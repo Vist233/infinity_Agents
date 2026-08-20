@@ -1,0 +1,14 @@
+# C1 diff summary
+
+Added:
+
+- `cloudflare-worker/migrations-infinity/0014_d1_worker_runtime.sql`
+- `cloudflare-worker/test/d1-runtime-schema.test.ts`
+- browser owner-isolation coverage in `cloudflare-worker/test/tasks.test.ts`
+
+Updated:
+
+- `cloudflare-worker/src/tasks.ts`
+
+The source change is intentionally limited to D1 task creation/ownership and
+does not pretend that the Worker v2 control plane already exists.

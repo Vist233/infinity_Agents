@@ -44,6 +44,7 @@ interface TaskRow {
   updated_at: number;
   finished_at: number | null;
   chat_confirmation_id: string | null;
+  execution_pool_id?: string;
 }
 
 function iso(value: number | null | undefined): string | null {
@@ -297,9 +298,19 @@ async function handleTaskSpec(request: Request, env: Env, user: AuthedUser): Pro
   await env.DB.prepare(
     `INSERT INTO task_specs
       (task_spec_id, project_id, user_id, title, analysis_type, research_question,
-       revision, status, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 'draft', ?7, ?7)`
-  ).bind(id, projectId, user.userId, title, String(body?.analysis_type ?? "generic"), String(body?.research_question ?? ""), now).run();
+       goal, prompt_template_version, revision, status, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, 'draft', ?9, ?9)`
+  ).bind(
+    id,
+    projectId,
+    user.userId,
+    title,
+    String(body?.analysis_type ?? "generic"),
+    String(body?.research_question ?? ""),
+    String(body?.goal ?? body?.research_question ?? "").trim(),
+    String(body?.prompt_template_version ?? "goal-driven-executor-v1").trim() || "goal-driven-executor-v1",
+    now,
+  ).run();
   return json({ task_spec_id: id, revision: 1, status: "draft" }, 201);
 }
 
@@ -349,6 +360,7 @@ function publicTask(row: TaskRow): Record<string, unknown> {
     result_artifact_id: row.result_artifact_id,
     error_message: row.error_message,
     created_by: row.created_by,
+    execution_pool_id: row.execution_pool_id ?? "public-default",
     created_at: iso(row.created_at),
     updated_at: iso(row.updated_at),
     finished_at: iso(row.finished_at),
@@ -360,7 +372,7 @@ async function loadTask(taskIdValue: string, env: Env, user: AuthedUser): Promis
     `SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
             title, status, attempt_count, max_attempts, result_artifact_id,
             error_message, created_by, created_at, updated_at, finished_at,
-            chat_confirmation_id
+            chat_confirmation_id, execution_pool_id
      FROM tasks WHERE task_id = ?1 AND created_by = ?2`
   ).bind(taskIdValue, user.userId).first<TaskRow>();
 }
@@ -476,8 +488,9 @@ async function handleCreateTask(request: Request, env: Env, user: AuthedUser, di
         `INSERT INTO tasks
           (task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
            title, status, attempt_count, max_attempts, created_by, created_at, updated_at,
-           chat_confirmation_id, dispatch_policy)
-         SELECT ?1, ?2, ?3, ?4, ?5, ?6, 'queued', 0, 3, ?7, ?8, ?8, ?9, 'owner_then_public'
+           chat_confirmation_id, dispatch_policy, task_class, execution_pool_id)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, 'queued', 0, 3, ?7, ?8, ?8, ?9,
+                'owner_then_public', 'public', 'public-default'
          WHERE ?9 IS NULL OR EXISTS (
            SELECT 1 FROM chat_task_confirmations
            WHERE confirmation_id = ?9 AND user_id = ?7 AND status = 'pending'
@@ -485,11 +498,29 @@ async function handleCreateTask(request: Request, env: Env, user: AuthedUser, di
          )`
       ).bind(id, specId, snapshotId, projectId, methodId, title, user.userId, now, chatConfirmationId, now),
       env.DB.prepare(
-        "INSERT INTO task_idempotency (user_id, idempotency_key, task_id, request_hash, created_at) VALUES (?1, ?2, ?3, ?4, ?5)"
+        `INSERT INTO task_idempotency (user_id, idempotency_key, task_id, request_hash, created_at)
+         SELECT ?1, ?2, ?3, ?4, ?5
+         WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?3 AND created_by = ?1)`
       ).bind(user.userId, idempotencyKey, id, fingerprint, now),
       env.DB.prepare(
-        "INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at) VALUES (?1, ?2, 'task_queued', ?3, ?4)"
-      ).bind(taskId(), id, JSON.stringify({ task_id: id, status: "queued" }), now),
+        `INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
+         SELECT ?1, ?2, 'task_queued', ?3, ?4
+         WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND created_by = ?5)`
+      ).bind(taskId(), id, JSON.stringify({ task_id: id, status: "queued", execution_pool_id: "public-default" }), now, user.userId),
+      env.DB.prepare(
+        `INSERT INTO outbox_events
+          (event_id, idempotency_key, aggregate_type, aggregate_id, event_type,
+           payload_json, status, attempts, next_attempt_at, created_at)
+         SELECT ?1, ?2, 'task', ?3, 'task_queued', ?4, 'pending', 0, ?5, ?5
+         WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?3 AND created_by = ?6)`
+      ).bind(
+        taskId(),
+        `task-queued:${id}`,
+        id,
+        JSON.stringify({ task_id: id, status: "queued", pool_id: "public-default" }),
+        now,
+        user.userId,
+      ),
     ]);
   } catch {
     const raced = await env.DB.prepare(
@@ -516,7 +547,7 @@ async function handleListTasks(request: Request, env: Env, user: AuthedUser): Pr
     `SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
             title, status, attempt_count, max_attempts, result_artifact_id,
             error_message, created_by, created_at, updated_at, finished_at,
-            chat_confirmation_id
+            chat_confirmation_id, execution_pool_id
      FROM tasks WHERE created_by = ?1 ORDER BY created_at DESC LIMIT ?2`
   ).bind(user.userId, limit).all<TaskRow>();
   return json({ tasks: (result.results ?? []).map(publicTask) });
@@ -527,7 +558,7 @@ async function handleTaskByConfirmation(confirmationId: string, env: Env, user: 
     `SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
             title, status, attempt_count, max_attempts, result_artifact_id,
             error_message, created_by, created_at, updated_at, finished_at,
-            chat_confirmation_id
+            chat_confirmation_id, execution_pool_id
      FROM tasks WHERE chat_confirmation_id = ?1 AND created_by = ?2`
   ).bind(confirmationId, user.userId).first<TaskRow>();
   return json({ task: task ? publicTask(task) : null });
@@ -590,7 +621,7 @@ async function handleArtifact(artifactId: string, env: Env, user: AuthedUser): P
   const artifact = await env.DB.prepare(
     `SELECT a.name, a.content_type, a.object_key
      FROM artifacts a JOIN tasks t ON t.task_id = a.task_id
-     WHERE a.artifact_id = ?1 AND t.created_by = ?2 AND a.status = 'published'`
+       WHERE a.artifact_id = ?1 AND t.created_by = ?2 AND a.release_state = 'published'`
   ).bind(artifactId, user.userId).first<{ name: string; content_type: string | null; object_key: string }>();
   if (!artifact || !env.RESOURCE_BUCKET) return errorJson("Artifact not found", 404, "ARTIFACT_NOT_FOUND");
   const object = await env.RESOURCE_BUCKET.get(artifact.object_key);

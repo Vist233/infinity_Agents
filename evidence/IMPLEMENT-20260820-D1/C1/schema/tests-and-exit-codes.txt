@@ -1,0 +1,13 @@
+C1 command ledger
+
+1. `npm run check` in `cloudflare-worker`
+   exit 0 — TypeScript typecheck passed.
+
+2. `npm test -- --run` in `cloudflare-worker`
+   exit 0 — 9 test files, 48 tests passed.
+
+3. In-memory SQLite replay of migrations 0001–0014
+   exit 0 — every migration executed successfully.
+
+4. `git diff --check`
+   exit 0 — no whitespace errors.

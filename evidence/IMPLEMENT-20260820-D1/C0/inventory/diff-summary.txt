@@ -1,0 +1,5 @@
+# C0 diff summary
+
+No application code was changed in C0. The only additions are this C0 evidence
+card and its baseline/checkpoint ledgers. Remote D1, R2, Redis, Docker, GHCR,
+Cloudflare, and GitHub state were not touched.
