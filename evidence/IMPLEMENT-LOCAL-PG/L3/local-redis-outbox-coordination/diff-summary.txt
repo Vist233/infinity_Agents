@@ -1,0 +1,5 @@
+ backend/local_runtime/__init__.py     |   2 +
+ backend/local_runtime/outbox_redis.py | 221 ++++++++++++++++++++++++++++++
+ backend/local_runtime/worker_api.py   |  29 +++-
+ tests/test_local_redis_outbox.py      | 249 ++++++++++++++++++++++++++++++++++
+ 4 files changed, 499 insertions(+), 2 deletions(-)

@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from .api_repository import LocalRuntimeApiRepository
 from .migrations import apply_migrations
 from .object_store import LocalObjectStore, ObjectStoreError
+from .outbox_redis import LocalOutboxPublisher, read_hints
 from .repository import (
     PROTOCOL_VERSION,
     RUNTIME_CAPABILITY,
@@ -585,7 +586,7 @@ class WorkerV2Api:
         })
 
 
-def create_worker_v2_app(database_url: str, object_root: str) -> FastAPI:
+def create_worker_v2_app(database_url: str, object_root: str, redis_url: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await apply_migrations(database_url)
@@ -596,9 +597,18 @@ def create_worker_v2_app(database_url: str, object_root: str) -> FastAPI:
         app.state.runtime_repository = repository
         app.state.runtime_store = LocalObjectStore(object_root)
         app.state.worker_v2 = WorkerV2Api(repository, app.state.runtime_store)
+        app.state.redis_url = redis_url
+        publisher: LocalOutboxPublisher | None = None
+        if redis_url:
+            publisher = LocalOutboxPublisher(pool, redis_url)
+            await publisher.recover_expired_claims()
+            await publisher.start()
+            app.state.outbox_publisher = publisher
         try:
             yield
         finally:
+            if publisher is not None:
+                await publisher.stop()
             await pool.close()
 
     app = FastAPI(lifespan=lifespan)
@@ -718,6 +728,20 @@ def create_worker_v2_app(database_url: str, object_root: str) -> FastAPI:
             return error_json("Artifact upload not found", 404, "ARTIFACT_UPLOAD_NOT_FOUND")
         return await api(request).complete_artifact(auth, parsed, request)
 
+    @app.get("/v1/hints")
+    async def hints(request: Request):
+        """Advisory wake-up hints; PostgreSQL poll remains authoritative."""
+        configured = getattr(request.app.state, "redis_url", None)
+        if not configured:
+            return JSONResponse(content={"items": [], "next_cursor": "0-0"})
+        try:
+            cursor = str(request.query_params.get("cursor") or "0-0")
+            limit = int(request.query_params.get("limit") or 20)
+            payload = await read_hints(configured, cursor=cursor, limit=limit)
+        except Exception:
+            return JSONResponse(content={"items": [], "next_cursor": "0-0"})
+        return JSONResponse(content=payload)
+
     return app
 
 
@@ -726,9 +750,10 @@ def main() -> None:
 
     database_url = os.getenv("LOCAL_RUNTIME_DATABASE_URL", "").strip()
     object_root = os.getenv("LOCAL_OBJECT_ROOT", "").strip()
+    redis_url = os.getenv("LOCAL_REDIS_URL", "").strip() or None
     if not database_url or not object_root:
         raise SystemExit("LOCAL_RUNTIME_DATABASE_URL and LOCAL_OBJECT_ROOT are required")
-    app = create_worker_v2_app(database_url, object_root)
+    app = create_worker_v2_app(database_url, object_root, redis_url=redis_url)
     uvicorn.run(
         app,
         host=os.getenv("LOCAL_API_HOST", "127.0.0.1"),

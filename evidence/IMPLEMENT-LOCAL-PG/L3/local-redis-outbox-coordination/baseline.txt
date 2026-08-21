@@ -1,0 +1,8 @@
+72f1c09 feat(local-runtime): L2 Worker v2 FastAPI control plane and local object store
+f7887d9 feat(local-runtime): L1 canonical PostgreSQL schema and transactional worker state machine
+1f43a1b docs: freeze pure-local main migration baseline
+ M backend/local_runtime/__init__.py
+ M backend/local_runtime/worker_api.py
+?? backend/local_runtime/outbox_redis.py
+?? evidence/IMPLEMENT-LOCAL-PG/L3/
+?? tests/test_local_redis_outbox.py

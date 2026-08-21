@@ -1,0 +1,27 @@
+# L3 test runs 2026-08-21 16:27:30 +0800
+containers: infinity-l3-redis-test infinity-l1-pg-test infinity-agent-worker-b-v2 
+
+## ruff check (L3 files)
+All checks passed!
+exit=0
+
+## pytest L3 (real PostgreSQL + real Redis)
+tests/test_local_redis_outbox.py::test_outbox_events_publish_as_hints PASSED [ 14%]
+tests/test_local_redis_outbox.py::test_redis_outage_keeps_events_and_recovers PASSED [ 28%]
+tests/test_local_redis_outbox.py::test_redis_flush_loses_nothing_durable PASSED [ 42%]
+tests/test_local_redis_outbox.py::test_redis_never_stores_secrets_or_inputs PASSED [ 57%]
+tests/test_local_redis_outbox.py::test_stale_publishing_claim_is_requeued PASSED [ 71%]
+tests/test_local_redis_outbox.py::test_hints_endpoint_degrades_without_redis PASSED [ 85%]
+tests/test_local_redis_outbox.py::test_hints_endpoint_serves_published_events PASSED [100%]
+============================== 7 passed in 2.09s ===============================
+exit=0
+
+## pytest full local-runtime regression (L1+L2+L3+worker contract)
+...............................                                          [100%]
+31 passed in 4.23s
+exit=0
+
+## pytest without DSN/Redis URL (skip behaviour)
+ssssssssssssssssss......                                                 [100%]
+6 passed, 18 skipped in 0.56s
+exit=0
