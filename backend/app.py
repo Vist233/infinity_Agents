@@ -17,7 +17,6 @@ import hmac
 import logging
 import json
 import hashlib
-import secrets
 import time
 import shutil
 from datetime import datetime, timezone
@@ -56,9 +55,6 @@ from backend.auth import (
     CSRF_COOKIE_NAME,
     SESSION_COOKIE_NAME,
     Principal,
-    TokenVerifier,
-    create_session_cookie,
-    principal_from_session_cookie,
     require_user,
     verify_websocket_token,
 )
@@ -190,10 +186,9 @@ async def lifespan(app):
             )
         except Exception as exc:
             raise RuntimeError("Trust issuer database pool could not be initialized") from exc
-    app.state.token_verifier = TokenVerifier()
-    # Authenticated bearer requests use the same durable principal recorder as
-    # the cookie/OIDC path.  This makes the first bearer request safe under the
-    # users-table RLS policy and keeps project-member foreign keys valid.
+    # The local shared runtime does not verify OIDC tokens.  Every request is
+    # treated as the same shared user; the principal recorder keeps the users
+    # table audit trail alive.
     app.state.principal_recorder = _record_principal
 
     # In legacy development mode the bootstrap project is harmless. With RLS
@@ -267,66 +262,24 @@ async def lifespan(app):
 app = FastAPI(lifespan=lifespan)
 
 
-def _safe_return_to(value: Optional[str]) -> str:
-    candidate = str(value or "/").strip()
-    if not candidate.startswith("/") or candidate.startswith("//"):
-        return "/"
-    return candidate
-
-
-def _cookie_secure() -> bool:
-    return _env_flag("COOKIE_SECURE", os.getenv("APP_ENV", "development").lower() in {"production", "prod"})
-
-
-def _dev_auth_environment_allowed() -> bool:
-    return os.getenv("APP_ENV", "development").lower() in {"development", "dev", "test", "acceptance"}
-
-
-def _configured_dev_user_id() -> str:
-    default = "acceptance_api" if os.getenv("APP_ENV", "development").lower() == "acceptance" else "alice"
-    return os.getenv("AUTH_DEV_LOGIN_USER_ID", default).strip() or default
-
-
-def _validate_dev_user_id(user_id: str) -> str:
-    if not _dev_auth_environment_allowed() or not _env_flag("AUTH_DEV_LOGIN_ENABLED", False):
-        raise HTTPException(status_code=404, detail="Not found")
-    if not re.fullmatch(r"[A-Za-z0-9._@:-]{1,128}", user_id):
-        raise HTTPException(status_code=400, detail="Invalid local user ID")
-    # Acceptance may use the deterministic local OIDC stub, but it must not be
-    # an arbitrary-user impersonation endpoint.  A single configured identity
-    # is enough for local smoke tests and keeps the deployed-like surface
-    # closed to user-controlled subject selection.
-    if os.getenv("APP_ENV", "development").lower() == "acceptance" and user_id != _configured_dev_user_id():
-        raise HTTPException(status_code=403, detail="This acceptance login identity is not allowed")
-    return user_id
-
+# ---------------------------------------------------------------------------
+# Local shared-user authentication
+# ---------------------------------------------------------------------------
+# On the pure-local main branch every request is treated as the same shared
+# user.  OIDC, session cookies and bearer tokens are no longer verified.
+# The auth routes below are thin compatibility shims so that the frontend's
+# /auth/me and /auth/logout calls keep working.
 
 def _external_base_url(request: Request) -> str:
-    """Best-effort public origin for proxied local auth flows.
-
-    When the FastAPI app sits behind the local Next.js dev server, request.url
-    reflects the internal API origin (for example :8008 / :18008). Prefer the
-    forwarded public host/proto so OIDC callbacks return to the browser-facing
-    origin.
-    """
-    explicit = os.getenv("OIDC_PUBLIC_BASE_URL", "").strip().rstrip("/")
+    """Best-effort public origin for proxied local flows."""
+    explicit = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
     if explicit:
         return explicit
     forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
     forwarded_host = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
     scheme = forwarded_proto or request.url.scheme
     host = forwarded_host or request.headers.get("host") or request.url.netloc
-    if not re.fullmatch(r"[A-Za-z0-9.:-]+", str(host or "").strip()):
-        host = request.url.netloc
     return f"{scheme}://{str(host).strip()}"
-
-
-def _public_callback_url(request: Request) -> str:
-    explicit = os.getenv("OIDC_REDIRECT_URI", "").strip()
-    if explicit:
-        return explicit
-    callback_path = str(request.app.url_path_for("auth_callback"))
-    return f"{_external_base_url(request)}{callback_path}"
 
 
 async def _record_principal(principal: Principal) -> None:
@@ -348,328 +301,41 @@ async def _record_principal(principal: Principal) -> None:
                         last_seen_at = NOW()
                     """,
                     principal.user_id,
-                    principal.issuer or os.getenv("OIDC_ISSUER", "local"),
+                    principal.issuer or "local-shared",
                     principal.subject or principal.user_id,
                     principal.email,
                 )
     except Exception:
-        # Authentication must not fail only because the audit mapping is
-        # temporarily unavailable; the request still carries a verified token.
+        # The audit mapping must not block the request.
         logger.exception("Failed to persist authenticated principal")
 
 
-async def _set_session_cookie(response, principal: Principal, *, pool=None) -> None:
-    session_id = principal.session_id or str(uuid.uuid4())
-    session_principal = Principal(
-        user_id=principal.user_id,
-        issuer=principal.issuer,
-        subject=principal.subject,
-        email=principal.email,
-        session_id=session_id,
-        roles=principal.roles,
-    )
-    response.set_cookie(
-        SESSION_COOKIE_NAME,
-        create_session_cookie(session_principal),
-        max_age=8 * 60 * 60,
-        httponly=True,
-        secure=_cookie_secure(),
-        samesite="lax",
-        path="/",
-    )
-    # A readable, non-authenticating CSRF nonce is paired with the HttpOnly
-    # session cookie.  State-changing browser requests must echo it in the
-    # X-CSRF-Token header; the nonce is never accepted as an identity token.
-    response.set_cookie(
-        CSRF_COOKIE_NAME,
-        secrets.token_urlsafe(24),
-        max_age=8 * 60 * 60,
-        httponly=False,
-        secure=_cookie_secure(),
-        samesite="lax",
-        path="/",
-    )
-    if pool is not None:
-        try:
-            with rls_user_context(principal.user_id):
-                async with pool.acquire() as conn:
-                    await conn.execute(
-                        """
-                        INSERT INTO auth_sessions (session_id, user_id, expires_at)
-                        VALUES ($1::uuid, $2, NOW() + INTERVAL '8 hours')
-                        ON CONFLICT (session_id) DO UPDATE SET
-                            user_id = EXCLUDED.user_id,
-                            expires_at = EXCLUDED.expires_at,
-                            revoked_at = NULL
-                        """,
-                        session_id,
-                        principal.user_id,
-                    )
-        except Exception:
-            logger.exception("Failed to persist authentication session")
-            raise HTTPException(status_code=503, detail="Authentication session store is unavailable")
-
-
-def _oauth_state_hash(state: str) -> str:
-    return hashlib.sha256(state.encode("utf-8")).hexdigest()
-
-
-async def _store_oauth_state(request: Request, state: str, data: Dict[str, Any]) -> None:
-    pool = getattr(request.app.state, "db_pool", None)
-    if pool is None:
-        request.app.state.oauth_states[state] = data
-        return
-    with rls_user_context("auth-flow"):
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO oauth_states (state_hash, verifier, nonce, return_to, expires_at)
-                VALUES ($1, $2, $3, $4, to_timestamp($5))
-                """,
-                _oauth_state_hash(state), data["verifier"], data["nonce"], data["return_to"], data["expires_at"],
-            )
-
-
-async def _load_oauth_state(request: Request, state: str) -> Optional[Dict[str, Any]]:
-    pool = getattr(request.app.state, "db_pool", None)
-    if pool is None:
-        return request.app.state.oauth_states.get(state)
-    with rls_user_context("auth-flow"):
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT verifier, nonce, return_to, code_challenge, EXTRACT(EPOCH FROM expires_at) AS expires_at
-                FROM oauth_states
-                WHERE state_hash = $1 AND expires_at > NOW()
-                """,
-                _oauth_state_hash(state),
-            )
-    if not row:
-        return None
-    return {
-        "verifier": row["verifier"],
-        "nonce": row["nonce"],
-        "return_to": row["return_to"],
-        "code_challenge": row["code_challenge"],
-        "expires_at": float(row["expires_at"]),
-    }
-
-
-async def _set_oauth_code_challenge(request: Request, state: str, code_challenge: str) -> None:
-    pool = getattr(request.app.state, "db_pool", None)
-    if pool is None:
-        state_data = request.app.state.oauth_states.get(state)
-        if state_data is not None:
-            state_data["code_challenge"] = code_challenge
-        return
-    with rls_user_context("auth-flow"):
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE oauth_states SET code_challenge = $2 WHERE state_hash = $1 AND expires_at > NOW()",
-                _oauth_state_hash(state),
-                code_challenge,
-            )
-
-
-async def _consume_oauth_state(request: Request, state: str) -> Optional[Dict[str, Any]]:
-    pool = getattr(request.app.state, "db_pool", None)
-    if pool is None:
-        return request.app.state.oauth_states.pop(state, None)
-    with rls_user_context("auth-flow"):
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    """
-                    SELECT verifier, nonce, return_to, code_challenge, EXTRACT(EPOCH FROM expires_at) AS expires_at
-                    FROM oauth_states
-                    WHERE state_hash = $1 AND expires_at > NOW()
-                    FOR UPDATE
-                    """,
-                    _oauth_state_hash(state),
-                )
-                if not row:
-                    return None
-                await conn.execute("DELETE FROM oauth_states WHERE state_hash = $1", _oauth_state_hash(state))
-    return {
-        "verifier": row["verifier"],
-        "nonce": row["nonce"],
-        "return_to": row["return_to"],
-        "code_challenge": row["code_challenge"],
-        "expires_at": float(row["expires_at"]),
-    }
-
-
 @app.get("/auth/login")
-async def auth_login(request: Request, return_to: str = "/"):
-    """Start Authorization Code + PKCE; acceptance can use the local OIDC spy."""
-    safe_return = _safe_return_to(return_to)
-    dev_login = _env_flag("AUTH_DEV_LOGIN_ENABLED", False) and _dev_auth_environment_allowed()
-    authorization_url = "/auth/dev/authorize" if dev_login else os.getenv("OIDC_AUTHORIZATION_URL", "").strip()
-    client_id = "local-oidc-client" if dev_login else os.getenv("OIDC_CLIENT_ID", "").strip()
-    if not authorization_url or not client_id:
-        raise HTTPException(status_code=503, detail="OIDC login is not configured")
-    state = secrets.token_urlsafe(32)
-    nonce = secrets.token_urlsafe(32)
-    verifier = secrets.token_urlsafe(48)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-    await _store_oauth_state(request, state, {
-        "verifier": verifier,
-        "nonce": nonce,
-        "return_to": safe_return,
-        "dev_user_id": _configured_dev_user_id() if dev_login else None,
-        "expires_at": time.time() + 600,
-    })
-    from urllib.parse import urlencode
-    redirect_uri = _public_callback_url(request)
-    query_values = {
-        "response_type": "code",
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "scope": os.getenv("OIDC_SCOPE", "openid profile email"),
-        "state": state,
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-        "nonce": nonce,
-    }
-    if dev_login:
-        query_values["user_id"] = _configured_dev_user_id()
-    query = urlencode(query_values)
-    response = RedirectResponse(url=f"{authorization_url}?{query}", status_code=307)
-    response.set_cookie("oidc_state", state, max_age=600, httponly=True, secure=_cookie_secure(), samesite="lax", path="/")
-    return response
-
-
-@app.get("/auth/dev/authorize")
-async def auth_dev_authorize(
-    request: Request,
-    client_id: str,
-    redirect_uri: str,
-    state: str,
-    nonce: str,
-    code_challenge: str,
-    code_challenge_method: str = "S256",
-    user_id: str = "alice",
-):
-    """Deterministic local OIDC authorization endpoint.
-
-    This is an OIDC-shaped test stub, not a production authentication path.
-    It validates the PKCE request shape and returns a one-use development
-    authorization code to the registered callback.
-    """
-    state_data = await _load_oauth_state(request, state)
-    if not state_data:
-        raise HTTPException(status_code=400, detail="Invalid OIDC state")
-    user_id = _validate_dev_user_id(user_id)
-    expected_user_id = str(state_data.get("dev_user_id") or _configured_dev_user_id())
-    if user_id != expected_user_id:
-        raise HTTPException(status_code=403, detail="This authorization state is bound to another local identity")
-    if client_id != "local-oidc-client" or code_challenge_method != "S256" or not code_challenge:
-        raise HTTPException(status_code=400, detail="Invalid PKCE request")
-    expected_redirect = _public_callback_url(request)
-    if redirect_uri != expected_redirect:
-        raise HTTPException(status_code=400, detail="Invalid redirect URI")
-    if not re.fullmatch(r"[A-Za-z0-9._@:-]{1,128}", user_id):
-        raise HTTPException(status_code=400, detail="Invalid local user ID")
-    if not state_data or state_data.get("nonce") != nonce or state_data.get("code_challenge") not in {None, code_challenge}:
-        raise HTTPException(status_code=400, detail="Invalid OIDC state")
-    await _set_oauth_code_challenge(request, state, code_challenge)
-    from urllib.parse import urlencode
-    return RedirectResponse(
-        url=f"{redirect_uri}?{urlencode({'code': f'dev:{user_id}', 'state': state})}",
-        status_code=303,
-    )
-
-
-@app.get("/auth/dev/login")
-async def auth_dev_login(request: Request, return_to: str = "/", user_id: str = "alice"):
-    """Local-only login endpoint used by deterministic acceptance tests."""
-    user_id = _validate_dev_user_id(user_id)
-    principal = Principal(user_id=user_id, issuer="local-oidc-spy", subject=user_id)
-    await _record_principal(principal)
-    response = RedirectResponse(url=_safe_return_to(return_to), status_code=303)
-    await _set_session_cookie(response, principal, pool=getattr(request.app.state, "db_pool", None))
-    return response
-
-
-@app.get("/auth/callback", name="auth_callback")
-async def auth_callback(request: Request, code: str, state: str, error: Optional[str] = None):
-    if error:
-        raise HTTPException(status_code=401, detail="OIDC authorization was denied")
-    state_cookie = request.cookies.get("oidc_state")
-    state_data = await _consume_oauth_state(request, state)
-    if not state_data or state_cookie != state or float(state_data.get("expires_at", 0)) <= time.time():
-        raise HTTPException(status_code=400, detail="Invalid or expired OIDC state")
-    if _env_flag("AUTH_DEV_LOGIN_ENABLED", False) and _dev_auth_environment_allowed() and code.startswith("dev:"):
-        if not state_data.get("code_challenge"):
-            raise HTTPException(status_code=400, detail="PKCE verification failed")
-        principal_id = code[4:] or "local-user"
-        if not re.fullmatch(r"[A-Za-z0-9._@:-]{1,128}", principal_id):
-            raise HTTPException(status_code=401, detail="Invalid local authorization code")
-        expected_user_id = str(state_data.get("dev_user_id") or _configured_dev_user_id())
-        if principal_id != expected_user_id:
-            raise HTTPException(status_code=401, detail="Invalid local authorization identity")
-        principal = Principal(user_id=principal_id, issuer="local-oidc-spy", subject=principal_id)
-    else:
-        token_url = os.getenv("OIDC_TOKEN_URL", "").strip()
-        if not token_url:
-            raise HTTPException(status_code=503, detail="OIDC token endpoint is not configured")
-        import httpx
-        redirect_uri = _public_callback_url(request)
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
-            token_response = await client.post(token_url, data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "client_id": os.getenv("OIDC_CLIENT_ID", ""),
-                "redirect_uri": redirect_uri,
-                "code_verifier": state_data["verifier"],
-            })
-        if token_response.status_code >= 400:
-            raise HTTPException(status_code=401, detail="OIDC token exchange failed")
-        try:
-            token_payload = token_response.json()
-        except ValueError as exc:
-            raise HTTPException(status_code=401, detail="OIDC token response is invalid") from exc
-        access_token = str(token_payload.get("access_token") or "")
-        if not access_token:
-            raise HTTPException(status_code=401, detail="OIDC token response is missing access token")
-        id_token = str(token_payload.get("id_token") or "")
-        principal = await request.app.state.token_verifier.verify(
-            id_token or access_token,
-            expected_nonce=state_data.get("nonce") if id_token else None,
-        )
-    await _record_principal(principal)
-    response = RedirectResponse(url=_safe_return_to(state_data.get("return_to")), status_code=303)
-    response.delete_cookie("oidc_state", path="/")
-    await _set_session_cookie(response, principal, pool=getattr(request.app.state, "db_pool", None))
-    return response
+async def auth_login(return_to: str = "/"):
+    """Local runtime: no login flow.  Redirect straight to the task center."""
+    safe = str(return_to or "/task-center/").strip()
+    if not safe.startswith("/") or safe.startswith("//"):
+        safe = "/task-center/"
+    return RedirectResponse(url=safe, status_code=302)
 
 
 @app.get("/auth/me")
 async def auth_me(user: Principal = Depends(require_user)):
-    return {"user_id": user.user_id, "issuer": user.issuer, "subject": user.subject, "email": user.email}
+    return {
+        "user_id": user.user_id,
+        "issuer": user.issuer,
+        "subject": user.subject,
+        "email": user.email,
+    }
 
 
 @app.post("/auth/logout")
-async def auth_logout(request: Request, return_to: str = "/"):
-    raw_cookie = request.cookies.get(SESSION_COOKIE_NAME)
-    if raw_cookie:
-        try:
-            principal = principal_from_session_cookie(raw_cookie)
-            pool = getattr(request.app.state, "db_pool", None)
-            if pool is not None and principal.session_id:
-                with rls_user_context(principal.user_id):
-                    async with pool.acquire() as conn:
-                        await conn.execute(
-                            "UPDATE auth_sessions SET revoked_at = NOW() WHERE session_id = $1::uuid",
-                            principal.session_id,
-                        )
-        except HTTPException:
-            pass
-    response = RedirectResponse(url=_safe_return_to(return_to), status_code=303)
-    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
-    response.delete_cookie("oidc_state", path="/")
-    response.delete_cookie(CSRF_COOKIE_NAME, path="/")
-    return response
+async def auth_logout(return_to: str = "/"):
+    """Local runtime: logout is a no-op redirect."""
+    safe = str(return_to or "/task-center/").strip()
+    if not safe.startswith("/") or safe.startswith("//"):
+        safe = "/task-center/"
+    return RedirectResponse(url=safe, status_code=302)
 
 _PROJECT_ROOT = FilePath(__file__).parent.parent
 _SESSIONS_ROOT = _PROJECT_ROOT / "papers" / "sessions"

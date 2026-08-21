@@ -29,9 +29,8 @@ export function withCsrfHeader(headers?: HeadersInit): Headers {
   return result;
 }
 
-/** Redirect the browser to the login flow, preserving the current location. */
+/** Local shared runtime: no login flow. Redirect to task center. */
 export function redirectToLogin(): void {
   if (typeof window === "undefined") return;
-  const returnTo = window.location.pathname + window.location.search;
-  window.location.assign(`/auth/login?return_to=${encodeURIComponent(returnTo)}`);
+  window.location.assign("/task-center/");
 }

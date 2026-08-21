@@ -185,20 +185,6 @@ test("Task Center submits files directly without a preview call", async ({ page 
   expect(requestedUrls.some((url) => url.includes("/api/tasks/preview"))).toBe(false);
 });
 
-test("legacy /code-agent/tasks index redirects to Task Center", async ({ page }) => {
-  await page.route("**/api/tasks*", async (route) => {
-    await route.fulfill({
-      status: 200,
-      body: JSON.stringify({ tasks: MOCK_TASKS }),
-      contentType: "application/json",
-    });
-  });
-
-  await page.goto("/code-agent/tasks");
-  await expect(page).toHaveURL(/\/task-center\/?$/);
-  await expect(page.getByTestId("task-creation-card")).toBeVisible();
-});
-
 test("legacy task detail route loads with events and artifacts", async ({ page }) => {
   await page.route("**/api/tasks?limit=50", async (route) => {
     await route.fulfill({ status: 200, body: JSON.stringify({ tasks: MOCK_TASKS }), contentType: "application/json" });

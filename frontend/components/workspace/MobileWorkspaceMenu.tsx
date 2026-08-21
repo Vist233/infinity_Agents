@@ -4,11 +4,9 @@ import { ArrowDownToLine, Menu, Plus, X } from "lucide-react";
 import { useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { AgentNav } from "@/components/chat/AgentNav";
-import { SessionList } from "@/components/chat/SessionList";
-import { WorkspaceUserFooter } from "@/components/chat/WorkspaceUserFooter";
+import { AgentNav } from "@/components/workspace/AgentNav";
+import { WorkspaceUserFooter } from "@/components/workspace/WorkspaceUserFooter";
 import { useLanguage } from "@/lib/i18n";
-import type { SessionItem, SessionRunState } from "@/lib/chat-state";
 import { Button } from "@/components/ui/button";
 
 interface MobileTaskItem {
@@ -28,21 +26,6 @@ interface MobileWorkspaceMenuProps {
   taskItems?: MobileTaskItem[];
   onNewTask?: () => void;
   activeTaskId?: string;
-  sessions?: SessionItem[];
-  currentSessionId?: string | null;
-  editingSessionId?: string | null;
-  editingTitle?: string;
-  deletingSessionId?: string | null;
-  sessionRunMap?: Record<string, SessionRunState>;
-  onNewChat?: () => void;
-  onSwitchSession?: (id: string) => void;
-  onEditSessionTitle?: (session: SessionItem) => void;
-  onEditingTitleChange?: (value: string) => void;
-  onSaveSessionTitle?: (sessionId: string) => void;
-  onCancelEditing?: () => void;
-  onRequestDelete?: (session: SessionItem) => void;
-  onCancelDelete?: () => void;
-  onConfirmDelete?: (session: SessionItem) => void;
   imageJudgeExamples?: MobileImageJudgeExample[];
   imageJudgeSelectedId?: string;
   imageJudgeShowDownload?: boolean;
@@ -56,21 +39,6 @@ export function MobileWorkspaceMenu({
   taskItems,
   onNewTask,
   activeTaskId,
-  sessions,
-  currentSessionId,
-  editingSessionId,
-  editingTitle,
-  deletingSessionId,
-  sessionRunMap,
-  onNewChat,
-  onSwitchSession,
-  onEditSessionTitle,
-  onEditingTitleChange,
-  onSaveSessionTitle,
-  onCancelEditing,
-  onRequestDelete,
-  onCancelDelete,
-  onConfirmDelete,
   imageJudgeExamples,
   imageJudgeSelectedId,
   imageJudgeShowDownload,
@@ -97,38 +65,6 @@ export function MobileWorkspaceMenu({
         </div>
         <AgentNav active={active} onNavigate={navigate} />
         <div className="mt-4 min-h-0 flex-1 space-y-5 overflow-y-auto pr-1">
-          {sessions !== undefined ? (
-            <section>
-              {onNewChat ? (
-                <Button
-                  variant="outline"
-                  className="w-full justify-start gap-2 rounded-xl bg-white/90"
-                  onClick={() => { onNewChat(); setOpen(false); }}
-                >
-                  <Plus size={16} />
-                  {t("home.newChat")}
-                </Button>
-              ) : null}
-              <div className="mt-4 px-2 text-[11px] uppercase tracking-[0.2em] text-zinc-400">{t("home.recentActivities")}</div>
-              <SessionList
-                sessions={sessions}
-                currentSessionId={currentSessionId ?? null}
-                editingSessionId={editingSessionId ?? null}
-                editingTitle={editingTitle ?? ""}
-                deletingSessionId={deletingSessionId ?? null}
-                sessionRunMap={sessionRunMap ?? {}}
-                onSwitchSession={(id) => { onSwitchSession?.(id); setOpen(false); }}
-                onEditSessionTitle={(session) => onEditSessionTitle?.(session)}
-                onEditingTitleChange={(value) => onEditingTitleChange?.(value)}
-                onSaveSessionTitle={(sessionId) => onSaveSessionTitle?.(sessionId)}
-                onCancelEditing={() => onCancelEditing?.()}
-                onRequestDelete={(session) => onRequestDelete?.(session)}
-                onCancelDelete={() => onCancelDelete?.()}
-                onConfirmDelete={(session) => onConfirmDelete?.(session)}
-              />
-            </section>
-          ) : null}
-
           {imageJudgeExamples ? (
             <section>
               {onOpenImageJudgeDownload ? (

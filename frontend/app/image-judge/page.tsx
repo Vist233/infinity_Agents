@@ -3,11 +3,11 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDownToLine, ExternalLink, FileImage, Microscope, Upload } from "lucide-react";
-import { AgentNav } from "@/components/chat/AgentNav";
-import { MobileWorkspaceMenu } from "@/components/chat/MobileWorkspaceMenu";
+import { AgentNav } from "@/components/workspace/AgentNav";
+import { MobileWorkspaceMenu } from "@/components/workspace/MobileWorkspaceMenu";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/lib/i18n";
-import { WorkspaceUserFooter } from "@/components/chat/WorkspaceUserFooter";
+import { WorkspaceUserFooter } from "@/components/workspace/WorkspaceUserFooter";
 
 const RELEASE_URL = "https://github.com/Vist233/infinity_Agents/releases/latest";
 const MAC_DOWNLOAD_URL = "https://github.com/Vist233/infinity_Agents/releases/latest/download/ImageJudge-macos.zip";

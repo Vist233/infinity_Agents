@@ -1,5 +1,5 @@
-import { ChatWorkspace } from "@/components/chat/ChatWorkspace";
+import { redirect } from "next/navigation";
 
-export default function ChatPage() {
-  return <ChatWorkspace />;
+export default function RootPage() {
+  redirect("/task-center/");
 }

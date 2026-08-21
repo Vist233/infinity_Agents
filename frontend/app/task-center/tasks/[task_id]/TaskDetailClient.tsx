@@ -2,15 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLanguage, type TranslationKey } from "@/lib/i18n";
-import { AgentNav } from "@/components/chat/AgentNav";
-import { MobileWorkspaceMenu } from "@/components/chat/MobileWorkspaceMenu";
-import { WorkspaceUserFooter } from "@/components/chat/WorkspaceUserFooter";
+import { AgentNav } from "@/components/workspace/AgentNav";
+import { MobileWorkspaceMenu } from "@/components/workspace/MobileWorkspaceMenu";
+import { WorkspaceUserFooter } from "@/components/workspace/WorkspaceUserFooter";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, RefreshCw, Download, PlayCircle, CheckCircle2, XCircle, Clock, AlertTriangle, LogIn } from "lucide-react";
+import { ArrowLeft, RefreshCw, Download, PlayCircle, CheckCircle2, XCircle, Clock, AlertTriangle } from "lucide-react";
 import { useRouter, useParams } from "next/navigation";
-import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
-import { getCurrentUser } from "@/lib/api/auth";
+import { getApiBase } from "@/lib/runtime-config";
 import { artifactDownloadUrl, getJson, cancelTask, listTasks, type TaskItem } from "@/lib/api/tasks";
 
 type TaskStatus = "draft" | "queued" | "claimed" | "running" | "succeeded" | "failed" | "cancelled" | "timeout";
@@ -99,7 +98,7 @@ function formatBytes(bytes: number | null) {
 }
 
 function taskIdFromBrowserPath(pathname: string): string | null {
-  const match = pathname.match(/^\/(?:code-agent|task-center)\/tasks\/([^/]+)\/?$/);
+  const match = pathname.match(/^\/task-center\/tasks\/([^/]+)\/?$/);
   if (!match) return null;
   const candidate = decodeURIComponent(match[1]).trim();
   return candidate && candidate !== "preview" ? candidate : null;
@@ -132,8 +131,6 @@ export default function TaskDetailPage() {
   const [eventsError, setEventsError] = useState<string | null>(null);
   const [artifactsError, setArtifactsError] = useState<string | null>(null);
   const [taskListError, setTaskListError] = useState<string | null>(null);
-  const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated" | "error">("checking");
-  const [authError, setAuthError] = useState<string | null>(null);
   const detailRequestRef = useRef(0);
   const detailInFlightRef = useRef<{ taskId: string | null; promise: Promise<void> } | null>(null);
 
@@ -189,32 +186,11 @@ export default function TaskDetailPage() {
     return promise;
   }, [taskId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    void getCurrentUser()
-      .then((user) => {
-        if (cancelled) return;
-        if (!user) {
-          setAuthStatus("unauthenticated");
-          setAuthError(null);
-          setLoading(false);
-          return;
-        }
-        setAuthStatus("authenticated");
-        setAuthError(null);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setAuthStatus("error");
-        setAuthError(err instanceof Error ? err.message : t("error.backendUnavailable"));
-        setLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [t]);
+
 
   useEffect(() => {
-    if (authStatus === "authenticated" && taskId) void loadDetail();
-  }, [authStatus, taskId, loadDetail]);
+    if (taskId) void loadDetail();
+  }, [taskId, loadDetail]);
 
   useEffect(() => {
     setCancelSuccess(false);
@@ -223,7 +199,7 @@ export default function TaskDetailPage() {
   const currentTaskStatus = task?.status;
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !taskId) return;
+    if (!taskId) return;
     if (currentTaskStatus && ["succeeded", "failed", "cancelled", "timeout"].includes(currentTaskStatus)) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -236,7 +212,7 @@ export default function TaskDetailPage() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [authStatus, taskId, currentTaskStatus, loadDetail]);
+  }, [taskId, currentTaskStatus, loadDetail]);
 
   const handleCancel = async () => {
     if (!task || !taskId) return;
@@ -262,12 +238,12 @@ export default function TaskDetailPage() {
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
       <aside className="w-[260px] bg-[var(--surface-1)] border-r border-[var(--hairline)] hidden md:flex flex-col p-3 backdrop-blur-xl print:hidden">
         <AgentNav active="tasks" onNavigate={(path) => router.push(path)} />
-        {authStatus === "authenticated" && <Button variant="outline" className="mt-3 w-full justify-start gap-2 rounded-xl" onClick={() => router.push("/task-center/")}>
+        <Button variant="outline" className="mt-3 w-full justify-start gap-2 rounded-xl" onClick={() => router.push("/task-center/")}>
           <PlayCircle size={16} />
           {t("tasks.newTask")}
-        </Button>}
+        </Button>
         <div className="mt-3 px-2 text-xs font-semibold uppercase tracking-widest text-zinc-400">{t("tasks.title")}</div>
-        {authStatus === "authenticated" && <ScrollArea className="mt-2 min-h-0 flex-1">
+        <ScrollArea className="mt-2 min-h-0 flex-1">
           <div className="space-y-1 pr-1">
             {taskList.length === 0 ? (
               <div className="rounded-xl border border-dashed border-zinc-200 px-3 py-4 text-center text-xs text-zinc-400">
@@ -285,8 +261,8 @@ export default function TaskDetailPage() {
               </button>
             ))}
           </div>
-        </ScrollArea>}
-        {authStatus === "authenticated" && <WorkspaceUserFooter />}
+        </ScrollArea>
+        <WorkspaceUserFooter />
         <div className="p-2 text-center text-xs tracking-tighter text-zinc-400">v1.0.0 @ 2026</div>
       </aside>
       <main className="flex-1 flex flex-col relative min-w-0">
@@ -295,22 +271,19 @@ export default function TaskDetailPage() {
               <MobileWorkspaceMenu
                 active="tasks"
                 activeTaskId={taskId ?? undefined}
-                taskItems={authStatus === "authenticated" ? taskList.map((item) => ({
+                taskItems={taskList.map((item) => ({
                   task_id: item.task_id,
                   title: item.title,
                   statusLabel: t(STATUS_LABELS[item.status]),
-                })) : undefined}
-                onNewTask={authStatus === "authenticated" ? () => router.push("/task-center/") : undefined}
+                }))}
+                onNewTask={() => router.push("/task-center/")}
               />
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.push("/task-center/")}>
                 <ArrowLeft size={16} />
               </Button>
             <div className="text-sm font-semibold tracking-tight text-zinc-700">{t("tasks.detailTitle")}</div>
           </div>
-          {authStatus === "unauthenticated" ? <Button type="button" size="sm" className="gap-2" onClick={redirectToLogin}>
-            <LogIn size={15} />
-            {t("home.signInRegister")}
-          </Button> : authStatus === "authenticated" ? <div className="flex gap-2">
+          <div className="flex gap-2">
             {task && !isTerminal && (
               <Button variant="destructive" size="sm" onClick={handleCancel} disabled={cancelling}>
                 <XCircle size={14} className="mr-1" />
@@ -321,28 +294,11 @@ export default function TaskDetailPage() {
               <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
               {t("composer.retry")}
             </Button>
-          </div> : null}
+          </div>
         </header>
 
         <ScrollArea className="flex-1">
-          {authStatus === "unauthenticated" ? (
-            <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-6 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full border border-zinc-200 bg-white shadow-sm"><LogIn size={20} className="text-zinc-500" /></div>
-              <div className="space-y-2">
-                <h2 className="text-2xl font-medium tracking-tight">{t("auth.signInTitle")}</h2>
-                <p className="max-w-md text-sm text-zinc-500">{t("auth.signInDescription")}</p>
-              </div>
-              <Button type="button" className="gap-2 rounded-xl" onClick={redirectToLogin}>
-                <LogIn size={16} />
-                {t("auth.signIn")}
-              </Button>
-            </div>
-          ) : authStatus === "error" ? (
-            <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-6 text-center">
-              <p className="max-w-md text-sm text-red-600">{t("error.backendUnavailable")}: {authError}</p>
-              <Button type="button" variant="outline" onClick={() => window.location.reload()}>{t("composer.retry")}</Button>
-            </div>
-          ) : cancelSuccess && (
+          {cancelSuccess && (
             <div className="mx-4 mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
               {t("tasks.cancelSuccess")}
             </div>

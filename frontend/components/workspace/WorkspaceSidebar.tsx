@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { AgentNav, type WorkspaceSection } from "@/components/chat/AgentNav";
+import { AgentNav, type WorkspaceSection } from "@/components/workspace/AgentNav";
 import { UserFooter } from "@/components/workspace/UserFooter";
 
 /**

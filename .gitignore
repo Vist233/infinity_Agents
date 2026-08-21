@@ -61,7 +61,7 @@ env/
 
 # Runtime paper artifacts (generated locally)
 papers/
-workspace/
+/workspace/
 
 # Cloudflare Worker deployment surfaces remain exclusive to cloudflare-deploy.
 cloudflare-worker/

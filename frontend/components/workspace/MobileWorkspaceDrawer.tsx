@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Menu, X } from "lucide-react";
-import { AgentNav, type WorkspaceSection } from "@/components/chat/AgentNav";
+import { AgentNav, type WorkspaceSection } from "@/components/workspace/AgentNav";
 import { UserFooter } from "@/components/workspace/UserFooter";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/lib/i18n";
