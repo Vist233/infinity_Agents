@@ -1,5 +1,11 @@
 # Infinity Agents — Cloudflare Deploy 交接文档
 
+> 2026-08-21 补充：`main` 分支已切换到纯本地运行时迁移（PostgreSQL + 本地对象存储 +
+> 本地 Redis，见 `docs/POST_CLOUDFLARE_MAIN_LOCAL_POSTGRESQL_PLAN_2026-08-20.md`）。
+> L1/L2/L3 已完成并推送（提交 `f7887d9`、`72f1c09`、`6c03c60`，执行证据在
+> `evidence/IMPLEMENT-LOCAL-PG/`）。本文档继续只描述 Cloudflare 生产架构，
+> 对应 `cloudflare-deploy` 分支与线上 `infinity.zhangyvjing.com`，两者均未改动。
+
 > 最后更新：2026-08-21
 > 当前分支：`cloudflare-deploy`；C7 最终运行时代码：`57f6fb9`；已部署 Edge 版本：
 > `42b1ecaf-7a97-47d1-ae73-e6b4041fd900`；不可变 Worker 镜像：`sha256:c76aff2544dc...`
