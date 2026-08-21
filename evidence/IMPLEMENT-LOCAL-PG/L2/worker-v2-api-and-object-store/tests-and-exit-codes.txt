@@ -1,0 +1,31 @@
+# L2 test runs 2026-08-21 16:16:25 +0800
+
+## ruff check (new files)
+All checks passed!
+exit=0
+
+## pytest L2 (object store + worker v2 API e2e incl. multipart and restart recovery)
+tests/test_local_object_store.py::test_write_and_read_roundtrip PASSED   [  8%]
+tests/test_local_object_store.py::test_rejects_traversal_and_invalid_keys PASSED [ 16%]
+tests/test_local_object_store.py::test_rejects_symlink_escape PASSED     [ 25%]
+tests/test_local_object_store.py::test_write_stream_enforces_limit PASSED [ 33%]
+tests/test_local_object_store.py::test_multipart_assemble_and_cleanup PASSED [ 41%]
+tests/test_local_object_store.py::test_assemble_enforces_max_bytes PASSED [ 50%]
+tests/test_local_runtime_api.py::test_full_task_lifecycle PASSED         [ 58%]
+tests/test_local_runtime_api.py::test_superseded_session_is_rejected PASSED [ 66%]
+tests/test_local_runtime_api.py::test_artifact_checksum_mismatch_is_rejected PASSED [ 75%]
+tests/test_local_runtime_api.py::test_connect_rejects_forbidden_infrastructure_fields PASSED [ 83%]
+tests/test_local_runtime_api.py::test_object_key_traversal_cannot_escape_store PASSED [ 91%]
+tests/test_local_runtime_api.py::test_restart_recovers_stale_finalize PASSED [100%]
+============================== 12 passed in 2.07s ==============================
+exit=0
+
+## pytest regression (L1 + worker v2 contract suites)
+............                                                             [100%]
+12 passed in 1.29s
+exit=0
+
+## pytest without DSN (skip behaviour)
+sssssssssss......                                                        [100%]
+6 passed, 11 skipped in 0.47s
+exit=0

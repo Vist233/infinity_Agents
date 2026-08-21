@@ -1,0 +1,11 @@
+f7887d9 feat(local-runtime): L1 canonical PostgreSQL schema and transactional worker state machine
+1f43a1b docs: freeze pure-local main migration baseline
+be537fd docs: close C7 production release
+ M backend/local_runtime/__init__.py
+?? backend/local_runtime/admin.py
+?? backend/local_runtime/api_repository.py
+?? backend/local_runtime/object_store.py
+?? backend/local_runtime/worker_api.py
+?? evidence/IMPLEMENT-LOCAL-PG/L2/
+?? tests/test_local_object_store.py
+?? tests/test_local_runtime_api.py

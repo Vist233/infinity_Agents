@@ -1,0 +1,8 @@
+ backend/local_runtime/__init__.py       |  12 +-
+ backend/local_runtime/admin.py          | 204 +++++++++
+ backend/local_runtime/api_repository.py | 616 ++++++++++++++++++++++++++
+ backend/local_runtime/object_store.py   | 171 ++++++++
+ backend/local_runtime/worker_api.py     | 741 ++++++++++++++++++++++++++++++++
+ tests/test_local_object_store.py        |  81 ++++
+ tests/test_local_runtime_api.py         | 365 ++++++++++++++++
+ 7 files changed, 2189 insertions(+), 1 deletion(-)
