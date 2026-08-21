@@ -32,8 +32,8 @@ docker compose -f docker-compose.infra.yml --env-file "$ENV_FILE" up -d
 # 4. Wait for health checks
 echo "==> Waiting for services to be healthy ..."
 for i in $(seq 1 60); do
-  pg_status=$(docker compose -f docker-compose.infra.yml ps --format json postgres 2>/dev/null | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('Health','unknown'))" 2>/dev/null || echo "checking")
-  redis_status=$(docker compose -f docker-compose.infra.yml ps --format json redis 2>/dev/null | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('Health','unknown'))" 2>/dev/null || echo "checking")
+  pg_status=$(docker compose -f docker-compose.infra.yml ps --format json postgres 2>/dev/null | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print((d[0] if isinstance(d,list) else d).get('Health','unknown'))" 2>/dev/null || echo "checking")
+  redis_status=$(docker compose -f docker-compose.infra.yml ps --format json redis 2>/dev/null | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print((d[0] if isinstance(d,list) else d).get('Health','unknown'))" 2>/dev/null || echo "checking")
   if [ "$pg_status" = "healthy" ] && [ "$redis_status" = "healthy" ]; then
     echo "    PostgreSQL: healthy"
     echo "    Redis:      healthy"

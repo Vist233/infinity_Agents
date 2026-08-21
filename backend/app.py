@@ -270,6 +270,8 @@ app = FastAPI(lifespan=lifespan)
 # The auth routes below are thin compatibility shims so that the frontend's
 # /auth/me and /auth/logout calls keep working.
 
+_HOST_RE = re.compile(r"^[A-Za-z0-9.:\-\[\]]+$")
+
 def _external_base_url(request: Request) -> str:
     """Best-effort public origin for proxied local flows."""
     explicit = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
@@ -279,7 +281,11 @@ def _external_base_url(request: Request) -> str:
     forwarded_host = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
     scheme = forwarded_proto or request.url.scheme
     host = forwarded_host or request.headers.get("host") or request.url.netloc
-    return f"{scheme}://{str(host).strip()}"
+    # Reject malformed Host headers to prevent header injection.
+    host_str = str(host).strip()
+    if not _HOST_RE.fullmatch(host_str):
+        host_str = request.url.netloc
+    return f"{scheme}://{host_str}"
 
 
 async def _record_principal(principal: Principal) -> None:
