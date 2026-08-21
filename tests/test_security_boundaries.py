@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.auth import Principal, create_session_cookie, principal_from_session_cookie
+from backend.auth import Principal
 from backend.resource_broker import EgressDenied, ResourceBroker, ResourceForbidden
 from backend.security import (
     ArtifactCollector,
@@ -19,12 +19,7 @@ from backend.code_agent.worker.executor import _validated_control_plane_url
 from agent.tools.image_analyzer import ImageAnalysisTools
 
 
-def test_session_cookie_is_signed_and_expires(monkeypatch):
-    monkeypatch.setenv("SESSION_COOKIE_SECRET", "test-secret")
-    cookie = create_session_cookie(Principal(user_id="alice", issuer="test"), ttl_seconds=60)
-    assert principal_from_session_cookie(cookie).user_id == "alice"
-    with pytest.raises(Exception):
-        principal_from_session_cookie(cookie[:-1] + ("a" if cookie[-1] != "a" else "b"))
+# Session cookie test removed in L4 (shared-user auth, no cookies)
 
 
 @pytest.mark.parametrize("value", ["../secret", "/etc/passwd", "a/../../b", ""])

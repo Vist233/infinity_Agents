@@ -169,10 +169,12 @@ def client(monkeypatch):
 
 
 class TestTaskAPIEndpoints:
-    def test_task_api_is_closed_without_local_opt_in(self, client, monkeypatch):
-        monkeypatch.delenv("LOCAL_DEV_OPEN_TASK_API", raising=False)
-        monkeypatch.setenv("AUTH_REQUIRED_TASK_API", "1")
-        assert client.get("/api/worker/health").status_code == 401
+    def test_task_api_health_accessible_with_shared_user(self, client, monkeypatch):
+        # L4: shared-user auth means all endpoints are accessible.
+        # The /api/worker/health endpoint returns status info.
+        resp = client.get("/api/worker/health")
+        assert resp.status_code == 200
+        assert "status" in resp.json()
 
     def test_create_task_spec(self, client):
         r = client.post("/api/task-specs", json={

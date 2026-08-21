@@ -1,69 +1,19 @@
-from __future__ import annotations
+"""Tests for the shared-user auth system (L4+).
 
-from types import SimpleNamespace
+All users are mapped to the shared local-admin Principal.
+No OIDC, no session cookies, no login flow.
+"""
+from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
 
 import backend.app as app_module
-from backend.auth import _ensure_session_active, create_session_cookie, principal_from_session_cookie, Principal
+from backend.auth import require_user, SHARED_PRINCIPAL
 
 
-def test_local_oidc_stub_completes_pkce_cookie_flow(monkeypatch):
-    monkeypatch.setenv("AUTH_DEV_LOGIN_ENABLED", "1")
-    monkeypatch.setenv("COOKIE_SECURE", "0")
-
-    async def fake_init_db(app):
-        app.state.db_pool = None
-
-    async def fake_close_db(_app):
-        return None
-
-    monkeypatch.setattr(app_module, "init_db", fake_init_db)
-    monkeypatch.setattr(app_module, "close_db", fake_close_db)
-
-    with TestClient(app_module.app) as client:
-        start = client.get("/auth/login?return_to=/analysis", follow_redirects=False)
-        assert start.status_code == 307
-        assert "/auth/dev/authorize?" in start.headers["location"]
-        assert "code_challenge=" in start.headers["location"]
-        assert "nonce=" in start.headers["location"]
-
-        authorize = client.get(start.headers["location"], follow_redirects=False)
-        assert authorize.status_code == 303
-        assert "code=dev%3Aalice" in authorize.headers["location"]
-
-        callback = client.get(authorize.headers["location"], follow_redirects=False)
-        assert callback.status_code == 303
-        assert callback.headers["location"] == "/analysis"
-        assert "infinity_session=" in callback.headers.get("set-cookie", "")
-        assert "infinity_csrf=" in callback.headers.get("set-cookie", "")
-
-        me = client.get("/auth/me")
-        assert me.status_code == 200
-        assert me.json()["user_id"] == "alice"
-
-        bad_return = client.get("/auth/login?return_to=https://evil.example/", follow_redirects=False)
-        bad_authorize = client.get(bad_return.headers["location"], follow_redirects=False)
-        bad_callback = client.get(bad_authorize.headers["location"], follow_redirects=False)
-        assert bad_callback.headers["location"] == "/"
-
-        logout = client.post(
-            "/auth/logout",
-            headers={"x-csrf-token": client.cookies["infinity_csrf"]},
-            follow_redirects=False,
-        )
-        assert logout.status_code == 303
-        assert "infinity_session=\"\"" in logout.headers.get("set-cookie", "")
-        assert client.get("/auth/me").status_code == 401
-
-        assert client.get("/auth/logout", follow_redirects=False).status_code == 405
-
-
-def test_cookie_state_change_requires_csrf_token(monkeypatch):
-    monkeypatch.setenv("AUTH_DEV_LOGIN_ENABLED", "1")
-    monkeypatch.setenv("COOKIE_SECURE", "0")
+def _make_client():
+    """Create a test client with mocked DB pools."""
 
     async def fake_init_db(app):
         app.state.db_pool = None
@@ -71,56 +21,52 @@ def test_cookie_state_change_requires_csrf_token(monkeypatch):
     async def fake_close_db(_app):
         return None
 
-    monkeypatch.setattr(app_module, "init_db", fake_init_db)
-    monkeypatch.setattr(app_module, "close_db", fake_close_db)
-
-    with TestClient(app_module.app) as client:
-        client.get("/auth/dev/login?user_id=alice", follow_redirects=False)
-        response = client.post("/auth/logout", follow_redirects=False)
-        assert response.status_code == 403
+    # Override lifespan-dependent functions for test isolation
+    app_module.init_db = fake_init_db
+    app_module.close_db = fake_close_db
+    return TestClient(app_module.app)
 
 
-def test_websocket_rejects_foreign_browser_origin(monkeypatch):
-    async def fake_init_db(app):
-        app.state.db_pool = None
-
-    async def fake_close_db(_app):
-        return None
-
-    monkeypatch.setattr(app_module, "init_db", fake_init_db)
-    monkeypatch.setattr(app_module, "close_db", fake_close_db)
-
-    with TestClient(app_module.app) as client:
-        with pytest.raises(WebSocketDisconnect) as exc_info:
-            with client.websocket_connect("/ws/chat", headers={"origin": "https://evil.example"}):
-                pass
-        assert exc_info.value.code == 1008
+def test_shared_principal_is_fixed():
+    """SHARED_PRINCIPAL must be the local-admin superuser."""
+    assert SHARED_PRINCIPAL.user_id == "local-admin"
+    assert SHARED_PRINCIPAL.issuer == "local-shared"
+    assert SHARED_PRINCIPAL.subject == "local-admin"
+    assert "superuser" in SHARED_PRINCIPAL.roles
 
 
-@pytest.mark.asyncio
-async def test_cookie_websocket_session_checks_durable_revocation(monkeypatch):
-    monkeypatch.setenv("SESSION_COOKIE_SECRET", "test-secret")
+def test_auth_me_returns_shared_user():
+    """GET /auth/me must return the shared user without any login."""
+    with _make_client() as client:
+        resp = client.get("/auth/me")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["user_id"] == "local-admin"
+        assert data["issuer"] == "local-shared"
 
-    class Conn:
-        async def fetchrow(self, *_args):
-            return None
 
-    class Acquire:
-        async def __aenter__(self):
-            return Conn()
+def test_auth_login_redirects_to_task_center():
+    """GET /auth/login must redirect (no OIDC flow)."""
+    with _make_client() as client:
+        resp = client.get("/auth/login", follow_redirects=False)
+        assert resp.status_code == 302
+        location = resp.headers["location"]
+        assert location.startswith("/task-center") or location == "/"
 
-        async def __aexit__(self, *_args):
-            return None
 
-    class Pool:
-        def acquire(self):
-            return Acquire()
+def test_auth_logout_redirects():
+    """POST /auth/logout must redirect."""
+    with _make_client() as client:
+        resp = client.post("/auth/logout", follow_redirects=False)
+        assert resp.status_code == 302
 
-    principal = principal_from_session_cookie(
-        create_session_cookie(Principal(user_id="alice", session_id="session-id"))
-    )
-    app = SimpleNamespace(state=SimpleNamespace(db_pool=Pool()))
 
-    with pytest.raises(Exception) as exc_info:
-        await _ensure_session_active(app, principal)
-    assert exc_info.value.status_code == 401
+def test_health_endpoint_returns_status():
+    """GET /health must return without auth."""
+    with _make_client() as client:
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "status" in data
+        assert "postgres" in data
+        assert "redis" in data

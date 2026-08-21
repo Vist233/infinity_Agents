@@ -75,3 +75,7 @@ normal_distribution.png
 cute_turtle.png
 worker.env
 .local-test/
+
+# Local deployment artifacts
+backups/
+local-data/

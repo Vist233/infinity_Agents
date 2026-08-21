@@ -1,9 +1,13 @@
-"""Long-lived D1 Worker v2 process.
+"""Long-lived Worker v2 process.
 
 The process owns one persistent Worker credential. It connects to the
-Cloudflare control plane, uses the HTTPS Redis Relay only for wake-up hints,
-claims work with D1 fencing, runs direct non-root Claude Code, uploads the
+control plane API, optionally reads wake-up hints from a Redis Relay,
+claims work with fencing, runs direct non-root Claude Code, uploads the
 result, and then clears the attempt directory.
+
+When WORKER_RELAY_URL is not set the Worker relies solely on control-plane
+polling for task discovery (hints are advisory and their absence does not
+affect correctness).
 """
 
 from __future__ import annotations
@@ -63,11 +67,11 @@ async def _connect_until_ready(client: WorkerV2Client, worker_id: str) -> None:
                 raise
             if exc.status_code is not None and exc.status_code < 500:
                 raise
-            logger.warning("D1 Worker connect failed; retrying: %s", exc.code or type(exc).__name__)
+            logger.warning("Worker connect failed; retrying: %s", exc.code or type(exc).__name__)
         except Exception as exc:
             if not _is_transient_transport_error(exc):
                 raise
-            logger.warning("D1 Worker connect transport failed; retrying: %s", type(exc).__name__)
+            logger.warning("Worker connect transport failed; retrying: %s", type(exc).__name__)
         await _retry_pause()
 
 
@@ -94,12 +98,24 @@ async def _heartbeat(client: WorkerV2Client, stop: asyncio.Event) -> None:
             logger.warning("Worker heartbeat failed: %s", type(exc).__name__)
 
 
+def _build_relay() -> RedisHintClient | None:
+    """Create a RedisHintClient if relay env vars are configured, else None."""
+    relay_url = os.getenv("WORKER_RELAY_URL", "").strip()
+    relay_token = os.getenv("WORKER_RELAY_HINT_TOKEN", "").strip()
+    if not relay_url or not relay_token:
+        logger.info("WORKER_RELAY_URL not set; Worker will poll control plane only")
+        return None
+    try:
+        return RedisHintClient(base_url=relay_url, token=relay_token)
+    except Exception as exc:
+        logger.warning("RedisHintClient init failed; falling back to poll-only: %s", exc)
+        return None
+
+
 async def run_worker(worker_id: str) -> None:
     control_plane_url = _required("WORKER_CONTROL_PLANE_URL")
-    relay_url = _required("WORKER_RELAY_URL")
     credential = _required("WORKER_CREDENTIAL")
-    instance_id = _required("WORKER_INSTANCE_ID")
-    relay_token = _required("WORKER_RELAY_HINT_TOKEN")
+    instance_id = os.getenv("WORKER_INSTANCE_ID", "").strip() or f"local-{worker_id}"
     image_digest = os.getenv("WORKER_IMAGE_DIGEST", "").strip() or None
     client = WorkerV2Client(
         base_url=control_plane_url,
@@ -108,7 +124,7 @@ async def run_worker(worker_id: str) -> None:
         instance_id=instance_id,
         image_digest=image_digest,
     )
-    relay = RedisHintClient(base_url=relay_url, token=relay_token)
+    relay = _build_relay()
     stop = asyncio.Event()
     heartbeat_task: asyncio.Task[Any] | None = None
     try:
@@ -116,14 +132,16 @@ async def run_worker(worker_id: str) -> None:
         heartbeat_task = asyncio.create_task(_heartbeat(client, stop))
         while not stop.is_set():
             hints: list[dict[str, Any]] = []
-            try:
-                # Hints are advisory only. D1 poll/claim is authoritative, so
-                # a Relay outage cannot lose or duplicate a task.
-                hints = await relay.read(limit=20)
-                if hints:
-                    logger.info("Worker %s received %d task hint(s)", worker_id, len(hints))
-            except Exception as exc:
-                logger.warning("Redis Relay hint read failed: %s", type(exc).__name__)
+            if relay is not None:
+                try:
+                    # Hints are advisory only. Control-plane poll/claim is
+                    # authoritative, so a Relay outage cannot lose or
+                    # duplicate a task.
+                    hints = await relay.read(limit=20)
+                    if hints:
+                        logger.info("Worker %s received %d task hint(s)", worker_id, len(hints))
+                except Exception as exc:
+                    logger.warning("Redis Relay hint read failed: %s", type(exc).__name__)
 
             try:
                 tasks, next_poll_seconds = await client.poll()
@@ -133,7 +151,7 @@ async def run_worker(worker_id: str) -> None:
                 if exc.code in _SESSION_RECONNECT_CODES:
                     await _reconnect(client, worker_id)
                     continue
-                logger.warning("D1 Worker poll failed: %s", exc.code or type(exc).__name__)
+                logger.warning("Worker poll failed: %s", exc.code or type(exc).__name__)
                 await _retry_pause()
                 continue
             except asyncio.CancelledError:
@@ -141,7 +159,7 @@ async def run_worker(worker_id: str) -> None:
             except Exception as exc:
                 if not _is_transient_transport_error(exc):
                     raise
-                logger.warning("D1 Worker poll transport failed; retrying: %s", type(exc).__name__)
+                logger.warning("Worker poll transport failed; retrying: %s", type(exc).__name__)
                 await _retry_pause()
                 continue
 
@@ -168,7 +186,8 @@ async def run_worker(worker_id: str) -> None:
                 await heartbeat_task
             except asyncio.CancelledError:
                 pass
-        await relay.close()
+        if relay is not None:
+            await relay.close()
         await client.close()
 
 

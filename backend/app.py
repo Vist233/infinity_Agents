@@ -5893,6 +5893,25 @@ async def publish_outbox_endpoint(user: Optional[Principal] = Depends(_require_t
     return {"processed": processed, "mode": "redis"}
 
 
+
+@app.get("/health")
+async def public_health():
+    """Public health check — no auth required. Returns PG/Redis status."""
+    pool = getattr(app.state, "db_pool", None)
+    pg_ok = False
+    if pool is not None and not pool.is_closing():
+        try:
+            async with pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            pg_ok = True
+        except Exception:
+            pass
+    redis = get_redis_client()
+    redis_ok = bool(redis and redis.is_connected)
+    status = "ready" if pg_ok and redis_ok else ("degraded" if pg_ok else "unavailable")
+    return {"status": status, "postgres": pg_ok, "redis": redis_ok}
+
+
 @app.get("/api/worker/health")
 async def worker_health_endpoint(user: Optional[Principal] = Depends(_require_task_api_key)):
     """Health check for workers."""
