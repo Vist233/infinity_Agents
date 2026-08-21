@@ -2,8 +2,8 @@
 
 > 2026-08-21 补充：`main` 分支已切换到纯本地运行时迁移（PostgreSQL + 本地对象存储 +
 > 本地 Redis，见 `docs/POST_CLOUDFLARE_MAIN_LOCAL_POSTGRESQL_PLAN_2026-08-20.md`）。
-> L1/L2/L3 已完成并推送（提交 `f7887d9`、`72f1c09`、`6c03c60`，执行证据在
-> `evidence/IMPLEMENT-LOCAL-PG/`）。本文档继续只描述 Cloudflare 生产架构，
+> L1/L2/L3/L4 已完成并推送（L1 `f7887d9`、L2 `72f1c09`、L3 `6c03c60`、L4 `4f0a012`，执行证据在
+> `evidence/IMPLEMENT-LOCAL-PG/`）。L4 删除了 Chat Agent 全部代码并将认证替换为共享 local-admin 用户（内网场景无需登录）。本文档继续只描述 Cloudflare 生产架构，
 > 对应 `cloudflare-deploy` 分支与线上 `infinity.zhangyvjing.com`，两者均未改动。
 
 > 最后更新：2026-08-21
