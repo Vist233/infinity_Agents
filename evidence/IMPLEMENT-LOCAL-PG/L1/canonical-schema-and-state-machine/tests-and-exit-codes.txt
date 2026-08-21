@@ -1,0 +1,18 @@
+pytest tests/test_local_runtime_pg.py -v
+collecting ... collected 5 items
+
+tests/test_local_runtime_pg.py::test_empty_migration_is_repeatable_and_schema_is_canonical PASSED [ 20%]
+tests/test_local_runtime_pg.py::test_expired_reconnect_keeps_immutable_session_history PASSED [ 40%]
+tests/test_local_runtime_pg.py::test_public_worker_claims_cross_user_task_once_and_browser_stays_isolated PASSED [ 60%]
+tests/test_local_runtime_pg.py::test_user_cannot_create_task_with_another_users_dataset PASSED [ 80%]
+tests/test_local_runtime_pg.py::test_stale_session_cannot_renew_attempt PASSED [100%]
+
+============================== 5 passed in 0.59s ===============================
+exit=0
+
+ruff check backend/local_runtime tests/test_local_runtime_pg.py
+All checks passed!
+exit=0
+
+pytest without DSN (must skip, not fake-pass)
+5 skipped in 0.10s
