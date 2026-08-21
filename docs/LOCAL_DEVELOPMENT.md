@@ -1,49 +1,63 @@
-# 技术架构与本地运行
+# 本地开发与部署
 
-> **2026-08-20 目标架构提示**：本页的PostgreSQL命令只用于旧本地实现。当前唯一目标见
-> [`ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md`](./ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md)：
-> D1是Task事实源，R2保存文件，zhangbot Redis负责hint/presence/事件，Docker Worker通过
-> Cloudflare Worker v2 HTTPS API访问D1/R2。
+> 最后更新：2026-08-22（L5 一键本地部署）
 
 ## 架构概览
 
 ```text
-浏览器 / 本地客户端
-        |
-        |  same-origin REST + SSE
-        v
-Infinity Agents Worker（cloudflare-deploy）
-        |----------------------|
-        |                      |
-   PaperAgent API        ImageJudge API
-        |                      |
-      D1 / OIDC          独立 D1 / KV / DO
-
-本地开发时：
-浏览器 -> Next.js frontend -> FastAPI backend -> PostgreSQL + PaperAgent tools
-ImageJudge -> 独立 Qt 桌面程序
+浏览器 -> Next.js (port 3000) -> FastAPI (port 8008) -> PostgreSQL + Redis
+Worker  -> FastAPI control plane (/api/worker/v2/*)
 ```
 
-`main` 保存产品源码：`agent/`、`backend/`、`frontend/`、`image-judge/`、测试、脚本和文档。`cloudflare-deploy` 保留这些目录的同一份内容，并额外提供 `cloudflare-worker/` 以及 Cloudflare 部署配置。`agent-dev` 仅保留作历史分支。
+- **PostgreSQL 16**：Task、Attempt、Worker、Session、Event、Artifact 元数据唯一事实源
+- **Redis 7**：通知、presence、实时事件（可重建，不保存持久数据）
+- **FastAPI**：唯一 HTTP API，提供 Analysis、Task Center、Worker 控制面
+- **Next.js**：前端，同源代理 API
+- **Worker**：独立进程，通过 HTTP 调用控制面，不直连数据库
 
-PaperAgent 的会话和消息由当前运行环境的持久化数据库保存；生产环境使用 Infinity Worker 的 Agent D1。ImageJudge 使用独立资源，不与聊天数据共用数据库。登录由 Zhang Auth OIDC 负责。
+所有访问者共享 `local-admin` 用户，无需登录。
 
-## 本地运行 Web 产品
+## 前置条件
 
-### 1. 启动 FastAPI 后端
+- Python 3.11+（推荐 `pyenv shell Agent`）
+- Node.js 22+
+- Docker Desktop（用于 PostgreSQL 和 Redis）
+
+## 一键启动
+
+### 1. 配置环境
 
 ```bash
-pyenv shell Agent
-pip install -r requirements.txt
-
-export DATABASE_URL="postgresql://app_user:your_password@localhost:5432/app_db"
-export MOONSHOT_API_KEY="your_api_key_here"
-
-pyenv shell Agent
-python -m uvicorn backend.app:app --host 127.0.0.1 --port 8008 --reload
+cp .env.local.example .env.local
 ```
 
-### 2. 启动 Next.js 前端
+编辑 `.env.local`，至少修改以下密码：
+- `POSTGRES_PASSWORD`
+- `REDIS_PASSWORD`
+- `DATABASE_URL`（密码需与 `POSTGRES_PASSWORD` 一致）
+- `REDIS_URL`（密码需与 `REDIS_PASSWORD` 一致）
+
+### 2. 启动基础设施
+
+```bash
+bash scripts/start-local.sh
+```
+
+脚本会：
+1. 启动 PostgreSQL + Redis（Docker named volume 持久化）
+2. 等待健康检查通过
+3. 自动运行数据库迁移（幂等）
+4. 创建存储目录
+5. 输出后续启动命令
+
+### 3. 启动 API
+
+```bash
+source .env.local
+uvicorn backend.app:app --host 0.0.0.0 --port 8008 --reload
+```
+
+### 4. 启动前端
 
 ```bash
 cd frontend
@@ -51,29 +65,75 @@ npm install
 npm run dev
 ```
 
-打开 `http://localhost:3000`。如果前端需要连接其他后端地址，可设置 `NEXT_PUBLIC_API_BASE`；默认使用当前页面的同源 API。
+打开 `http://localhost:3000`。
 
-生产登录和会话 API 需要 Zhang Auth OIDC。不要把任何真实密钥提交到 Git；本地只通过环境变量提供 `MOONSHOT_API_KEY`、数据库连接和 OIDC 配置。
+### 5. 注册并启动 Worker（可选）
 
-## 本地运行 ImageJudge
+```bash
+# 注册 Worker（API 必须先启动）
+bash scripts/enroll-worker.sh
 
-ImageJudge 是独立的 Qt 桌面程序，不会随 FastAPI 或 Next.js 自动启动。进入 `image-judge/` 后按该目录说明安装依赖并运行；模型 Key 由用户在程序中手动输入，程序不依赖系统钥匙串。
+# 将输出的 WORKER_ID 和 WORKER_CREDENTIAL 填入 .env.local
+# 然后：
+source .env.local
+ANTHROPIC_API_KEY=sk-ant-your-key python -m backend.code_agent.worker.consumer_v2 "$WORKER_1_ID"
+```
+
+**注意**：`ANTHROPIC_API_KEY` 只在 Worker 进程中设置，不要写入 `.env.local` 的 API 配置段。
+
+## 日常操作
+
+| 操作 | 命令 |
+|---|---|
+| 启动基础设施 | `bash scripts/start-local.sh` |
+| 停止（保留数据） | `bash scripts/stop-local.sh` |
+| 销毁（删除数据） | `bash scripts/destroy-local.sh` |
+| 备份数据库 | `bash scripts/backup-db.sh` |
+| 恢复数据库 | `bash scripts/restore-db.sh backups/pg-xxx.sql.gz` |
+| 健康检查 | `curl http://localhost:8008/health` |
+| 注册 Worker | `bash scripts/enroll-worker.sh` |
+
+## 端口说明
+
+| 服务 | 默认端口 | 环境变量 |
+|---|---|---|
+| PostgreSQL | 5432 | `PG_PORT` |
+| Redis | 6379 | `REDIS_PORT` |
+| FastAPI | 8008 | `API_PORT` |
+| Next.js | 3000 | — |
+
+如果本机已有 PostgreSQL 或 Redis 占用端口，修改 `.env.local` 中的端口变量和对应的 `DATABASE_URL` / `REDIS_URL`。
+
+## 数据持久化
+
+- PostgreSQL 数据存储在 Docker named volume `pg_data` 中
+- Redis 数据存储在 Docker named volume `redis_data` 中
+- `docker compose down` 保留数据；`docker compose down -v` 删除数据
+- 定期使用 `scripts/backup-db.sh` 创建备份
 
 ## 测试
 
 ```bash
-# Frontend
-cd frontend
-npm run lint
-npm run typecheck
-npm run test:unit
-npm run build
-npm run test:e2e
+# 后端测试（不需要 Docker）
+python -m pytest tests/ -q --timeout=30
 
-# Python backend
-cd ..
-pyenv shell Agent
-pytest -q
+# 需要 PostgreSQL 的集成测试
+# 先启动基础设施，然后：
+python -m pytest tests/test_local_runtime_pg.py tests/test_task_integration_pg.py -v
+
+# 前端单元测试
+cd frontend && npx vitest run
+
+# 前端构建
+cd frontend && npm run build
 ```
 
-`cloudflare-deploy` 分支的 Worker 检查和部署命令见该分支的 [`cloudflare-worker/README.md`](https://github.com/Vist233/infinity_Agents/blob/cloudflare-deploy/cloudflare-worker/README.md)。
+## 故障排查
+
+| 问题 | 解决 |
+|---|---|
+| Docker 连接失败 | 启动 Docker Desktop |
+| 端口被占用 | 修改 `.env.local` 中的端口 |
+| 迁移失败 | 检查 `DATABASE_URL` 密码是否正确 |
+| Redis 连接失败 | 检查 `REDIS_URL` 密码是否正确 |
+| Worker 连接失败 | 确认 API 已启动，检查 `WORKER_CONTROL_PLANE_URL` |
