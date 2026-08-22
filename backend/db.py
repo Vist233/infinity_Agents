@@ -33,7 +33,7 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id TEXT;
                 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions (updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_sessions_user_updated_at ON sessions (user_id, updated_at DESC);
-                
+
                 CREATE TABLE IF NOT EXISTS messages (
                      message_id SERIAL PRIMARY KEY, -- 消息唯一 ID
                     session_id UUID NOT NULL,      -- 关联会话 ID
@@ -42,8 +42,8 @@ async def ensure_table(pool: asyncpg.Pool) -> None:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     -- 约束：当 session 被删除时，对应的消息也自动删除
                     CONSTRAINT fk_session
-                    FOREIGN KEY(session_id) 
-                    REFERENCES sessions(session_id) 
+                    FOREIGN KEY(session_id)
+                    REFERENCES sessions(session_id)
                     ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages (session_id);
@@ -746,12 +746,12 @@ async def insert_message(pool: asyncpg.Pool, session_id: str, role: str, content
     更新 sessions 表的 updated_at 字段，让对话在侧边栏置顶
     """
     insert_msg_query = """
-        INSERT INTO messages (session_id, role, content) 
+        INSERT INTO messages (session_id, role, content)
         VALUES ($1, $2, $3)
     """
     update_session_query = """
-        UPDATE sessions 
-        SET updated_at = NOW() 
+        UPDATE sessions
+        SET updated_at = NOW()
         WHERE session_id = $1
     """
 
@@ -765,8 +765,8 @@ async def insert_message(pool: asyncpg.Pool, session_id: str, role: str, content
     except Exception as e:
         logging.error(f"Failed to insert message and update session: {e}")
         raise e
-    
-    
+
+
 async def get_all_sessions(pool, user_id: str):
     """
     从数据库获取所有会话列表，按最后更新时间倒序排列
@@ -780,7 +780,7 @@ async def get_all_sessions(pool, user_id: str):
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(query, user_id)
-            
+
             return [
                 {
                     "session_id": str(row["session_id"]),
@@ -794,7 +794,7 @@ async def get_all_sessions(pool, user_id: str):
     except Exception as e:
         logging.error(f"Error fetching sessions: {e}")
         return []
-    
+
 
 async def update_session_title(pool: asyncpg.Pool, session_id: str, title: str, user_id: str) -> bool:
     """
@@ -846,12 +846,12 @@ async def get_session_messages(pool, session_id: str):
         FROM messages
         WHERE session_id = $1
         ORDER BY created_at ASC;
-    """ 
+    """
     u_id = uuid.UUID(session_id)
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(query, u_id)
-            
+
             return [
                 {
                     "role": row["role"],
