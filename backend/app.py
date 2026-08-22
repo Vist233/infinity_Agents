@@ -2074,7 +2074,7 @@ async def get_session_history(session_id: str, user: Principal = Depends(require
         messages = await get_session_messages(pool, session_id)
         if not messages:
             return []
-            
+
         return messages
 
     except HTTPException:
