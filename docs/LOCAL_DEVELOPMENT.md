@@ -81,6 +81,81 @@ ANTHROPIC_API_KEY=sk-ant-your-key python -m backend.code_agent.worker.consumer_v
 
 **注意**：`ANTHROPIC_API_KEY` 只在 Worker 进程中设置，不要写入 `.env.local` 的 API 配置段。
 
+### Deploying Workers on Windows
+
+Workers can run on Windows machines that connect to the API server over the
+local network. Each Windows Worker is a standalone Python process that polls
+the control plane for work.
+
+**Prerequisites on Windows**:
+- Python 3.11+ installed and on PATH
+- Claude Code CLI installed: `npm install -g @anthropic-ai/claude-code`
+- Repository cloned locally (or at least the `backend/` package)
+
+**Step 1 — Install Worker dependencies** (only `httpx` is needed):
+
+```powershell
+pip install httpx
+```
+
+**Step 2 — Register the Worker** (from the server where the API runs):
+
+```powershell
+# On the server machine (or from any machine with network access):
+.\scripts\enroll-worker.ps1 http://<server-ip>:8008
+```
+
+This outputs `WORKER_ID` and `WORKER_CREDENTIAL`. Save them.
+
+**Step 3 — Configure and start the Worker**:
+
+```powershell
+# Set environment variables for this session:
+$env:WORKER_CONTROL_PLANE_URL = "http://<server-ip>:8008"
+$env:WORKER_ID = "public-worker-xxxx"
+$env:WORKER_CREDENTIAL = "xxxx"
+$env:ANTHROPIC_API_KEY = "sk-ant-your-key"
+$env:ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
+$env:ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+
+# Start the Worker:
+python -m backend.code_agent.worker.consumer_v2 $env:WORKER_ID
+```
+
+**Step 4 — Deploy a second Worker**:
+
+Run the enrollment script again to get a second credential, then start
+a second process with a different `WORKER_ID`:
+
+```powershell
+.\scripts\enroll-worker.ps1 http://<server-ip>:8008
+# (save the new credentials)
+$env:WORKER_ID = "public-worker-yyyy"
+$env:WORKER_CREDENTIAL = "yyyy"
+python -m backend.code_agent.worker.consumer_v2 $env:WORKER_ID
+```
+
+**Important**: The API server's `.env.local` must contain
+`REDIS_NAMESPACE=infinity_local` (or `WORKER_PUBLIC_NAMESPACE`) for
+Worker enrollment to work.
+
+### Deleting All Workers
+
+To revoke all Worker enrollments (e.g., before decommissioning or resetting):
+
+```powershell
+# PowerShell — revokes every registered Worker
+.\scripts\delete-all-workers.ps1 http://<server-ip>:8008
+
+# Bash equivalent:
+bash scripts/delete-all-workers.sh http://<server-ip>:8008
+```
+
+This calls `POST /api/worker-enrollments/{worker_id}/revoke` for each
+active Worker. Revoked Workers lose their next poll/heartbeat and disconnect.
+
+---
+
 ## 日常操作
 
 | 操作 | 命令 |
