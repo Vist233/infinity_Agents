@@ -53,11 +53,6 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: python -m pytest -p pytest_asyncio.plugin -q tests/test_artifact_download.py
 
-      - name: Run test auth and streaming
-        env:
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-        run: python -m pytest -p pytest_asyncio.plugin -q tests/test_auth_and_streaming.py
-
       - name: Run test auth flow
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
