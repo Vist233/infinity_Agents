@@ -2,6 +2,7 @@ import type { Env } from "./env";
 import { MAX_CONTEXT_MESSAGES } from "./env";
 import type { AuthedUser } from "./auth";
 import { errorJson, nowSeconds } from "./http";
+import type { ChatEventRow, ChatEventInput } from "./db";
 import {
   bindChatTaskConfirmation,
   claimChatTaskConfirmation,
@@ -11,11 +12,13 @@ import {
   createChatTaskConfirmation,
   getChatRequestIdempotency,
   getChatSession,
+  getChatToolCall,
   getChatTaskConfirmation,
   getChatTaskConfirmationForUser,
   getOwnedTask,
-  insertMessage,
-  listMessages,
+  insertChatEvent,
+  listChatEvents,
+  MAX_INLINE_TOOL_RESULT_BYTES,
   releaseChatRequestIdempotency,
   reopenChatTaskConfirmation,
   reserveChatRequestIdempotency,
@@ -66,6 +69,277 @@ interface ChatLoopResult {
 interface StreamLifecycle {
   onResult?: (result: ChatLoopResult) => Promise<void>;
   onError?: () => Promise<void>;
+}
+
+function normalizeToolArguments(argumentsJson: string): string {
+  try {
+    const parsed = JSON.parse(argumentsJson || "{}");
+    return JSON.stringify(parsed);
+  } catch {
+    return "{}";
+  }
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (utf8ByteLength(value) <= maxBytes) return value;
+  let result = "";
+  for (const character of value) {
+    if (utf8ByteLength(result + character) > maxBytes) break;
+    result += character;
+  }
+  return result;
+}
+
+function toolResultRecord(result: string, callId: string): Pick<ChatEventInput, "result_summary" | "result_object_key" | "result_bytes"> {
+  const resultBytes = utf8ByteLength(result);
+  if (resultBytes <= MAX_INLINE_TOOL_RESULT_BYTES) {
+    return { result_summary: result, result_object_key: null, result_bytes: resultBytes };
+  }
+  // PAPER-04/05 will replace this deferred reference with an R2-backed object
+  // store. Keep D1 bounded now and preserve the original byte count.
+  const marker = "\n[full tool result deferred to an object reference]";
+  const summary = `${truncateUtf8(result, MAX_INLINE_TOOL_RESULT_BYTES - utf8ByteLength(marker))}${marker}`;
+  return {
+    result_summary: summary,
+    result_object_key: `pending-chat-result:${callId}`,
+    result_bytes: resultBytes,
+  };
+}
+
+function toolResultStatus(result: string): "succeeded" | "failed" {
+  try {
+    const parsed = JSON.parse(result) as { error?: unknown };
+    return parsed && typeof parsed === "object" && typeof parsed.error === "string" ? "failed" : "succeeded";
+  } catch {
+    return "succeeded";
+  }
+}
+
+const MAX_SSE_TOOL_SUMMARY_BYTES = 2_048;
+const MAX_SSE_TOOL_ARGUMENTS_BYTES = 1_024;
+
+function redactDisplayValue(key: string, value: unknown): unknown {
+  if (/(?:secret|token|password|authorization|credential|cookie|api[_-]?key|object[_-]?key|path)/i.test(key)) {
+    return "[redacted]";
+  }
+  if (Array.isArray(value)) return value.slice(0, 20).map((item) => redactDisplayValue(key, item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).slice(0, 40).map(([childKey, childValue]) => [
+      childKey,
+      redactDisplayValue(childKey, childValue),
+    ]));
+  }
+  return typeof value === "string" ? truncateUtf8(value, 256) : value;
+}
+
+function safeDisplayText(value: string, maxBytes: number): string {
+  const redacted = value
+    .replace(/(?:r2:\/\/|paper\/|file:\/\/|\/(?:tmp|var|home|Users)\/)[^\s"']+/gi, "[redacted-reference]");
+  return truncateUtf8(redacted, maxBytes);
+}
+
+function safeToolArgumentsSummary(argumentsJson: string): string {
+  try {
+    return safeDisplayText(JSON.stringify(redactDisplayValue("", JSON.parse(argumentsJson || "{}"))), MAX_SSE_TOOL_ARGUMENTS_BYTES);
+  } catch {
+    return "[invalid arguments]";
+  }
+}
+
+function safeToolResultSummary(result: string): string {
+  try {
+    return safeDisplayText(JSON.stringify(redactDisplayValue("", JSON.parse(result))), MAX_SSE_TOOL_SUMMARY_BYTES);
+  } catch {
+    return safeDisplayText(result, MAX_SSE_TOOL_SUMMARY_BYTES);
+  }
+}
+
+function emitToolCallEvent(
+  emit: (event: Record<string, unknown>) => void,
+  turnId: string,
+  call: ToolCall,
+  status: "pending" | "processing",
+): void {
+  emit({
+    type: "tool_call",
+    correlation_id: truncateUtf8(turnId, 255),
+    tool_call_id: truncateUtf8(call.id, 255),
+    tool_name: truncateUtf8(call.function.name, 255),
+    status,
+    arguments_summary: safeToolArgumentsSummary(call.function.arguments),
+  });
+}
+
+function emitToolResultEvent(
+  emit: (event: Record<string, unknown>) => void,
+  turnId: string,
+  call: ToolCall,
+  result: string,
+): void {
+  emit({
+    type: "tool_result",
+    correlation_id: truncateUtf8(turnId, 255),
+    tool_call_id: truncateUtf8(call.id, 255),
+    tool_name: truncateUtf8(call.function.name, 255),
+    status: toolResultStatus(result),
+    summary: safeToolResultSummary(result),
+  });
+}
+
+async function persistToolCallEvents(
+  env: Env,
+  sessionId: string,
+  turnId: string,
+  content: string,
+  toolCalls: ToolCall[],
+): Promise<void> {
+  for (const [index, call] of toolCalls.entries()) {
+    await insertChatEvent(env, {
+      session_id: sessionId,
+      turn_id: turnId,
+      event_type: "tool_call",
+      role: "assistant",
+      content: index === 0 ? (content || null) : null,
+      tool_call_id: call.id,
+      tool_name: call.function.name,
+      tool_arguments_json: normalizeToolArguments(call.function.arguments),
+      status: "pending",
+      created_at: nowSeconds(),
+    });
+  }
+}
+
+async function persistToolResultEvent(
+  env: Env,
+  sessionId: string,
+  turnId: string,
+  callId: string,
+  result: string,
+): Promise<void> {
+  await insertChatEvent(env, {
+    session_id: sessionId,
+    turn_id: turnId,
+    event_type: "tool_result",
+    role: "tool",
+    tool_call_id: callId,
+    ...toolResultRecord(result, callId),
+    status: toolResultStatus(result),
+    created_at: nowSeconds(),
+  });
+}
+
+async function persistTerminalError(env: Env, sessionId: string, turnId: string): Promise<void> {
+  try {
+    await insertChatEvent(env, {
+      session_id: sessionId,
+      turn_id: turnId,
+      event_type: "error",
+      role: "system",
+      content: "Chat turn failed",
+      status: "failed",
+      created_at: nowSeconds(),
+    });
+  } catch {
+    // Preserve the original failure if the terminal D1 write also fails.
+  }
+}
+
+/** Rebuild provider-valid messages from the durable event ledger. */
+export function rebuildModelMessages(events: ChatEventRow[]): ChatMessage[] {
+  const sessionId = events[0]?.session_id;
+  const groups = new Map<string, ChatEventRow[]>();
+  for (const event of [...events].sort((left, right) => left.event_id - right.event_id)) {
+    if (sessionId && event.session_id !== sessionId) continue;
+    const group = groups.get(event.turn_id) ?? [];
+    group.push(event);
+    groups.set(event.turn_id, group);
+  }
+
+  const renderedGroups: ChatMessage[][] = [];
+  for (const group of groups.values()) {
+    const messages: ChatMessage[] = [];
+    for (const event of group) {
+      if (event.event_type === "user_message" && event.role === "user" && event.content != null) {
+        messages.push({ role: "user", content: event.content });
+      }
+    }
+
+    type ToolSegment = { calls: ChatEventRow[]; results: ChatEventRow[]; sawResult: boolean };
+    const segments: ToolSegment[] = [];
+    let current: ToolSegment | null = null;
+    for (const event of group) {
+      if (event.event_type === "tool_call" && event.role === "assistant") {
+        if (current?.sawResult) {
+          segments.push(current);
+          current = null;
+        }
+        current ??= { calls: [], results: [], sawResult: false };
+        current.calls.push(event);
+      } else if (event.event_type === "tool_result" && event.role === "tool") {
+        current ??= { calls: [], results: [], sawResult: false };
+        current.results.push(event);
+        current.sawResult = true;
+      }
+    }
+    if (current) segments.push(current);
+
+    for (const segment of segments) {
+      const resultByCall = new Map<string, ChatEventRow>();
+      for (const result of segment.results) {
+        if (result.tool_call_id && !resultByCall.has(result.tool_call_id)) resultByCall.set(result.tool_call_id, result);
+      }
+      const complete = segment.calls.length > 0
+        && segment.calls.every((call) => Boolean(call.tool_call_id && resultByCall.has(call.tool_call_id)));
+      if (!complete) continue;
+
+      const toolCalls = segment.calls
+        .filter((call) => call.tool_call_id && call.tool_name)
+        .map((call) => ({
+          id: call.tool_call_id as string,
+          type: "function" as const,
+          function: {
+            name: call.tool_name as string,
+            arguments: normalizeToolArguments(call.tool_arguments_json ?? "{}"),
+          },
+        }));
+      if (toolCalls.length !== segment.calls.length) continue;
+      messages.push({
+        role: "assistant",
+        content: segment.calls.find((call) => call.content != null)?.content ?? null,
+        tool_calls: toolCalls,
+      });
+      for (const call of toolCalls) {
+        const result = resultByCall.get(call.id);
+        if (!result) continue;
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: result.result_summary ?? "[tool result unavailable]",
+        });
+      }
+    }
+
+    for (const event of group) {
+      if (event.event_type === "assistant_message" && event.role === "assistant" && event.content != null) {
+        messages.push({ role: "assistant", content: event.content });
+      }
+    }
+    if (messages.length > 0) renderedGroups.push(messages);
+  }
+
+  const selected: ChatMessage[] = [];
+  let used = 0;
+  for (let index = renderedGroups.length - 1; index >= 0; index -= 1) {
+    const group = renderedGroups[index];
+    if (selected.length > 0 && used + group.length > MAX_CONTEXT_MESSAGES) break;
+    selected.unshift(...group);
+    used += group.length;
+  }
+  return [{ role: "system", content: PAPER_AGENT_SYSTEM_PROMPT }, ...selected];
 }
 
 function sseEncode(event: Record<string, unknown>): Uint8Array {
@@ -139,6 +413,7 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
   if (clientRequestId.length > 255) {
     return errorJson("client_request_id is too long", 400, "INVALID_CLIENT_REQUEST_ID");
   }
+  const turnId = clientRequestId ? `client:${clientRequestId}` : crypto.randomUUID();
   if (clientRequestId) {
     const reserved = await reserveChatRequestIdempotency(
       env,
@@ -188,33 +463,34 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
     );
   }
 
-  // Load prior history (authoritative from D1), then persist the new user turn.
-  let history: Awaited<ReturnType<typeof listMessages>>;
+  // Load prior canonical history (authoritative from D1), then persist the new
+  // user event before the first provider completion request.
   try {
-    history = await listMessages(env, sessionId);
-    await insertMessage(env, sessionId, "user", userContent);
+    await listChatEvents(env, sessionId);
+    await insertChatEvent(env, {
+      session_id: sessionId,
+      turn_id: turnId,
+      event_type: "user_message",
+      role: "user",
+      content: userContent,
+      status: "completed",
+      created_at: nowSeconds(),
+    });
     await touchChatSession(env, sessionId);
   } catch (error) {
+    await persistTerminalError(env, sessionId, turnId);
     if (clientRequestId) await releaseChatRequestIdempotency(env, user.userId, clientRequestId);
     await decrementDailyUsageSafe(env, user.userId);
     throw error;
   }
 
-  const contextHistory = history.slice(-MAX_CONTEXT_MESSAGES).map((m) => ({
-    role: m.role === "assistant" ? "assistant" : "user",
-    content: m.content
-  })) as ChatMessage[];
-
-  const modelMessages: ChatMessage[] = [
-    { role: "system", content: PAPER_AGENT_SYSTEM_PROMPT },
-    ...contextHistory,
-    { role: "user", content: userContent }
-  ];
+  const modelMessages = rebuildModelMessages(await listChatEvents(env, sessionId));
 
   return streamModelLoop(
     env,
     user,
     sessionId,
+    turnId,
     modelMessages,
     true,
     shouldRequestTaskConfirmation(userContent),
@@ -314,44 +590,54 @@ async function handleTaskConfirmation(
     // model continuation instead of failing the user's queued task.
   }
 
-  const history = await listMessages(env, sessionId);
-  const contextHistory = history.slice(-MAX_CONTEXT_MESSAGES).map((m) => ({
-    role: m.role === "assistant" ? "assistant" : "user",
-    content: m.content,
-  })) as ChatMessage[];
-  const modelMessages: ChatMessage[] = [
-    { role: "system", content: PAPER_AGENT_SYSTEM_PROMPT },
-    ...contextHistory,
-    {
-      role: "assistant",
-      content: null,
-      tool_calls: [{
-        id: confirmation.tool_call_id,
-        type: "function",
-        function: { name: confirmation.tool_name, arguments: JSON.stringify(args) },
-      }],
-    },
-    {
-      role: "tool",
-      tool_call_id: confirmation.tool_call_id,
-      content: JSON.stringify({
-        status: task.status,
-        task_id: task.task_id,
-        title: task.title,
-        message: task.status === "queued"
-          ? "The user completed the confirmation card. The task is queued for asynchronous background execution."
-          : `The user completed the confirmation card. The task status is ${task.status}. Report that status accurately; do not describe it as queued unless the status is queued.`,
-      }),
-    },
-  ];
-
   // Claim only after every operation above has succeeded. If history loading
   // fails, the card remains pending and the user can retry.
   if (!(await claimChatTaskConfirmation(env, confirmationId, taskId))) {
     return errorJson("Task confirmation has already been used", 409, "TASK_CONFIRMATION_USED");
   }
 
-  return streamModelLoop(env, user, sessionId, modelMessages, false, false, {
+  const taskResult = JSON.stringify({
+    status: task.status,
+    task_id: task.task_id,
+    title: task.title,
+    message: task.status === "queued"
+      ? "The user completed the confirmation card. The task is queued for asynchronous background execution."
+      : `The user completed the confirmation card. The task status is ${task.status}. Report that status accurately; do not describe it as queued unless the status is queued.`,
+  });
+  const originalCall = await getChatToolCall(env, sessionId, confirmation.tool_call_id);
+  const resumeTurnId = `confirmation:${confirmationId}`;
+  try {
+    // Compatibility for confirmations created before PAPER-03: reconstruct
+    // the call event from this known pending confirmation, then record its
+    // result exactly once.
+    if (!originalCall) {
+      await insertChatEvent(env, {
+        session_id: sessionId,
+        turn_id: resumeTurnId,
+        event_type: "tool_call",
+        role: "assistant",
+        tool_call_id: confirmation.tool_call_id,
+        tool_name: confirmation.tool_name,
+        tool_arguments_json: normalizeToolArguments(JSON.stringify(args)),
+        status: "pending",
+        created_at: nowSeconds(),
+      });
+    }
+    await persistToolResultEvent(
+      env,
+      sessionId,
+      originalCall?.turn_id ?? resumeTurnId,
+      confirmation.tool_call_id,
+      taskResult,
+    );
+  } catch (error) {
+    await reopenChatTaskConfirmation(env, confirmationId);
+    throw error;
+  }
+
+  const modelMessages = rebuildModelMessages(await listChatEvents(env, sessionId));
+
+  return streamModelLoop(env, user, sessionId, resumeTurnId, modelMessages, false, false, {
     onResult: async (result) => {
       if (result.status === "completed") {
         const completed = await completeChatTaskConfirmation(env, confirmationId, taskId, nowSeconds());
@@ -372,6 +658,7 @@ function streamModelLoop(
   env: Env,
   user: AuthedUser,
   sessionId: string,
+  turnId: string,
   modelMessages: ChatMessage[],
   refundQuotaOnError: boolean,
   forceTaskConfirmation = false,
@@ -382,7 +669,15 @@ function streamModelLoop(
       const startedAt = Date.now();
       const emit = (event: Record<string, unknown>) => controller.enqueue(sseEncode(event));
       const emitStatus = (phase: string, extra: Record<string, unknown> = {}) =>
-        emit({ type: "status", phase, elapsed_ms: Date.now() - startedAt, attempt: 1, max_attempts: 1, ...extra });
+        emit({
+          type: "status",
+          phase,
+          correlation_id: truncateUtf8(turnId, 255),
+          elapsed_ms: Date.now() - startedAt,
+          attempt: 1,
+          max_attempts: 1,
+          ...extra,
+        });
 
       try {
         emitStatus("thinking");
@@ -390,13 +685,22 @@ function streamModelLoop(
           env,
           sessionId,
           user.userId,
+          turnId,
           modelMessages,
           emit,
           emitStatus,
           forceTaskConfirmation,
         );
-        if (result.assistantText.trim()) {
-          await insertMessage(env, sessionId, "assistant", result.assistantText);
+        if (result.assistantText.trim() || result.status === "completed") {
+          await insertChatEvent(env, {
+            session_id: sessionId,
+            turn_id: turnId,
+            event_type: "assistant_message",
+            role: "assistant",
+            content: result.assistantText || null,
+            status: "completed",
+            created_at: nowSeconds(),
+          });
           await touchChatSession(env, sessionId);
         }
         if (lifecycle?.onResult) {
@@ -404,6 +708,7 @@ function streamModelLoop(
         }
         if (result.status === "completed") emit({ type: "done" });
       } catch (error) {
+        await persistTerminalError(env, sessionId, turnId);
         if (lifecycle?.onError) {
           try {
             await lifecycle.onError();
@@ -437,6 +742,7 @@ async function runToolLoop(
   env: Env,
   sessionId: string,
   userId: string,
+  turnId: string,
   messages: ChatMessage[],
   emit: (event: Record<string, unknown>) => void,
   emitStatus: (phase: string, extra?: Record<string, unknown>) => void,
@@ -457,13 +763,20 @@ async function runToolLoop(
     // If the provider ignores tool_choice, synthesize the same safe pending
     // confirmation instead of creating a task or asking the user to restart.
     if (forceTaskConfirmation && iteration === 0 && !toolCalls.some((call) => call.function.name === "request_task_creation")) {
-      emit({ type: "tool_call", tool_name: "request_task_creation" });
+      const synthesizedCall: ToolCall = {
+        id: crypto.randomUUID(),
+        type: "function",
+        function: { name: "request_task_creation", arguments: JSON.stringify(inferTaskConfirmationArgs(messages)) },
+      };
+      await persistToolCallEvents(env, sessionId, turnId, content, [synthesizedCall]);
+      emitToolCallEvent(emit, turnId, synthesizedCall, "pending");
+      emitToolCallEvent(emit, turnId, synthesizedCall, "processing");
       emitStatus("tool_running", { tool_name: "request_task_creation" });
       return await pauseForTaskConfirmation(
         env,
         sessionId,
         userId,
-        crypto.randomUUID(),
+        synthesizedCall.id,
         inferTaskConfirmationArgs(messages),
         content,
         emit,
@@ -471,10 +784,13 @@ async function runToolLoop(
     }
 
     if (toolCalls.length > 0) {
-      // Record the assistant's tool-call turn, then execute each tool.
+      // Record every assistant tool call before executing any of them. This
+      // preserves provider ordering even when streamed chunks arrive out of order.
+      await persistToolCallEvents(env, sessionId, turnId, content, toolCalls);
       messages.push({ role: "assistant", content: content || null, tool_calls: toolCalls });
       for (const call of toolCalls) {
-        emit({ type: "tool_call", tool_name: call.function.name });
+        emitToolCallEvent(emit, turnId, call, "pending");
+        emitToolCallEvent(emit, turnId, call, "processing");
         emitStatus("tool_running", { tool_name: call.function.name });
         let args: Record<string, unknown> = {};
         try {
@@ -486,7 +802,18 @@ async function runToolLoop(
           return await pauseForTaskConfirmation(env, sessionId, userId, call.id, args, content, emit);
         }
 
-        const result = await runTool(env, sessionId, call.function.name, args);
+        let result: string;
+        try {
+          result = await runTool(env, sessionId, userId, call.function.name, args);
+        } catch (error) {
+          const failedResult = JSON.stringify({ error: "tool_execution_failed" });
+          await persistToolResultEvent(env, sessionId, turnId, call.id, failedResult);
+          emitToolResultEvent(emit, turnId, call, failedResult);
+          messages.push({ role: "tool", tool_call_id: call.id, content: failedResult });
+          throw error;
+        }
+        await persistToolResultEvent(env, sessionId, turnId, call.id, result);
+        emitToolResultEvent(emit, turnId, call, result);
         messages.push({ role: "tool", tool_call_id: call.id, content: result });
       }
       // Loop again so the model can consume tool results.
@@ -629,7 +956,9 @@ async function streamCompletion(
   buffer += decoder.decode();
   if (buffer.trim()) processEvent(buffer);
 
-  const toolCalls: ToolCall[] = [...toolAcc.values()]
+  const toolCalls: ToolCall[] = [...toolAcc.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, t]) => t)
     .filter((t) => t.name)
     .map((t) => ({
       id: t.id || crypto.randomUUID(),

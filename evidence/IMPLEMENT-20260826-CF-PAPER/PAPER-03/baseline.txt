@@ -1,0 +1,10 @@
+branch: cloudflare-deploy
+baseline_commit: 61adfab9d18e457b076ce8918afc9124124c3273
+c7_contract_commit: 57f6fb9f4a788d0f2d2111fb2e423b59cfc0df4a
+worktree_at_card_start:
+  intentional prior product changes: cloudflare-worker/src/jwt.ts; PAPER-02 event migration/db/fake-D1/schema changes were retained
+  intentional prior evidence: evidence/IMPLEMENT-20260826-CF-PAPER/PAPER-00|PAPER-01|PAPER-02
+  pre-existing user inputs: docs/CLOUDFLARE_PAPER_WORKSPACE_DESIGN.md, docs/CLOUDFLARE_PAPER_WORKSPACE_EXECUTION_PLAN.md
+  no unrelated tracked product diff identified
+baseline_chat_sha256: d323d8d59e9facfa23a1250745e4630e84e4a3d52a086a6ae6f1f4325d35002d
+baseline_note: hash was read from the exact baseline commit; the current file is intentionally changed by this card.

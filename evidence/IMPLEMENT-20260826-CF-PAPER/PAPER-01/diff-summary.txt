@@ -1,0 +1,13 @@
+# PAPER-01 diff summary
+
+## Intentional changes
+
+- `cloudflare-worker/src/jwt.ts`: parse Access Token header before JWKS access; require `alg=ES256`, non-empty `kid`, and matching EC/P-256 JWK; normalize malformed payload/signature errors.
+- `cloudflare-worker/test/jwt.test.ts`: add 11 focused positive/negative JWT tests, including preservation of valid ID Token verification.
+- Evidence files under this directory.
+
+## Intentional non-changes
+
+- No chat, Paper tool, D1 migration, R2, Redis, Processor, frontend, Python runtime, C7 Worker v2, Wrangler config, or deployment path changed.
+- The pre-existing untracked Paper contract documents and PAPER-00 evidence remain untouched.
+- No token material is logged or included in test output/evidence.

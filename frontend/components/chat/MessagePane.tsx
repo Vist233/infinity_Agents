@@ -3,7 +3,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import MarkdownRenderer from "@/components/markdown-renderer";
 import { LogIn, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { Message, SessionRunState } from "@/lib/chat-state";
+import type { Message, SessionRunState, ToolTimelineEntry } from "@/lib/chat-state";
 import { RunStatus } from "@/components/chat/RunStatus";
 import type { RefObject } from "react";
 import { useLanguage } from "@/lib/i18n";
@@ -17,6 +17,8 @@ function ProductLogo({ size = "h-6 w-6" }: { size?: string }) {
 
 interface MessagePaneProps {
   messages: Message[];
+  toolTimeline: ToolTimelineEntry[];
+  legacyTextOnly: boolean;
   sessionId: string | null;
   isLoading: boolean;
   runState: SessionRunState;
@@ -28,6 +30,8 @@ interface MessagePaneProps {
 
 export function MessagePane({
   messages,
+  toolTimeline,
+  legacyTextOnly,
   sessionId,
   isLoading,
   runState,
@@ -104,6 +108,31 @@ export function MessagePane({
                 </div>
               );
             })}
+            {legacyTextOnly && (
+              <div data-testid="legacy-history-label" className="text-center text-[11px] text-zinc-400">
+                Legacy text-only history
+              </div>
+            )}
+            {toolTimeline.length > 0 && (
+              <section data-testid="tool-timeline" aria-label="Tool timeline" className="rounded-2xl border border-zinc-200 bg-white/70 p-3 space-y-2">
+                <div className="text-[11px] font-semibold uppercase tracking-widest text-zinc-400">Tool activity</div>
+                {toolTimeline.map((entry) => (
+                  <details key={entry.toolCallId} data-testid={`tool-trace-${entry.toolCallId}`} className="rounded-xl border border-zinc-200 bg-zinc-50/80 px-3 py-2">
+                    <summary className="cursor-pointer list-none text-sm text-zinc-700 flex items-center justify-between gap-3">
+                      <span className="font-medium">{entry.toolName}</span>
+                      <span className={`text-xs ${entry.status === "failed" ? "text-red-600" : entry.status === "succeeded" ? "text-emerald-600" : "text-amber-600"}`}>
+                        {entry.status}
+                      </span>
+                    </summary>
+                    <div className="mt-2 space-y-1 text-xs text-zinc-500 break-words">
+                      <div>Correlation: {entry.correlationId}</div>
+                      {entry.argumentsSummary && <div>Arguments: {entry.argumentsSummary}</div>}
+                      {entry.summary && <div>Result: {entry.summary}</div>}
+                    </div>
+                  </details>
+                ))}
+              </section>
+            )}
           </div>
         )}
       </div>

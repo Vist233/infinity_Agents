@@ -1,6 +1,28 @@
 import type { Message, SessionItem } from "@/lib/chat-state";
 import { withCsrfHeader } from "@/lib/runtime-config";
 
+const MAX_TIMELINE_SUMMARY_CHARS = 2048;
+const MAX_TIMELINE_ARGUMENTS_CHARS = 1024;
+const MAX_TIMELINE_EVENTS = 100;
+
+export interface SessionHistoryEvent {
+  session_id: string;
+  event_id: number;
+  turn_id: string;
+  event_type: "tool_call" | "tool_result";
+  tool_call_id: string;
+  tool_name: string;
+  status: "pending" | "processing" | "succeeded" | "failed" | "unknown";
+  summary: string;
+  arguments_summary?: string;
+}
+
+export interface SessionHistory {
+  messages: Message[];
+  timeline: SessionHistoryEvent[];
+  legacyTextOnly: boolean;
+}
+
 export interface ApiError extends Error {
   status?: number;
   detail?: string;
@@ -63,16 +85,67 @@ export async function createSession(apiBase: string): Promise<{ session_id: stri
   return requestJson(`${apiBase}/api/sessions`, { method: "POST" });
 }
 
-export async function listSessionMessages(apiBase: string, sessionId: string): Promise<Message[]> {
-  const data = await requestJson<unknown>(`${apiBase}/api/sessions/${sessionId}/messages`);
-  if (!Array.isArray(data)) {
-    return [];
-  }
-  return data
+function boundedText(value: unknown, maxChars: number): string {
+  return typeof value === "string" ? value.slice(0, maxChars) : "";
+}
+
+function normalizeMessages(value: unknown): Message[] {
+  if (!Array.isArray(value)) return [];
+  return value
     .filter((item) => item && typeof item === "object")
     .map((item) => item as Record<string, unknown>)
     .filter((item) => (item.role === "user" || item.role === "assistant") && typeof item.content === "string")
-    .map((item) => ({ role: item.role as "user" | "assistant", content: item.content as string }));
+    .map((item) => ({ role: item.role as "user" | "assistant", content: boundedText(item.content, 32_000) }));
+}
+
+function normalizeTimeline(value: unknown, sessionId: string): SessionHistoryEvent[] {
+  if (!Array.isArray(value)) return [];
+  const collapsed = new Map<string, SessionHistoryEvent>();
+  for (const item of value
+    .filter((item) => item && typeof item === "object")
+    .map((item) => item as Record<string, unknown>)
+    .filter((item) => item.session_id === sessionId)
+    .filter((item) => (item.event_type === "tool_call" || item.event_type === "tool_result"))
+    .filter((item) => typeof item.tool_call_id === "string" && typeof item.tool_name === "string")
+    .slice(0, MAX_TIMELINE_EVENTS)) {
+    const event = {
+      session_id: sessionId,
+      event_id: Number.isFinite(Number(item.event_id)) ? Number(item.event_id) : 0,
+      turn_id: boundedText(item.turn_id, 255),
+      event_type: item.event_type as "tool_call" | "tool_result",
+      tool_call_id: boundedText(item.tool_call_id, 255),
+      tool_name: boundedText(item.tool_name, 255),
+      status: ["pending", "processing", "succeeded", "failed"].includes(String(item.status))
+        ? item.status as SessionHistoryEvent["status"]
+        : "unknown",
+      summary: boundedText(item.summary, MAX_TIMELINE_SUMMARY_CHARS),
+      ...(typeof item.arguments_summary === "string"
+        ? { arguments_summary: boundedText(item.arguments_summary, MAX_TIMELINE_ARGUMENTS_CHARS) }
+        : {}),
+    } as SessionHistoryEvent;
+    const previous = collapsed.get(event.tool_call_id);
+    collapsed.set(event.tool_call_id, previous
+      ? { ...previous, ...(event.event_type === "tool_result" ? { status: event.status, summary: event.summary } : {}) }
+      : event);
+  }
+  return [...collapsed.values()];
+}
+
+export async function listSessionHistory(apiBase: string, sessionId: string): Promise<SessionHistory> {
+  const data = await requestJson<unknown>(`${apiBase}/api/sessions/${sessionId}/messages`);
+  if (Array.isArray(data)) {
+    return { messages: normalizeMessages(data), timeline: [], legacyTextOnly: true };
+  }
+  const record = data && typeof data === "object" ? data as Record<string, unknown> : {};
+  return {
+    messages: normalizeMessages(record.messages),
+    timeline: normalizeTimeline(record.events, sessionId),
+    legacyTextOnly: record.legacy_text_only === true,
+  };
+}
+
+export async function listSessionMessages(apiBase: string, sessionId: string): Promise<Message[]> {
+  return (await listSessionHistory(apiBase, sessionId)).messages;
 }
 
 export async function updateSessionTitle(apiBase: string, sessionId: string, title: string): Promise<void> {

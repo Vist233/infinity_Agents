@@ -1,0 +1,9 @@
+PAPER-08 baseline
+date=2026-08-26
+branch=cloudflare-deploy
+baseline_commit=61adfab9d18e457b076ce8918afc9124124c3273
+previous_checkpoint=evidence/IMPLEMENT-20260826-CF-PAPER/PAPER-07/checkpoint.md
+
+PAPER-07 was complete before this card began. Its dedicated Processor, additive resource/object schema, private upload bridge, and focused evidence were preserved. The two user-provided design/plan documents remained unmodified.
+
+PAPER-08 changes were limited to the Edge paper tool contract/dispatch, the authenticated user propagation needed by those tools, resource read helpers, and focused prompt/tool tests. No external system was contacted.

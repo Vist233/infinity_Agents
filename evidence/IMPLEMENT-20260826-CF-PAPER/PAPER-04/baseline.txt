@@ -1,0 +1,20 @@
+card=PAPER-04
+branch=cloudflare-deploy
+baseline_commit=61adfab9d18e457b076ce8918afc9124124c3273
+baseline_commit_subject=fix: remove unused import and trailing whitespace
+worktree_baseline=dirty_preexisting
+preexisting_changes=local PAPER-01/PAPER-02/PAPER-03 implementation and evidence; user-provided design/plan documents
+external_authorization=none
+
+Baseline file hashes (HEAD, before PAPER-04 edits):
+frontend/lib/ws/chat-stream.ts a0e9622e3fdada5314059a3470f5fd06f96957b0468fbbf6c1058cbb853d566d
+frontend/lib/api/sessions.ts 4c0b48e5336f3817392a7667513626aa676e2bb38323c5b1c654f9b5c11d6922
+frontend/hooks/use-chat-controller.ts b0377ee9ab4c2bb4ec5cc769efcbbf2361311862e8aef1d8da6896c4cc864fd1
+frontend/lib/chat-state.ts b08fd5871a51355dc6c0c91070c5c13bb30bf5087e9fbf2b59256035e293f07a
+frontend/components/chat/MessagePane.tsx 0b5c38ee2966f46de97d707e1cb2063a6337e29f64a6e3c58f15ad18c11e5910
+cloudflare-worker/src/chat.ts d323d8d59e9facfa23a1250745e4630e84e4a3d52a086a6ae6f1f4325d35002d
+cloudflare-worker/src/sessions.ts e6665ada5b9130a04d0bea5a841f7bc81ccff59d6ee7dd23cc3781371a7b1b60
+cloudflare-worker/test/chat.test.ts f8800597b8c7eac08757b52587b0096d58d7de67487e764506aa267df1fce81e
+frontend/lib/ws/chat-stream.test.ts 66099e16b2bf1b2aa176573119ab9aeb4bcba5d20397879a848ac391bb452dfc
+frontend/lib/api/sessions.test.ts 5171c63feb83a263a4c2109e059dfd2ff05b3ba502d72d0345215eb36c0df98a
+frontend/e2e/chat.spec.ts 38bb7e343d94170e37666c9dec487ecbcf679c667918ba6d65bd5e9512284952

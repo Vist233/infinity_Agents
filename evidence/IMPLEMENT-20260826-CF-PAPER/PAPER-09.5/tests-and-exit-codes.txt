@@ -1,0 +1,58 @@
+PAPER-09.5 verification record
+
+1. Test-first focused regression
+   Command: `npm test -- --run test/tools.test.ts test/paper-resources.test.ts test/paper-processor-delivery.test.ts`
+   Result: exit code 1 before implementation; 3 files, 5 new assertions failed as expected (missing PubMed availability/materialization decision, approved_url still created a resource, and missing delivery definition).
+
+2. Focused suite after implementation
+   Command: `npm test -- --run test/tools.test.ts test/paper-resources.test.ts test/paper-processor-delivery.test.ts`
+   Result: 3 files, 18 tests passed; exit code 0.
+
+3. Mandatory Worker gate, first attempt
+   Command: `cd cloudflare-worker && npm run check && npm test`
+   Result: exit code 1; prompt template contained an unescaped backtick (`TS1005`). Fixed without changing behavior.
+
+4. Mandatory Worker gate, second attempt
+   Command: `cd cloudflare-worker && npm run check && npm test`
+   Result: exit code 1; the fixed PubMed reason constant was typed as a union when reading its discriminated field (`TS2339`). Narrowed the constant without changing the contract.
+
+5. Mandatory Worker gate, final
+   Command: `cd cloudflare-worker && npm run check && npm test`
+   Result: TypeScript check passed and 23 files / 126 tests passed; exit code 0.
+
+6. Dedicated Processor Python tests
+   Command: `eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q tests/test_paper_processor_ingestion.py`
+   Result: 8 passed; exit code 0. The pyenv shim emitted only a non-fatal rehash warning.
+
+7. Dedicated Processor Python syntax
+   Command: `eval "$(pyenv init - zsh)"; pyenv shell Agent; python -m compileall -q backend/paper_processor tests/test_paper_processor_ingestion.py`
+   Result: passed; exit code 0. The pyenv shim emitted only a non-fatal rehash warning.
+
+8. Frontend typecheck
+   Command: `cd frontend && npm run typecheck`
+   Result: passed; exit code 0.
+
+9. Frontend lint
+   Command: `cd frontend && npm run lint`
+   Result: passed; exit code 0.
+
+10. Frontend unit suite
+    Command: `cd frontend && npm run test:unit`
+    Result: 12 files / 50 tests passed; exit code 0. Existing React act warnings and Node deprecation warnings were non-fatal.
+
+11. Frontend browser E2E
+    Command: `cd frontend && npm run test:e2e -- chat.spec.ts`
+    Result: first sandbox attempt exit code 1 because local port 3000 bind returned `EPERM`; approved local-only rerun passed 6 tests; exit code 0. The run had one expected proxy refusal for an unavailable local task backend; all six tests passed.
+
+12. Migration/repository hygiene
+    Result: existing local SQLite replay of migrations `0018`–`0021` and idempotent `0021` replay passed; `git diff --check` passed; exit code 0.
+
+13. Secret scan
+    Result: PAPER scope scan found no literal parent credentials, private keys, credential-bearing URLs, long bearer values, or secret values; exit code 0.
+
+14. Remote ref preflight
+    Command: `git ls-remote --heads origin cloudflare-deploy`
+    Result: sandbox-only attempt failed with the DNS error recorded in `baseline.txt`; approved read-only retry returned the exact baseline ref; no write occurred.
+
+15. External Cloudflare operations
+    Result: not run. No remote D1 migration, R2 write, Processor registration, deployment, remote task, Redis ACL change, Secret rotation, Cloudflare configuration change, or live Cloudflare/browser release test was performed.

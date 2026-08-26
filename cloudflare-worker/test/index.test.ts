@@ -15,7 +15,11 @@ describe("Infinity Edge route composition", () => {
   it("keeps the public health endpoint", async () => {
     const response = await worker.fetch(new Request("https://app.test/health"), testEnv());
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "ok", service: "infinity-agents-edge" });
+    expect(await response.json()).toEqual({
+      status: "ok",
+      service: "infinity-agents-edge",
+      readiness: { d1: "configured", resource_bucket: "unconfigured", paper_processor: "unconfigured" },
+    });
   });
 
   it("requires same-origin double-submit CSRF protection for browser mutations", async () => {
@@ -100,6 +104,26 @@ describe("Infinity Edge route composition", () => {
     );
     expect(response.status).toBe(401);
     expect(await response.json()).toMatchObject({ error: { code: "WORKER_AUTH_REQUIRED" } });
+  });
+
+  it("routes the dedicated Paper Processor protocol without browser authentication", async () => {
+    const env = testEnv();
+    env.PAPER_PROCESSOR_ID = "processor-1";
+    env.PAPER_PROCESSOR_SHARED_SECRET = "bootstrap-secret";
+    const connected = await worker.fetch(new Request("https://app.test/api/paper-processor/connect", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-paper-processor-id": "processor-1", "x-paper-processor-token": "bootstrap-secret" },
+      body: JSON.stringify({ instance_id: "instance-1" }),
+    }), env);
+    expect(connected.status).toBe(200);
+    const session = await connected.json() as { processor_session_token: string };
+    const polled = await worker.fetch(new Request("https://app.test/api/paper-processor/poll", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-paper-processor-session": session.processor_session_token },
+      body: "{}",
+    }), env);
+    expect(polled.status).toBe(200);
+    expect(await polled.json()).toEqual({ resource: null });
   });
 
   it("rejects plaintext requests through the retired Worker protocol", async () => {

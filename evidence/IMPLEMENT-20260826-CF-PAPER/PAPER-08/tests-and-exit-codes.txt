@@ -1,0 +1,29 @@
+PAPER-08 verification record
+
+1. Test-first focused regression
+   Command: `npm test -- --run test/tools.test.ts`
+   Result: failed as expected before implementation because the new materialize tool was absent and resource reads still followed the old abstract-only path; exit code 1.
+
+2. Paper tool focused tests
+   Command: `npm test -- --run test/tools.test.ts`
+   Result: 7 tests passed; exit code 0.
+
+3. Tool loop and durable event compatibility
+   Command: `npm test -- --run test/chat.test.ts test/tools.test.ts`
+   Result: 2 files, 23 tests passed; exit code 0.
+
+4. Mandatory Worker type check
+   Command: `cd cloudflare-worker && npm run check`
+   Result: TypeScript check passed; exit code 0.
+
+5. Mandatory Worker full test suite
+   Command: `cd cloudflare-worker && npm test`
+   Result: 21 files, 115 tests passed; exit code 0.
+
+6. Diff hygiene
+   Command: `git diff --check`
+   Result: passed; exit code 0.
+
+7. High-confidence secret scan
+   Scope: changed tool, chat, prompt, database/object access, fake D1, and tests; generated dependencies and evidence excluded.
+   Result: no credential-shaped matches. No parent D1/R2/Redis/Processor/model credential or raw object-store reference was added to browser-facing output, model tool results, logs, or evidence. Exit code 0.

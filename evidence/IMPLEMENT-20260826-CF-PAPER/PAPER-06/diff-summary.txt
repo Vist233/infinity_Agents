@@ -1,0 +1,31 @@
+# PAPER-06 diff summary
+
+PAPER-06 adds the dedicated Paper Processor control plane while preserving the public Worker-v2 boundary:
+
+- `cloudflare-worker/migrations-infinity/0019_paper_processor_sessions.sql` adds hash-only short-lived Processor sessions and partial unique indexes enforcing at most one active attempt per resource and per Processor identity.
+- `cloudflare-worker/src/db.ts` adds session authentication, one-resource claim, lease renewal, ordered stage transitions, fixed-kind object recording, finalize-once, and fenced cancellation helpers. All mutations are conditional on exact resource, attempt, Processor identity, lease hash, fencing epoch, active status, and lease expiry.
+- `cloudflare-worker/src/paper-processor.ts` adds fixed connect/poll/input/renew/stage/object/finalize/cancel routes. Responses never expose R2 keys, parent credentials, or arbitrary caller-selected object paths; uploads are bounded and checksum verified.
+- `cloudflare-worker/src/paper-object-store.ts` adds fixed server-owned `source_pdf`, `text_manifest`, and `image_manifest` put access alongside the existing fixed getter.
+- `cloudflare-worker/src/index.ts` routes the dedicated control plane before browser-cookie/CSRF API handling and leaves `/api/worker/v2/` unchanged.
+- `backend/paper_processor/{__init__.py,client.py,runner.py}` and `backend/Dockerfile.paper-processor` provide a protocol-only, non-root dedicated image scaffold. It does not import or install public Worker, database, object-store, relay, or model runtime dependencies; PDF admission/extraction remains for PAPER-07 onward.
+- `cloudflare-worker/test/fake-d1.ts`, `test/paper-processor.test.ts`, `test/paper-processor-schema.test.ts`, `test/paper-processor-image.test.ts`, and `test/index.test.ts` provide positive and negative control-plane evidence.
+
+Retained prior-card changes are present in the same working tree and were not reverted. No external system was modified.
+
+Post-card SHA-256 (for reproducibility):
+
+- `cloudflare-worker/src/db.ts` `f3b58210e34e1ec204c52565ce47ed6295e5c683740762fda8ce187987551f54`
+- `cloudflare-worker/src/env.ts` `dea1196f833dbb9872aaa75bf2967c32d3a475aadf02983ec2f2f3ac6a695e3f`
+- `cloudflare-worker/src/index.ts` `e2cee21159c3183396acda63f9099bcd4eb6af1fe9c0b18a9f13841fe8cb63bd`
+- `cloudflare-worker/src/paper-object-store.ts` `2298ffbbd84b05abe81dedd7142399fc44c1d65b401e024cc2a4ef7bb58b566e`
+- `cloudflare-worker/src/paper-processor.ts` `4581b90ec314b255d3152b60b9ec49d4ca9d316b02e0fd0cf7ce2dd8efb1d049`
+- `cloudflare-worker/migrations-infinity/0019_paper_processor_sessions.sql` `8908edcc3dae26033b1413b60616cd7157c59c854a4dacd98bdcef07950b23a4`
+- `cloudflare-worker/test/fake-d1.ts` `09e8c77abc01de7d13117325902fdc04b416e78b9c2c49cd8e45cf02185eea80`
+- `cloudflare-worker/test/index.test.ts` `ec510e22636a4d1bba26dada7b46480fa649b274d5b4f1aa88ca332dcc81857a`
+- `cloudflare-worker/test/paper-processor.test.ts` `b38b75881663c4f2fd44281981abf5bdeed620a09055f523916734a6b54d0568`
+- `cloudflare-worker/test/paper-processor-schema.test.ts` `4355795b5d87ef5113388bc6e91fd9782f737c060feb893a20557d5fe9e6c66c`
+- `cloudflare-worker/test/paper-processor-image.test.ts` `e63de1261b69f0415b7b23da4e49dd2122562dd646eac285f8d8b7748421579a`
+- `backend/Dockerfile.paper-processor` `243e5d85c85c9732c6108251cc5bc0866e77830325ea804956aa9ff4d1de3c04`
+- `backend/paper_processor/__init__.py` `7484b66b3352d1d0a268e1939a1a63a5ef928d8d256242d0da3467a9a6cdfe7b`
+- `backend/paper_processor/client.py` `2f7251bef314a4022d1265923d81412355208e1811176d236854daeebc78a3aa`
+- `backend/paper_processor/runner.py` `ed1ece5b8fd3701d970a1bbdfc6d5c2a1ebe9410c489caee2f47963193d7dcdb`

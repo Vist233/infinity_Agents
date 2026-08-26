@@ -14,6 +14,35 @@ describe("chat stream event normalization", () => {
     expect(event).toEqual({ type: "chunk", content: "hello" });
   });
 
+  it("normalizes correlated tool calls and bounded results", () => {
+    const call = normalizeChatEvent(JSON.stringify({
+      type: "tool_call",
+      correlation_id: "client:turn-1",
+      tool_call_id: "call-1",
+      tool_name: "read_paper",
+      status: "pending",
+      arguments_summary: JSON.stringify({ paper_id: "p1" }),
+    }));
+    expect(call).toMatchObject({
+      type: "tool_call",
+      correlation_id: "client:turn-1",
+      tool_call_id: "call-1",
+      tool_name: "read_paper",
+      status: "pending",
+    });
+
+    const result = normalizeChatEvent(JSON.stringify({
+      type: "tool_result",
+      correlation_id: "client:turn-1",
+      tool_call_id: "call-1",
+      tool_name: "read_paper",
+      status: "succeeded",
+      summary: "x".repeat(20_000),
+    }));
+    expect(result?.type).toBe("tool_result");
+    expect((result as { summary?: string }).summary?.length).toBeLessThanOrEqual(2048);
+  });
+
   it("normalizes only a structured task draft event for the To-Do card", () => {
     const event = normalizeChatEvent(JSON.stringify({
       type: "task_draft_created",
@@ -80,6 +109,14 @@ describe("chat stream event normalization", () => {
   it("ignores invalid type", () => {
     const event = normalizeChatEvent(JSON.stringify({ type: "other", data: 1 }));
     expect(event).toBeNull();
+  });
+
+  it("ignores malformed structured SSE instead of treating it as assistant text", () => {
+    expect(normalizeChatEvent('{"type":"tool_result"')).toBeNull();
+  });
+
+  it("does not accept a tool result without a call correlation", () => {
+    expect(normalizeChatEvent(JSON.stringify({ type: "tool_result", status: "succeeded", summary: "x" }))).toBeNull();
   });
 });
 

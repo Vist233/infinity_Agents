@@ -1,0 +1,15 @@
+# PAPER-07 diff summary
+
+Implemented the first complete local PDF materialization path:
+
+- Added a standalone trusted Processor ingestion module with canonical source mapping, public-address DNS/redirect checks, bounded streaming download, PDF magic/content checks, SHA-256 measurement, `pypdf` text/page extraction, PyMuPDF image extraction, PNG normalization, bounded manifests, and fail-closed parser limits.
+- Added dedicated Processor image/runtime dependencies and a loop that reconnects after failure while cleaning temporary workspaces.
+- Added the additive Processor-object metadata migration and Edge persistence for per-page text/image objects, with fixed logical object identifiers and server-side storage reconstruction.
+- Added an owned, bounded private source-PDF upload and exact leased-attempt input route; no browser or public Worker receives parent storage credentials.
+- Added real-PDF fixtures and negative tests for malformed, encrypted, image-only, oversize, non-PDF, private-redirect, parser-limit, stale-upload, duplicate/restart, and workspace-cleanup cases.
+
+Intentional non-changes:
+
+- No public Claude Worker PDF parsing, no Redis PDF/full-text/object-key storage, no PostgreSQL or Hyperdrive production path, and no C7 runtime redesign.
+- No browser pagination/image surface or Agent tool implementation; those belong to later cards.
+- No external deployment or Cloudflare resource mutation.

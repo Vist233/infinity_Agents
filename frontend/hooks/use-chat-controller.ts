@@ -10,15 +10,17 @@ import {
   getRunStateForSession,
   INITIAL_CHAT_STATE,
   isDefaultSessionTitle,
+  getToolTimelineForSession,
   type Message,
   type SessionItem,
   type SessionRunState,
+  type ToolTimelineEntry,
   type TerminalState,
 } from "@/lib/chat-state";
 import {
   createSession,
   deleteSession,
-  listSessionMessages,
+  listSessionHistory,
   listSessions,
   updateSessionTitle,
 } from "@/lib/api/sessions";
@@ -57,6 +59,8 @@ export function useChatController() {
 
   const sessionId = state.sessionId;
   const messages = useMemo(() => getMessagesForSession(state, sessionId), [state, sessionId]);
+  const toolTimeline = useMemo(() => getToolTimelineForSession(state, sessionId), [state, sessionId]);
+  const legacyTextOnly = sessionId ? state.sessionLegacyHistoryMap[sessionId] === true : false;
   const currentRunState = useMemo(() => getRunStateForSession(state, sessionId), [state, sessionId]);
   const isLoading = currentRunState.running;
 
@@ -134,7 +138,21 @@ export function useChatController() {
     }
 
     const promise = (async () => {
-      const mapped = await listSessionMessages(apiBase, targetSessionId);
+      const history = await listSessionHistory(apiBase, targetSessionId);
+      const mapped = history.messages;
+      dispatch({
+        type: "set_session_tool_timeline",
+        sessionId: targetSessionId,
+        timeline: history.timeline.map((event): ToolTimelineEntry => ({
+          correlationId: event.turn_id,
+          toolCallId: event.tool_call_id,
+          toolName: event.tool_name,
+          status: event.status,
+          summary: event.summary,
+          ...(event.arguments_summary ? { argumentsSummary: event.arguments_summary } : {}),
+        })),
+        legacyTextOnly: history.legacyTextOnly,
+      });
       let merged = mapped;
       dispatch({
         type: "update_session_messages",
@@ -517,12 +535,33 @@ export function useChatController() {
         if (eventPayload.type === "tool_call") {
           const toolName = eventPayload.tool_name;
           if (!toolName) return;
+          dispatch({
+            type: "upsert_session_tool_timeline",
+            sessionId: targetSessionId!,
+            entry: {
+              correlationId: eventPayload.correlation_id,
+              toolCallId: eventPayload.tool_call_id,
+              toolName,
+              status: eventPayload.status,
+              summary: "",
+              ...(eventPayload.arguments_summary ? { argumentsSummary: eventPayload.arguments_summary } : {}),
+            },
+          });
           setSessionRunState(targetSessionId!, (prev) => ({
             ...prev,
             hasReceivedToolCall: true,
             toolName,
             activeTools: prev.activeTools.includes(toolName) ? prev.activeTools : [...prev.activeTools, toolName],
           }));
+          return;
+        }
+        if (eventPayload.type === "tool_result") {
+          dispatch({
+            type: "update_session_tool_timeline",
+            sessionId: targetSessionId!,
+            toolCallId: eventPayload.tool_call_id,
+            patch: { status: eventPayload.status, summary: eventPayload.summary },
+          });
           return;
         }
         if (eventPayload.type === "task_draft_created" || eventPayload.type === "task_draft_updated") {
@@ -712,6 +751,18 @@ export function useChatController() {
           return;
         }
         if (eventPayload.type === "tool_call") {
+          dispatch({
+            type: "upsert_session_tool_timeline",
+            sessionId: targetSessionId,
+            entry: {
+              correlationId: eventPayload.correlation_id,
+              toolCallId: eventPayload.tool_call_id,
+              toolName: eventPayload.tool_name,
+              status: eventPayload.status,
+              summary: "",
+              ...(eventPayload.arguments_summary ? { argumentsSummary: eventPayload.arguments_summary } : {}),
+            },
+          });
           setSessionRunState(targetSessionId, (prev) => ({
             ...prev,
             hasReceivedToolCall: true,
@@ -720,6 +771,15 @@ export function useChatController() {
               ? prev.activeTools
               : [...prev.activeTools, eventPayload.tool_name],
           }));
+          return;
+        }
+        if (eventPayload.type === "tool_result") {
+          dispatch({
+            type: "update_session_tool_timeline",
+            sessionId: targetSessionId,
+            toolCallId: eventPayload.tool_call_id,
+            patch: { status: eventPayload.status, summary: eventPayload.summary },
+          });
           return;
         }
         if (eventPayload.type === "task_confirmation") {
@@ -827,6 +887,8 @@ export function useChatController() {
     apiBase,
     state,
     messages,
+    toolTimeline,
+    legacyTextOnly,
     currentRunState,
     isLoading,
     statusText,

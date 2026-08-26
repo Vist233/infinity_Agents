@@ -1,0 +1,15 @@
+# PAPER-09 diff summary
+
+Implemented private paper image delivery and the resource lifecycle safety loop:
+
+- Added same-origin authenticated image delivery with owned-resource checks, manifest-backed image IDs, fixed hierarchical R2 keys, private/no-store headers, and an 8 MiB response/object cap.
+- Added explicit `PAPER_IMAGE_ANALYSIS_EGRESS=enabled` policy gating and a bounded StepFun-compatible multimodal provider request. Image bytes remain server-side; tool output contains only bounded analysis text and provenance.
+- Added structured D1 audit events with allowlisted stages/outcomes and forbidden secret/path/payload metadata checks. Health readiness exposes only configured/unconfigured binding flags.
+- Added cancellation and deletion revocation for resources and active attempts, a unique cleanup job, stale-claim recovery, transient retry, fixed-prefix R2 cleanup, and idempotent completion/failure recording.
+- Added positive and negative fake-D1/R2/provider regressions for ownership, guessed IDs, byte limits, egress denial, provider success/failure, deletion during processing, cancellation, retry, stale recovery, and migration replay.
+
+Intentional non-changes:
+
+- No raw PDF, full text, image bytes, R2 keys, provider credentials, or parent D1/R2/Redis/Processor credentials are returned to the browser, model, SSE, Redis, logs, or evidence.
+- No public Claude Worker, PostgreSQL, Hyperdrive, C7 Worker-v2, or Redis contract was changed.
+- No external deployment or Cloudflare resource mutation.

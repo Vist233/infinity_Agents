@@ -1,0 +1,22 @@
+# PAPER-04 diff summary
+
+PAPER-04 changes are limited to the durable tool timeline/history and its tests:
+
+- Edge: `cloudflare-worker/src/sessions.ts` now authorizes the session first, derives text from canonical `chat_events`, emits a collapsed per-tool history response, caps text/arguments/results, redacts sensitive argument keys, and omits object keys and raw payload fields. Legacy `chat_messages` history remains readable and is explicitly labeled.
+- Edge SSE: `cloudflare-worker/src/chat.ts` now emits correlated status, `tool_call`, and `tool_result` events with bounded/redacted display summaries; provider-facing persistence remains in the PAPER-03 canonical ledger.
+- Frontend API/state: `frontend/lib/api/sessions.ts` and `frontend/lib/chat-state.ts` add bounded history normalization, foreign-session filtering, per-session timeline hydration, legacy labeling, and call/result collapse/update actions.
+- Frontend stream/controller/UI: `frontend/lib/ws/chat-stream.ts`, `frontend/hooks/use-chat-controller.ts`, `frontend/components/chat/ChatWorkspace.tsx`, and `frontend/components/chat/MessagePane.tsx` parse safe correlated events, retain live status, hydrate after reload, and render expandable tool rows.
+- Tests: added/updated Edge session/chat tests, frontend stream/session/state tests, and `frontend/e2e/chat.spec.ts` coverage for live calls, result transitions, reload restoration, malformed/foreign/long payloads, legacy history, and task confirmation cancellation.
+
+The working tree also contains retained PAPER-01 through PAPER-03 changes and evidence. The user-provided design/plan documents remain untracked and were not modified.
+
+Post-card SHA-256 (for reproducibility):
+
+- `cloudflare-worker/src/chat.ts` `4b34c882f234ecc2e98700d554a4ae8414a621de5c45474180e8c90d880dfc23`
+- `cloudflare-worker/src/sessions.ts` `ef02c143b5840cf09facd64d58f403ee7c3a198c6f3d2f594203738819445fde`
+- `frontend/lib/ws/chat-stream.ts` `b31ab9a48739bd02b036ed0e45af17323811d7df6788f638dd2a4a959b4421c5`
+- `frontend/lib/api/sessions.ts` `8abf507f6cbe4646ae0fe5b51ba9e9f837f2c6caee0bfbdaa761d832b13da046`
+- `frontend/hooks/use-chat-controller.ts` `dfc124184452828ed3fdf5ffecad243f39bd18efeab6afc87f322ae29f0e2b32`
+- `frontend/lib/chat-state.ts` `35c9c335b4100e8fda9d8b4304186cf704997e080710282ec7ab813b6fea5294`
+- `frontend/components/chat/MessagePane.tsx` `d3430e3dbeacec3dee52f8f649e9550f0b9310460e3314385bb76e3cd4d7ebc6`
+- `frontend/e2e/chat.spec.ts` `84d4b97abd37be1ae96e71756edbc1faf2130a2aeef51d708116a1ecd14ecce4`

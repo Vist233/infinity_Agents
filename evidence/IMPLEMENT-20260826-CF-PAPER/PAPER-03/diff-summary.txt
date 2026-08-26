@@ -1,0 +1,16 @@
+# PAPER-03 diff summary
+
+## Intentional changes
+
+- `cloudflare-worker/src/chat.ts`: persist user/call/result/final/error events, correlate turns, replay complete event history into provider message shape, handle task-confirmation continuation events, normalize tool arguments, bound/defer large results, and canonicalize streamed tool-call index order.
+- `cloudflare-worker/src/db.ts`: add event lookup, session deletion cleanup, and idempotent same-session tool-result insertion used by the chat loop.
+- `cloudflare-worker/test/chat.test.ts`: add positive and negative durable-loop/replay/failure regressions and update the previous persistence assertion to prove no `chat_messages` dual-write.
+- `cloudflare-worker/test/fake-d1.ts`: add event-result/session/failure behavior for local tests.
+- Evidence files under this directory.
+
+## Intentional non-changes
+
+- No new migration was changed in this card; PAPER-02's additive schema is retained.
+- No frontend/SSE timeline change was made; stable tool timeline rendering is PAPER-04.
+- No R2 object store was added yet. Oversized results use a bounded D1 summary plus an explicit deferred-reference stub permitted before the object-store card.
+- No Python runtime, public Claude-Code Worker, C7 Worker v2, Redis, remote D1, R2, Processor, or Cloudflare configuration changed.

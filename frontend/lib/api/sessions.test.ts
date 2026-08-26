@@ -1,6 +1,7 @@
 import {
   createSession,
   deleteSession,
+  listSessionHistory,
   listSessionMessages,
   listSessions,
   updateSessionTitle,
@@ -48,6 +49,69 @@ describe("sessions api", () => {
 
     const messages = await listSessionMessages("http://localhost:8008", "s1");
     expect(messages).toHaveLength(2);
+  });
+
+  it("hydrates only the requested session's bounded timeline and hides object keys", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        messages: [{ role: "user", content: "read" }, { role: "assistant", content: "done" }],
+        events: [
+          {
+            session_id: "s1",
+            event_id: 2,
+            turn_id: "turn-1",
+            event_type: "tool_call",
+            tool_call_id: "call-1",
+            tool_name: "read_paper",
+            status: "pending",
+            arguments_summary: JSON.stringify({ paper_id: "p1" }),
+          },
+          {
+            session_id: "other-session",
+            event_id: 3,
+            turn_id: "turn-x",
+            event_type: "tool_result",
+            tool_call_id: "call-x",
+            tool_name: "read_paper",
+            status: "succeeded",
+            summary: "foreign",
+            object_key: "paper/other/source.pdf",
+          },
+          {
+            session_id: "s1",
+            event_id: 4,
+            turn_id: "turn-1",
+            event_type: "tool_result",
+            tool_call_id: "call-1",
+            tool_name: "read_paper",
+            status: "succeeded",
+            summary: "y".repeat(10_000),
+            object_key: "paper/s1/secret.pdf",
+          },
+        ],
+        legacy_text_only: false,
+      }),
+    } as Response);
+
+    const history = await listSessionHistory("http://localhost:8008", "s1");
+    expect(history.messages).toHaveLength(2);
+    expect(history.timeline).toHaveLength(1);
+    expect(history.timeline.every((event) => event.session_id === "s1")).toBe(true);
+    expect(history.timeline[0]).toMatchObject({ status: "succeeded", summary: "y".repeat(2048) });
+    expect(history.timeline[0].summary?.length).toBeLessThanOrEqual(2048);
+    expect(history.timeline[0]).not.toHaveProperty("object_key");
+  });
+
+  it("marks an old text-only array response as legacy", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [{ role: "assistant", content: "old answer" }],
+    } as Response);
+
+    const history = await listSessionHistory("http://localhost:8008", "s1");
+    expect(history.legacyTextOnly).toBe(true);
+    expect(history.timeline).toEqual([]);
   });
 
   it("throws api error on non-2xx", async () => {

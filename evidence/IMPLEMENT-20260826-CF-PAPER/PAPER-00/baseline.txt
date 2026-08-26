@@ -1,0 +1,16 @@
+branch: cloudflare-deploy
+baseline_commit: 61adfab9d18e457b076ce8918afc9124124c3273
+head_summary: 61adfab fix: remove unused import and trailing whitespace
+c7_contract_commit: 57f6fb9 (referenced by HANDOFF.md and Paper Workspace design)
+worktree_status_at_start:
+  ?? docs/CLOUDFLARE_PAPER_WORKSPACE_DESIGN.md
+  ?? docs/CLOUDFLARE_PAPER_WORKSPACE_EXECUTION_PLAN.md
+  These are pre-existing user-provided untracked inputs and were not modified.
+relevant_file_hashes_at_start:
+  HANDOFF.md: 024e893be82341a497bbbdfaa37429e3516718e78d2b5232c80360b9999d00c0
+  docs/ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md: cf9efd83f4e6fd54fe08e670dd05533bbf676b763ff3ef978256846099c523cd
+  cloudflare-worker/src/chat.ts: d323d8d59e9facfa23a1250745e4630e84e4a3d52a086a6ae6f1f4325d35002d
+  cloudflare-worker/src/tools.ts: 3bc96a9411999e461aa576a1ce9696454f29a4bab831b250e1d7adb8b27d21cc
+  cloudflare-worker/src/db.ts: 7e7d1c7914c4253841d7429bf67896b2b0ebcb04bfc52e2d99a95a75a5a79425
+  cloudflare-worker/migrations-infinity/0001_init.sql: 81f3c1ec3466a9ff802416655997e35e1367794852da3e01162afc77171d348b
+  cloudflare-worker/wrangler.jsonc: 19e5e728f1fc5fd6417dccc966d31c9512986ffea963fe8146c38d3f7e9aa71e

@@ -1,0 +1,10 @@
+# PAPER-09.5 independent review summary
+
+Review performed after the final local gates and before commit.
+
+- Source contract: numeric `pubmed:<PMID>` remains abstract-only; only `pubmed:PMC<PMCID>` enters `sourceForPaperRef`; no PMID-to-PMCID claim or arbitrary fetch path was introduced.
+- Resource entry point: `approved_url` is rejected before `getChatSession`, `createPaperResource`, or `linkPaperResource`; the regression asserts zero D1 resources and links.
+- Delivery artifact: JSON and runbook are versioned, contain all required operational sections, use only names for secrets, leave host/digest unresolved, and carry explicit approval blockers.
+- Security boundary: no public Worker or Processor path receives D1/R2/Redis parent credentials; no raw payload is placed in browser output, SSE, Redis, logs, or evidence.
+- C7 preservation: no public Worker-v2 pool, lease/fencing, Artifact, Redis relay, PostgreSQL, or Hyperdrive production path was changed by PAPER-09.5.
+- Findings: no blocking local finding. Concrete runtime profile and immutable Processor image digest remain PAPER-10 release prerequisites.

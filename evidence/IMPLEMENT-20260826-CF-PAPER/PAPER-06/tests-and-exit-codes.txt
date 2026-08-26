@@ -1,0 +1,26 @@
+# PAPER-06 tests and exit codes
+
+Branch: `cloudflare-deploy`
+Baseline: `61adfab9d18e457b076ce8918afc9124124c3273`
+
+Pre-implementation regression evidence (expected failures, no tests skipped):
+
+- `cd cloudflare-worker && npm test -- --run test/paper-processor.test.ts test/paper-processor-schema.test.ts` -> exit 1. The new protocol tests failed at collection because `src/paper-processor.ts` and migration `0019_paper_processor_sessions.sql` were not yet implemented.
+
+Focused post-implementation:
+
+- `cd cloudflare-worker && npm test -- --run test/paper-processor.test.ts test/paper-processor-schema.test.ts test/paper-processor-image.test.ts test/index.test.ts` -> exit 0; 4 files, 18 tests passed.
+- `cd cloudflare-worker && npm run check` -> exit 0.
+- `eval "$(pyenv init - zsh)"; pyenv shell Agent; python -m compileall -q backend/paper_processor` -> exit 0; pyenv emitted only a non-fatal local shim rehash warning.
+- SQLite migration check: `0018_paper_resources.sql` + `0019_paper_processor_sessions.sql` applied to one temporary database, `0019` re-applied, and table/index inspection found `paper_processor_sessions`, both active-attempt indexes, and all PAPER-05 resource tables -> exit 0.
+
+Mandatory Edge gate after implementation:
+
+- `cd cloudflare-worker && npm run check && npm test` -> exit 0; 21 files, 110 tests passed.
+
+Coverage includes independent bootstrap/session authentication, hash-only session storage, one active claim per resource and Processor, resource/attempt/fencing/lease swaps, stale and expired leases, ordered stage transitions, checksum-verified fixed-kind upload, missing-manifest/duplicate finalize, positive and duplicate cancel, expired session, broad listing, public Worker credential rejection, Edge route composition, and dedicated image boundary checks.
+
+Repository hygiene:
+
+- `git diff --check` -> exit 0.
+- No deployment, remote D1 migration, remote R2 write, Processor registration, Redis ACL change, secret rotation, Cloudflare configuration change, or remote task was performed.

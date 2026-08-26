@@ -1,0 +1,20 @@
+# Dedicated Paper Processor image. It is deliberately separate from the public
+# code-execution Worker image and contains only the bounded source/extraction
+# runtime plus the narrow HTTPS control protocol client.
+FROM python:3.12-slim
+
+RUN groupadd --system --gid 10002 paperprocessor \
+    && useradd --system --uid 10002 --gid 10002 --create-home --home-dir /home/paperprocessor paperprocessor
+
+WORKDIR /app
+COPY backend/__init__.py ./backend/__init__.py
+COPY backend/paper_processor ./backend/paper_processor
+COPY backend/requirements.paper-processor.txt ./requirements.paper-processor.txt
+RUN pip install --no-cache-dir -r requirements.paper-processor.txt
+RUN chown -R 10002:10002 /app /home/paperprocessor
+
+USER 10002:10002
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python", "-m", "backend.paper_processor.runner"]

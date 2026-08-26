@@ -1,0 +1,13 @@
+card=PAPER-06
+branch=cloudflare-deploy
+baseline_commit=61adfab9d18e457b076ce8918afc9124124c3273
+worktree_baseline=dirty_preexisting
+preexisting_changes=local PAPER-01/PAPER-02/PAPER-03/PAPER-04/PAPER-05 implementation and evidence; user-provided design/plan documents
+external_authorization=none
+
+Baseline file hashes (HEAD, before PAPER-06 edits):
+cloudflare-worker/src/db.ts 474ec4553bea1567644f03103394d91d1eb4d1d8910a8088d59c15ea5937f3ef
+cloudflare-worker/src/index.ts 8684b420caffe59a9f7c8e21a300487c0644957e010b9e70777ad69f69b90775
+cloudflare-worker/src/env.ts f794224a8ab48f1359247e871fbd14ed020327d0abedea60cba465ec99e0dc66
+cloudflare-worker/src/paper-object-store.ts 055956eb1d57e2d2d57682007477d81b91a718d4f8159ac03a13d6b50273e69d
+cloudflare-worker/migrations-infinity/0018_paper_resources.sql 1f4362aba86125bfa5c5cddb3b603396e60723a2f93f2f38ffe3a94cd35e724e

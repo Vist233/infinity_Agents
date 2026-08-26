@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleCancelChatTaskConfirmation, handleChat } from "../src/chat";
+import { handleCancelChatTaskConfirmation, handleChat, rebuildModelMessages } from "../src/chat";
 import { makeEnv } from "./fake-d1";
 import type { AuthedUser } from "../src/auth";
+import type { ChatEventRow } from "../src/db";
 
 const ARXIV_XML = `<?xml version="1.0"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
@@ -44,6 +45,15 @@ function sseResponse(frames: string[]): Response {
       controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       controller.close();
     }
+  });
+  return { ok: true, status: 200, body: stream } as unknown as Response;
+}
+
+function interruptedResponse(): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(new Error("upstream stream interrupted"));
+    },
   });
   return { ok: true, status: 200, body: stream } as unknown as Response;
 }
@@ -159,9 +169,23 @@ describe("handleChat", () => {
 
     // The loop surfaces a tool call, then streams content and finishes.
     expect(types).toContain("tool_call");
+    expect(types).toContain("tool_result");
     expect(types).toContain("chunk");
     expect(types).toContain("done");
-    expect(events.find((e) => e.type === "tool_call")?.tool_name).toBe("search_paper");
+    expect(events.find((e) => e.type === "status")).toMatchObject({ correlation_id: expect.any(String) });
+    expect(events.find((e) => e.type === "tool_call" && e.status === "processing")).toMatchObject({
+      correlation_id: expect.any(String),
+      tool_call_id: "call_1",
+      tool_name: "search_paper",
+      status: "processing",
+    });
+    expect(events.find((e) => e.type === "tool_result")).toMatchObject({
+      correlation_id: expect.any(String),
+      tool_call_id: "call_1",
+      tool_name: "search_paper",
+      status: "succeeded",
+    });
+    expect(events.find((e) => e.type === "tool_result")).not.toHaveProperty("object_key");
 
     const finalText = events
       .filter((e) => e.type === "chunk")
@@ -173,11 +197,26 @@ describe("handleChat", () => {
     expect(stepfunCalls()).toBe(2);
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("export.arxiv.org"))).toBe(true);
 
-    // The user turn and the assistant answer were both persisted.
-    const roles = db.chatMessages.map((m) => m.role);
-    expect(roles).toContain("user");
-    expect(roles).toContain("assistant");
-    expect(db.chatMessages.find((m) => m.role === "assistant")?.content).toBe("Found 1 paper.");
+    // The user turn, exact tool call/result, and assistant answer are persisted
+    // in the canonical event ledger; legacy chat_messages is not dual-written.
+    expect(db.chatMessages).toHaveLength(0);
+    expect(db.chatEvents.map((event) => event.event_type)).toEqual([
+      "user_message",
+      "tool_call",
+      "tool_result",
+      "assistant_message",
+    ]);
+    expect(db.chatEvents.find((event) => event.event_type === "tool_call")).toMatchObject({
+      tool_call_id: "call_1",
+      tool_name: "search_paper",
+      tool_arguments_json: '{"query":"attention"}',
+      status: "pending",
+    });
+    expect(db.chatEvents.find((event) => event.event_type === "tool_result")).toMatchObject({
+      tool_call_id: "call_1",
+      status: "succeeded",
+    });
+    expect(db.chatEvents.find((event) => event.event_type === "assistant_message")?.content).toBe("Found 1 paper.");
 
     // One conversation consumed exactly one daily-quota unit.
     expect([...db.dailyUsage.values()][0]).toBe(1);
@@ -233,6 +272,7 @@ describe("handleChat", () => {
       "status",
       "status",
       "chunk",
+      "tool_call",
       "tool_call",
       "status",
       "task_confirmation",
@@ -350,5 +390,153 @@ describe("handleChat", () => {
     expect(requestBodies[1]?.tool_choice).toBeUndefined();
     expect(events.map((event) => event.type)).toContain("task_confirmation");
     expect([...db.chatTaskConfirmations.values()][0]?.status).toBe("pending");
+  });
+
+  it("persists multiple tool calls in index order even when stream chunks arrive out of order", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("s1", "user-1");
+    let stepfunCall = 0;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.includes("stepfun.test")) {
+        if (url.includes("export.arxiv.org")) return textResponse(ARXIV_XML);
+        return jsonResponse({ esearchresult: { idlist: [] } });
+      }
+      stepfunCall += 1;
+      if (stepfunCall === 1) {
+        return sseResponse([
+          JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 1, id: "call-1", function: { name: "search_paper", arguments: '{"query":"one"}' } }] }, finish_reason: null }] }),
+          JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "call-0", function: { name: "search_paper", arguments: '{ "query": "zero" }' } }] }, finish_reason: null }] }),
+          JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+        ]);
+      }
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<Record<string, unknown>> };
+      const assistant = body.messages?.find((message) => message.role === "assistant" && Array.isArray(message.tool_calls));
+      expect((assistant?.tool_calls as Array<{ id: string }>).map((call) => call.id)).toEqual(["call-0", "call-1"]);
+      const results = body.messages?.filter((message) => message.role === "tool");
+      expect(results?.map((result) => result.tool_call_id)).toEqual(["call-0", "call-1"]);
+      return sseResponse([JSON.stringify({ choices: [{ delta: { content: "两个结果已整理。" }, finish_reason: "stop" }] })]);
+    }) as unknown as typeof fetch;
+
+    const response = await handleChat(makeRequest("s1", "find two papers"), env, USER);
+    await readSse(response);
+    expect(stepfunCall).toBe(2);
+    expect(db.chatEvents.filter((event) => event.event_type === "tool_call").map((event) => event.tool_call_id))
+      .toEqual(["call-0", "call-1"]);
+  });
+
+  it("rebuilds a durable tool call/result pair for the next request after refresh", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("s1", "user-1");
+    installStepFunMock();
+    await readSse(await handleChat(makeRequest("s1", "find attention papers"), env, USER));
+
+    const replay = { body: null as { messages?: Array<Record<string, unknown>> } | null };
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("stepfun.test")) {
+        replay.body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<Record<string, unknown>> };
+        return sseResponse([JSON.stringify({ choices: [{ delta: { content: "已从历史工具结果继续。" }, finish_reason: "stop" }] })]);
+      }
+      return textResponse("");
+    }) as unknown as typeof fetch;
+
+    await readSse(await handleChat(makeRequest("s1", "continue", "refresh-1"), env, USER));
+    const assistant = replay.body?.messages?.find((message) => message.role === "assistant" && Array.isArray(message.tool_calls));
+    expect(assistant).toMatchObject({ tool_calls: [{ id: "call_1", function: { name: "search_paper", arguments: '{"query":"attention"}' } }] });
+    expect(replay.body?.messages?.some((message) => message.role === "tool" && message.tool_call_id === "call_1")).toBe(true);
+  });
+
+  it("replays a completed idempotent request without calling the provider again", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("s1", "user-1");
+    const { stepfunCalls } = installStepFunMock();
+    await readSse(await handleChat(makeRequest("s1", "find attention papers", "same-request"), env, USER));
+    const eventCount = db.chatEvents.length;
+
+    const retry = await handleChat(makeRequest("s1", "find attention papers", "same-request"), env, USER);
+    expect((await readSse(retry)).map((event) => event.type)).toEqual(["chunk", "done"]);
+    expect(stepfunCalls()).toBe(2);
+    expect(db.chatEvents).toHaveLength(eventCount);
+  });
+
+  it("records a failed tool result and terminal error, then releases the idempotency guard", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("s1", "user-1");
+    db.failNextPaperCacheRead = true;
+    const { stepfunCalls } = installStepFunMock();
+
+    const response = await handleChat(makeRequest("s1", "find attention papers", "tool-failure"), env, USER);
+    const events = await readSse(response);
+    expect(events.some((event) => event.type === "error")).toBe(true);
+    expect(db.chatEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event_type: "tool_result", status: "failed", tool_call_id: "call_1" }),
+      expect.objectContaining({ event_type: "error", status: "failed" }),
+    ]));
+    expect(db.chatRequestIdempotency.size).toBe(0);
+    expect(stepfunCalls()).toBe(1);
+  });
+
+  it("releases idempotency and records a terminal event when the first D1 event write fails", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("s1", "user-1");
+    db.failNextChatEventInsert = true;
+
+    await expect(handleChat(makeRequest("s1", "hello", "d1-failure"), env, USER)).rejects.toThrow("D1 write failed");
+    expect(db.chatRequestIdempotency.size).toBe(0);
+    expect(db.chatEvents).toEqual([expect.objectContaining({ event_type: "error", status: "failed" })]);
+  });
+
+  it("records a terminal error for an interrupted provider stream", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("s1", "user-1");
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("stepfun.test")) return interruptedResponse();
+      return textResponse("");
+    }) as unknown as typeof fetch;
+
+    const response = await handleChat(makeRequest("s1", "hello", "stream-failure"), env, USER);
+    const events = await readSse(response);
+    expect(events.some((event) => event.type === "error")).toBe(true);
+    expect(db.chatEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event_type: "user_message" }),
+      expect.objectContaining({ event_type: "error", status: "failed" }),
+    ]));
+    expect(db.chatRequestIdempotency.size).toBe(0);
+  });
+
+  it("records one terminal error when the provider repeats a tool-call ID", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("s1", "user-1");
+    let stepfunCall = 0;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (!String(input).includes("stepfun.test")) return textResponse("");
+      stepfunCall += 1;
+      return sseResponse([
+        JSON.stringify({ choices: [{ delta: { tool_calls: [
+          { index: 0, id: "duplicate-call", function: { name: "search_paper", arguments: '{"query":"one"}' } },
+          { index: 1, id: "duplicate-call", function: { name: "search_paper", arguments: '{"query":"two"}' } },
+        ] }, finish_reason: "tool_calls" }] }),
+      ]);
+    }) as unknown as typeof fetch;
+
+    const response = await handleChat(makeRequest("s1", "duplicate call", "duplicate-call-request"), env, USER);
+    expect((await readSse(response)).some((event) => event.type === "error")).toBe(true);
+    expect(db.chatEvents.filter((event) => event.event_type === "tool_call")).toHaveLength(1);
+    expect(db.chatEvents.filter((event) => event.event_type === "error")).toHaveLength(1);
+    expect(stepfunCall).toBe(1);
+  });
+
+  it("does not replay an incomplete historical tool call or a foreign session result", async () => {
+    const incomplete: ChatEventRow[] = [
+      { event_id: 1, session_id: "s1", turn_id: "turn-1", event_type: "user_message", role: "user", content: "question", tool_call_id: null, tool_name: null, tool_arguments_json: null, result_summary: null, result_object_key: null, result_sha256: null, result_bytes: null, status: "completed", created_at: 1 },
+      { event_id: 2, session_id: "s1", turn_id: "turn-1", event_type: "tool_call", role: "assistant", content: null, tool_call_id: "call-1", tool_name: "search_paper", tool_arguments_json: '{"query":"q"}', result_summary: null, result_object_key: null, result_sha256: null, result_bytes: null, status: "pending", created_at: 2 },
+      { event_id: 3, session_id: "s2", turn_id: "turn-1", event_type: "tool_result", role: "tool", content: null, tool_call_id: "call-1", tool_name: null, tool_arguments_json: null, result_summary: "foreign", result_object_key: null, result_sha256: null, result_bytes: 7, status: "succeeded", created_at: 3 },
+    ];
+    const messages = rebuildModelMessages(incomplete);
+    expect(messages).toEqual([
+      { role: "system", content: expect.any(String) },
+      { role: "user", content: "question" },
+    ]);
   });
 });

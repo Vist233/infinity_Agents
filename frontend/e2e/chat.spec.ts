@@ -108,6 +108,121 @@ test("switches session and deletes selected session", async ({ page }) => {
   await expect(page.getByTestId("session-row-s2")).toHaveCount(0);
 });
 
+test("shows a durable tool trace while running and after reload", async ({ page }) => {
+  const sessions = [{ session_id: "s1", title: "Paper chat", created_at: "", updated_at: "" }];
+  const history = {
+    messages: [{ role: "user", content: "find a paper" }, { role: "assistant", content: "Found it." }],
+    events: [
+      {
+        session_id: "s1",
+        event_id: 2,
+        turn_id: "client:turn-1",
+        event_type: "tool_call",
+        tool_call_id: "call-1",
+        tool_name: "search_paper",
+        status: "pending",
+        summary: "",
+        arguments_summary: '{"query":"attention"}',
+      },
+      {
+        session_id: "s1",
+        event_id: 3,
+        turn_id: "client:turn-1",
+        event_type: "tool_result",
+        tool_call_id: "call-1",
+        tool_name: "search_paper",
+        status: "succeeded",
+        summary: "{\"count\":1}",
+      },
+    ],
+    legacy_text_only: false,
+  };
+
+  await page.route("**/api/sessions", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ status: 200, body: JSON.stringify(sessions), contentType: "application/json" });
+      return;
+    }
+    await route.continue();
+  });
+  await page.route("**/api/sessions/s1/messages", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify(history), contentType: "application/json" });
+  });
+  await page.route("**/api/chat", async (route) => {
+    const body = [
+      { type: "status", phase: "tool_running", correlation_id: "client:live-1", elapsed_ms: 1, attempt: 1, max_attempts: 1, tool_name: "search_paper" },
+      { type: "tool_call", correlation_id: "client:live-1", tool_call_id: "call-live", tool_name: "search_paper", status: "processing", arguments_summary: '{"query":"attention"}' },
+      { type: "tool_result", correlation_id: "client:live-1", tool_call_id: "call-live", tool_name: "search_paper", status: "succeeded", summary: '{"count":1}' },
+      { type: "chunk", content: "Found it." },
+      { type: "done" },
+    ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+    await route.fulfill({ status: 200, body, contentType: "text/event-stream" });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Paper chat" }).click();
+  await expect(page.getByTestId("tool-timeline")).toBeVisible();
+  await expect(page.getByTestId("tool-trace-call-1")).toContainText("search_paper");
+  await expect(page.getByTestId("tool-trace-call-1")).toContainText("succeeded");
+
+  const composer = page.locator("textarea");
+  await composer.fill("find another paper");
+  await composer.press("Enter");
+  await expect(page.getByTestId("tool-trace-call-live")).toBeVisible();
+  await expect(page.getByTestId("tool-trace-call-live")).toContainText("succeeded");
+
+  await page.reload();
+  await page.getByRole("button", { name: "Paper chat" }).click();
+  await expect(page.getByTestId("tool-trace-call-1")).toContainText("succeeded");
+  await expect(page.getByText("paper/s1")).toHaveCount(0);
+});
+
+test("keeps task confirmation visible and cancellable after a tool call", async ({ page }) => {
+  await page.route("**/api/sessions", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        body: JSON.stringify([{ session_id: "s1", title: "Task chat", created_at: "", updated_at: "" }]),
+        contentType: "application/json",
+      });
+      return;
+    }
+    await route.continue();
+  });
+  await page.route("**/api/sessions/s1/messages", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify({ messages: [], events: [], legacy_text_only: false }), contentType: "application/json" });
+  });
+  await page.route("**/api/chat/task-confirmation/cancel", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify({ status: "cancelled" }), contentType: "application/json" });
+  });
+  await page.route("**/api/chat", async (route) => {
+    const body = [
+      { type: "tool_call", correlation_id: "client:task-1", tool_call_id: "task-call-1", tool_name: "request_task_creation", status: "processing", arguments_summary: "{}" },
+      {
+        type: "task_confirmation",
+        confirmation_id: "confirmation-1",
+        tool_name: "request_task_creation",
+        title: "Background analysis",
+        analysis_type: "generic",
+        research_question: "Run the analysis",
+        method_document_name: "execution.md",
+        method_document_content: "# Execute",
+        dataset_name: "data.zip",
+      },
+    ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+    await route.fulfill({ status: 200, body, contentType: "text/event-stream" });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Task chat" }).click();
+  await page.locator("textarea").fill("create a background analysis task");
+  await page.locator("textarea").press("Enter");
+  await expect(page.getByText("待确认的分析任务", { exact: true })).toBeVisible();
+  await expect(page.getByText("Run the analysis", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "取消草案" }).last().click();
+  await expect(page.getByText("待确认的分析任务", { exact: true })).toHaveCount(0);
+});
+
 test("mobile drawer keeps workspace-specific actions available", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route("**/api/sessions", async (route) => {

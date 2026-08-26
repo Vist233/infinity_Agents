@@ -1,0 +1,9 @@
+PAPER-07 baseline
+date=2026-08-26
+branch=cloudflare-deploy
+baseline_commit=61adfab9d18e457b076ce8918afc9124124c3273
+baseline_contract_ref=57f6fb9f4a788d0f2d2111fb2e423b59cfc0df4a
+
+The working tree already contained the completed PAPER-01 through PAPER-06 changes and the two user-provided design/plan documents before PAPER-07 started. Those changes were preserved and not reset. PAPER-06 evidence is the historical pre-card reference for the Processor control protocol and its migration/session files.
+
+PAPER-07 was limited to the dedicated Processor ingestion runtime, its dependency/image definition, additive Processor-object metadata, the owned private-upload/input bridge, and their focused tests. No remote environment was contacted.

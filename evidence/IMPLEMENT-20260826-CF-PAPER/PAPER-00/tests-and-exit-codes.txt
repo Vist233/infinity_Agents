@@ -1,0 +1,11 @@
+PAPER-00 focused checks:
+- No focused regression test applies: this card is baseline inventory/evidence only and permits no product code change.
+
+Mandatory Edge suite:
+- Command: `cd cloudflare-worker && npm run check && npm test`
+- Exit code: 0
+- `npm run check`: TypeScript check passed.
+- `npm test`: 14 test files passed; 66 tests passed; 0 failed.
+
+External checks intentionally not run:
+- No remote D1 migration, R2 write, Processor registration, deployment, remote task, Redis ACL change, secret rotation, or browser release test was authorized for PAPER-00.

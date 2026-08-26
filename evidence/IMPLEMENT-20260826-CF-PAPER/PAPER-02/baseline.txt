@@ -1,0 +1,11 @@
+branch: cloudflare-deploy
+baseline_commit: 61adfab9d18e457b076ce8918afc9124124c3273
+c7_contract_commit: 57f6fb9f4a788d0f2d2111fb2e423b59cfc0df4a
+worktree_at_card_start:
+  intentional prior product change: cloudflare-worker/src/jwt.ts (PAPER-01)
+  intentional prior tests/evidence: cloudflare-worker/test/jwt.test.ts and evidence/IMPLEMENT-20260826-CF-PAPER/PAPER-00|PAPER-01
+  pre-existing user inputs: docs/CLOUDFLARE_PAPER_WORKSPACE_DESIGN.md, docs/CLOUDFLARE_PAPER_WORKSPACE_EXECUTION_PLAN.md
+  no unrelated tracked product diff identified
+baseline_chat_events_schema: absent; no 0017 migration exists at card start
+baseline_db_sha256: 7e7d1c7914c4253841d7429bf67896b2b0ebcb04bfc52e2d99a95a75a5a79425
+baseline_fake_d1_sha256: 95dd10ee3094bfb6fe1fd8946f1e6c577e8637aa3b1d27c4b5679d1e46546411

@@ -1,0 +1,71 @@
+{
+  "schema_version": "paper-processor.delivery/v1",
+  "status": "blocked_until_runtime_approval",
+  "runtime": {
+    "provider": "cloudflare",
+    "class": "managed",
+    "profile": "OWNER_APPROVAL_REQUIRED",
+    "allowed_service_class": "dedicated-paper-processor",
+    "host": null,
+    "runtime_profile_required_before_release": true,
+    "network_policy": "HTTPS control-plane only; no network after source download"
+  },
+  "image": {
+    "build_context": "backend/Dockerfile.paper-processor",
+    "immutable_ref_env": "PAPER_PROCESSOR_IMAGE_DIGEST",
+    "immutable_ref_format": "oci-image@sha256:<64-hex-digest>",
+    "digest_value": null,
+    "digest_required_before_release": true
+  },
+  "environment": {
+    "required_non_secret_names": [
+      "PAPER_PROCESSOR_EDGE_URL",
+      "PAPER_PROCESSOR_ID",
+      "PAPER_PROCESSOR_INSTANCE_ID",
+      "PAPER_PROCESSOR_WORK_ROOT"
+    ],
+    "fixed_non_secret_names": ["PYTHONPATH", "PYTHONUNBUFFERED"],
+    "unknown_names_forbidden": true
+  },
+  "secret_boundary": {
+    "delivery": "platform_secret_injection_only",
+    "processor_secret_names": ["PAPER_PROCESSOR_TOKEN"],
+    "edge_secret_names": ["PAPER_PROCESSOR_SHARED_SECRET"],
+    "parent_credentials_forbidden": [
+      "D1_API_TOKEN",
+      "R2_PARENT_KEY",
+      "REDIS_URL",
+      "CLOUDFLARE_API_TOKEN",
+      "STEPFUN_API_KEY"
+    ],
+    "secret_values_in_definition_or_logs": false
+  },
+  "singleton_lease": {
+    "active_instances_per_processor_id": 1,
+    "instance_id_must_be_unique": true,
+    "lease_and_fencing_source": "D1",
+    "restart_behavior": "reconnect with a new short-lived session; stale attempts remain fenced"
+  },
+  "health_restart": {
+    "readiness": "A successful Edge connect plus a running poll/renew loop; no public health endpoint is exposed.",
+    "liveness": "The managed runtime observes process liveness and bounded poll progress; transport failure triggers reconnect.",
+    "restart": "Restart on process failure with platform-bounded backoff; startup recovery removes stale temporary workspaces.",
+    "shutdown": "Stop polling, report or cancel the fenced attempt, and remove the temporary work root."
+  },
+  "logging": {
+    "format": "structured safe events",
+    "redaction_policy": "Allow only stage, safe error code, opaque resource/attempt IDs, counts and sizes; redact tokens, headers, URLs with credentials, local paths and stack traces.",
+    "raw_payloads_forbidden": true,
+    "forbidden_fields": ["PAPER_PROCESSOR_TOKEN", "lease_token", "session_token", "pdf_bytes", "full_text", "image_bytes", "source_url"]
+  },
+  "rollback": {
+    "operation": "revoke processor capabilities and active sessions, pause the new runtime, and point the managed service to the previous immutable image digest",
+    "revoke_capabilities_first": true,
+    "preserve_d1_r2": true,
+    "do_not_delete_or_edit_metadata": true
+  },
+  "approval_blockers": [
+    "CLOUDFLARE_MANAGED_RUNTIME_PROFILE_UNSPECIFIED",
+    "PAPER_PROCESSOR_IMAGE_DIGEST_NOT_PROVIDED"
+  ]
+}

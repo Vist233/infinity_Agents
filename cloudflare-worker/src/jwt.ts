@@ -60,36 +60,58 @@ export async function verifyAccessToken(token: string, env: Env): Promise<Access
     throw new Error("Invalid JWT format");
   }
   const [encodedHeader, encodedPayload, encodedSignature] = parts;
+  let header: { alg?: unknown; kid?: unknown };
+  try {
+    header = JSON.parse(new TextDecoder().decode(base64UrlToBytes(encodedHeader))) as typeof header;
+  } catch {
+    throw new Error("Invalid access token header");
+  }
+  if (header.alg !== "ES256" || typeof header.kid !== "string" || !header.kid.trim()) {
+    throw new Error("Invalid access token header");
+  }
+
   const signingInput = new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`);
-  const signature = base64UrlToBytes(encodedSignature);
+  let signature: Uint8Array;
+  try {
+    signature = base64UrlToBytes(encodedSignature);
+  } catch {
+    throw new Error("Invalid JWT signature");
+  }
 
   const keys = await loadJwks(env);
+  const jwk = keys.find((key) => {
+    const candidate = key as JsonWebKey & { kid?: string; kty?: string; crv?: string };
+    return candidate.kid === header.kid && candidate.kty === "EC" && candidate.crv === "P-256";
+  });
+  if (!jwk) {
+    throw new Error("Unknown access token signing key");
+  }
+
   let verified = false;
-  for (const jwk of keys) {
-    try {
-      const key = await crypto.subtle.importKey(
-        "jwk",
-        jwk,
-        { name: "ECDSA", namedCurve: "P-256" },
-        false,
-        ["verify"]
-      );
-      // WebCrypto expects a raw (r||s) signature for ECDSA, which is exactly the
-      // JOSE ES256 encoding.
-      const ok = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, signature, signingInput);
-      if (ok) {
-        verified = true;
-        break;
-      }
-    } catch {
-      // try next key
-    }
+  try {
+    const key = await crypto.subtle.importKey(
+      "jwk",
+      jwk,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"]
+    );
+    // WebCrypto expects a raw (r||s) signature for ECDSA, which is exactly the
+    // JOSE ES256 encoding.
+    verified = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, signature, signingInput);
+  } catch {
+    verified = false;
   }
   if (!verified) {
     throw new Error("JWT signature verification failed");
   }
 
-  const payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(encodedPayload))) as AccessTokenPayload;
+  let payload: AccessTokenPayload;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(encodedPayload))) as AccessTokenPayload;
+  } catch {
+    throw new Error("Invalid access token payload");
+  }
   if (payload.type !== "access") {
     throw new Error("Invalid token type");
   }

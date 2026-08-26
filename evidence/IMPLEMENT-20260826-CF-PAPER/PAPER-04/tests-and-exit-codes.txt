@@ -1,0 +1,40 @@
+# PAPER-04 tests and exit codes
+
+Branch: `cloudflare-deploy`
+Baseline: `61adfab9d18e457b076ce8918afc9124124c3273`
+
+Pre-implementation regression evidence (expected failures, no tests skipped):
+
+- `cd frontend && npm run test:unit -- --run lib/ws/chat-stream.test.ts lib/api/sessions.test.ts lib/chat-state.test.ts` -> exit 1. New tests exposed the missing timeline state/history protocol; malformed fixture escaping was corrected before implementation.
+- `cd cloudflare-worker && npm test -- --run test/sessions.test.ts` -> exit 1. New tests exposed the old array-only history response and repository inline-result bound.
+
+Focused post-implementation:
+
+- `cd frontend && npm run test:unit -- --run lib/ws/chat-stream.test.ts lib/api/sessions.test.ts lib/chat-state.test.ts && npm run typecheck` -> exit 0; 3 files, 28 tests passed.
+- `cd cloudflare-worker && npm test -- --run test/sessions.test.ts test/chat.test.ts` -> exit 0; 2 files, 19 tests passed.
+
+Mandatory Edge gate:
+
+- `cd cloudflare-worker && npm run check` -> exit 0.
+- `cd cloudflare-worker && npm test` -> exit 0; 17 files, 97 tests passed.
+
+Frontend gate:
+
+- `cd frontend && npm run test:unit` -> exit 0; 12 files, 50 tests passed.
+- `cd frontend && npm run typecheck` -> exit 0.
+- `cd frontend && npm run lint` -> exit 0.
+- `cd frontend && npm run build` -> exit 0; webpack production build completed.
+
+Browser/E2E:
+
+- Initial `npm run test:e2e -- --project=chromium chat.spec.ts` -> exit 1 because this repository has no named `chromium` project; rerun with the repository's configured command.
+- First real E2E run after implementation -> exit 1; it caught duplicate call/result rows in the hydrate path. The timeline was changed to collapse by `tool_call_id`.
+- Second E2E run after collapse -> exit 0; 5 tests passed.
+- E2E run after adding confirmation coverage -> exit 1; it caught an assertion against an input value rather than visible text.
+- Final `cd frontend && npm run test:e2e -- chat.spec.ts` -> exit 0; 6 tests passed, including live tool trace, reload restoration, redaction assertion, and task-confirmation cancellation.
+- In-app browser local shell inspection at `http://127.0.0.1:3000/` -> PASS: Analysis shell, sign-in-safe empty state, and message textbox were visible. Local dev server was stopped after verification.
+
+Repository hygiene:
+
+- `git diff --check` -> exit 0.
+- No deployment, remote D1 migration, remote R2 write, Processor registration, Redis ACL change, secret rotation, Cloudflare configuration change, or remote task was performed.

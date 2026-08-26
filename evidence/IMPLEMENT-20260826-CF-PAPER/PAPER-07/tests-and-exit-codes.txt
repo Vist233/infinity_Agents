@@ -1,0 +1,37 @@
+PAPER-07 verification record
+
+1. Test-first negative baseline
+   Command: `eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q tests/test_paper_processor_ingestion.py`
+   Result: failed as expected before implementation with `ModuleNotFoundError` for the new ingestion module; exit code 1.
+
+2. Dedicated Processor ingestion focused tests
+   Command: `eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q tests/test_paper_processor_ingestion.py`
+   Result: 8 passed; exit code 0.
+
+3. Edge focused protocol/resource/schema tests
+   Command: `npm test -- --run test/paper-processor.test.ts test/paper-resources.test.ts test/d1-runtime-schema.test.ts test/paper-processor-schema.test.ts test/paper-processor-image.test.ts test/index.test.ts`
+   Result: 6 files, 32 tests passed; exit code 0.
+
+4. Mandatory Worker type check
+   Command: `cd cloudflare-worker && npm run check`
+   Result: TypeScript check passed; exit code 0.
+
+5. Mandatory Worker full test suite
+   Command: `cd cloudflare-worker && npm test`
+   Result: 21 files, 112 tests passed; exit code 0.
+
+6. Python syntax verification
+   Command: `eval "$(pyenv init - zsh)"; pyenv shell Agent; python -m compileall -q backend/paper_processor tests/test_paper_processor_ingestion.py`
+   Result: passed; exit code 0. The pyenv rehash warning was non-fatal.
+
+7. Additive migration replay
+   Command: apply migrations 0018, 0019, and 0020 to a temporary SQLite database, replay 0020, then query the three Paper tables.
+   Result: all expected tables present after replay; exit code 0. No remote D1 was used.
+
+8. Diff hygiene
+   Command: `git diff --check`
+   Result: passed; exit code 0.
+
+9. High-confidence secret scan
+   Scope: dedicated Processor source, image definition, dependency file, Edge Processor/resource/object controls, migration, and PAPER-07 tests; node_modules and evidence excluded.
+   Result: no credential-shaped matches. The broader term scan only matched intentional negative assertions in `paper-processor-image.test.ts`; no secret value was present. Exit code 0.

@@ -1,0 +1,23 @@
+# PAPER-05 diff summary
+
+PAPER-05 adds the authorized paper-resource metadata/object boundary:
+
+- `cloudflare-worker/migrations-infinity/0018_paper_resources.sql` adds additive, bounded D1 tables for resources, processing attempts, and session-purpose links with foreign keys, indexes, state checks, lease-hash/fencing fields, and no destructive operation.
+- `cloudflare-worker/src/db.ts` adds typed resource/attempt/link rows, ownership-aware link/read/revoke helpers, attempt metadata, and conditional state transitions fenced by active attempt, lease expiry, and fencing epoch. The legacy `paper_authorizations` table remains compatibility-only.
+- `cloudflare-worker/src/paper-object-store.ts` is a narrow fixed-kind R2 getter with no list/prefix or caller-supplied key capability.
+- `cloudflare-worker/src/paper-resources.ts` adds authenticated create/read/delete/link routes, safe metadata responses, ready-only manifest/object reads, fixed object selection, manifest sanitization, bounded inputs, and ownership/link validation.
+- `cloudflare-worker/src/index.ts` composes the resource routes inside the existing authenticated/CSRF API boundary.
+- `cloudflare-worker/test/fake-d1.ts`, `test/d1-runtime-schema.test.ts`, and `test/paper-resources.test.ts` provide deterministic D1/R2-shaped coverage for positive and negative cases.
+
+Retained prior-card changes are present in the same working tree and were not reverted. No external system was modified.
+
+Post-card SHA-256 (for reproducibility):
+
+- `cloudflare-worker/src/db.ts` `474ec4553bea1567644f03103394d91d1eb4d1d8910a8088d59c15ea5937f3ef`
+- `cloudflare-worker/src/index.ts` `8684b420caffe59a9f7c8e21a300487c0644957e010b9e70777ad69f69b90775`
+- `cloudflare-worker/src/paper-object-store.ts` `055956eb1d57e2d2d57682007477d81b91a718d4f8159ac03a13d6b50273e69d`
+- `cloudflare-worker/src/paper-resources.ts` `693c89517bfc913804706d9f9037726eccd1aef24697148764a4b2d6dfda5964`
+- `cloudflare-worker/migrations-infinity/0018_paper_resources.sql` `1f4362aba86125bfa5c5cddb3b603396e60723a2f93f2f38ffe3a94cd35e724e`
+- `cloudflare-worker/test/fake-d1.ts` `89aac080b8230c8c3c13b280a5d9381c896f61962c0db1160942e9860f5cf0e4`
+- `cloudflare-worker/test/d1-runtime-schema.test.ts` `861309ba3d6846e69fba06e74d2dfd5914c58f8c16544c55b9c0e4f1614f6a77`
+- `cloudflare-worker/test/paper-resources.test.ts` `b11afb1030df53aa35dbdffaf394580e95baa525f090b5fd6656ba4f8a578c31`

@@ -16,6 +16,9 @@ import { handleUserSettings } from "./settings";
 import { handleWorkerV2 } from "./worker-v2";
 import { flushD1Outbox } from "./outbox-relay";
 import { recoverExpiredLeases } from "./lease-recovery";
+import { handlePaperResourceApi } from "./paper-resources";
+import { handlePaperProcessorApi } from "./paper-processor";
+import { runPaperResourceCleanup } from "./paper-cleanup";
 
 export { ImageJudgeUserConcurrencyLock } from "./image-judge";
 
@@ -58,7 +61,15 @@ export default {
     const method = request.method;
 
     if (method === "GET" && pathname === "/health") {
-      return json({ status: "ok", service: "infinity-agents-edge" });
+      return json({
+        status: "ok",
+        service: "infinity-agents-edge",
+        readiness: {
+          d1: env.DB ? "configured" : "unconfigured",
+          resource_bucket: env.RESOURCE_BUCKET ? "configured" : "unconfigured",
+          paper_processor: env.PAPER_PROCESSOR_ID && env.PAPER_PROCESSOR_SHARED_SECRET ? "configured" : "unconfigured",
+        },
+      });
     }
 
     // ImageJudge has independent bindings and credentials. Keep this check
@@ -96,6 +107,14 @@ export default {
       if (workerResponse) return workerResponse;
     }
 
+    // The Paper Processor is a separate trusted runtime. Its short-lived
+    // session protocol bypasses browser cookies/CSRF but never shares the
+    // public Worker-v2 credential boundary.
+    if (pathname === "/api/paper-processor/connect" || pathname.startsWith("/api/paper-processor/")) {
+      const processorResponse = await handlePaperProcessorApi(request, env);
+      if (processorResponse) return processorResponse;
+    }
+
     // The old D1-only Worker protocol is intentionally closed. There is no
     // fallback to the historical PostgreSQL/RLS worker gateway here.
     if (pathname.startsWith("/api/worker/v1/")) {
@@ -121,6 +140,9 @@ export default {
       if (method === "GET" && pathname === "/api/settings") {
         return withCookies(await handleUserSettings(request, env, user), setCookies);
       }
+
+      const paperResourceResponse = await handlePaperResourceApi(request, env, user);
+      if (paperResourceResponse) return withCookies(paperResourceResponse, setCookies);
 
       const taskResponse = await handleTaskApi(request, env, user);
       if (taskResponse) return withCookies(taskResponse, setCookies);
@@ -174,5 +196,6 @@ export default {
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
     await recoverExpiredLeases(env);
     await flushD1Outbox(env);
+    await runPaperResourceCleanup(env);
   },
 } satisfies ExportedHandler<Env>;

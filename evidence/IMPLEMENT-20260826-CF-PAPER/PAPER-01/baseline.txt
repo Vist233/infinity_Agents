@@ -1,0 +1,8 @@
+branch: cloudflare-deploy
+baseline_commit: 61adfab9d18e457b076ce8918afc9124124c3273
+c7_contract_commit: 57f6fb9f4a788d0f2d2111fb2e423b59cfc0df4a
+worktree_at_card_start:
+  pre-existing user inputs: docs/CLOUDFLARE_PAPER_WORKSPACE_DESIGN.md, docs/CLOUDFLARE_PAPER_WORKSPACE_EXECUTION_PLAN.md
+  prior card evidence: evidence/IMPLEMENT-20260826-CF-PAPER/PAPER-00/*
+  no tracked product diff at card start
+baseline_jwt_sha256: 9bfdf231b3b3220e0efe25991c364e6ae7b4cf5375c21c093f0064fa52a895ca

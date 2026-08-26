@@ -1,0 +1,16 @@
+# PAPER-08 diff summary
+
+Implemented the resource-aware Edge Agent contract:
+
+- Added `materialize_paper` with search-session authorization, canonical arXiv/PMC admission, owned-resource creation, and duplicate reuse.
+- Replaced the production abstract-only read contract with resource-aware `text`, `search`, `outline`, and `images` modes while keeping an explicit abstract compatibility adapter.
+- Added bounded page ranges, literal/safe-regex search, manifest-backed page/image validation, and resource/page/excerpt citations.
+- Added `analyze_paper_image` request validation and provenance output without exposing server paths, storage keys, image bytes, or processor credentials.
+- Updated the model tool schemas, user identity propagation, and Paper Workspace prompt; retained durable chat event persistence and the existing tool-loop limit.
+- Added positive and negative fake-D1/R2 regression coverage for processing states, ownership, idempotency, manifest bounds, invalid modes, and unsafe regex.
+
+Intentional non-changes:
+
+- Image bytes are not embedded in SSE or model tool output; authorized image delivery/provider egress remains PAPER-09.
+- No public Claude Worker, Redis, PostgreSQL, Hyperdrive, or C7 Worker-v2 path was changed.
+- No external deployment or Cloudflare resource mutation.

@@ -20,6 +20,7 @@ export interface ChatStatusEvent {
   max_attempts: number;
   tool_name?: string;
   reason?: string;
+  correlation_id?: string;
 }
 
 export interface ChatChunkEvent {
@@ -29,7 +30,20 @@ export interface ChatChunkEvent {
 
 export interface ChatToolCallEvent {
   type: "tool_call";
+  correlation_id: string;
+  tool_call_id: string;
   tool_name: string;
+  status: "pending" | "processing";
+  arguments_summary: string;
+}
+
+export interface ChatToolResultEvent {
+  type: "tool_result";
+  correlation_id: string;
+  tool_call_id: string;
+  tool_name: string;
+  status: "succeeded" | "failed";
+  summary: string;
 }
 
 export interface ChatDoneEvent {
@@ -66,7 +80,7 @@ export interface ChatTaskConfirmedEvent {
   duplicate?: boolean;
 }
 
-export type ChatEvent = ChatStatusEvent | ChatChunkEvent | ChatToolCallEvent | ChatTaskDraftEvent | ChatTaskDraftCancelledEvent | ChatTaskConfirmationEvent | ChatTaskConfirmedEvent | ChatDoneEvent | ChatErrorEvent;
+export type ChatEvent = ChatStatusEvent | ChatChunkEvent | ChatToolCallEvent | ChatToolResultEvent | ChatTaskDraftEvent | ChatTaskDraftCancelledEvent | ChatTaskConfirmationEvent | ChatTaskConfirmedEvent | ChatDoneEvent | ChatErrorEvent;
 
 export interface StartChatStreamOptions {
   apiBase: string;
@@ -85,7 +99,13 @@ export interface ChatStreamHandle {
 const OPEN = 1;
 const CLOSED = 3;
 
-const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "task_draft_created", "task_draft_updated", "task_draft_cancelled", "task_confirmation", "task_confirmed", "done", "error"]);
+const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "tool_result", "task_draft_created", "task_draft_updated", "task_draft_cancelled", "task_confirmation", "task_confirmed", "done", "error"]);
+const MAX_EVENT_TEXT_CHARS = 2_048;
+const MAX_ARGUMENTS_CHARS = 1_024;
+
+function boundedText(value: unknown, maxChars: number): string {
+  return typeof value === "string" ? value.slice(0, maxChars) : "";
+}
 
 export function toFriendlyChatError(message: string, language: Language = "en"): string {
   if (message.includes("paper_not_authorized_for_session")) {
@@ -111,14 +131,35 @@ export function normalizeChatEvent(rawData: unknown): ChatEvent | null {
         max_attempts: Number(payload.max_attempts) || 1,
         tool_name: typeof payload.tool_name === "string" ? payload.tool_name : undefined,
         reason: typeof payload.reason === "string" ? payload.reason : undefined,
+        correlation_id: typeof payload.correlation_id === "string" ? boundedText(payload.correlation_id, 255) : undefined,
       };
     }
     if (payload.type === "chunk") {
       return { type: "chunk", content: typeof payload.content === "string" ? payload.content : "" };
     }
     if (payload.type === "tool_call") {
-      if (typeof payload.tool_name !== "string") return null;
-      return { type: "tool_call", tool_name: payload.tool_name };
+      if (typeof payload.correlation_id !== "string" || typeof payload.tool_call_id !== "string" || typeof payload.tool_name !== "string") return null;
+      if (payload.status !== "pending" && payload.status !== "processing") return null;
+      return {
+        type: "tool_call",
+        correlation_id: boundedText(payload.correlation_id, 255),
+        tool_call_id: boundedText(payload.tool_call_id, 255),
+        tool_name: boundedText(payload.tool_name, 255),
+        status: payload.status,
+        arguments_summary: boundedText(payload.arguments_summary, MAX_ARGUMENTS_CHARS),
+      };
+    }
+    if (payload.type === "tool_result") {
+      if (typeof payload.correlation_id !== "string" || typeof payload.tool_call_id !== "string" || typeof payload.tool_name !== "string") return null;
+      if (payload.status !== "succeeded" && payload.status !== "failed") return null;
+      return {
+        type: "tool_result",
+        correlation_id: boundedText(payload.correlation_id, 255),
+        tool_call_id: boundedText(payload.tool_call_id, 255),
+        tool_name: boundedText(payload.tool_name, 255),
+        status: payload.status,
+        summary: boundedText(payload.summary, MAX_EVENT_TEXT_CHARS),
+      };
     }
     if (payload.type === "task_draft_created" || payload.type === "task_draft_updated") {
       if (!payload.draft || typeof payload.draft !== "object") return null;
@@ -165,6 +206,7 @@ export function normalizeChatEvent(rawData: unknown): ChatEvent | null {
     }
     return null;
   } catch {
+    if (/^[{[]/.test(rawData.trim())) return null;
     return { type: "chunk", content: rawData };
   }
 }

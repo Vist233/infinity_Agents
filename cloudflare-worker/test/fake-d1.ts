@@ -1,4 +1,16 @@
 import type { Env, RateLimitBinding } from "../src/env";
+import type {
+  ChatEventRow,
+  ChatEventRole,
+  ChatEventType,
+  PaperProcessingAttemptRow,
+  PaperProcessorSessionRow,
+  PaperProcessorObjectRow,
+  PaperResourceAuditEventRow,
+  PaperCleanupJobRow,
+  PaperResourceLinkRow,
+  PaperResourceRow,
+} from "../src/db";
 
 /**
  * Minimal in-memory stand-in for the subset of D1 used by the Worker. Statements
@@ -163,6 +175,14 @@ export class FakeD1 {
   cache = new Map<string, { data: string; expires_at: number }>();
   chatSessions = new Map<string, ChatSessionRow>();
   chatMessages: ChatMessageRow[] = [];
+  chatEvents: ChatEventRow[] = [];
+  paperResources = new Map<string, PaperResourceRow>();
+  paperProcessingAttempts = new Map<string, PaperProcessingAttemptRow>();
+  paperResourceLinks = new Map<string, PaperResourceLinkRow>();
+  paperProcessorSessions = new Map<string, PaperProcessorSessionRow>();
+  paperProcessorObjects = new Map<string, PaperProcessorObjectRow>();
+  paperAuditEvents: PaperResourceAuditEventRow[] = [];
+  paperCleanupJobs = new Map<string, PaperCleanupJobRow>();
   chatTaskConfirmations = new Map<string, ChatTaskConfirmationRow>();
   chatRequestIdempotency = new Map<string, ChatRequestIdempotencyRow>();
   tasks = new Map<string, TaskRow>();
@@ -174,7 +194,15 @@ export class FakeD1 {
   workerSessions = new Map<string, WorkerSessionRow>();
   workerOffers = new Map<string, WorkerOfferRow>();
   workerAttempts = new Map<string, WorkerAttemptRow>();
+  failNextChatEventInsert = false;
+  failNextPaperCacheRead = false;
   private messageSeq = 0;
+  private eventSeq = 0;
+
+  nextChatEventId(): number {
+    this.eventSeq += 1;
+    return this.eventSeq;
+  }
 
   seedChatSession(id: string, userId: string, title = "Test session"): void {
     const ts = Math.floor(Date.now() / 1000);
@@ -190,6 +218,32 @@ export class FakeD1 {
       content,
       created_at: Math.floor(Date.now() / 1000)
     });
+  }
+
+  /** Simulates the idempotent SQL backfill in 0017 for repository tests. */
+  applyChatEventsMigration(): void {
+    for (const message of [...this.chatMessages].sort((a, b) => a.id - b.id)) {
+      if (message.role !== "user" && message.role !== "assistant") continue;
+      const turnId = `legacy:${message.id}`;
+      if (this.chatEvents.some((event) => event.session_id === message.session_id && event.turn_id === turnId)) continue;
+      this.chatEvents.push({
+        event_id: this.nextChatEventId(),
+        session_id: message.session_id,
+        turn_id: turnId,
+        event_type: message.role === "user" ? "user_message" : "assistant_message",
+        role: message.role,
+        content: message.content,
+        tool_call_id: null,
+        tool_name: null,
+        tool_arguments_json: null,
+        result_summary: null,
+        result_object_key: null,
+        result_sha256: null,
+        result_bytes: null,
+        status: "legacy",
+        created_at: message.created_at,
+      });
+    }
   }
 
   seedTask(taskId: string, userId: string, title = "Test task", status = "queued", chatConfirmationId: string | null = null): void {
@@ -235,6 +289,104 @@ class FakeStatement {
 
   async first<T>(): Promise<T | null> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("FROM paper_processor_sessions") && sql.includes("session_token_hash = ?1")) {
+      const [tokenHash, now] = this.args as [string, number];
+      const row = [...this.db.paperProcessorSessions.values()].find((session) =>
+        session.session_token_hash === tokenHash && session.revoked_at == null && session.expires_at > now,
+      );
+      return (row as T) ?? null;
+    }
+    if (sql.includes("FROM paper_processor_sessions") && sql.includes("processor_session_id = ?1")) {
+      const [sessionId, tokenHash, now] = this.args as [string, string, number];
+      const row = this.db.paperProcessorSessions.get(sessionId);
+      return row && row.session_token_hash === tokenHash && row.revoked_at == null && row.expires_at > now ? (row as T) : null;
+    }
+    if (sql.includes("SELECT r.resource_id, r.source_kind") && sql.includes("r.status = 'requested'")) {
+      const rows = [...this.db.paperResources.values()]
+        .filter((resource) => resource.status === "requested")
+        .sort((left, right) => left.created_at - right.created_at);
+      const row = rows[0];
+      if (!row) return null;
+      const epochs = [...this.db.paperProcessingAttempts.values()]
+        .filter((attempt) => attempt.resource_id === row.resource_id)
+        .map((attempt) => attempt.fencing_epoch);
+      return { resource_id: row.resource_id, source_kind: row.source_kind, source_ref: row.source_ref, canonical_ref: row.canonical_ref, fencing_epoch: Math.max(0, ...epochs) + 1 } as T;
+    }
+    if (sql.includes("JOIN paper_resources r ON r.resource_id = a.resource_id") && sql.includes("a.lease_token_hash = ?4")) {
+      const [attemptId, resourceId, processorId, tokenHash, fencingEpoch, now] = this.args as [string, string, string, string, number, number];
+      const attempt = this.db.paperProcessingAttempts.get(attemptId);
+      const resource = this.db.paperResources.get(resourceId);
+      return attempt && resource && attempt.resource_id === resourceId && attempt.processor_id === processorId
+        && attempt.lease_token_hash === tokenHash && attempt.fencing_epoch === fencingEpoch
+        && ["claimed", "downloading", "extracting", "uploading"].includes(attempt.status)
+        && attempt.lease_expires_at > now
+        ? ({ ...attempt, attempt_status: attempt.status, source_kind: resource.source_kind, source_ref: resource.source_ref, canonical_ref: resource.canonical_ref, title: resource.title, resource_status: resource.status, pdf_object_key: resource.pdf_object_key, text_manifest_key: resource.text_manifest_key } as T)
+        : null;
+    }
+    if (sql.includes("MAX(a.fencing_epoch)") && sql.includes("paper_processing_attempts")) {
+      const resourceId = String(this.args[0]);
+      const max = Math.max(0, ...[...this.db.paperProcessingAttempts.values()].filter((attempt) => attempt.resource_id === resourceId).map((attempt) => attempt.fencing_epoch));
+      return { next_epoch: max + 1 } as T;
+    }
+    if (sql.includes("SELECT 1 AS ok FROM chat_sessions WHERE id = ?1")) {
+      const [sessionId] = this.args as [string];
+      return this.db.chatSessions.has(sessionId) ? ({ ok: 1 } as T) : null;
+    }
+    if (sql.includes("SELECT r.resource_id FROM paper_resources r") && sql.includes("s.user_id = ?3")) {
+      const [resourceId, sessionId, userId] = this.args as [string, string, string];
+      const row = this.db.paperResources.get(resourceId);
+      const session = this.db.chatSessions.get(sessionId);
+      return row && row.session_id === sessionId && row.user_id === userId && session?.user_id === userId
+        ? ({ resource_id: row.resource_id } as T)
+        : null;
+    }
+    if (sql.includes("FROM paper_resources r") && sql.includes("r.source_kind = ?3") && sql.includes("r.source_ref = ?4")) {
+      const [sessionId, userId, sourceKind, sourceRef] = this.args as [string, string, PaperResourceRow["source_kind"], string];
+      const session = this.db.chatSessions.get(sessionId);
+      const row = [...this.db.paperResources.values()]
+        .filter((candidate) => candidate.session_id === sessionId && candidate.user_id === userId
+          && candidate.source_kind === sourceKind && candidate.source_ref === sourceRef
+          && session?.user_id === userId
+          && [...this.db.paperResourceLinks.values()].some((link) => link.resource_id === candidate.resource_id && link.session_id === sessionId))
+        .sort((left, right) => right.updated_at - left.updated_at || right.created_at - left.created_at)[0];
+      return (row as T) ?? null;
+    }
+    if (sql.includes("FROM paper_resources r") && sql.includes("JOIN paper_resource_links l")) {
+      const [resourceId, sessionId, userId] = this.args as [string, string, string];
+      const row = this.db.paperResources.get(resourceId);
+      const session = this.db.chatSessions.get(sessionId);
+      const linked = [...this.db.paperResourceLinks.values()].some((link) => link.resource_id === resourceId && link.session_id === sessionId);
+      return row && linked && row.session_id === sessionId && row.user_id === userId && session?.user_id === userId ? (row as T) : null;
+    }
+    if (sql.includes("FROM paper_processing_attempts WHERE resource_id = ?1 AND attempt_id = ?2")) {
+      const [resourceId, attemptId] = this.args as [string, string];
+      return this.db.paperProcessingAttempts.get(attemptId)?.resource_id === resourceId
+        ? (this.db.paperProcessingAttempts.get(attemptId) as T)
+        : null;
+    }
+    if (sql.includes("FROM paper_resources") && sql.includes("WHERE resource_id = ?1")) {
+      return (this.db.paperResources.get(String(this.args[0])) as T) ?? null;
+    }
+    if (sql.includes("FROM chat_events") && sql.includes("event_type = 'tool_call'")) {
+      const [sessionId, toolCallId] = this.args as [string, string];
+      const row = this.db.chatEvents.find((event) =>
+        event.session_id === sessionId && event.event_type === "tool_call" && event.tool_call_id === toolCallId,
+      );
+      return row ? ({
+        event_id: row.event_id,
+        turn_id: row.turn_id,
+        tool_call_id: row.tool_call_id,
+        tool_name: row.tool_name,
+        tool_arguments_json: row.tool_arguments_json,
+      } as T) : null;
+    }
+    if (sql.includes("FROM chat_events") && sql.includes("event_type = 'tool_result'")) {
+      const [sessionId, toolCallId] = this.args as [string, string];
+      const row = this.db.chatEvents.find((event) =>
+        event.session_id === sessionId && event.event_type === "tool_result" && event.tool_call_id === toolCallId,
+      );
+      return row ? ({ event_id: row.event_id } as T) : null;
+    }
     if (sql.includes("FROM worker_pool_policy")) {
       return this.db.workerPoolPolicy as T;
     }
@@ -359,6 +511,10 @@ class FakeStatement {
       } as T;
     }
     if (sql.includes("FROM paper_cache")) {
+      if (this.db.failNextPaperCacheRead) {
+        this.db.failNextPaperCacheRead = false;
+        throw new Error("Paper tool failed");
+      }
       const [key] = this.args as [string];
       const row = this.db.cache.get(key);
       return row ? ({ data: row.data, expires_at: row.expires_at } as T) : null;
@@ -368,6 +524,21 @@ class FakeStatement {
 
   async all<T>(): Promise<{ results: T[] }> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("FROM paper_cleanup_jobs")) {
+      const [now] = this.args as [number, number];
+      const rows = [...this.db.paperCleanupJobs.values()]
+        .filter((job) => ["pending", "failed"].includes(job.status) && job.next_attempt_at <= now)
+        .sort((left, right) => left.next_attempt_at - right.next_attempt_at || left.cleanup_id.localeCompare(right.cleanup_id))
+        .slice(0, Number(this.args[1]));
+      return { results: rows as unknown as T[] };
+    }
+    if (sql.includes("FROM chat_events")) {
+      const [sessionId] = this.args as [string];
+      const rows = this.db.chatEvents
+        .filter((event) => event.session_id === sessionId)
+        .sort((a, b) => a.event_id - b.event_id);
+      return { results: rows as unknown as T[] };
+    }
     if (sql.includes("FROM chat_messages")) {
       const [sessionId] = this.args as [string];
       const rows = this.db.chatMessages
@@ -397,6 +568,277 @@ class FakeStatement {
 
   async run(): Promise<{ meta: { changes: number } }> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("INSERT OR IGNORE INTO paper_resource_audit_events")) {
+      const [eventId, resourceId, attemptId, stage, outcome, errorCode, metadataJson, createdAt] = this.args as [string, string, string | null, PaperResourceAuditEventRow["stage"], PaperResourceAuditEventRow["outcome"], string | null, string, number];
+      if (this.db.paperAuditEvents.some((event) => event.event_id === eventId)) return { meta: { changes: 0 } };
+      this.db.paperAuditEvents.push({ event_id: eventId, resource_id: resourceId, attempt_id: attemptId, stage, outcome, error_code: errorCode, metadata_json: metadataJson, created_at: createdAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT INTO paper_cleanup_jobs")) {
+      const [cleanupId, resourceIdOrNow, nextAttemptAtOrResourceId] = this.args as [string, string | number, number | string];
+      const resourceId = sql.includes("SELECT ?1, resource_id") ? String(nextAttemptAtOrResourceId) : String(resourceIdOrNow);
+      const nextAttemptAt = sql.includes("SELECT ?1, resource_id") ? Number(resourceIdOrNow) : Number(nextAttemptAtOrResourceId);
+      const existing = this.db.paperCleanupJobs.get(resourceId);
+      if (existing) {
+        if (existing.status !== "completed") { existing.status = "pending"; existing.next_attempt_at = nextAttemptAt; existing.updated_at = nextAttemptAt; }
+        return { meta: { changes: 1 } };
+      }
+      this.db.paperCleanupJobs.set(resourceId, { cleanup_id: cleanupId, resource_id: resourceId, status: "pending", attempts: 0, next_attempt_at: nextAttemptAt, last_error_code: null, created_at: nextAttemptAt, updated_at: nextAttemptAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_cleanup_jobs SET status = 'running'")) {
+      const [cleanupId, now] = this.args as [string, number];
+      const row = [...this.db.paperCleanupJobs.values()].find((job) => job.cleanup_id === cleanupId);
+      if (!row || !["pending", "failed"].includes(row.status) || row.next_attempt_at > now || row.attempts >= 100) return { meta: { changes: 0 } };
+      row.status = "running";
+      row.attempts += 1;
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_cleanup_jobs SET status = 'failed', last_error_code = 'PAPER_CLEANUP_RECLAIMED'")) {
+      const [now] = this.args as [number];
+      let changes = 0;
+      for (const row of this.db.paperCleanupJobs.values()) {
+        if (row.status === "running" && row.updated_at <= now - 300) {
+          row.status = "failed";
+          row.last_error_code = "PAPER_CLEANUP_RECLAIMED";
+          row.next_attempt_at = now;
+          row.updated_at = now;
+          changes += 1;
+        }
+      }
+      return { meta: { changes } };
+    }
+    if (sql.includes("UPDATE paper_cleanup_jobs SET status = 'completed'")) {
+      const [cleanupId, now] = this.args as [string, number];
+      const row = [...this.db.paperCleanupJobs.values()].find((job) => job.cleanup_id === cleanupId);
+      if (!row || row.status !== "running") return { meta: { changes: 0 } };
+      row.status = "completed";
+      row.last_error_code = null;
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_cleanup_jobs SET status = 'failed'")) {
+      const [cleanupId, errorCode, now] = this.args as [string, string, number];
+      const row = [...this.db.paperCleanupJobs.values()].find((job) => job.cleanup_id === cleanupId);
+      if (!row || row.status !== "running") return { meta: { changes: 0 } };
+      row.status = "failed";
+      row.last_error_code = errorCode;
+      row.next_attempt_at = now + Math.min(3600, 30 * (row.attempts + 1));
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_resources SET status = 'cancelled', updated_at") && sql.includes("session_id = ?2 AND user_id = ?3")) {
+      const [resourceId, sessionId, userId, now] = this.args as [string, string, string, number];
+      const row = this.db.paperResources.get(resourceId);
+      if (!row || row.session_id !== sessionId || row.user_id !== userId || !["requested", "downloading", "extracting", "uploading"].includes(row.status)) return { meta: { changes: 0 } };
+      row.status = "cancelled";
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_resources SET status = 'deleted', updated_at")) {
+      const [resourceId, sessionId, userId, now] = this.args as [string, string, string, number];
+      const row = this.db.paperResources.get(resourceId);
+      if (!row || row.session_id !== sessionId || row.user_id !== userId || row.status === "deleted") return { meta: { changes: 0 } };
+      row.status = "deleted";
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_processing_attempts SET status = 'cancelled', finished_at") && sql.includes("WHERE resource_id = ?1")) {
+      const [resourceId, finishedAt] = this.args as [string, number];
+      let changes = 0;
+      for (const attempt of this.db.paperProcessingAttempts.values()) {
+        if (attempt.resource_id === resourceId && ["claimed", "downloading", "extracting", "uploading"].includes(attempt.status)) {
+          attempt.status = "cancelled";
+          attempt.finished_at = finishedAt;
+          changes += 1;
+        }
+      }
+      return { meta: { changes } };
+    }
+    if (sql.includes("INSERT INTO paper_processor_sessions")) {
+      const [sessionId, processorId, instanceId, tokenHash, createdAt, lastSeenAt, expiresAt, revokedAt] = this.args as [string, string, string, string, number, number, number, number | null];
+      this.db.paperProcessorSessions.set(sessionId, { processor_session_id: sessionId, processor_id: processorId, instance_id: instanceId, session_token_hash: tokenHash, created_at: createdAt, last_seen_at: lastSeenAt, expires_at: expiresAt, revoked_at: revokedAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_processor_sessions")) {
+      const [sessionId, now, expiresAt] = this.args as [string, number, number];
+      const row = this.db.paperProcessorSessions.get(sessionId);
+      if (!row || row.revoked_at != null || row.expires_at <= now) return { meta: { changes: 0 } };
+      row.last_seen_at = now;
+      row.expires_at = expiresAt;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_resources SET status = ?7, updated_at = ?6")) {
+      const [resourceId, expectedStatus, attemptId, processorId, tokenHash, now, nextStatus, fencingEpoch] = this.args as [string, PaperResourceRow["status"], string, string, string, number, PaperResourceRow["status"], number];
+      const resource = this.db.paperResources.get(resourceId);
+      const attempt = this.db.paperProcessingAttempts.get(attemptId);
+      if (!resource || !attempt || resource.status !== expectedStatus || attempt.resource_id !== resourceId || attempt.processor_id !== processorId || attempt.lease_token_hash !== tokenHash || attempt.fencing_epoch !== fencingEpoch || !["claimed", "downloading", "extracting", "uploading"].includes(attempt.status) || attempt.lease_expires_at <= now) return { meta: { changes: 0 } };
+      resource.status = nextStatus;
+      resource.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_resources SET") && sql.includes("source_kind = 'user_upload'")) {
+      const [resourceId, sessionId, userId, sizeBytes, sha256, now] = this.args as [string, string, string, number, string, number];
+      const resource = this.db.paperResources.get(resourceId);
+      if (!resource || resource.session_id !== sessionId || resource.user_id !== userId || resource.source_kind !== "user_upload" || resource.status !== "requested") return { meta: { changes: 0 } };
+      resource.pdf_object_key = `paper/${resourceId}/source.pdf`;
+      resource.pdf_size_bytes = sizeBytes;
+      resource.pdf_sha256 = sha256;
+      resource.source_sha256 = sha256;
+      resource.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_processing_attempts SET status = ?2")) {
+      const [attemptId, nextStatus, resourceId, processorId, tokenHash, fencingEpoch, now] = this.args as [string, PaperProcessingAttemptRow["status"], string, string, string, number, number];
+      const attempt = this.db.paperProcessingAttempts.get(attemptId);
+      if (!attempt || attempt.resource_id !== resourceId || attempt.processor_id !== processorId || attempt.lease_token_hash !== tokenHash || attempt.fencing_epoch !== fencingEpoch || !["claimed", "downloading", "extracting", "uploading"].includes(attempt.status) || attempt.lease_expires_at <= now) return { meta: { changes: 0 } };
+      attempt.status = nextStatus;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_processing_attempts") && sql.includes("SET lease_expires_at")) {
+      const [attemptId, resourceId, processorId, tokenHash, fencingEpoch, now, leaseExpiresAt] = this.args as [string, string, string, string, number, number, number];
+      const attempt = this.db.paperProcessingAttempts.get(attemptId);
+      if (!attempt || attempt.resource_id !== resourceId || attempt.processor_id !== processorId || attempt.lease_token_hash !== tokenHash || attempt.fencing_epoch !== fencingEpoch || !["claimed", "downloading", "extracting", "uploading"].includes(attempt.status) || attempt.lease_expires_at <= now) return { meta: { changes: 0 } };
+      attempt.lease_expires_at = leaseExpiresAt;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_resources SET") && sql.includes("text_manifest_key IS NOT NULL")) {
+      const [resourceId, attemptId, processorId, tokenHash, fencingEpoch, pageCount, imageCount, now] = this.args as [string, string, string, string, number, number | null, number | null, number];
+      const resource = this.db.paperResources.get(resourceId);
+      const attempt = this.db.paperProcessingAttempts.get(attemptId);
+      if (!resource || !attempt || resource.status !== "uploading" || !resource.text_manifest_key || attempt.resource_id !== resourceId || attempt.processor_id !== processorId || attempt.lease_token_hash !== tokenHash || attempt.fencing_epoch !== fencingEpoch || attempt.status !== "uploading" || attempt.lease_expires_at <= now) return { meta: { changes: 0 } };
+      resource.status = "ready";
+      resource.page_count = pageCount;
+      resource.image_count = imageCount;
+      resource.updated_at = now;
+      resource.ready_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_processing_attempts SET status = 'succeeded'")) {
+      const [attemptId, resourceId, processorId, tokenHash, fencingEpoch, finishedAt] = this.args as [string, string, string, string, number, number];
+      const attempt = this.db.paperProcessingAttempts.get(attemptId);
+      if (!attempt || attempt.resource_id !== resourceId || attempt.processor_id !== processorId || attempt.lease_token_hash !== tokenHash || attempt.fencing_epoch !== fencingEpoch || attempt.status !== "uploading") return { meta: { changes: 0 } };
+      attempt.status = "succeeded";
+      attempt.finished_at = finishedAt;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_resources SET status = 'cancelled'")) {
+      const [resourceId, attemptId, processorId, tokenHash, fencingEpoch, now] = this.args as [string, string, string, string, number, number];
+      const resource = this.db.paperResources.get(resourceId);
+      const attempt = this.db.paperProcessingAttempts.get(attemptId);
+      if (!resource || !attempt || !["downloading", "extracting", "uploading"].includes(resource.status) || attempt.resource_id !== resourceId || attempt.processor_id !== processorId || attempt.lease_token_hash !== tokenHash || attempt.fencing_epoch !== fencingEpoch || !["claimed", "downloading", "extracting", "uploading"].includes(attempt.status) || attempt.lease_expires_at <= now) return { meta: { changes: 0 } };
+      resource.status = "cancelled";
+      resource.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_processing_attempts SET status = 'cancelled'") && sql.includes("resource_id = ?2")) {
+      const [attemptId, resourceId, processorId, tokenHash, fencingEpoch, finishedAt] = this.args as [string, string, string, string, number, number];
+      const attempt = this.db.paperProcessingAttempts.get(attemptId);
+      if (!attempt || attempt.resource_id !== resourceId || attempt.processor_id !== processorId || attempt.lease_token_hash !== tokenHash || attempt.fencing_epoch !== fencingEpoch || !["claimed", "downloading", "extracting", "uploading"].includes(attempt.status) || attempt.lease_expires_at <= finishedAt) return { meta: { changes: 0 } };
+      attempt.status = "cancelled";
+      attempt.finished_at = finishedAt;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_resources SET") && sql.includes("paper_processing_attempts a") && (sql.includes("status = 'uploading'") || sql.includes("pdf_object_key"))) {
+      const [resourceId, attemptId, processorId, tokenHash, fencingEpoch, sizeBytes, sha256, now] = this.args as [string, string, string, string, number, number, string, number];
+      const resource = this.db.paperResources.get(resourceId);
+      const attempt = this.db.paperProcessingAttempts.get(attemptId);
+      const sourcePdf = sql.includes("pdf_object_key");
+      const expectedResourceStatus = sourcePdf ? "downloading" : "uploading";
+      const allowedAttemptStatuses = sourcePdf ? ["claimed", "downloading"] : ["uploading"];
+      if (!resource || !attempt || resource.status !== expectedResourceStatus || attempt.resource_id !== resourceId || attempt.processor_id !== processorId || attempt.lease_token_hash !== tokenHash || attempt.fencing_epoch !== fencingEpoch || !allowedAttemptStatuses.includes(attempt.status) || attempt.lease_expires_at <= now) return { meta: { changes: 0 } };
+      if (sql.includes("pdf_object_key")) { resource.pdf_object_key = `paper/${resourceId}/source.pdf`; resource.pdf_size_bytes = sizeBytes; resource.pdf_sha256 = sha256; resource.source_sha256 = sha256; }
+      else if (sql.includes("text_manifest_key")) resource.text_manifest_key = `paper/${resourceId}/text/manifest.json`;
+      else resource.image_manifest_key = `paper/${resourceId}/images/manifest.json`;
+      resource.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_processing_attempts SET status = 'cancelled', finished_at")) {
+      const [attemptId, finishedAt] = this.args as [string, number];
+      const attempt = this.db.paperProcessingAttempts.get(attemptId);
+      if (!attempt || attempt.status !== "claimed") return { meta: { changes: 0 } };
+      attempt.status = "cancelled";
+      attempt.finished_at = finishedAt;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_resources SET status = 'failed'")) {
+      const [resourceId, attemptId, processorId, tokenHash, fencingEpoch, errorCode, errorMessage, now] = this.args as [string, string, string, string, number, string, string, number];
+      const resource = this.db.paperResources.get(resourceId);
+      const attempt = this.db.paperProcessingAttempts.get(attemptId);
+      if (!resource || !attempt || !["downloading", "extracting", "uploading"].includes(resource.status) || attempt.resource_id !== resourceId || attempt.processor_id !== processorId || attempt.lease_token_hash !== tokenHash || attempt.fencing_epoch !== fencingEpoch || !["claimed", "downloading", "extracting", "uploading"].includes(attempt.status) || attempt.lease_expires_at <= now) return { meta: { changes: 0 } };
+      resource.status = "failed";
+      resource.error_code = errorCode;
+      resource.error_message_safe = errorMessage;
+      resource.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_processing_attempts SET status = 'failed'")) {
+      const [attemptId, resourceId, processorId, tokenHash, fencingEpoch, errorCode, errorMessage, finishedAt] = this.args as [string, string, string, string, number, string, string, number];
+      const attempt = this.db.paperProcessingAttempts.get(attemptId);
+      if (!attempt || attempt.resource_id !== resourceId || attempt.processor_id !== processorId || attempt.lease_token_hash !== tokenHash || attempt.fencing_epoch !== fencingEpoch || !["claimed", "downloading", "extracting", "uploading"].includes(attempt.status) || attempt.lease_expires_at <= finishedAt) return { meta: { changes: 0 } };
+      attempt.status = "failed";
+      attempt.error_code = errorCode;
+      attempt.error_message_safe = errorMessage;
+      attempt.finished_at = finishedAt;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT INTO paper_processor_objects")) {
+      const [resourceId, attemptId, kind, objectId, sizeBytes, sha256, contentType, createdAt, processorId, tokenHash, fencingEpoch] = this.args as [string, string, PaperProcessorObjectRow["kind"], string, number, string, string, number, string, string, number];
+      const resource = this.db.paperResources.get(resourceId);
+      const attempt = this.db.paperProcessingAttempts.get(attemptId);
+      if (!resource || resource.status !== "uploading" || !attempt || attempt.resource_id !== resourceId || attempt.processor_id !== processorId || attempt.lease_token_hash !== tokenHash || attempt.fencing_epoch !== fencingEpoch || attempt.status !== "uploading" || attempt.lease_expires_at <= createdAt) return { meta: { changes: 0 } };
+      const key = `${resourceId}|${kind}|${objectId}`;
+      const existing = this.db.paperProcessorObjects.get(key);
+      if (existing && (existing.size_bytes !== sizeBytes || existing.sha256 !== sha256)) return { meta: { changes: 0 } };
+      this.db.paperProcessorObjects.set(key, { resource_id: resourceId, attempt_id: attemptId, kind, object_id: objectId, size_bytes: sizeBytes, sha256, content_type: contentType, created_at: existing?.created_at ?? createdAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT INTO paper_resources")) {
+      const [resourceId, sessionId, userId, sourceKind, sourceRef, canonicalRef, title, status, sourceSha256, pdfObjectKey, pdfSizeBytes, pdfSha256, textManifestKey, imageManifestKey, pageCount, imageCount, errorCode, errorMessageSafe, createdAt, updatedAt, readyAt] = this.args as [string, string, string, PaperResourceRow["source_kind"], string, string | null, string | null, PaperResourceRow["status"], string | null, string | null, number | null, string | null, string | null, string | null, number | null, number | null, string | null, string | null, number, number, number | null];
+      this.db.paperResources.set(resourceId, { resource_id: resourceId, session_id: sessionId, user_id: userId, source_kind: sourceKind, source_ref: sourceRef, canonical_ref: canonicalRef, title, status, source_sha256: sourceSha256, pdf_object_key: pdfObjectKey, pdf_size_bytes: pdfSizeBytes, pdf_sha256: pdfSha256, text_manifest_key: textManifestKey, image_manifest_key: imageManifestKey, page_count: pageCount, image_count: imageCount, error_code: errorCode, error_message_safe: errorMessageSafe, created_at: createdAt, updated_at: updatedAt, ready_at: readyAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT INTO paper_resource_links")) {
+      const [sessionId, resourceId, purpose, createdAt] = this.args as [string, string, PaperResourceLinkRow["purpose"], number];
+      const key = `${sessionId}|${resourceId}|${purpose}`;
+      if (this.db.paperResourceLinks.has(key)) return { meta: { changes: 0 } };
+      this.db.paperResourceLinks.set(key, { session_id: sessionId, resource_id: resourceId, purpose, created_at: createdAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("DELETE FROM paper_resource_links")) {
+      const [sessionId, resourceId] = this.args as [string, string];
+      let changes = 0;
+      for (const [key, link] of this.db.paperResourceLinks.entries()) {
+        if (link.session_id === sessionId && link.resource_id === resourceId) {
+          this.db.paperResourceLinks.delete(key);
+          changes += 1;
+        }
+      }
+      return { meta: { changes } };
+    }
+    if (sql.includes("INSERT INTO paper_processing_attempts")) {
+      const [attemptId, resourceId, processorId, leaseTokenHash, fencingEpoch, status, startedAt, leaseExpiresAt, finishedAt, errorCode, errorMessageSafe] = this.args as [string, string, string, string, number, PaperProcessingAttemptRow["status"], number | null, number, number | null, string | null, string | null];
+      const active = [...this.db.paperProcessingAttempts.values()].some((attempt) =>
+        (attempt.resource_id === resourceId || attempt.processor_id === processorId)
+        && ["claimed", "downloading", "extracting", "uploading"].includes(attempt.status));
+      if (active) throw new Error("active paper processing attempt exists");
+      this.db.paperProcessingAttempts.set(attemptId, { attempt_id: attemptId, resource_id: resourceId, processor_id: processorId, lease_token_hash: leaseTokenHash, fencing_epoch: fencingEpoch, status, started_at: startedAt, lease_expires_at: leaseExpiresAt, finished_at: finishedAt, error_code: errorCode, error_message_safe: errorMessageSafe });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_resources")) {
+      const [resourceId, nextStatus, expectedStatus, attemptId, fencingEpoch, now] = this.args as [string, PaperResourceRow["status"], PaperResourceRow["status"], string | null, number | null, number];
+      const row = this.db.paperResources.get(resourceId);
+      if (!row || row.status !== expectedStatus) return { meta: { changes: 0 } };
+      if (attemptId) {
+        const attempt = this.db.paperProcessingAttempts.get(attemptId);
+        if (!attempt || attempt.resource_id !== resourceId || attempt.fencing_epoch !== fencingEpoch || !["claimed", "downloading", "extracting", "uploading"].includes(attempt.status) || attempt.lease_expires_at <= now) return { meta: { changes: 0 } };
+      }
+      row.status = nextStatus;
+      row.updated_at = now;
+      if (nextStatus === "ready") row.ready_at = now;
+      return { meta: { changes: 1 } };
+    }
     if (sql.includes("UPDATE tasks SET status = 'cancelled'")) {
       const [taskId, now] = this.args as [string, number];
       const row = this.db.tasks.get(taskId);
@@ -415,6 +857,44 @@ class FakeStatement {
       return { meta: { changes: 1 } };
     }
     if (sql.includes("INSERT INTO task_events") || sql.includes("INSERT INTO outbox_events")) {
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT INTO chat_events")) {
+      if (this.db.failNextChatEventInsert) {
+        this.db.failNextChatEventInsert = false;
+        throw new Error("D1 write failed");
+      }
+      const [sessionId, turnId, eventType, role, content, toolCallId, toolName, toolArgumentsJson, resultSummary, resultObjectKey, resultSha256, resultBytes, status, createdAt] = this.args as [
+        string, string, ChatEventType, ChatEventRole, string | null, string | null, string | null,
+        string | null, string | null, string | null, string | null, number | null, string | null, number,
+      ];
+      if (!this.db.chatSessions.has(sessionId)) throw new Error("Chat session not found");
+      if (eventType === "tool_result" && !this.db.chatEvents.some((event) => event.session_id === sessionId && event.event_type === "tool_call" && event.tool_call_id === toolCallId)) {
+        throw new Error("Tool call not found for session");
+      }
+      if (eventType === "tool_call" && this.db.chatEvents.some((event) => event.session_id === sessionId && event.event_type === "tool_call" && event.tool_call_id === toolCallId)) {
+        throw new Error("Duplicate tool call ID");
+      }
+      if (eventType === "tool_result" && this.db.chatEvents.some((event) => event.session_id === sessionId && event.event_type === "tool_result" && event.tool_call_id === toolCallId)) {
+        return { meta: { changes: 0 } };
+      }
+      this.db.chatEvents.push({
+        event_id: this.db.nextChatEventId(),
+        session_id: sessionId,
+        turn_id: turnId,
+        event_type: eventType,
+        role,
+        content,
+        tool_call_id: toolCallId,
+        tool_name: toolName,
+        tool_arguments_json: toolArgumentsJson,
+        result_summary: resultSummary,
+        result_object_key: resultObjectKey,
+        result_sha256: resultSha256,
+        result_bytes: resultBytes,
+        status,
+        created_at: createdAt,
+      });
       return { meta: { changes: 1 } };
     }
     if (sql.includes("INSERT INTO workers")) {
@@ -464,6 +944,11 @@ class FakeStatement {
     if (sql.includes("INSERT INTO chat_messages")) {
       const [sessionId, role, content] = this.args as [string, string, string];
       this.db.addMessage(sessionId, role, content);
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("DELETE FROM chat_events")) {
+      const [sessionId] = this.args as [string];
+      this.db.chatEvents = this.db.chatEvents.filter((event) => event.session_id !== sessionId);
       return { meta: { changes: 1 } };
     }
     if (sql.includes("INSERT INTO worker_sessions")) {

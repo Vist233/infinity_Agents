@@ -1,0 +1,11 @@
+PAPER-09.5 baseline
+date=2026-08-27
+branch=cloudflare-deploy
+baseline_commit=61adfab9d18e457b076ce8918afc9124124c3273
+baseline_remote_ref=61adfab9d18e457b076ce8918afc9124124c3273 refs/heads/cloudflare-deploy
+previous_checkpoint=evidence/IMPLEMENT-20260826-CF-PAPER/PAPER-09/checkpoint.md
+external-release-checkpoint=evidence/IMPLEMENT-20260826-CF-PAPER/PAPER-10/checkpoint.md
+
+The existing uncommitted Paper Workspace implementation, tests, documentation, and prior evidence were treated as one reviewable change set and preserved. The updated design and execution-plan documents were read as authoritative inputs; the design was updated only for the final supported source taxonomy. No unrelated user change was overwritten.
+
+The initial sandbox-only remote read failed with `fatal: unable to access 'https://github.com/Vist233/infinity_Agents.git/': Could not resolve host: github.com`. An approved read-only retry resolved `origin/cloudflare-deploy` to the baseline commit above. No Cloudflare system was contacted.

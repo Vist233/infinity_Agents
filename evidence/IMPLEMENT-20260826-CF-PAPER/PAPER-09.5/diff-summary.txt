@@ -1,0 +1,15 @@
+# PAPER-09.5 diff summary
+
+Implemented the local contract-closure and release-candidate backup surface:
+
+- `search_paper` now returns a stable availability object for PMID-only PubMed results; cached old records are normalized to the same abstract-only contract, and `materialize_paper` returns a stable no-resource reason instead of treating a PMID as a PMCID.
+- The public resource creation route no longer accepts `approved_url`; the stable rejection happens before any D1 resource or link is created. No arbitrary URL downloader was added.
+- Added `backend/paper_processor/delivery.v1.json`, a versioned Cloudflare-managed delivery contract with explicit runtime-profile and digest blockers, plus `docs/PAPER_PROCESSOR_CLOUDFLARE_MANAGED_RUNBOOK.md` covering artifact identity, non-secret environment names, secret injection boundaries, lease/singleton rules, health/restart, logging redaction, and rollback.
+- Updated the authoritative Paper design taxonomy and Agent prompt to distinguish abstract-only PubMed results from materializable PMC references.
+- Added positive/negative tests for the PubMed decision path, approved_url pre-D1 rejection, required delivery fields, missing identity/secret-boundary fail-closed behavior, and documentation secret boundaries.
+
+Intentional non-changes:
+
+- No concrete Processor host, registry, Cloudflare managed runtime product, image digest, or credential was invented. The two precise release blockers remain explicit.
+- C7 D1/R2/Redis/Worker-v2 and public Claude-Code Worker boundaries were preserved.
+- No Cloudflare external write or PAPER-10 live acceptance was performed.

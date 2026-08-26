@@ -1,0 +1,12 @@
+# PAPER-00 diff summary
+
+## Intentional changes
+
+- Added this card's baseline/evidence files under `evidence/IMPLEMENT-20260826-CF-PAPER/PAPER-00/`.
+- Added a read-only active path inventory covering Edge routes, D1 tables, R2 binding, current tool/chat behavior, Python reference boundary, and the design gap.
+
+## Intentional non-changes
+
+- No Edge source, frontend source, Python runtime, Docker image, migration, test, Wrangler configuration, or C7 Worker v2 code changed.
+- No D1, R2, Redis, Processor, model provider, browser session, or Cloudflare configuration was modified.
+- The pre-existing untracked inputs `docs/CLOUDFLARE_PAPER_WORKSPACE_DESIGN.md` and `docs/CLOUDFLARE_PAPER_WORKSPACE_EXECUTION_PLAN.md` were read and left untouched.

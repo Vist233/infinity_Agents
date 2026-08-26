@@ -1,0 +1,25 @@
+# PAPER-05 tests and exit codes
+
+Branch: `cloudflare-deploy`
+Baseline: `61adfab9d18e457b076ce8918afc9124124c3273`
+
+Pre-implementation regression evidence (expected failures, no tests skipped):
+
+- `cd cloudflare-worker && npm test -- --run test/paper-resources.test.ts test/d1-runtime-schema.test.ts` -> exit 1. The new tests failed because migration `0018_paper_resources.sql` and the resource route did not yet exist.
+
+Focused post-implementation:
+
+- `cd cloudflare-worker && npm test -- --run test/paper-resources.test.ts test/d1-runtime-schema.test.ts` -> exit 0; 2 files, 12 tests passed.
+- `cd cloudflare-worker && npm run check` -> exit 0.
+- SQLite migration check: `0001_init.sql` + `0018_paper_resources.sql` applied, then `0018_paper_resources.sql` re-applied to the same temporary database; table inspection found `paper_resources`, `paper_processing_attempts`, and `paper_resource_links`; exit 0.
+
+Mandatory Edge gate after implementation:
+
+- `cd cloudflare-worker && npm run check && npm test` -> exit 0; 18 files, 103 tests passed.
+
+Coverage includes owned pending create/read, link creation, ready manifest through fixed object access, cross-user and guessed IDs, stale/expired fencing, invalid transitions, object-key traversal, deleted resource, and revoked link.
+
+Repository hygiene:
+
+- `git diff --check` -> exit 0.
+- No deployment, remote D1 migration, remote R2 write, Processor registration, Redis ACL change, secret rotation, Cloudflare configuration change, or remote task was performed.

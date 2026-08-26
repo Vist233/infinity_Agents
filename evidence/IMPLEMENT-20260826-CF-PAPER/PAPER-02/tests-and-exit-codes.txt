@@ -1,0 +1,34 @@
+# PAPER-02 tests and exit codes
+
+Focused regression after initial implementation:
+- Command: `npm test -- --run test/chat-events.test.ts test/d1-runtime-schema.test.ts`
+- Exit code: 1 (first run)
+- Result: 10/12 passed; two assertion mismatches were corrected in the test expectation and validation error wording. No requirement was removed or weakened.
+
+Focused regression after correction:
+- Command: `npm test -- --run test/chat-events.test.ts test/d1-runtime-schema.test.ts`
+- Exit code: 0
+- Result: 2 test files passed; 12 tests passed; 0 failed.
+
+Real local SQLite migration checks:
+- Empty database, apply `0017_chat_events.sql` twice, count events: exit code 0; count 0.
+- Two legacy sessions, three legacy messages, apply `0017_chat_events.sql` twice: exit code 0; three deterministic `legacy:<id>` events and no duplicate rows.
+- Duplicate tool-call ID against the migrated schema: expected SQLite exit code 19 (`UNIQUE constraint failed`).
+- Invalid event/role pair against the migrated schema: expected SQLite exit code 19 (`CHECK constraint failed`).
+
+Mandatory Edge suite, first attempt:
+- Command: `cd cloudflare-worker && npm run check && npm test`
+- Exit code: 2
+- Result: TypeScript found a fake-D1-only `eventSeq` property reference in `FakeStatement`. Fixed in the relevant test support before rerun.
+
+Mandatory Edge suite, final:
+- Command: `cd cloudflare-worker && npm run check && npm test`
+- Exit code: 0
+- `npm run check`: TypeScript check passed.
+- `npm test`: 16 test files passed; 84 tests passed; 0 failed.
+
+Additional local verification:
+- `git diff --check`: exit code 0.
+- Secret scan: exit code 0; details in `secret-scan.txt`.
+
+Not run: remote D1 migration, R2 write, Processor, browser, deployment, or other external integration; no authorization was provided.

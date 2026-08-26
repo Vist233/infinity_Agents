@@ -3,6 +3,17 @@ export interface Message {
   content: string;
 }
 
+export type ToolTimelineStatus = "pending" | "processing" | "succeeded" | "failed" | "unknown";
+
+export interface ToolTimelineEntry {
+  correlationId: string;
+  toolCallId: string;
+  toolName: string;
+  status: ToolTimelineStatus;
+  summary: string;
+  argumentsSummary?: string;
+}
+
 export interface SessionItem {
   session_id: string;
   title: string;
@@ -41,6 +52,8 @@ export interface ChatState {
   sessionId: string | null;
   sessions: SessionItem[];
   sessionMessagesMap: Record<string, Message[]>;
+  sessionToolTimelineMap: Record<string, ToolTimelineEntry[]>;
+  sessionLegacyHistoryMap: Record<string, boolean>;
   sessionRunMap: Record<string, SessionRunState>;
   editingSessionId: string | null;
   editingTitle: string;
@@ -70,6 +83,8 @@ export const INITIAL_CHAT_STATE: ChatState = {
   sessionId: null,
   sessions: [],
   sessionMessagesMap: {},
+  sessionToolTimelineMap: {},
+  sessionLegacyHistoryMap: {},
   sessionRunMap: {},
   editingSessionId: null,
   editingTitle: "",
@@ -83,6 +98,9 @@ export type ChatAction =
   | { type: "set_sessions"; sessions: SessionItem[] }
   | { type: "set_session_messages"; sessionId: string; messages: Message[] }
   | { type: "update_session_messages"; sessionId: string; updater: (prev: Message[]) => Message[] }
+  | { type: "set_session_tool_timeline"; sessionId: string; timeline: ToolTimelineEntry[]; legacyTextOnly: boolean }
+  | { type: "upsert_session_tool_timeline"; sessionId: string; entry: ToolTimelineEntry }
+  | { type: "update_session_tool_timeline"; sessionId: string; toolCallId: string; patch: Partial<ToolTimelineEntry> }
   | { type: "upsert_session"; session: SessionItem; toTop?: boolean }
   | { type: "remove_session"; sessionId: string }
   | { type: "set_session_run_state"; sessionId: string; runState: SessionRunState }
@@ -120,6 +138,33 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         },
       };
     }
+    case "set_session_tool_timeline":
+      return {
+        ...state,
+        sessionToolTimelineMap: { ...state.sessionToolTimelineMap, [action.sessionId]: action.timeline },
+        sessionLegacyHistoryMap: { ...state.sessionLegacyHistoryMap, [action.sessionId]: action.legacyTextOnly },
+      };
+    case "upsert_session_tool_timeline": {
+      const current = state.sessionToolTimelineMap[action.sessionId] || [];
+      const index = current.findIndex((entry) => entry.toolCallId === action.entry.toolCallId);
+      const timeline = index === -1
+        ? [...current, action.entry]
+        : current.map((entry, entryIndex) => entryIndex === index ? { ...entry, ...action.entry } : entry);
+      return {
+        ...state,
+        sessionToolTimelineMap: { ...state.sessionToolTimelineMap, [action.sessionId]: timeline },
+      };
+    }
+    case "update_session_tool_timeline": {
+      const current = state.sessionToolTimelineMap[action.sessionId] || [];
+      return {
+        ...state,
+        sessionToolTimelineMap: {
+          ...state.sessionToolTimelineMap,
+          [action.sessionId]: current.map((entry) => entry.toolCallId === action.toolCallId ? { ...entry, ...action.patch } : entry),
+        },
+      };
+    }
     case "upsert_session": {
       const exists = state.sessions.some((s) => s.session_id === action.session.session_id);
       if (!exists) {
@@ -145,11 +190,17 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       delete nextMessages[action.sessionId];
       const nextRunMap = { ...state.sessionRunMap };
       delete nextRunMap[action.sessionId];
+      const nextToolTimelineMap = { ...state.sessionToolTimelineMap };
+      delete nextToolTimelineMap[action.sessionId];
+      const nextLegacyHistoryMap = { ...state.sessionLegacyHistoryMap };
+      delete nextLegacyHistoryMap[action.sessionId];
       return {
         ...state,
         sessions: state.sessions.filter((s) => s.session_id !== action.sessionId),
         sessionMessagesMap: nextMessages,
         sessionRunMap: nextRunMap,
+        sessionToolTimelineMap: nextToolTimelineMap,
+        sessionLegacyHistoryMap: nextLegacyHistoryMap,
         sessionId: state.sessionId === action.sessionId ? null : state.sessionId,
       };
     }
@@ -205,6 +256,9 @@ export const getMessagesForSession = (state: ChatState, sessionId: string | null
 
 export const getRunStateForSession = (state: ChatState, sessionId: string | null) =>
   sessionId ? (state.sessionRunMap[sessionId] || DEFAULT_RUN_STATE) : DEFAULT_RUN_STATE;
+
+export const getToolTimelineForSession = (state: ChatState, sessionId: string | null) =>
+  sessionId ? (state.sessionToolTimelineMap[sessionId] || []) : [];
 
 export const deriveSessionTitle = (rawInput: string) => {
   const normalized = rawInput.replace(/\s+/g, " ").trim();

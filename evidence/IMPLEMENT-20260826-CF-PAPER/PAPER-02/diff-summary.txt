@@ -1,0 +1,16 @@
+# PAPER-02 diff summary
+
+## Intentional changes
+
+- `cloudflare-worker/migrations-infinity/0017_chat_events.sql`: additive bounded `chat_events` schema, event/role checks, foreign key, chronological indexes, per-session unique tool-call ID, and idempotent legacy backfill marked `legacy`.
+- `cloudflare-worker/src/db.ts`: typed event contract, byte-bounded validation, foreign-session guard, canonical event insert/read helpers, and explicit legacy text-history compatibility helper.
+- `cloudflare-worker/test/fake-d1.ts`: in-memory event storage, migration backfill simulation, event ordering, duplicate-ID, and session existence behavior.
+- `cloudflare-worker/test/chat-events.test.ts`: positive/negative repository and migration-behavior tests.
+- `cloudflare-worker/test/d1-runtime-schema.test.ts`: static schema/migration contract assertions.
+- Evidence files under this directory.
+
+## Intentional non-changes
+
+- `cloudflare-worker/src/chat.ts` and all chat writers are unchanged; no dual-write or loop cutover was introduced before PAPER-03.
+- No frontend, Python runtime, public Claude-Code Worker, C7 Worker v2, R2, Redis, Processor, or remote D1 path changed.
+- Legacy `chat_messages` remains intact and readable; no destructive migration or table drop was added.

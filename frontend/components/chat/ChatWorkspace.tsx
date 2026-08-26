@@ -120,6 +120,8 @@ export function ChatWorkspace() {
             )}
             <MessagePane
               messages={controller.messages}
+              toolTimeline={controller.toolTimeline}
+              legacyTextOnly={controller.legacyTextOnly}
               sessionId={controller.state.sessionId}
               isLoading={controller.isLoading}
               runState={controller.currentRunState}

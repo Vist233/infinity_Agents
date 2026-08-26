@@ -1,0 +1,24 @@
+# PAPER-01 tests and exit codes
+
+Focused regression before implementation:
+- Command: `npm test -- --run test/jwt.test.ts`
+- Exit code: 1 (expected red baseline)
+- Result: 11 tests collected; 5 header/payload expectations failed against the pre-change implementation, proving the new negative tests detect the existing gap.
+
+Focused regression after implementation:
+- Command: `npm test -- --run test/jwt.test.ts`
+- Exit code: 0
+- Result: 1 test file passed; 11 tests passed; 0 failed.
+
+Mandatory Edge suite:
+- Command: `cd cloudflare-worker && npm run check && npm test`
+- Exit code: 0
+- `npm run check`: TypeScript check passed.
+- `npm test`: 15 test files passed; 77 tests passed; 0 failed.
+
+Additional local verification:
+- Command: `git diff --check`
+- Exit code: 0.
+- Secret scan command/result: recorded in `secret-scan.txt`; exit code 0.
+
+Not required for PAPER-01 and not run: frontend, Python reference, integration, browser, remote D1/R2, Processor, deployment, or live Cloudflare checks.

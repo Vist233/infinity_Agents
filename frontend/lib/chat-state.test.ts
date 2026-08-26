@@ -4,6 +4,7 @@ import {
   INITIAL_CHAT_STATE,
   deriveSessionTitle,
   getMessagesForSession,
+  getToolTimelineForSession,
   isDefaultSessionTitle,
 } from "@/lib/chat-state";
 import { describe, expect, it } from "vitest";
@@ -55,12 +56,35 @@ describe("chatReducer", () => {
       sessions: [{ session_id: "s1", title: "T", created_at: "", updated_at: "" }],
       sessionMessagesMap: { s1: [{ role: "user" as const, content: "x" }] },
       sessionRunMap: { s1: DEFAULT_RUN_STATE },
+      sessionToolTimelineMap: {
+        s1: [{ correlationId: "turn-1", toolCallId: "call-1", toolName: "read_paper", status: "pending" as const, summary: "" }],
+      },
+      sessionLegacyHistoryMap: { s1: false },
     };
     const next = chatReducer(withSession, { type: "remove_session", sessionId: "s1" });
     expect(next.sessions).toHaveLength(0);
     expect(next.sessionMessagesMap.s1).toBeUndefined();
     expect(next.sessionRunMap.s1).toBeUndefined();
+    expect(next.sessionToolTimelineMap.s1).toBeUndefined();
+    expect(next.sessionLegacyHistoryMap.s1).toBeUndefined();
     expect(next.sessionId).toBeNull();
+  });
+
+  it("hydrates and updates a bounded tool timeline", () => {
+    const hydrated = chatReducer(INITIAL_CHAT_STATE, {
+      type: "set_session_tool_timeline",
+      sessionId: "s1",
+      timeline: [{ correlationId: "turn-1", toolCallId: "call-1", toolName: "read_paper", status: "pending", summary: "" }],
+      legacyTextOnly: false,
+    });
+    const updated = chatReducer(hydrated, {
+      type: "update_session_tool_timeline",
+      sessionId: "s1",
+      toolCallId: "call-1",
+      patch: { status: "succeeded", summary: "ready" },
+    });
+    expect(getToolTimelineForSession(updated, "s1")[0]).toMatchObject({ status: "succeeded", summary: "ready" });
+    expect(updated.sessionLegacyHistoryMap.s1).toBe(false);
   });
 });
 

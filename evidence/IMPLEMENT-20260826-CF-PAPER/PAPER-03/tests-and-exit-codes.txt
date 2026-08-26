@@ -1,0 +1,24 @@
+# PAPER-03 tests and exit codes
+
+Focused regression:
+- Command: `npm test -- --run test/chat-events.test.ts test/chat.test.ts`
+- Exit code: 0
+- Result: 2 test files passed; 24 tests passed; 0 failed.
+- Covered: durable user/tool/result/final events, no legacy dual-write, normalized/index-ordered multiple calls, provider-valid refresh replay, completed request-id replay without a second provider call, tool failure, initial D1 write failure, interrupted stream, duplicate call ID, incomplete history, and cross-session result rejection.
+
+Mandatory Edge suite, first attempt:
+- Command: `cd cloudflare-worker && npm run check && npm test`
+- Exit code: 2
+- Result: TypeScript rejected the replay-test closure variable narrowing. The test-only mutable holder was corrected and the command was rerun.
+
+Mandatory Edge suite, final:
+- Command: `cd cloudflare-worker && npm run check && npm test`
+- Exit code: 0
+- `npm run check`: TypeScript check passed.
+- `npm test`: 16 test files passed; 94 tests passed; 0 failed.
+
+Additional local verification:
+- `git diff --check`: exit code 0.
+- Secret scan: exit code 0; details in `secret-scan.txt`.
+
+Not run: remote D1/R2, browser/E2E, Processor, deployment, or external integration; no authorization was provided and those belong to later cards.

@@ -5,10 +5,91 @@ import {
   createChatSession,
   deleteChatSession,
   getChatSession,
+  listChatEvents,
   listChatSessions,
   listMessages,
   renameChatSession
 } from "./db";
+import type { ChatEventRow } from "./db";
+
+const MAX_HISTORY_TEXT_CHARS = 32_000;
+const MAX_HISTORY_SUMMARY_CHARS = 2_048;
+const MAX_HISTORY_ARGUMENTS_CHARS = 1_024;
+const MAX_HISTORY_EVENTS = 100;
+
+function boundedText(value: string | null | undefined, maxChars: number): string {
+  return (value ?? "").slice(0, maxChars);
+}
+
+function redactArgumentValue(key: string, value: unknown): unknown {
+  if (/(?:secret|token|password|authorization|credential|cookie|api[_-]?key|object[_-]?key|path)/i.test(key)) {
+    return "[redacted]";
+  }
+  if (Array.isArray(value)) return value.slice(0, 20).map((item) => redactArgumentValue(key, item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).slice(0, 40).map(([childKey, childValue]) => [
+      childKey,
+      redactArgumentValue(childKey, childValue),
+    ]));
+  }
+  return typeof value === "string" ? boundedText(value, 256) : value;
+}
+
+function safeArgumentsSummary(argumentsJson: string | null): string | undefined {
+  if (!argumentsJson) return undefined;
+  try {
+    const parsed = JSON.parse(argumentsJson) as unknown;
+    return boundedText(JSON.stringify(redactArgumentValue("", parsed)), MAX_HISTORY_ARGUMENTS_CHARS);
+  } catch {
+    return "[invalid arguments]";
+  }
+}
+
+function safeResultSummary(summary: string | null): string {
+  return boundedText(summary, MAX_HISTORY_SUMMARY_CHARS);
+}
+
+function toHistoryMessages(rows: ChatEventRow[]): Array<{ role: "user" | "assistant"; content: string }> {
+  return rows
+    .filter((row) => (row.event_type === "user_message" || row.event_type === "assistant_message")
+      && (row.role === "user" || row.role === "assistant")
+      && row.content != null)
+    .map((row) => ({ role: row.role as "user" | "assistant", content: boundedText(row.content, MAX_HISTORY_TEXT_CHARS) }));
+}
+
+function toSafeHistoryEvents(rows: ChatEventRow[]): Array<Record<string, unknown>> {
+  const toolNames = new Map(
+    rows
+      .filter((row) => row.event_type === "tool_call" && row.tool_call_id && row.tool_name)
+      .map((row) => [row.tool_call_id as string, row.tool_name as string]),
+  );
+  const collapsed = new Map<string, Record<string, unknown>>();
+  for (const row of rows
+    .filter((row) => row.event_type === "tool_call" || row.event_type === "tool_result")
+    .filter((row) => row.tool_call_id)
+    .slice(0, MAX_HISTORY_EVENTS)) {
+    const callId = row.tool_call_id as string;
+    const previous = collapsed.get(callId);
+    const next = {
+      session_id: row.session_id,
+      event_id: row.event_id,
+      turn_id: boundedText(row.turn_id, 255),
+      event_type: row.event_type,
+      tool_call_id: row.tool_call_id,
+      tool_name: row.tool_name ?? toolNames.get(row.tool_call_id as string) ?? "unknown",
+      status: row.status ?? "unknown",
+      summary: row.event_type === "tool_result" ? safeResultSummary(row.result_summary) : "",
+      ...(row.event_type === "tool_call" ? { arguments_summary: safeArgumentsSummary(row.tool_arguments_json) } : {}),
+    };
+    collapsed.set(callId, previous
+      ? {
+          ...previous,
+          ...(row.event_type === "tool_result" ? { status: next.status, summary: next.summary } : {}),
+        }
+      : next);
+  }
+  return [...collapsed.values()];
+}
 
 function toSessionItem(row: { id: string; title: string; created_at: number; updated_at: number }) {
   return {
@@ -36,8 +117,24 @@ export async function getSessions(env: Env, user: AuthedUser): Promise<Response>
 export async function getSessionMessages(env: Env, user: AuthedUser, sessionId: string): Promise<Response> {
   const owned = await getChatSession(env, sessionId, user.userId);
   if (!owned) return errorJson("Session not found", 404, "NOT_FOUND");
-  const rows = await listMessages(env, sessionId);
-  return json(rows.map((m) => ({ role: m.role, content: m.content })));
+  const eventRows = await listChatEvents(env, sessionId);
+  const legacyTextOnly = eventRows.length === 0
+    || eventRows.every((row) => row.status === "legacy" && (row.event_type === "user_message" || row.event_type === "assistant_message"));
+  if (eventRows.length === 0) {
+    const rows = await listMessages(env, sessionId);
+    return json({
+      messages: rows
+        .filter((row) => row.role === "user" || row.role === "assistant")
+        .map((row) => ({ role: row.role, content: boundedText(row.content, MAX_HISTORY_TEXT_CHARS) })),
+      events: [],
+      legacy_text_only: true,
+    });
+  }
+  return json({
+    messages: toHistoryMessages(eventRows),
+    events: legacyTextOnly ? [] : toSafeHistoryEvents(eventRows),
+    legacy_text_only: legacyTextOnly,
+  });
 }
 
 /** PATCH /api/sessions/:id/title */
