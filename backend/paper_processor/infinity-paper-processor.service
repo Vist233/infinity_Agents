@@ -1,0 +1,39 @@
+[Unit]
+Description=Infinity Paper Processor (single trusted zhangbot instance)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/home/zhangyvjing/.config/infinity-paper-processor/processor.env
+Environment=PAPER_PROCESSOR_EDGE_URL=https://infinity.zhangyvjing.com
+Environment=PAPER_PROCESSOR_ID=paper-processor-zhangbot-v1
+Environment=PAPER_PROCESSOR_WORK_ROOT=%h/.local/state/infinity-paper-processor/work
+Environment=PYTHONPATH=%h/.local/share/infinity-paper-processor/current
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/.local/share/infinity-paper-processor/current/.venv/bin/python -m backend.paper_processor.runner
+WorkingDirectory=%h/.local/share/infinity-paper-processor/current
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+MemoryMax=256M
+TasksMax=32
+LimitNOFILE=256
+ReadWritePaths=%h/.local/state/infinity-paper-processor
+
+[Install]
+WantedBy=default.target

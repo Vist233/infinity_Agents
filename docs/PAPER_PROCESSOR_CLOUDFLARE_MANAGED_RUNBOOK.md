@@ -1,88 +1,137 @@
-# Dedicated Paper Processor — Cloudflare-managed delivery v1
+# Dedicated Paper Processor — zhangbot delivery v2
 
-This runbook implements the checked-in `paper-processor.delivery/v1` contract
-at `backend/paper_processor/delivery.v1.json`. It is restricted to an
-owner-approved Cloudflare-managed runtime. The repository currently does not
-identify a concrete managed runtime profile or an approved image registry for
-this dedicated service; therefore release remains blocked with
-`CLOUDFLARE_MANAGED_RUNTIME_PROFILE_UNSPECIFIED` and
-`PAPER_PROCESSOR_IMAGE_DIGEST_NOT_PROVIDED`. Do not infer a host, registry,
-container service, or account from the repository.
+This runbook implements the checked-in `paper-processor.delivery/v2` contract
+at `backend/paper_processor/delivery.v1.json`. `zhangbot` is the one approved
+and one allowed host for this release. It is an owner-operated Linux VPS
+runtime, not a public Worker, not the C7 Worker runtime, and not a Docker
+deployment. No other host, replica, or horizontal scaling is permitted.
 
-## 1. Immutable artifact gate
+The Processor is an outbound-only client. It connects to the fixed Edge
+control plane at `https://infinity.zhangyvjing.com` and downloads only from the
+source allowlist enforced by `backend/paper_processor/ingest.py`:
+`arxiv.org`, `export.arxiv.org`, `www.ncbi.nlm.nih.gov`, `ncbi.nlm.nih.gov`,
+and `pmc.ncbi.nlm.nih.gov`. It exposes no listening socket or inbound port.
+After a source is admitted and downloaded, parsing must not use the network.
 
-- Build only from `backend/Dockerfile.paper-processor`.
-- Record an owner-approved OCI reference in the release record using
-  `PAPER_PROCESSOR_IMAGE_DIGEST` and the exact form
-  `oci-image@sha256:<64-hex-digest>`.
-- Floating tags, mutable image names, local-only images, and the existing
-  public Claude-Code Worker image are not valid Processor artifacts.
-- A missing approved runtime profile or digest is a blocker; do not substitute
-  a public host or a guessed Cloudflare product.
+## 1. Reviewed release artifact
 
-## 2. Runtime and environment boundary
+The release is a reviewed Git commit plus the checked-in hashes in the
+delivery definition. The Processor source hash is calculated with the exact
+command recorded in that definition. Dependencies are installed only from
+`backend/requirements.paper-processor.zhangbot.txt`, which pins exact
+versions. The deployment is a Python 3.10 virtualenv, with this layout:
 
-The managed runtime may receive only these non-secret names:
+```text
+/home/zhangyvjing/.local/share/infinity-paper-processor/releases/<commit>/
+  .venv/
+  install-record.txt
+/home/zhangyvjing/.local/share/infinity-paper-processor/current -> releases/<commit>
+```
 
-| Name | Boundary |
+The installation record must contain the interpreter version, the lock-file
+hash, the reviewed commit, and the installed package list. It must not contain
+tokens or parent credentials. Before activation, verify the source, lock file,
+service unit, and installation record against the release evidence. A
+Dockerfile is not a delivery artifact for this runtime.
+
+## 2. Runtime and credential boundary
+
+The service unit supplies only these non-secret settings:
+
+| Setting | Required value or rule |
 |---|---|
-| `PAPER_PROCESSOR_EDGE_URL` | approved Edge HTTPS control-plane URL |
-| `PAPER_PROCESSOR_ID` | server-issued Processor identity |
-| `PAPER_PROCESSOR_INSTANCE_ID` | unique runtime instance identity |
-| `PAPER_PROCESSOR_WORK_ROOT` | temporary local workspace root |
-| `PYTHONPATH`, `PYTHONUNBUFFERED` | image/runtime settings |
+| `PAPER_PROCESSOR_EDGE_URL` | `https://infinity.zhangyvjing.com` only |
+| `PAPER_PROCESSOR_ID` | `paper-processor-zhangbot-v1` |
+| `PAPER_PROCESSOR_INSTANCE_ID` | generated per boot/process/nonce by the runtime, or a verified unique value |
+| `PAPER_PROCESSOR_WORK_ROOT` | the controlled user state directory under `.local/state` |
+| `PYTHONPATH` | the active release directory |
+| `PYTHONUNBUFFERED` | `1` |
 
-The only Processor secret is `PAPER_PROCESSOR_TOKEN`, injected by the approved
-platform secret mechanism. The Edge separately holds
-`PAPER_PROCESSOR_SHARED_SECRET`. Neither side receives D1/R2 parent
-credentials, Redis credentials, Cloudflare account/API tokens, or provider
-keys. Secret values never appear in this file, image arguments, logs, browser
-state, Redis, or evidence.
+The only Processor secret is `PAPER_PROCESSOR_TOKEN`. Store it in
+`/home/zhangyvjing/.config/infinity-paper-processor/processor.env` with mode
+`0600`; the file contains exactly the one key and no comments, URLs, or other
+settings. Deliver it through a secure SSH stdin channel and never put it in a
+command argument, shell history, service unit, process log, browser state, or
+evidence. The Edge separately stores `PAPER_PROCESSOR_SHARED_SECRET`; its
+value is the same bootstrap secret but is never read back into logs or files.
 
-## 3. Lease, singleton and network assumptions
+The Processor never receives D1/R2 parent credentials, Redis credentials,
+Cloudflare account/API tokens, provider/model keys, or public Worker
+credentials. Redis remains only a recreatable notification hint and contains
+no paper bytes, extracted text, source URLs, object identifiers, tool payloads,
+or secrets.
 
-- Run one active instance for each server-issued `PAPER_PROCESSOR_ID`.
-- `PAPER_PROCESSOR_INSTANCE_ID` must be unique; horizontal scaling requires a
-  separately approved protocol change.
-- D1 is the authority for the short-lived Processor session, resource lease,
-  attempt, and fencing epoch. A restart reconnects and cannot reuse stale
-  capabilities.
-- The Processor calls only the fixed HTTPS Edge control API. It has no D1/R2
-  SDK, Redis connection, public Worker credential, or broad object listing.
-- After source download and validation, parsing runs without network access.
+## 3. Service hardening and singleton protocol
 
-## 4. Health, restart and logs
+Install and manage
+`backend/paper_processor/infinity-paper-processor.service` as a user-level
+systemd unit. Validate the unit with `systemd-analyze --user verify` before
+starting it. The unit must retain `PrivateTmp=yes`, `NoNewPrivileges=yes`,
+`ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateDevices=yes`,
+`UMask=0077`, bounded `MemoryMax=256M`, `TasksMax=32`, `LimitNOFILE=256`, and
+the explicit address-family restriction. Its only write path is the controlled
+temporary work directory. Do not add a socket, port, timer that creates a
+second instance, or a second service name.
 
-Readiness requires a successful Edge `connect` and a live poll/renew loop. The
-service does not expose a public health route. Liveness is process health plus
-bounded poll progress. The managed runtime restarts a failed process with its
-bounded backoff; startup recovery removes stale temporary workspaces and the
-next session is fenced by D1. Graceful shutdown stops polling, reports or
-cancels the current fenced attempt, and removes temporary files.
+The D1 control plane remains authoritative for Processor sessions, attempts,
+leases, and fencing epochs. There may be only one active instance for
+`paper-processor-zhangbot-v1`. Every connect uses a new instance/session; a
+restart cannot reuse stale capabilities. A stale attempt is expired or
+cancelled and remains fenced before a replacement attempt is accepted.
 
-Logs are structured and safe: stage, safe error code, opaque IDs, counts and
-sizes are allowed. Tokens, headers, source URLs, local paths, PDF/full-text or
-image bytes, raw manifests, stack traces and provider credentials are never
-logged. Failure details are returned only as bounded safe error codes/messages
-through the Edge protocol.
+Readiness means a successful Edge `connect` followed by bounded poll/renew
+progress. There is no public Processor health endpoint. systemd restarts only
+on process failure with the configured delay; startup recovery removes stale
+temporary workspaces. Graceful shutdown stops polling, reports or cancels the
+current fenced attempt, and removes temporary files.
 
-## 5. Release and rollback procedure
+## 4. Ordered installation and release procedure
 
-Before any external operation, the owner must approve the exact Cloudflare
-managed runtime profile, image digest, target environment, secret injection
-channel, and maintenance window. Then:
+Before each release, record the target account, Worker, D1 database, R2 bucket,
+Edge version, reviewed commit, local artifact hashes, and current zhangbot
+service state. Use read-only checks to confirm that no older Paper Processor
+unit, process, listener, or unexpected release is active. Do not alter the
+existing Redis, Redis Relay, or Cloudflared user services.
 
-1. Re-run local Edge, Processor, frontend, migration-replay, diff, and secret
-   gates; capture the immutable image digest.
-2. Provision only the named secret values through the platform secret channel.
-3. Register one Processor identity and start one instance in the approved
-   managed runtime; verify connect, claim, renew, fenced upload/finalize,
-   cancellation and restart recovery.
-4. On rollback, revoke Processor capabilities and active sessions first, pause
-   the new runtime, and point it to the prior immutable image digest. Preserve
-   D1 metadata and immutable R2 evidence; never hand-edit or delete state to
-   manufacture a pass.
+After the local tests, independent review, diff check, and secret scan pass:
 
-No step above authorizes a remote migration, R2 write, Processor registration,
-deployment, Redis ACL change, or secret rotation by itself. Those operations
-remain PAPER-10 actions and require separate explicit owner authorization.
+1. Verify the selected commit and artifact hashes again on both the release
+   checkout and the zhangbot transfer directory.
+2. Apply D1 migrations `0017` through `0021` in order and read back each
+   migration marker and required table/index. Stop if any step is ambiguous.
+3. Set the non-secret Edge binding `PAPER_PROCESSOR_ID` to
+   `paper-processor-zhangbot-v1`. Set the Edge secret
+   `PAPER_PROCESSOR_SHARED_SECRET` through the Wrangler secret channel, and
+   transfer the same token once to the mode-0600 Processor env file through
+   SSH stdin. Never echo either value.
+4. Copy the reviewed release into its commit-named directory, create the
+   Python 3.10 virtualenv, install only the pinned lock file, write the
+   sanitized installation record, validate the unit, and start the single
+   user service. Confirm that Redis, Relay, and Cloudflared unit state is
+   unchanged.
+5. Deploy the Edge from the reviewed branch, verify the public readiness
+   signal, then verify Processor connect and poll without exposing a public
+   Processor route.
+6. Run the authenticated end-to-end cases: supported-source search and PDF
+   materialization, D1/R2/Processor processing, page-scoped text, image
+   retrieval and analysis, durable tool-call history and refresh recovery,
+   provider egress, cross-user isolation, invalid identifiers, stale leases,
+   duplicate finalization, cancellation, malformed input, and restart
+   recovery. Evidence must include read-only state checks and safe summaries,
+   not just HTTP status or process liveness.
+
+## 5. Logging, failure and rollback
+
+Logs may contain only stage, safe error code, opaque resource/attempt IDs,
+counts, sizes, and bounded timing. Redact tokens, headers, URLs, local paths,
+stack traces, paper contents, raw manifests, and provider credentials. The
+normal log and evidence scan must prove that no secret or full payload crossed
+the boundary.
+
+On any failed step, stop at that step and record whether an external write
+occurred. Revoke Processor capabilities and active sessions first. Stop the
+service, preserve D1/R2 metadata, and restore the prior reviewed release by
+pointing the `current` symlink to its previous commit-named directory. Start
+the old service only after read-only hash and unit verification. Do not delete
+or hand-edit metadata to manufacture a pass. A Git revert is separate from a
+Cloudflare rollback and does not authorize either one.

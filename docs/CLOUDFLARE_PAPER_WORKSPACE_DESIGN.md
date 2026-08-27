@@ -72,17 +72,26 @@ Redis remains a recreatable notification hint only.  It contains no PDF bytes,
 full text, source URLs containing credentials, tool payloads, or user secrets.
 ```
 
-The processor is a platform-managed, fixed-purpose service.  It is not a
-student/public Worker and it is not the existing generic Claude Code runtime.
-It receives a short-lived, resource-and-attempt-scoped capability over a fixed
-HTTPS control API.  It never receives D1/R2 parent credentials and never gets
+The processor is a fixed-purpose service on the owner-approved `zhangbot`
+Linux VPS. This is the sole allowed host and sole active instance for the
+release; it is not a student/public Worker, the existing generic Claude Code
+runtime, or a Docker deployment. It receives a short-lived,
+resource-and-attempt-scoped capability over the fixed HTTPS Edge control API at
+`https://infinity.zhangyvjing.com`. It has no inbound listener and may make
+outbound HTTPS requests only to that control plane and the explicit arXiv/PMC
+source allowlist. It never receives D1/R2 parent credentials and never gets
 the ability to list another user's resources.
 
-Its release artifact must include a reviewed deployment definition for the
-approved Cloudflare-managed runtime: an immutable image identity, non-secret
-environment contract, secret injection boundary, health/restart rules,
-singleton/lease assumptions, log-redaction rules, and rollback operation. A
-Dockerfile alone is not a deployable service.
+Its release artifact is a reviewed Git commit plus source, dependency-lock,
+and systemd-unit hashes, installed in a Python 3.10 virtualenv under a
+commit-named release directory. The `systemd-user` service uses
+`PrivateTmp`, `NoNewPrivileges`, `ProtectSystem`, bounded memory/tasks, a
+controlled work directory, and a mode-0600 env file containing only
+`PAPER_PROCESSOR_TOKEN`. The Edge separately holds
+`PAPER_PROCESSOR_SHARED_SECRET`. The definition also fixes health/restart
+rules, singleton/lease assumptions, log-redaction rules, and rollback. The
+Dockerfile is retained only as historical/reference material and is not a
+deployable artifact for this runtime.
 
 The processor may use a temporary local working directory.  That directory is
 not a product storage location: it is deleted after a terminal attempt.  The

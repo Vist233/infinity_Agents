@@ -11,7 +11,9 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import urllib.error
+from urllib.parse import urlparse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
@@ -33,9 +35,39 @@ class PaperProcessorProtocolError(RuntimeError):
     """The Edge rejected a Processor protocol request."""
 
 
+_FIXED_EDGE_HOST = "infinity.zhangyvjing.com"
+
+
+def _validate_edge_url(edge_url: str) -> str:
+    parsed = urlparse(edge_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != _FIXED_EDGE_HOST
+        or parsed.port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise PaperProcessorProtocolError("Paper Processor Edge URL is not the fixed control plane")
+    return f"https://{_FIXED_EDGE_HOST}"
+
+
+def _new_instance_id() -> str:
+    try:
+        with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as boot_file:
+            boot_id = boot_file.read().strip()
+    except OSError:
+        boot_id = "boot-unknown"
+    if not boot_id:
+        boot_id = "boot-unknown"
+    return f"zhangbot-{boot_id}-{os.getpid()}-{secrets.token_hex(8)}"
+
+
 class PaperProcessorClient:
     def __init__(self, edge_url: str, processor_id: str, bootstrap_token: str, instance_id: str) -> None:
-        self._edge_url = edge_url.rstrip("/")
+        self._edge_url = _validate_edge_url(edge_url)
         self._processor_id = processor_id
         self._bootstrap_token = bootstrap_token
         self._instance_id = instance_id
@@ -159,7 +191,7 @@ def from_environment() -> PaperProcessorClient:
     edge_url = os.environ.get("PAPER_PROCESSOR_EDGE_URL", "").strip()
     processor_id = os.environ.get("PAPER_PROCESSOR_ID", "").strip()
     bootstrap_token = os.environ.get("PAPER_PROCESSOR_TOKEN", "").strip()
-    instance_id = os.environ.get("PAPER_PROCESSOR_INSTANCE_ID", "").strip()
-    if not edge_url or not processor_id or not bootstrap_token or not instance_id:
+    instance_id = os.environ.get("PAPER_PROCESSOR_INSTANCE_ID", "").strip() or _new_instance_id()
+    if not edge_url or not processor_id or not bootstrap_token:
         raise PaperProcessorProtocolError("Paper Processor runtime configuration is incomplete")
     return PaperProcessorClient(edge_url, processor_id, bootstrap_token, instance_id)

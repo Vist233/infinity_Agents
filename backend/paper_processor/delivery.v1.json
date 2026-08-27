@@ -1,21 +1,43 @@
 {
-  "schema_version": "paper-processor.delivery/v1",
-  "status": "blocked_until_runtime_approval",
+  "schema_version": "paper-processor.delivery/v2",
+  "status": "ready_for_zhangbot_rollout",
   "runtime": {
-    "provider": "cloudflare",
-    "class": "managed",
-    "profile": "OWNER_APPROVAL_REQUIRED",
-    "allowed_service_class": "dedicated-paper-processor",
-    "host": null,
-    "runtime_profile_required_before_release": true,
-    "network_policy": "HTTPS control-plane only; no network after source download"
+    "provider": "linux-vps",
+    "class": "dedicated-single-host",
+    "host": "zhangbot",
+    "service_manager": "systemd-user",
+    "service_unit": "infinity-paper-processor.service",
+    "edge_control_plane": "https://infinity.zhangyvjing.com",
+    "inbound_ports": [],
+    "outbound_policy": "HTTPS only to the fixed Edge control plane and the allowlisted arXiv/PMC source hosts; no inbound listener",
+    "allowed_source_hosts": [
+      "arxiv.org",
+      "export.arxiv.org",
+      "www.ncbi.nlm.nih.gov",
+      "ncbi.nlm.nih.gov",
+      "pmc.ncbi.nlm.nih.gov"
+    ],
+    "post_download_network_policy": "No network access during parsing",
+    "horizontal_scaling": "forbidden; exactly one active instance",
+    "runtime_approval": "owner-approved zhangbot VPS only"
   },
-  "image": {
-    "build_context": "backend/Dockerfile.paper-processor",
-    "immutable_ref_env": "PAPER_PROCESSOR_IMAGE_DIGEST",
-    "immutable_ref_format": "oci-image@sha256:<64-hex-digest>",
-    "digest_value": null,
-    "digest_required_before_release": true
+  "artifact": {
+    "reviewed_processor_commit": "540d705830c800727b034a9c4d44b664d058685d",
+    "source_commit_role": "reviewed Paper Processor runtime source; final release record pins the exact preceding review commit",
+    "python_version": "3.10",
+    "packaging": "Python virtualenv; Docker is not the zhangbot delivery path",
+    "release_layout": "/home/zhangyvjing/.local/share/infinity-paper-processor/releases/<commit>",
+    "current_symlink": "/home/zhangyvjing/.local/share/infinity-paper-processor/current",
+    "virtualenv_layout": "<release-dir>/.venv",
+    "dependency_lock": "backend/requirements.paper-processor.zhangbot.txt",
+    "dependency_install_record": "/home/zhangyvjing/.local/share/infinity-paper-processor/current/install-record.txt",
+    "service_unit": "backend/paper_processor/infinity-paper-processor.service",
+    "artifact_hash_command": "sha256sum backend/paper_processor/__init__.py backend/paper_processor/client.py backend/paper_processor/ingest.py backend/paper_processor/runner.py | sha256sum",
+    "artifact_hashes": {
+      "processor_source_sha256": "ce76a75997ebff53c10a1baf2beb2631b66c8fb5a6740b469ba8bf04bf381813",
+      "dependency_lock_sha256": "7910fd24e531e02f8b79a87ddc6bf5742ad67f2593b01172162f6c99901436d7",
+      "service_unit_sha256": "706ce12b9f63a6dfeda4620d6517483e2e2db7ae5657ebd09dae98fcc3a17029"
+    }
   },
   "environment": {
     "required_non_secret_names": [
@@ -25,47 +47,60 @@
       "PAPER_PROCESSOR_WORK_ROOT"
     ],
     "fixed_non_secret_names": ["PYTHONPATH", "PYTHONUNBUFFERED"],
+    "fixed_values": {
+      "PAPER_PROCESSOR_EDGE_URL": "https://infinity.zhangyvjing.com",
+      "PAPER_PROCESSOR_ID": "paper-processor-zhangbot-v1"
+    },
+    "instance_id_format": "zhangbot-<boot-id>-<process-id>-<random-nonce>",
     "unknown_names_forbidden": true
   },
   "secret_boundary": {
-    "delivery": "platform_secret_injection_only",
+    "processor_delivery": "secure SSH stdin once, then local file mode 0600; never command-line or shell history",
     "processor_secret_names": ["PAPER_PROCESSOR_TOKEN"],
+    "processor_env_file": "/home/zhangyvjing/.config/infinity-paper-processor/processor.env",
+    "processor_env_file_mode": "0600",
+    "processor_env_file_keys": ["PAPER_PROCESSOR_TOKEN"],
     "edge_secret_names": ["PAPER_PROCESSOR_SHARED_SECRET"],
     "parent_credentials_forbidden": [
       "D1_API_TOKEN",
       "R2_PARENT_KEY",
       "REDIS_URL",
       "CLOUDFLARE_API_TOKEN",
-      "STEPFUN_API_KEY"
+      "STEPFUN_API_KEY",
+      "DASHSCOPE_API_KEY"
     ],
     "secret_values_in_definition_or_logs": false
   },
   "singleton_lease": {
+    "processor_id": "paper-processor-zhangbot-v1",
     "active_instances_per_processor_id": 1,
     "instance_id_must_be_unique": true,
+    "instance_identity": "boot-id plus process-id plus random nonce",
     "lease_and_fencing_source": "D1",
-    "restart_behavior": "reconnect with a new short-lived session; stale attempts remain fenced"
+    "session_protocol": "short-lived connect session with lease and fencing epoch",
+    "restart_behavior": "stop polling, let capabilities expire or cancel the fenced attempt, then reconnect with a new instance/session"
   },
   "health_restart": {
-    "readiness": "A successful Edge connect plus a running poll/renew loop; no public health endpoint is exposed.",
-    "liveness": "The managed runtime observes process liveness and bounded poll progress; transport failure triggers reconnect.",
-    "restart": "Restart on process failure with platform-bounded backoff; startup recovery removes stale temporary workspaces.",
-    "shutdown": "Stop polling, report or cancel the fenced attempt, and remove the temporary work root."
+    "readiness": "Edge connect succeeds and the process enters the bounded poll/renew loop; no public health endpoint is exposed",
+    "liveness": "systemd process liveness plus bounded poll progress; transport failure triggers reconnect",
+    "restart": "systemd Restart=on-failure with bounded five-second delay and startup workspace recovery",
+    "shutdown": "stop polling, finish or cancel the current fenced attempt, and remove the temporary work root",
+    "memory_max": "256M",
+    "tasks_max": 32,
+    "no_public_listener": true,
+    "hardening": ["PrivateTmp=yes", "NoNewPrivileges=yes", "ProtectSystem=strict", "ProtectHome=read-only", "UMask=0077"]
   },
   "logging": {
     "format": "structured safe events",
-    "redaction_policy": "Allow only stage, safe error code, opaque resource/attempt IDs, counts and sizes; redact tokens, headers, URLs with credentials, local paths and stack traces.",
+    "redaction_policy": "Allow only stage, safe error code, opaque resource/attempt IDs, counts and sizes; redact tokens, headers, URLs, local paths and stack traces",
     "raw_payloads_forbidden": true,
-    "forbidden_fields": ["PAPER_PROCESSOR_TOKEN", "lease_token", "session_token", "pdf_bytes", "full_text", "image_bytes", "source_url"]
+    "forbidden_fields": ["PAPER_PROCESSOR_TOKEN", "lease_token", "session_token", "pdf_bytes", "full_text", "image_bytes", "source_url", "R2 object key"]
   },
   "rollback": {
-    "operation": "revoke processor capabilities and active sessions, pause the new runtime, and point the managed service to the previous immutable image digest",
+    "operation": "revoke Processor capabilities and active sessions, stop the service, restore the previous reviewed current symlink, and preserve D1/R2 metadata",
     "revoke_capabilities_first": true,
     "preserve_d1_r2": true,
-    "do_not_delete_or_edit_metadata": true
-  },
-  "approval_blockers": [
-    "CLOUDFLARE_MANAGED_RUNTIME_PROFILE_UNSPECIFIED",
-    "PAPER_PROCESSOR_IMAGE_DIGEST_NOT_PROVIDED"
-  ]
+    "do_not_delete_or_edit_metadata": true,
+    "release_restore": "point current to the prior immutable release directory and restart only after read-only verification"
+  }
 }

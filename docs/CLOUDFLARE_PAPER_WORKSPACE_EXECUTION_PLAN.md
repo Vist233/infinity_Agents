@@ -184,9 +184,10 @@ previous decision to stop immediately at `PAPER-10`.
   Processor rejects that source kind. The public API must not advertise a
   resource it cannot process.
 - The Processor has a Dockerfile and protocol client, but no reviewed,
-  reproducible deployment definition for its approved Cloudflare-managed
-  runtime, including image identity, environment/secret injection, health
-  behaviour, restart behaviour, and operator runbook.
+  reproducible deployment definition for the now-approved `zhangbot`
+  single-host VPS runtime, including commit/artifact identity,
+  environment/secret injection, health behaviour, restart behaviour, and
+  operator runbook.
 
 Do not mark these as merely PAPER-10 risks. They are local implementation and
 release-artifact gaps. `PAPER-10` remains blocked until PAPER-09.5 passes,
@@ -482,11 +483,13 @@ immutable, reviewable release candidate before any production mutation.
   arbitrary URL downloading as a shortcut. A future approved-URL feature
   requires its own reviewed source-admission card.
 - Add a versioned deployment definition and operator runbook for the dedicated
-  Processor on the approved Cloudflare-managed runtime. It must name the
-  immutable image input, non-secret required environment names, secret delivery
-  boundary, single-instance/lease assumptions, health/restart semantics,
+  Processor on the explicitly approved `zhangbot` Linux VPS. It must name the
+  reviewed Git commit and artifact hashes, Python 3.10 virtualenv layout,
+  pinned dependency install record, non-secret environment names, exact
+  mode-0600 token file boundary, systemd-user hardening, single-instance/lease
+  assumptions, fixed Edge/source egress allowlist, health/restart semantics,
   log-redaction policy, and rollback procedure. It must not contain actual
-  credentials or silently select an unapproved external host.
+  credentials, expose an inbound port, or silently select another host.
 - Add focused positive and negative tests for both source-contract outcomes and
   for the checked-in delivery artifact's required fields. Run the Edge suite,
   frontend typecheck/lint/unit/E2E, and Processor tests.
@@ -525,7 +528,8 @@ any remote migration, processor registration, deployment, or live test.
 
 1. Re-read all prior checkpoints and confirm no skipped gate.
 2. Apply the additive D1 migrations through the repository deployment runbook.
-3. Deploy the Edge and dedicated processor from immutable reviewed commits.
+3. Deploy the Edge and the one zhangbot systemd-user Processor release from
+   the immutable reviewed commit and checked-in artifact hashes.
 4. In an authenticated browser, use a public open-access paper to prove:
    search, materialize, progress, refresh, page text, search, image list, one
    image analysis, and a durable tool timeline.

@@ -1,0 +1,3 @@
+# Reviewed against the zhangbot Python 3.10 runtime.
+pypdf==6.15.0
+PyMuPDF==1.26.6
