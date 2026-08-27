@@ -22,8 +22,8 @@
     "runtime_approval": "owner-approved zhangbot VPS only"
   },
   "artifact": {
-    "reviewed_processor_commit": "540d705830c800727b034a9c4d44b664d058685d",
-    "source_commit_role": "reviewed Paper Processor runtime source; final release record pins the exact preceding review commit",
+    "reviewed_processor_commit": "455ae849c572aa285cc752a10e21fd69f031b18d",
+    "source_commit_role": "reviewed Paper Processor runtime source commit included in the release history",
     "python_version": "3.10",
     "packaging": "Python virtualenv; Docker is not the zhangbot delivery path",
     "release_layout": "/home/zhangyvjing/.local/share/infinity-paper-processor/releases/<commit>",

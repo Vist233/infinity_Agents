@@ -1,57 +1,52 @@
-PAPER-10 local preflight record
+# PAPER-10 local release tests
 
-1. Prior-card mandatory Worker verification
-   Command: `cd cloudflare-worker && npm run check`
-   Result: TypeScript check passed; exit code 0.
+All commands below were run from the stated working directory. Exit codes are
+recorded exactly; no failed assertion was skipped.
 
-2. Prior-card mandatory Worker full suite
-   Command: `cd cloudflare-worker && npm test`
-   Result: 22 files, 121 tests passed; exit code 0.
+1. Delivery contract focused test
+   Working directory: `cloudflare-worker`
+   Command: `npm test -- --run test/paper-processor-delivery.test.ts`
+   Result: 4 tests passed; exit code 0.
 
-3. PAPER-09 focused acceptance suite
-   Command: `npm test -- --run test/paper-privacy.test.ts test/paper-processor.test.ts test/tools.test.ts test/index.test.ts test/d1-runtime-schema.test.ts`
-   Result: 5 files, 37 tests passed; exit code 0.
+2. Processor runtime and ingestion focused tests
+   Working directory: repository root
+   Command: `eval "$(pyenv init - zsh)"; pyenv shell Agent; PYTHONPATH=. python -m pytest -q tests/test_paper_processor_runtime.py tests/test_paper_processor_ingestion.py`
+   Result: 11 tests passed; exit code 0. pyenv emitted only its existing
+   non-fatal rehash permission warning.
 
-4. Migration replay preflight
-   Result: local SQLite replay of `0018`, `0019`, `0020`, `0021`, followed by an idempotent replay of `0021`, passed; exit code 0.
+3. Mandatory Edge gate
+   Working directory: `cloudflare-worker`
+   Command: `npm run check && npm test`
+   Result: TypeScript check exit code 0; 23 test files and 127 tests passed;
+   overall exit code 0.
 
-5. Diff and secret preflight
-   Result: `git diff --check` passed; PAPER scope high-confidence secret scan found no literal parent credentials/private keys/credential-bearing URLs; exit code 0.
+4. Frontend typecheck, lint and unit gate
+   Working directory: `frontend`
+   Command: `npm run typecheck && npm run lint && npm run test:unit`
+   Result: typecheck exit code 0; lint exit code 0; 12 files and 50 unit tests
+   passed; overall exit code 0. Existing React `act(...)` warnings were
+   non-fatal and did not alter the result.
 
-6. External release commands
-    Result: not run. No remote D1 migration, remote R2 write, Processor registration, remote task, Redis ACL change, secret rotation, Cloudflare configuration change, deployment, or live browser/integration write was performed.
+5. Frontend E2E gate, first environment attempt
+   Working directory: `frontend`
+   Command: `npm run test:e2e`
+   Result: exit code 1 because the sandbox denied binding the test web server
+   to `127.0.0.1:3000` (`EPERM`). No browser assertion failure occurred.
 
-7. Branch and source-control preflight
-   Command: `git status --short --branch && git rev-parse --verify HEAD && git ls-remote --heads origin cloudflare-deploy`
-   Result: exit code 0; branch `cloudflare-deploy`, local commit `fd3e8474ef6ba7c60108014fd5394140b6f52bd0`, and remote ref matched before evidence updates.
+6. Frontend E2E gate, permitted local-server retry
+   Working directory: `frontend`
+   Command: `npm run test:e2e`
+   Result: 13 tests passed; exit code 0. The Next.js proxy emitted expected
+   local `localhost:8000` connection-refused diagnostics for an absent optional
+   backend, while the E2E assertions all passed.
 
-8. Cloudflare identity preflight
-   Command: `wrangler whoami`
-   Result: exit code 0; authenticated account ID `3cfba3bb2ec69798aa4881b05d80810f`; no credential value recorded.
+7. Diff and secret gates
+   Commands: `git diff --check`; repository-scope credential-like pattern scan
+   over the changed Paper/runtime/docs/config files.
+   Result: diff check exit code 0; secret scan exit code 0 with no credential-like
+   value, private key, credential-bearing URL, or raw payload match.
 
-9. Edge deployment preflight
-   Commands: `wrangler deployments list --name infinity-agents-edge`; `wrangler versions list --name infinity-agents-edge --json`; `wrangler versions view 42b1ecaf-7a97-47d1-ae73-e6b4041fd900 --name infinity-agents-edge --json`
-   Result: each exit code 0; current deployed version is `42b1ecaf-7a97-47d1-ae73-e6b4041fd900`, version 104. Read-only bindings confirmed the expected `DB` D1 ID and `RESOURCE_BUCKET` bucket; no Paper Processor binding/secret was present.
-
-10. D1 target and migration preflight
-    Commands: `wrangler d1 list`; `wrangler d1 migrations list infinity-agents-db --remote`; `wrangler d1 execute infinity-agents-db --remote --json --command "SELECT name, type FROM sqlite_master WHERE type IN ('table','index') AND name IN ('chat_events','paper_resources','paper_processing_attempts','paper_resource_links','paper_processor_sessions','paper_processor_objects','paper_privacy_cleanup') ORDER BY type, name"`
-    Result: each exit code 0; D1 ID `9ee9ec94-cb42-40b5-8372-681c7b57c105` matched; all migrations `0017`–`0021` are pending; requested Paper tables/indexes were absent and the SELECT reported zero writes.
-
-11. R2 target preflight
-    Command: `wrangler r2 bucket list`
-    Result: exit code 0; `infinity-agents-resources` exists. No object was listed, read, or written.
-
-12. Edge health preflight
-    Command: `curl -fsS --max-time 20 https://infinity.zhangyvjing.com/health`
-    Result: exit code 0; `{"status":"ok","service":"infinity-agents-edge"}`.
-
-13. Secret-name preflight
-    Command: `wrangler secret list --name infinity-agents-edge`
-    Result: exit code 0; names only were returned. `PAPER_PROCESSOR_SHARED_SECRET` and `PAPER_PROCESSOR_ID` were absent; no Secret value was read or written.
-
-14. Processor artifact/runtime preflight
-    Commands: `sha256sum backend/Dockerfile.paper-processor backend/paper_processor/delivery.v1.json backend/paper_processor/ingest.py backend/paper_processor/client.py backend/paper_processor/runner.py cloudflare-worker/wrangler.jsonc`; local delivery definition inspection.
-    Result: exit code 0; hashes and the null digest/runtime blockers are recorded in `preflight.txt`. No registry push or runtime registration was attempted.
-
-15. PAPER-10 decision
-    Result: stopped at read-only preflight with `CLOUDFLARE_MANAGED_RUNTIME_PROFILE_UNSPECIFIED`, `PAPER_PROCESSOR_IMAGE_DIGEST_NOT_PROVIDED`, and missing secure Processor/Edge secret handoff. No remote D1 migration, R2 write, Processor registration, Secret/Redis change, deployment, or live acceptance was run.
+8. External operations in this local phase
+   Result: no remote D1 migration, R2 write, Processor registration, Secret or
+   Redis mutation, deployment, remote task, or authenticated live acceptance
+   was run before the required read-only preflight and source backup.

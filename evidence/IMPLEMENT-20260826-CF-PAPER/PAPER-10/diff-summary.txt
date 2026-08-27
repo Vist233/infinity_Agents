@@ -1,7 +1,28 @@
-# PAPER-10 diff summary
+# PAPER-10 local release diff summary
 
-No production or external-system code change was made for PAPER-10. This card only records the re-run read-only release preflight and the exact runtime/artifact blockers.
+The candidate change is limited to the Paper Workspace release surface:
 
-The releasable local surface is the implementation accepted by PAPER-00 through PAPER-09: durable chat/tool events, D1 resource metadata, R2-backed dedicated Processor ingestion, bounded page/image reads, private image delivery, policy-gated image analysis, safe audit/readiness events, revocation, and cleanup retry/recovery.
+- `backend/paper_processor/client.py`: fixed Edge control-plane validation and
+  unique boot/process/nonce instance identity generation.
+- `backend/paper_processor/delivery.v1.json`: versioned `v2` zhangbot runtime,
+  artifact/hash, environment, secret, singleton, hardening, health, logging,
+  and rollback contract.
+- `backend/paper_processor/infinity-paper-processor.service`: hardened
+  systemd-user unit with no listener and no embedded secret.
+- `backend/requirements.paper-processor.zhangbot.txt`: exact dependency pins.
+- `cloudflare-worker/wrangler.jsonc`: non-secret
+  `PAPER_PROCESSOR_ID=paper-processor-zhangbot-v1` binding.
+- `tests/test_paper_processor_runtime.py` and the delivery test: positive and
+  negative runtime-contract coverage.
+- `docs/CLOUDFLARE_PAPER_WORKSPACE_DESIGN.md`,
+  `docs/CLOUDFLARE_PAPER_WORKSPACE_EXECUTION_PLAN.md`, and the Processor
+  runbook: synchronized zhangbot-only deployment definition and operations.
 
-No `deployment.txt` is present because preflight stopped before deployment. No remote D1 migration, R2 write, Processor registration, Secret/Redis change, Cloudflare configuration change, or live acceptance occurred.
+The existing PubMed PMID abstract-only contract and
+`PAPER_APPROVED_URL_DISABLED` entry-point rejection remain unchanged and are
+covered by the full Edge suite. C7 Worker v2, D1/R2 schema SQL, Redis, Relay,
+Cloudflared, frontend product code, and external systems were not altered.
+
+No `deployment.txt` is present yet: the required read-only Cloudflare and
+zhangbot preflight, migrations, secret handoff, service installation, deploy,
+and authenticated live acceptance have not started in this local phase.

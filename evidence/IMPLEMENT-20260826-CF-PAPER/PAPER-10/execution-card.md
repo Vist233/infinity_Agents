@@ -2,19 +2,40 @@
 
 - Branch: `cloudflare-deploy`
 - Card: PAPER-10 — external release, deployment and live acceptance
-- Baseline commit: `61adfab9d18e457b076ce8918afc9124124c3273`
-- Local scope completed: release preflight, prior-card evidence continuity, local Worker checks, migration replay evidence, diff hygiene, and secret-scan review.
-- External scope not executed: preflight stopped before remote D1 migration, production R2/Processor configuration, Processor registration, deployment, remote task creation, or authenticated live browser/integration acceptance because the approved Processor runtime and immutable image identity were not available.
+- Candidate source commit: `455ae849c572aa285cc752a10e21fd69f031b18d`
+- Runtime decision: the user explicitly approved `zhangbot` as the sole
+  trusted Paper Processor host, overriding the earlier Cloudflare-managed
+  runtime assumption. No other host or replica is in scope.
+- External authorization: the user explicitly authorized production D1
+  migrations `0017`–`0021`, the minimum Edge/R2/Processor configuration,
+  zhangbot service installation, Edge/Processor deployment, and authenticated
+  live acceptance. Existing Redis, Redis Relay, and Cloudflared services remain
+  outside the change scope.
+- Local outcome: the fixed-source contract, PubMed/approved-URL boundaries,
+  Python 3.10 virtualenv delivery definition, pinned dependencies, fixed Edge
+  URL validation, unique instance identity, hardened systemd-user unit, and
+  operator runbook are implemented and tested.
+- External outcome at this checkpoint: not yet run. The next action is the
+  strict read-only Cloudflare and zhangbot preflight after source-control
+  backup. No Cloudflare, R2, Processor, Redis, Secret, or zhangbot write has
+  occurred in this local phase.
 
 ## Required release acceptance
 
-- [ ] Apply additive migrations `0017` through `0021` to the authorized target D1 database and verify schema/query behavior remotely.
-- [ ] Configure the authorized R2 binding and dedicated Paper Processor through the existing C7-safe deployment path, without exposing parent credentials.
-- [ ] Register/start the dedicated Paper Processor and verify lease, fencing, retry, cancellation, object publication, and recovery against real D1/R2.
-- [ ] Deploy the reviewed `cloudflare-deploy` Worker and Processor artifacts after immutable artifact/hash capture.
-- [ ] Run the authorized live browser/integration acceptance for chat replay, PDF admission/download/parse/page read, image delivery/analysis, deletion/revocation, and cleanup.
-- [ ] Capture deployment identifiers, migration results, live test exit codes, safe health/readiness output, rollback reference, and post-release secret scan.
-
-## Preflight blocker
-
-Owner authorization for the external writes and live validation has now been provided, but the release remains blocked until the owner provides the exact approved Cloudflare-managed Processor runtime profile, registry and immutable OCI image digest, Processor identity/token handoff, and Edge shared-secret injection channel. No credentials or target identifiers were inferred from the repository. No external write was attempted.
+- [ ] Re-run read-only target, artifact, Cloudflare, D1, R2, zhangbot, and
+  runtime preflight.
+- [ ] Apply additive D1 migrations `0017` through `0021` in order and read
+  back each migration marker and required table/index.
+- [ ] Configure the fixed Edge Processor ID and shared secret; transfer only
+  the Processor token to the mode-0600 zhangbot env file without logging it.
+- [ ] Deploy the reviewed Python virtualenv release and one systemd-user
+  service without changing Redis, Relay, or Cloudflared.
+- [ ] Deploy the reviewed Edge and verify readiness, Processor connect/poll,
+  lease/fencing, retries, cancellation, object publication, and restart
+  recovery against real D1/R2.
+- [ ] Run authenticated live search, supported PDF materialization, parsing,
+  page text, image retrieval/analysis, durable tool history/refresh recovery,
+  provider egress, isolation, invalid identifiers, stale leases, duplicate
+  finalize, cancellation, malformed input, and oversized/SSRF negatives.
+- [ ] Capture deployment identifiers, migration results, live exit codes, safe
+  health/readiness output, rollback reference, and post-release secret scan.
