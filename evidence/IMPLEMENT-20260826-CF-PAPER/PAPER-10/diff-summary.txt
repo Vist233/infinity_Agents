@@ -23,6 +23,9 @@ The existing PubMed PMID abstract-only contract and
 covered by the full Edge suite. C7 Worker v2, D1/R2 schema SQL, Redis, Relay,
 Cloudflared, frontend product code, and external systems were not altered.
 
-No `deployment.txt` is present yet: the required read-only Cloudflare and
-zhangbot preflight, migrations, secret handoff, service installation, deploy,
-and authenticated live acceptance have not started in this local phase.
+No successful `deployment.txt` is present: the read-only Cloudflare and
+zhangbot preflight passed and D1 migrations were applied, but Processor release
+installation stopped at the missing zhangbot `python3.10-venv`/ensurepip
+prerequisite. The temporary secret handoff and inactive release were rolled
+back; service installation, Edge deployment, R2 processing, and authenticated
+live acceptance did not occur.

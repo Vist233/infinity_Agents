@@ -47,6 +47,47 @@ recorded exactly; no failed assertion was skipped.
    value, private key, credential-bearing URL, or raw payload match.
 
 8. External operations in this local phase
-   Result: no remote D1 migration, R2 write, Processor registration, Secret or
-   Redis mutation, deployment, remote task, or authenticated live acceptance
-   was run before the required read-only preflight and source backup.
+   Result: this statement was superseded by the authorized PAPER-10 execution
+   after the source backup and passing read-only preflight. The exact external
+   results are below.
+
+9. Production D1 migration apply
+   Working directory: `cloudflare-worker`
+   Command: `npx wrangler d1 migrations apply infinity-agents-db --remote`
+   Result: interactive confirmation was supplied; `0017` through `0021` were
+   each reported successful in order; exit code 0.
+
+10. Production D1 migration readback
+    Commands: `npx wrangler d1 migrations list infinity-agents-db --remote`;
+    read-only `sqlite_master` query for all expected Paper tables/indexes;
+    read-only `d1_migrations` query for migration IDs 17–21.
+    Result: all commands exit code 0; no migrations pending; all expected
+    tables/indexes present; migration IDs 17–21 recorded; readback metadata
+    reports `changes=0`, `changed_db=false`, `rows_written=0`.
+
+11. Edge shared-secret and zhangbot token creation
+    Commands: `npx wrangler secret put PAPER_PROCESSOR_SHARED_SECRET --name
+    infinity-agents-edge` with a temporary stdin-only random value; SSH stdin
+    write to the exact zhangbot env file; read-only secret-name and env-shape
+    checks.
+    Result: secret put exit code 0; remote file write exit code 0; readback
+    showed mode 600, one token key, 64 hex characters, and no printed value.
+
+12. Processor release installation
+    Command: reviewed source archive transfer followed by remote Python 3.10
+    venv creation and pinned dependency installation.
+    Result: exit code 1 at `python3 -m venv` because ensurepip is unavailable
+    and the host lacks `python3.10-venv`. No dependency install, unit install,
+    service start, Processor registration, Edge deploy, R2 write, or live
+    acceptance followed.
+
+13. Failure rollback
+    Commands: targeted removal of the newly created commit-named release
+    directory; targeted removal of the newly created zhangbot token file;
+    `npx wrangler secret delete PAPER_PROCESSOR_SHARED_SECRET --name
+    infinity-agents-edge`; read-only secret, zhangbot, migration, and health
+    checks.
+    Result: release cleanup exit code 0; token cleanup exit code 0; secret
+    deletion exit code 0; all readbacks exit code 0. D1 migrations remain
+    applied; Edge health is OK; Processor unit/env/release are absent; existing
+    Redis/Relay/Cloudflared state is unchanged.

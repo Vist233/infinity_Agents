@@ -46,3 +46,135 @@ Blockers:
 3. The current Edge deployment has no Paper Processor shared-secret binding, and no secure handoff identifies the Processor identity/token. Do not invent or reuse a public Worker credential.
 
 No external write operation was performed. The pending migrations are preserved as the expected pre-migration state; they were not applied.
+
+---
+
+# PAPER-10 zhangbot-only preflight superseding the historical runtime blocker
+
+preflight_date=2026-08-27
+candidate_commit=61cc66d509a86ac93cebef9fd955644d68d278c0
+remote_ref=61cc66d509a86ac93cebef9fd955644d68d278c0 refs/heads/cloudflare-deploy
+worktree=clean_before_preflight
+
+The explicit owner instruction approved `zhangbot` as the sole trusted Paper
+Processor host and prohibited any other host or replica. This is the current
+runtime selection; the historical Cloudflare-managed/OCI blocker above remains
+an accurate record of the earlier decision and is not reused as a current
+blocker.
+
+## Source-control and artifact checks
+
+- `git status --short --branch`, `git rev-parse HEAD`, and the read-only
+  `git ls-remote --heads origin cloudflare-deploy` all passed (exit code 0).
+  Local HEAD and the exact remote ref are
+  `61cc66d509a86ac93cebef9fd955644d68d278c0`.
+- The Processor source aggregate hash is
+  `ce76a75997ebff53c10a1baf2beb2631b66c8fb5a6740b469ba8bf04bf381813`.
+  The pinned dependency lock hash is
+  `7910fd24e531e02f8b79a87ddc6bf5742ad67f2593b01172162f6c99901436d7`.
+  The systemd unit hash is
+  `706ce12b9f63a6dfeda4620d6517483e2e2db7ae5657ebd09dae98fcc3a17029`.
+- The checked-in delivery definition and Wrangler configuration were hashed
+  read-only; no secret value was read.
+
+## Cloudflare target checks
+
+- `npx wrangler whoami` exited 0 for account
+  `3cfba3bb2ec69798aa4881b05d80810f`.
+- `npx wrangler deployments list --name infinity-agents-edge` and
+  `npx wrangler versions view 42b1ecaf-7a97-47d1-ae73-e6b4041fd900 --name
+  infinity-agents-edge --json` exited 0. The deployed version is 104 with
+  script etag `d38f1148ec93eed5c3294b6c0b3e1b6c32edb33ff48396d6709f65554763040c`.
+  Read-only bindings confirm D1 `9ee9ec94-cb42-40b5-8372-681c7b57c105` and R2
+  bucket `infinity-agents-resources`; the old deployment has no Paper
+  Processor ID or shared-secret binding.
+- `npx wrangler d1 list` exited 0 and matched the configured production D1.
+- `npx wrangler d1 migrations list infinity-agents-db --remote` exited 0 and
+  reported `0017_chat_events.sql`, `0018_paper_resources.sql`,
+  `0019_paper_processor_sessions.sql`, `0020_paper_processor_objects.sql`,
+  and `0021_paper_privacy_cleanup.sql` all pending.
+- The read-only `sqlite_master` query exited 0 with `changes=0`,
+  `changed_db=false`, `rows_written=0`, and no requested Paper tables/indexes.
+- `npx wrangler r2 bucket list` exited 0 and returned
+  `infinity-agents-resources`; no object was read, listed, or written.
+- `npx wrangler secret list --name infinity-agents-edge` exited 0 and returned
+  secret names only. No Paper Processor shared secret exists in the current
+  deployment; no Secret value was read.
+- `curl -fsS --max-time 20 https://infinity.zhangyvjing.com/health` exited 0
+  with `{"status":"ok","service":"infinity-agents-edge"}`.
+
+## zhangbot runtime checks
+
+- Read-only SSH exited 0. The host is Linux 5.15 x86_64 with Python 3.10.12,
+  approximately 22 GiB free disk, and approximately 1.1 GiB available
+  memory+swap.
+- Existing `infinity-cloudflared.service`, `infinity-redis.service`, and
+  `infinity-redis-relay.service` are active. No
+  `infinity-paper-processor.service` unit or active unit is present; no Python
+  Paper Processor process is present when shell self-matches are excluded.
+- The Processor env file and release directory are absent. Existing listeners
+  remain only on loopback 8090 and 6379/::1:6379; no Processor listener exists.
+  Docker is absent, as expected for the Python virtualenv delivery.
+
+## Preflight decision
+
+PASS for the approved single-host runtime. All required target, artifact,
+health, singleton-starting-state, and no-old-service checks passed. Proceed to
+D1 migration `0017` only, with a read-back verification before `0018`.
+No Cloudflare, R2, Processor, Secret, Redis, or zhangbot write has occurred at
+this point.
+
+---
+
+# PAPER-10 external execution stop: zhangbot venv prerequisite blocker
+
+The first authorized external write sequence was executed only after the
+passing read-only preflight above. Production D1 migrations `0017` through
+`0021` applied successfully in order; each was printed as successful by
+Wrangler and the post-write migration/schema readbacks passed. The Edge shared
+secret was created through Wrangler, and the matching one-time Processor token
+was written to zhangbot with mode 0600 and a valid single-key shape. Secret
+values are not recorded here.
+
+The next step stopped during the zhangbot release installation command. The
+reviewed source archive reached the new commit-named release directory, but
+`python3 -m venv <release>/.venv` exited 1 with the exact remote blocker:
+`ensurepip is not available`; the host requires the Debian/Ubuntu
+`python3.10-venv` package. Because the virtualenv could not be created, no
+dependency installation, install record, systemd unit registration, service
+start, Processor connect/poll, Edge deployment, R2 write, or live acceptance
+was attempted.
+
+The incomplete release directory was removed as a targeted rollback. The
+token file and the newly created Edge shared secret were also removed. Read-
+only post-rollback checks passed: the release directory and token file are
+absent, the Processor unit is not found/inactive, the three existing zhangbot
+services remain active, loopback listeners remain only on 8090 and 6379, the
+Edge health response is unchanged, and D1 reports no migrations pending.
+
+External operation record:
+
+- D1 migrations `0017`–`0021`: write succeeded; readback exit code 0; this
+  additive schema change is retained and must not be hand-reverted.
+- Edge `PAPER_PROCESSOR_SHARED_SECRET` creation: write succeeded; secret-name
+  readback exit code 0.
+- zhangbot `processor.env` creation: write succeeded; mode/shape readback exit
+  code 0; rollback removal succeeded and readback confirmed absent.
+- zhangbot release transfer/venv command: exit code 1 at missing ensurepip;
+  targeted release-directory rollback succeeded.
+- Edge shared-secret rollback: delete succeeded; secret-name readback confirms
+  it is absent.
+- Edge deployment, Processor registration/start, R2 object write, Redis/ACL
+  change, and authenticated live acceptance: not run.
+
+The macOS archive emitted harmless `._*` metadata entries during the failed
+transfer. A future retry must use an AppleDouble-free archive or another
+reviewed transfer method and must first resolve the exact `python3.10-venv`
+host dependency through an explicitly approved maintenance action.
+
+## Stop decision
+
+`BLOCKED_PROCESSOR_RUNTIME_DEPENDENCY`: stop PAPER-10 here. Do not install
+system packages, retry the release transfer, create another secret, register
+the Processor, deploy Edge, or run live acceptance until the owner explicitly
+approves the host prerequisite and the preflight is repeated.

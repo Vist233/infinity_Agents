@@ -2,7 +2,9 @@
 
 - Branch: `cloudflare-deploy`
 - Card: PAPER-10 — external release, deployment and live acceptance
-- Candidate source commit: `455ae849c572aa285cc752a10e21fd69f031b18d`
+- Release commit: `61cc66d509a86ac93cebef9fd955644d68d278c0`
+- Reviewed Processor source commit pinned by the delivery definition:
+  `455ae849c572aa285cc752a10e21fd69f031b18d`
 - Runtime decision: the user explicitly approved `zhangbot` as the sole
   trusted Paper Processor host, overriding the earlier Cloudflare-managed
   runtime assumption. No other host or replica is in scope.
@@ -15,10 +17,12 @@
   Python 3.10 virtualenv delivery definition, pinned dependencies, fixed Edge
   URL validation, unique instance identity, hardened systemd-user unit, and
   operator runbook are implemented and tested.
-- External outcome at this checkpoint: not yet run. The next action is the
-  strict read-only Cloudflare and zhangbot preflight after source-control
-  backup. No Cloudflare, R2, Processor, Redis, Secret, or zhangbot write has
-  occurred in this local phase.
+- External outcome at this checkpoint: read-only preflight passed and D1
+  migrations `0017`–`0021` applied. The shared secret and zhangbot token were
+  created only for the next deployment step, then both were rolled back after
+  zhangbot virtualenv creation failed because ensurepip/
+  `python3.10-venv` is missing. No Processor service started, no Edge deploy,
+  Processor registration, R2 write, Redis change, or live acceptance occurred.
 
 ## Required release acceptance
 
@@ -39,3 +43,10 @@
   finalize, cancellation, malformed input, and oversized/SSRF negatives.
 - [ ] Capture deployment identifiers, migration results, live exit codes, safe
   health/readiness output, rollback reference, and post-release secret scan.
+
+## Stop condition
+
+`BLOCKED_PROCESSOR_RUNTIME_DEPENDENCY`: the exact zhangbot host prerequisite is
+missing. The next action requires an explicit owner-approved installation of
+the host's `python3.10-venv`/ensurepip prerequisite, then a fresh read-only
+preflight and a new release attempt. PAPER-10 is not complete.

@@ -2,6 +2,7 @@ PAPER-10 local release baseline
 date=2026-08-27
 branch=cloudflare-deploy
 baseline_commit=455ae849c572aa285cc752a10e21fd69f031b18d
+release_commit=61cc66d509a86ac93cebef9fd955644d68d278c0
 previous_checkpoint=evidence/IMPLEMENT-20260826-CF-PAPER/PAPER-09.5/checkpoint.md
 
 The worktree was clean before the PAPER-10 runtime-contract changes. The
