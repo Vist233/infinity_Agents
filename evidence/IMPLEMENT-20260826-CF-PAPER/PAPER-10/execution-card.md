@@ -4,7 +4,7 @@
 - Card: PAPER-10 — external release, deployment and live acceptance
 - Baseline commit: `61adfab9d18e457b076ce8918afc9124124c3273`
 - Local scope completed: release preflight, prior-card evidence continuity, local Worker checks, migration replay evidence, diff hygiene, and secret-scan review.
-- External scope not executed: remote D1 migration, production R2/Processor configuration, Processor registration, deployment, remote task creation, and authenticated live browser/integration acceptance.
+- External scope not executed: preflight stopped before remote D1 migration, production R2/Processor configuration, Processor registration, deployment, remote task creation, or authenticated live browser/integration acceptance because the approved Processor runtime and immutable image identity were not available.
 
 ## Required release acceptance
 
@@ -15,6 +15,6 @@
 - [ ] Run the authorized live browser/integration acceptance for chat replay, PDF admission/download/parse/page read, image delivery/analysis, deletion/revocation, and cleanup.
 - [ ] Capture deployment identifiers, migration results, live test exit codes, safe health/readiness output, rollback reference, and post-release secret scan.
 
-## Approval boundary
+## Preflight blocker
 
-This card is blocked until the owner explicitly authorizes the specific external writes and live validation above, and provides the authorized target/account/environment through the existing secure Cloudflare/Processor channels. No credentials or target identifiers are inferred from the repository.
+Owner authorization for the external writes and live validation has now been provided, but the release remains blocked until the owner provides the exact approved Cloudflare-managed Processor runtime profile, registry and immutable OCI image digest, Processor identity/token handoff, and Edge shared-secret injection channel. No credentials or target identifiers were inferred from the repository. No external write was attempted.

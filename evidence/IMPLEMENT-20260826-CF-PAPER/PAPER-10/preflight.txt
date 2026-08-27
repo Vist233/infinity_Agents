@@ -1,0 +1,48 @@
+# PAPER-10 read-only production preflight
+
+preflight_date=2026-08-27
+branch=cloudflare-deploy
+local_commit=fd3e8474ef6ba7c60108014fd5394140b6f52bd0
+remote_ref_before_preflight=fd3e8474ef6ba7c60108014fd5394140b6f52bd0 refs/heads/cloudflare-deploy
+worktree=clean_before_evidence_update
+
+## Target identity
+
+- Cloudflare account: `3cfba3bb2ec69798aa4881b05d80810f` (authenticated Wrangler OAuth identity; no token value recorded).
+- Edge Worker target: `infinity-agents-edge`, route `infinity.zhangyvjing.com`.
+- D1 target: `infinity-agents-db`, ID `9ee9ec94-cb42-40b5-8372-681c7b57c105`.
+- R2 target: `infinity-agents-resources`, configured as `RESOURCE_BUCKET`.
+- Current deployed Edge version: `42b1ecaf-7a97-47d1-ae73-e6b4041fd900` (version 104); script etag `d38f1148ec93eed5c3294b6c0b3e1b6c32edb33ff48396d6709f65554763040c`.
+- Current deployed version read-only bindings include the expected `DB` D1 ID and `RESOURCE_BUCKET` R2 bucket. No Paper Processor-specific binding or `PAPER_PROCESSOR_*` secret was present in that version's binding metadata.
+
+## Migration and object state
+
+- `wrangler d1 migrations list infinity-agents-db --remote` exited 0 and reported all five Paper migrations pending: `0017_chat_events.sql`, `0018_paper_resources.sql`, `0019_paper_processor_sessions.sql`, `0020_paper_processor_objects.sql`, `0021_paper_privacy_cleanup.sql`.
+- A read-only D1 `sqlite_master` query exited 0 with zero rows for the requested Paper tables/indexes; it reported `rows_written=0` and `changed_db=false`.
+- `wrangler r2 bucket list` exited 0 and returned `infinity-agents-resources`; no object was listed, read, or written.
+- `GET https://infinity.zhangyvjing.com/health` exited 0 and returned `{"status":"ok","service":"infinity-agents-edge"}`.
+
+## Secret and runtime state
+
+- `wrangler secret list --name infinity-agents-edge` exited 0 and returned secret names only. It did not include `PAPER_PROCESSOR_SHARED_SECRET` or `PAPER_PROCESSOR_ID`.
+- `backend/paper_processor/delivery.v1.json` remains `blocked_until_runtime_approval` with `host=null`, `digest_value=null`, and blockers `CLOUDFLARE_MANAGED_RUNTIME_PROFILE_UNSPECIFIED` and `PAPER_PROCESSOR_IMAGE_DIGEST_NOT_PROVIDED`.
+- No approved Cloudflare-managed Processor runtime profile, service identity, image registry, or immutable `oci-image@sha256:<64-hex-digest>` was found in the repository or current Wrangler configuration.
+- The local artifact hashes were captured without logging secrets:
+  - `backend/Dockerfile.paper-processor`: `959ef98def0dd537b7f998e2632d9a77e5ff400df79aa0836df4a44b51a1448c`
+  - `backend/paper_processor/delivery.v1.json`: `57880e773cd7781493fdbe01eee824d499f5c1a0a31b20dc05432e29472b442c`
+  - `backend/paper_processor/ingest.py`: `96d62def01bb9374a1355df79b788d7630dd8d0b689153ec546073d4e5e6af1d`
+  - `backend/paper_processor/client.py`: `e283f5398811a3a0dd6b8e69cfa818ff3d8b8f7e232139ca0c21dc6181d441d5`
+  - `backend/paper_processor/runner.py`: `498e5f25c3d7970eb8eb97c8bf1b6fa814115489fa7b5933e287ff5ca8749ffc`
+  - `cloudflare-worker/wrangler.jsonc`: `19e5e728f1fc5fd6417dccc966d31c9512986ffea963fe8146c38d3f7e9aa71e`
+
+## Preflight decision
+
+STOP before migration, R2 write, Processor registration, Secret/Redis change, or deployment.
+
+Blockers:
+
+1. `CLOUDFLARE_MANAGED_RUNTIME_PROFILE_UNSPECIFIED`: the approved Cloudflare-managed runtime class/profile and operational target are not identified.
+2. `PAPER_PROCESSOR_IMAGE_DIGEST_NOT_PROVIDED`: no owner-approved immutable Processor image digest exists; the local Dockerfile hash is not a deployable OCI identity.
+3. The current Edge deployment has no Paper Processor shared-secret binding, and no secure handoff identifies the Processor identity/token. Do not invent or reuse a public Worker credential.
+
+No external write operation was performed. The pending migrations are preserved as the expected pre-migration state; they were not applied.

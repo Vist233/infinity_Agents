@@ -4,6 +4,8 @@ branch=cloudflare-deploy
 baseline_commit=61adfab9d18e457b076ce8918afc9124124c3273
 previous_checkpoint=evidence/IMPLEMENT-20260826-CF-PAPER/PAPER-09/checkpoint.md
 
-PAPER-00 through PAPER-09 have PASS checkpoints with local implementation and regression evidence. The user-provided design and execution-plan documents remain unmodified. No production target, Cloudflare account, remote D1 database, R2 bucket, Processor endpoint, or deployment credential was inferred or contacted.
+PAPER-00 through PAPER-09.5 have PASS checkpoints with local implementation and regression evidence. The design and execution-plan documents are the checked-in production contract for this branch. The current Cloudflare account and target resources were contacted only through the read-only PAPER-10 preflight; no write credential value was exposed or persisted.
 
-PAPER-10 local preflight is complete. External release work is intentionally not started pending explicit owner authorization.
+Current PAPER-10 preflight was re-run on 2026-08-27 at local commit `fd3e8474ef6ba7c60108014fd5394140b6f52bd0`, with `origin/cloudflare-deploy` verified at the same ref before evidence updates. The authenticated Cloudflare account, Edge Worker, D1 database, R2 bucket, current deployed Edge version, remote migration state, R2 binding, and Secret names were checked read-only; details are in `preflight.txt`.
+
+Preflight stopped before any external write because the approved Cloudflare-managed Processor runtime profile and immutable OCI image digest are still unspecified, and the current Edge deployment has no Paper Processor shared-secret binding. No migration, R2 write, Processor registration, Secret/Redis change, deployment, or live acceptance was attempted.
