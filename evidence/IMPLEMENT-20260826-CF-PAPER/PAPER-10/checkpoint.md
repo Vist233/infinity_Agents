@@ -185,3 +185,28 @@ metadata and leave Redis/Relay/Cloudflared untouched.
 - post-push local status: clean `cloudflare-deploy`; this is a GitHub source
   backup only. No Cloudflare rule/secret/token/deployment, zhangbot release or
   service, D1/R2 object, Redis, Relay, or Cloudflared write occurred.
+
+## 2026-08-28 minimum WAF capability preflight blocker
+
+- status: `BLOCKED_WAF_TOKEN_PERMISSIONS`
+- baseline: `cloudflare-deploy` was clean at
+  `01a596619f3bb9ac1506c503e81738d4f5381ff3`, matching the remote tracking
+  ref.
+- read-only result: the owner-provided short-lived WAF token file exists and
+  is owned by the current user, but its mode is `0644`; required mode is
+  `0600`. The metadata check exited 4.
+- secret safety: token contents were not read, copied, printed, hashed, put in
+  an argument, sent to Cloudflare, or written to evidence.
+- external changes: none. No Cloudflare API request, WAF rule, secret
+  rotation, Edge/Processor deployment, D1/R2 write, zhangbot change, Redis,
+  Relay, or Cloudflared change occurred. `deployment.txt` remains absent.
+- stop condition: account/zone/WAF read/write capability and rule capacity
+  were not checked because the token permission precondition failed.
+- next exact action: change only the token file mode to `0600` without
+  revealing its contents, then resume PAPER-10. Repeat metadata validation,
+  verify the exact Cloudflare account/zone and Rulesets/WAF read/write
+  capability and safe entrypoint/capacity before creating the single
+  BIC-only fixed-path rule. Do not rotate secrets, deploy, or run live
+  acceptance before those read-only checks pass.
+- rollback: none required; no external write occurred. Existing GitHub and D1
+  state are unchanged.

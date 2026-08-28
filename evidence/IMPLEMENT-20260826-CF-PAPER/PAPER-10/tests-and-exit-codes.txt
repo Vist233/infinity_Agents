@@ -371,3 +371,14 @@ recorded exactly; no failed assertion was skipped.
       `git rev-parse HEAD` matched that SHA and the final worktree remained
       clean. This was the only external operation in this subphase: a GitHub
       source backup, not a Cloudflare or zhangbot change.
+
+38. Minimum WAF capability token preflight
+    - Working directory: repository root.
+    - Read-only command checked the expected short-lived token file's
+      existence, owner, and mode without opening or printing its contents.
+    - Result: the file exists and is owned by the current user, but its mode is
+      `0644` rather than the required `0600`; the check exited with code 4.
+    - Per the stop rule, no token content was read, no Cloudflare API request
+      was attempted, and no WAF rule, secret, deployment, D1/R2, zhangbot,
+      Redis, Relay, or Cloudflared write occurred. WAF capability and target
+      preflight therefore remain unverified.

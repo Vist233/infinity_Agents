@@ -164,3 +164,14 @@ from the expected `5ca83c60c6247e3271a639544c4233a791ef7860` remote tip, and a
 read-only `git ls-remote --heads origin cloudflare-deploy` returned the exact
 matching SHA with exit code 0. This GitHub backup does not change the
 `BLOCKED_PROCESSOR_EDGE_ACCESS` / `WAITING_MINIMUM_WAF_CAPABILITY` status.
+
+## 2026-08-28 minimum WAF capability preflight blocker
+
+This local evidence-only update records a metadata check against the
+owner-provided short-lived Cloudflare WAF token file. The file was present and
+owned by the current user but had mode `0644`, not the required `0600`; the
+check exited 4. Token contents were never read or persisted. Because the
+precondition failed, no Cloudflare API request or external write was made, no
+rule/read capability was inferred, and no deployment or live acceptance was
+started. The new evidence file is
+`evidence/IMPLEMENT-20260826-CF-PAPER/PAPER-10/waf-capability-preflight.md`.
