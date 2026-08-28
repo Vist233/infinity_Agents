@@ -2,9 +2,8 @@
 
 - Branch: `cloudflare-deploy`
 - Card: PAPER-10 — external release, deployment and live acceptance
-- Previous release commit: `61cc66d509a86ac93cebef9fd955644d68d278c0`
-  (superseded after the zhangbot user-systemd capability probe; the revised
-  immutable release commit is recorded in the checkpoint after commit)
+- Release commit: `3558c1fec9035465407ca121fea94bd77e74d7bd`
+  (supersedes the failed `61cc66d509a86ac93cebef9fd955644d68d278c0` release)
 - Reviewed Processor source commit pinned by the delivery definition:
   `455ae849c572aa285cc752a10e21fd69f031b18d`
 - Runtime decision: the user explicitly approved `zhangbot` as the sole
