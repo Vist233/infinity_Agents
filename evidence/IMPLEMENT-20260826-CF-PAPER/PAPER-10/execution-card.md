@@ -155,3 +155,39 @@ acceptance. PAPER-10 is not complete.
   `0/0 B`, then `15/41.9 MB`); no R2 write was issued.
 - Current status is `BLOCKED_PROCESSOR_DEPENDENCY_INSTALL_NETWORK_TIMEOUT`;
   `deployment.txt` is absent and PAPER-10 is not complete.
+
+## 2026-08-28 dependency-closure retry and rollback
+
+- This retry began from clean `cloudflare-deploy` commit
+  `6c67c8ec94eb32f8e9a77013c49c34f6c374b8d3`. Direct read-only preflight
+  verified the target account/Worker/D1/R2, no pending D1 migrations, stable
+  R2 metadata (`15` objects / `41.9 MB`), the exact four-path BIC-only WAF
+  rule, and the zhangbot venv/ensurepip, existing-service, listener, and
+  no-stale-Processor checks. The initial proxy-backed read stopped on the
+  unavailable local proxy; the same reads passed after switching to direct
+  network access.
+- The first remote archive validation exposed `._*` members in the older
+  wheelhouse. A new GNU-format wheelhouse was generated and independently
+  verified locally and remotely with SHA-256
+  `241dce8114d95fe6a74ca86eb745dfe5687e8d58302e015d0d539bfcbf609b17` and
+  no AppleDouble/PAX members. The source archive hash remained
+  `5d694b88f413abe59c64c4276d49d4e924dad05bb272348807ecccf7006e174b`.
+- A first install wrapper stopped before the candidate check because it
+  assumed the archive root was `<commit>`; a corrected attempt found the
+  `infinity-paper-processor-<commit>` root, created the Python 3.10 venv,
+  and then failed honestly at offline pip installation because pypdf's
+  Python 3.10 dependency `typing_extensions>=4.0` was absent from the
+  wheelhouse. The corrected install command exited `1`; no release/current,
+  unit, service, process, Edge deployment, or R2 object was created.
+- Capability-first rollback removed the exact WAF entrypoint/rule, deleted
+  `PAPER_PROCESSOR_SHARED_SECRET`, removed the one mode-0600 zhangbot token
+  env and all four retry archives, and verified no Processor release/current/
+  unit/process remained. D1 was not rerun, R2 was not written, and Redis,
+  Relay, and Cloudflared remained active.
+- The local closure is now a minimal exact pin
+  `typing_extensions==4.13.2`, its delivery lock hash is synchronized, and
+  the delivery regression test asserts the pin. Focused/full local gates
+  pass (Edge 129, Processor 12, frontend unit 50, E2E 13 after the permitted
+  local-server retry). `deployment.txt` remains absent and PAPER-10 is not
+  complete; the next action is a review commit/backup followed by a fresh
+  immutable preflight.

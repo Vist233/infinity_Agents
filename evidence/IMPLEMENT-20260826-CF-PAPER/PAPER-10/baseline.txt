@@ -101,3 +101,22 @@ or persisted in this local phase.
   exact WAF rule, Edge secret, zhangbot token, and transfer archive were
   removed by targeted rollback; D1 migrations/metadata and existing
   Redis/Relay/Cloudflared were preserved.
+
+2026-08-28 dependency-closure retry baseline
+
+- The retry started from clean branch `cloudflare-deploy`, commit
+  `6c67c8ec94eb32f8e9a77013c49c34f6c374b8d3`. Before local closure edits,
+  the target account/Worker/D1/R2 and zhangbot runtime were read-only checked;
+  D1 `0017`–`0021` were already applied and were not rerun.
+- The source archive was the reviewed commit archive with SHA-256
+  `5d694b88f413abe59c64c4276d49d4e924dad05bb272348807ecccf7006e174b`.
+  The portable dependency archive was independently rebuilt with SHA-256
+  `241dce8114d95fe6a74ca86eb745dfe5687e8d58302e015d0d539bfcbf609b17` and
+  contains the exact wheel inputs for the pinned Processor requirements,
+  including `typing_extensions==4.13.2` for the next retry.
+- The corrected release attempt failed at offline dependency resolution
+  because the prior lock omitted pypdf's Python 3.10 `typing_extensions`
+  requirement. The exact WAF/secret/token changes made before that step were
+  rolled back; no Processor release/current/unit/process or R2 object exists.
+- The current local candidate changes are limited to the zhangbot dependency
+  lock, its delivery manifest hash, and one delivery regression assertion.

@@ -352,3 +352,28 @@ metadata and leave Redis/Relay/Cloudflared untouched.
 - next exact card/action: remain on PAPER-10 but stop. Resolve the precise
   dependency network/approved wheel path and R2 read inconsistency, then
   restart with a fresh preflight. Do not rerun D1 `0017`–`0021`.
+
+## 2026-08-28 dependency-closure retry and rollback
+
+- status: `READY_FOR_DEPENDENCY_CLOSURE_COMMIT` (PAPER-10 is not PASS).
+- baseline: clean `cloudflare-deploy` commit
+  `6c67c8ec94eb32f8e9a77013c49c34f6c374b8d3`; direct read-only preflight
+  passed after bypassing the unavailable local proxy. D1 `0017`–`0021` were
+  read-only verified and not rerun; R2 remained at `15` objects / `41.9 MB`.
+- retry findings: the old wheelhouse contained AppleDouble members and was
+  rejected. A portable wheelhouse passed local/remote hash and member checks.
+  The corrected release install then failed with exit `1` because
+  `pypdf==6.15.0` requires `typing_extensions>=4.0` on Python 3.10 and the
+  prior lock did not declare it. No release/current/unit/service/process or
+  R2 object was created.
+- rollback: the exact WAF rule/entrypoint was deleted and read back absent;
+  the Edge shared secret was deleted and name-only read back absent; the
+  zhangbot token, release/current/unit, and retry archives were removed.
+  Redis/Relay/Cloudflared remained active and D1 was preserved.
+- local resolution: `typing_extensions==4.13.2` is now pinned, the delivery
+  lock hash is synchronized, and the delivery test asserts the exact pin.
+  Focused/full local gates passed: Edge `129`, Processor `12`, frontend unit
+  `50`, E2E `13`; `git diff --check` and normalized secret scan passed.
+- next exact action: create and back up the review commit, then repeat the
+  immutable read-only preflight. Recreate the exact four-path BIC-only rule
+  only after that preflight; do not rerun D1 migrations.

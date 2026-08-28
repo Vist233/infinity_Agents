@@ -526,3 +526,53 @@ recorded exactly; no failed assertion was skipped.
       D1 migration read exited `0` with no pending migrations. Edge health
       exited `0`/HTTP `200`. R2 metadata read was inconsistent: `15/41.9 MB`,
       then `0/0 B`, then `15/41.9 MB`; no R2 write/delete command was issued.
+
+50. Retry immutable preflight and archive diagnosis
+    - The initial Wrangler read-only command through the configured proxy
+      exited `1` on the unavailable `127.0.0.1:7897` proxy before D1 state
+      was read. With proxy variables removed, the same secret-name, D1
+      migration, R2 metadata, and WAF read-back command exited `0`: the
+      secret name was present, D1 returned `No migrations to apply!`, R2
+      returned `15` objects/`41.9 MB`, and the exact WAF rule read back as
+      one enabled logged `skip` rule with `products=["bic"]`.
+    - Read-only zhangbot runtime preflight with the corrected dpkg format
+      exited `0`: Ubuntu 22.04, `python3.10-venv` installed/candidate
+      `3.10.12-1~22.04.17`, venv/ensurepip/pip exit `0`, existing Redis/
+      Relay/Cloudflared active, Processor inactive/no release/current, no
+      Processor listener, and only the one mode-600 token key present.
+    - The first remote archive validation exited `43`: the source archive
+      was valid, while the older wheelhouse contained `./._pymupdf...` and
+      `./._pypdf...`. A portable GNU-format wheelhouse was then generated;
+      local validation exited `0`, transfer exited `0`, and remote hash/
+      member/AppleDouble validation exited `0`.
+
+51. Dependency-closure release retry and rollback
+    - The first release wrapper stopped before its candidate check because
+      it used the wrong extracted root name; no pass marker or release was
+      produced. Its wrapper did not capture a numeric exit code, so it is not
+      treated as an acceptance result.
+    - The corrected release install exited `1` after venv creation and
+      archive validation. Offline pip reported that `typing_extensions>=4.0`
+      required by `pypdf==6.15.0` was unavailable; the staging trap removed
+      all temporary release data. No release/current/unit/service/process or
+      R2 object was created.
+    - WAF rule deletion exited `0`/HTTP `200`; empty entrypoint deletion
+      exited `0`/HTTP `204`; final WAF read returned the expected not-found
+      error. Edge secret deletion exited `0` and the name-only list confirmed
+      absence. zhangbot cleanup exited `0`; token env, release/current/unit,
+      and retry archives were absent, while Redis/Relay/Cloudflared stayed
+      active.
+
+52. Local dependency closure and gates
+    - pypdf wheel metadata inspection exited `0` and confirmed the conditional
+      `typing_extensions >= 4.0` requirement. Direct PyPI download of
+      `typing_extensions==4.13.2` exited `0` with wheel SHA-256
+      `a439e7c04b49fec3e5d3e2beaa21755cadbbdc391694e28ccdd36ca4a1408f8c`.
+    - Focused delivery test exited `0` (`5` tests). Edge
+      `npm run check && npm test` exited `0` (`23` files/`129` tests).
+      Processor pytest exited `0` (`12` passed). Frontend typecheck/lint/unit
+      exited `0` (`50` unit tests). The first frontend E2E attempt exited
+      `1` only because the sandbox denied binding `127.0.0.1:3000`; the
+      permitted local-server retry exited `0` (`13` passed).
+    - `git diff --check` exited `0`; the working-tree no-match secret scan
+      had raw exit `1` and normalized gate exit `0`.

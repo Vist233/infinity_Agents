@@ -210,6 +210,7 @@ describe("versioned dedicated Paper Processor delivery definition", () => {
     expect(wranglerConfig).toContain('"PAPER_PROCESSOR_SOURCE_IP": "39.105.204.121"');
     expect(requirements).toMatch(/^pypdf==[0-9]+\.[0-9]+\.[0-9]+$/m);
     expect(requirements).toMatch(/^PyMuPDF==[0-9]+\.[0-9]+\.[0-9]+$/m);
+    expect(requirements).toMatch(/^typing_extensions==4\.13\.2$/m);
     expect(requirements).not.toMatch(/>=|<=|~=|\^/);
   });
 

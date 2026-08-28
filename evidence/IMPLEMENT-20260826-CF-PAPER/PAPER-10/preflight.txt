@@ -710,3 +710,60 @@ the R2 metadata-read inconsistency. A new PAPER-10 attempt must repeat the
 full immutable preflight, recreate the exact WAF rule with fresh readback, and
 only then retry secret/token/release/deployment. D1 migrations `0017`–`0021`
 remain applied and must not be rerun.
+
+# PAPER-10 dependency-closure retry and rollback
+
+retry_date=2026-08-28
+baseline_commit=6c67c8ec94eb32f8e9a77013c49c34f6c374b8d3
+status=READY_FOR_DEPENDENCY_CLOSURE_COMMIT
+
+## Fresh read-only preflight
+
+- The first Wrangler read-only run through the configured local proxy exited
+  `1` on proxy connection failure. With proxy variables removed, the same
+  read-only checks exited `0`: secret-name listing included
+  `PAPER_PROCESSOR_SHARED_SECRET` without exposing a value; D1 returned
+  `No migrations to apply!`; R2 returned `15` objects / `41.9 MB`; public
+  health reported `paper_processor=configured`; and the scoped WAF readback
+  returned the one exact enabled/logged BIC-only rule.
+- Corrected zhangbot SSH runtime preflight exited `0`: Ubuntu 22.04,
+  `python3.10-venv` installed/candidate `3.10.12-1~22.04.17`, Python 3.10
+  venv/ensurepip/pip passed, the existing Redis/Relay/Cloudflared services
+  were active, Processor was inactive with no release/current/listener, and
+  the token env had only `PAPER_PROCESSOR_TOKEN` at mode `600`.
+
+## Archive and release retry
+
+- The first archive check exited `43` because the older wheelhouse contained
+  `._*` AppleDouble members. A new GNU-format portable wheelhouse was
+  created and passed local validation, transfer, and remote validation with
+  SHA-256 `241dce8114d95fe6a74ca86eb745dfe5687e8d58302e015d0d539bfcbf609b17`.
+  The source archive hash was
+  `5d694b88f413abe59c64c4276d49d4e924dad05bb272348807ecccf7006e174b`.
+- The first release wrapper used the wrong extracted root name and stopped
+  before the candidate check; no numeric exit code was captured and it is not
+  used as acceptance evidence. The corrected wrapper created the venv and
+  reached offline pip, which exited `1` because `typing_extensions>=4.0`
+  required by pypdf was absent. The staging trap removed all temporary data.
+
+## External rollback
+
+- WAF rule delete was HTTP `200`/command exit `0`; empty entrypoint delete was
+  HTTP `204`/exit `0`; final readback returned the expected not-found error.
+  Edge secret deletion and name-only absence check exited `0`.
+- zhangbot cleanup exited `0`: token env, retry archives, release/current,
+  and Processor unit were absent; Redis/Relay/Cloudflared remained active.
+  No D1 migration, R2 object write, Redis/Relay/Cloudflared write, or Edge
+  code deployment was performed after the failed install.
+
+## Local closure
+
+- `pypdf` metadata inspection confirmed the conditional Python 3.10
+  dependency. `typing_extensions==4.13.2` was downloaded and hash-checked
+  locally, then pinned in the zhangbot lock; the delivery lock hash became
+  `51a30c24dc3af956d30e9891dbb3fb605c813b72f608f23507c7860c7a8c4775`.
+- Focused delivery test exited `0` (`5`); Edge check/test exited `0`
+  (`129`); Processor pytest exited `0` (`12`); frontend typecheck/lint/unit
+  exited `0` (`50`); E2E exited `1` in sandbox and `0` after the permitted
+  local-server retry (`13`). Diff check exited `0`; normalized secret gate
+  exited `0`. `deployment.txt` is absent and no PASS is asserted.

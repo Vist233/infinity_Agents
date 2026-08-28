@@ -291,3 +291,25 @@ unchanged; D1 migrations were not rerun. No R2 write was issued. The R2
 bucket-info read temporarily returned `15/41.9 MB`, then `0/0 B`, then
 `15/41.9 MB`; this read inconsistency is an unresolved retry blocker, not an
 action attributed to this attempt. `deployment.txt` remains absent.
+
+## 2026-08-28 dependency-closure retry
+
+The retry added only the missing Python 3.10 transitive dependency pin
+`typing_extensions==4.13.2`, synchronized
+`dependency_lock_sha256` to
+`51a30c24dc3af956d30e9891dbb3fb605c813b72f608f23507c7860c7a8c4775`, and
+added a delivery regression assertion for that exact pin. No endpoint,
+authorization, source allowlist, systemd hardening, D1/R2 schema, Redis, Relay,
+Cloudflared, or public frontend behavior changed.
+
+The corresponding external retry used a freshly rebuilt portable wheelhouse.
+Its remote SHA-256 was
+`241dce8114d95fe6a74ca86eb745dfe5687e8d58302e015d0d539bfcbf609b17`; the
+source archive was
+`5d694b88f413abe59c64c4276d49d4e924dad05bb272348807ecccf7006e174b`.
+The corrected install reached offline pip and stopped because the prior lock
+did not include pypdf's Python 3.10 `typing_extensions` dependency. The WAF
+rule, Edge secret, zhangbot token, and transferred archives were rolled back
+by exact identifiers/paths. Net external state after rollback is: D1
+unchanged, R2 unwritten, Processor absent, and existing Redis/Relay/
+Cloudflared active.
