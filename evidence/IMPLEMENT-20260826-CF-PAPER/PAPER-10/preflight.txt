@@ -286,3 +286,86 @@ the temporary directory was removed by a shell exit trap.
 
 The prerequisite gate therefore passed. No package, service, Edge, D1, R2,
 Processor, Redis, Relay, or Cloudflared write was performed by this check.
+
+---
+
+# PAPER-10 post-remediation immutable-release preflight
+
+preflight_date=2026-08-28
+branch=cloudflare-deploy
+local_commit=118b63a87023d3e269924920a20412c8c0dfbcd2
+release_commit=3558c1fec9035465407ca121fea94bd77e74d7bd
+remote_ref=118b63a87023d3e269924920a20412c8c0dfbcd2 refs/heads/cloudflare-deploy
+worktree=clean_before_preflight_evidence_update
+release_commit_is_ancestor_of_current=0
+release_runtime_paths_unchanged_since_release=0
+
+## Source and artifact identity
+
+- Local branch/worktree/ref readback exited 0. The current commit and exact
+  remote `origin/cloudflare-deploy` ref are both
+  `118b63a87023d3e269924920a20412c8c0dfbcd2`; the revised runtime release is
+  the immutable ancestor `3558c1fec9035465407ca121fea94bd77e74d7bd`.
+- The source aggregate hash is
+  `ce76a75997ebff53c10a1baf2beb2631b66c8fb5a6740b469ba8bf04bf381813`; the
+  dependency-lock hash is
+  `7910fd24e531e02f8b79a87ddc6bf5742ad67f2593b01172162f6c99901436d7`; and
+  the corrected systemd-unit hash is
+  `424a6846ef7b30d1eb505811da53620156e9186dae60ece38f3826e8338a2b2f`.
+  All match the checked-in delivery definition. No secret value was read.
+- The local release runtime paths are unchanged from the immutable release;
+  no production-scope diff exists between the release commit and current
+  branch for the Processor source, lock, or unit.
+
+## Cloudflare target readback
+
+- `npx wrangler whoami` exited 0 for account
+  `3cfba3bb2ec69798aa4881b05d80810f`.
+- `npx wrangler deployments list --name infinity-agents-edge` exited 0.
+  The Paper-capable deployment is version
+  `4ef4cea2-71ca-402e-aa4a-f5322417da2a`; its read-only `versions view` exited
+  0 and reported version number 116, script etag
+  `c4d49ecc0b35fca63fd5b188a30dd30c967e27e529d586a16d1f1ea969403dd`, D1 ID
+  `9ee9ec94-cb42-40b5-8372-681c7b57c105`, R2 bucket
+  `infinity-agents-resources`, and non-secret Processor ID
+  `paper-processor-zhangbot-v1`. The version metadata names the secret binding;
+  the current secret-name readback below confirms that its value is absent.
+- `npx wrangler d1 migrations list infinity-agents-db --remote` exited 0 and
+  reported no migrations to apply. A read-only schema query exited 0 and
+  returned `paper_cleanup_jobs`, `paper_processing_attempts`,
+  `paper_processor_sessions`, and `paper_resources`; metadata reported
+  `changes=0`, `changed_db=false`, and `rows_written=0`.
+- A read-only D1 migration-marker query exited 0 and returned IDs 17 through 21
+  with names `0017_chat_events.sql` through `0021_paper_privacy_cleanup.sql`.
+- `npx wrangler r2 bucket list` exited 0 and returned the configured
+  `infinity-agents-resources` bucket. No R2 object was read or written.
+- `npx wrangler secret list --name infinity-agents-edge` exited 0 and did not
+  include `PAPER_PROCESSOR_SHARED_SECRET`; no secret value was read.
+- `curl -fsS --max-time 20 https://infinity.zhangyvjing.com/health` exited 0
+  with `{"status":"ok","service":"infinity-agents-edge","readiness":{"d1":"configured","resource_bucket":"configured","paper_processor":"unconfigured"}}`.
+
+## zhangbot target readback
+
+- Read-only SSH preflight exited 0. Host is Ubuntu 22.04 x86_64 with Python
+  3.10.12; `dpkg-query` reports `python3.10-venv` version
+  `3.10.12-1~22.04.17` as `install ok installed`.
+- `python3 -m venv --help`, disposable venv creation, temporary
+  `ensurepip`, and temporary `pip --version` each exited 0; the disposable
+  directory was removed. No token or secret was involved.
+- `infinity-paper-processor.service` is inactive/not enabled/not found, no
+  Processor process exists, and the env file, current symlink, and new
+  commit-named release directory are absent.
+- `infinity-cloudflared.service`, `infinity-redis.service`, and
+  `infinity-redis-relay.service` are active (each exit 0). The listener
+  readback shows the existing SSH/DNS/Cloudflared/Redis-Relay loopback
+  listeners and no Processor listener; Docker is absent. No existing service
+  was changed.
+
+## Preflight decision
+
+PASS for the corrected immutable zhangbot release and actual production
+targets. The exact package/runtime gate, artifact hashes, branch/remote
+identity, Cloudflare target, migration state, R2 binding, absent secret, and
+clean Processor starting state all match. Do not rerun D1 migrations `0017`–
+`0021`; continue with the ordered secret handoff, release installation,
+Edge deployment, Processor readiness, and real authenticated acceptance.
