@@ -109,17 +109,18 @@ describe("Infinity Edge route composition", () => {
   it("routes the dedicated Paper Processor protocol without browser authentication", async () => {
     const env = testEnv();
     env.PAPER_PROCESSOR_ID = "processor-1";
+    env.PAPER_PROCESSOR_SOURCE_IP = "203.0.113.10";
     env.PAPER_PROCESSOR_SHARED_SECRET = "bootstrap-secret";
     const connected = await worker.fetch(new Request("https://app.test/api/paper-processor/connect", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-paper-processor-id": "processor-1", "x-paper-processor-token": "bootstrap-secret" },
+      headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.10", "x-paper-processor-id": "processor-1", "x-paper-processor-token": "bootstrap-secret" },
       body: JSON.stringify({ instance_id: "instance-1" }),
     }), env);
     expect(connected.status).toBe(200);
     const session = await connected.json() as { processor_session_token: string };
     const polled = await worker.fetch(new Request("https://app.test/api/paper-processor/poll", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-paper-processor-session": session.processor_session_token },
+      headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.10", "x-paper-processor-session": session.processor_session_token },
       body: "{}",
     }), env);
     expect(polled.status).toBe(200);

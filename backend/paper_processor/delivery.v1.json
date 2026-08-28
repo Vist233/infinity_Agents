@@ -19,7 +19,33 @@
     ],
     "post_download_network_policy": "No network access during parsing",
     "horizontal_scaling": "forbidden; exactly one active instance",
-    "runtime_approval": "owner-approved zhangbot VPS only"
+    "runtime_approval": "owner-approved zhangbot VPS only",
+    "edge_access": {
+      "stable_source_ipv4": "39.105.204.121",
+      "cloudflare_scope": "zone-level custom rule on zhangyvjing.com",
+      "cloudflare_action": "skip",
+      "skipped_products": ["bic"],
+      "allowed_host": "infinity.zhangyvjing.com",
+      "allowed_methods_and_paths": [
+        {"method": "POST", "path": "/api/paper-processor/connect"},
+        {"method": "POST", "path": "/api/paper-processor/poll"},
+        {"method": "GET", "path": "/api/paper-processor/attempts/*/input"},
+        {"method": "GET", "path": "/api/paper-processor/attempts/*/input/object"},
+        {"method": "POST", "path": "/api/paper-processor/attempts/*/renew"},
+        {"method": "POST", "path": "/api/paper-processor/attempts/*/stage"},
+        {"method": "POST", "path": "/api/paper-processor/attempts/*/finalize"},
+        {"method": "POST", "path": "/api/paper-processor/attempts/*/cancel"},
+        {"method": "POST", "path": "/api/paper-processor/attempts/*/fail"},
+        {"method": "PUT", "path": "/api/paper-processor/attempts/*/objects/source_pdf"},
+        {"method": "PUT", "path": "/api/paper-processor/attempts/*/objects/text_pages"},
+        {"method": "PUT", "path": "/api/paper-processor/attempts/*/objects/text_manifest"},
+        {"method": "PUT", "path": "/api/paper-processor/attempts/*/objects/image"},
+        {"method": "PUT", "path": "/api/paper-processor/attempts/*/objects/image_manifest"}
+      ],
+      "non_processor_paths_excepted": false,
+      "non_source_ips_excepted": false,
+      "worker_defense_in_depth": "Require the Cloudflare-injected CF-Connecting-IP to equal the fixed source IPv4 before Processor authentication"
+    }
   },
   "artifact": {
     "reviewed_processor_commit": "455ae849c572aa285cc752a10e21fd69f031b18d",
@@ -43,13 +69,15 @@
     "required_non_secret_names": [
       "PAPER_PROCESSOR_EDGE_URL",
       "PAPER_PROCESSOR_ID",
+      "PAPER_PROCESSOR_SOURCE_IP",
       "PAPER_PROCESSOR_INSTANCE_ID",
       "PAPER_PROCESSOR_WORK_ROOT"
     ],
     "fixed_non_secret_names": ["PYTHONPATH", "PYTHONUNBUFFERED"],
     "fixed_values": {
       "PAPER_PROCESSOR_EDGE_URL": "https://infinity.zhangyvjing.com",
-      "PAPER_PROCESSOR_ID": "paper-processor-zhangbot-v1"
+      "PAPER_PROCESSOR_ID": "paper-processor-zhangbot-v1",
+      "PAPER_PROCESSOR_SOURCE_IP": "39.105.204.121"
     },
     "instance_id_format": "zhangbot-<boot-id>-<process-id>-<random-nonce>",
     "unknown_names_forbidden": true

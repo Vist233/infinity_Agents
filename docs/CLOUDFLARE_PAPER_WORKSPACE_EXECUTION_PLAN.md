@@ -526,6 +526,28 @@ worktree intact and keeps PAPER-10 blocked.
 This is an external-write card and requires explicit owner authorization before
 any remote migration, processor registration, deployment, or live test.
 
+#### Current access remediation gate
+
+The prior release is blocked at `BLOCKED_PROCESSOR_EDGE_ACCESS` because the
+real zhangbot Python client received Cloudflare 403/Error 1010
+`browser_signature_banned` before reaching the Worker. The approved resolution
+must be a zone-level custom-rule `skip` for Browser Integrity Check only,
+matching the fixed host, the current verified zhangbot egress IPv4, and the
+exact Processor methods/path families (connect, poll, attempt input,
+renew/stage/object upload/finalize/cancel/fail). It must retain logging and
+must not be an IP Access Allow, a whole-host exception, a browser User-Agent
+workaround, or a skip of Security Level, User Agent Blocking, Zone Lockdown,
+WAF/rate-limit phases, Bot Fight Mode, or other custom rules. The Worker must
+also fail closed on the Cloudflare-injected source IP before checking the
+Processor identity and shared-secret/session/lease contract. Non-zhangbot IPs,
+non-Processor paths, and missing/incorrect shared credentials remain negative
+cases. If the control plane cannot create and read back that exact expression
+and BIC-only scope, stop with `BLOCKED_PROCESSOR_EDGE_ACCESS`. The current
+zone is Free; its wildcard operator cannot enforce an exact dynamic attempt
+segment, and the regex `matches` operator is unavailable on that plan. Do not
+install the broader wildcard as a substitute, even though the Worker has a
+second application-level route gate.
+
 1. Re-read all prior checkpoints and confirm no skipped gate.
 2. Apply the additive D1 migrations through the repository deployment runbook.
 3. Deploy the Edge and the one zhangbot systemd-user Processor release from

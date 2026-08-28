@@ -79,3 +79,29 @@ capability-revocation-first rollback. No client/header bypass, arbitrary proxy,
 alternate host, R2 write, Redis change, or migration rollback was attempted.
 PAPER-10 remains blocked on a reviewed resolution for the exact Edge access
 policy/client transport contract.
+
+## 2026-08-28 Edge access contract amendment
+
+The current uncommitted amendment is limited to the following Paper Workspace
+release surfaces and evidence:
+
+- `backend/paper_processor/delivery.v1.json`: fixed zhangbot source-IP,
+  BIC-only edge-access scope, and exact method/path contract.
+- `cloudflare-worker/src/paper-processor-access.ts`: application-level
+  fail-closed source-IP and protocol-route gate (ignored by the repository's
+  broad fixture rules and therefore must be force-added to the review commit).
+- `cloudflare-worker/src/env.ts`, `src/index.ts`, and `src/paper-processor.ts`:
+  non-secret binding, readiness requirement, and Worker defense-in-depth.
+- `cloudflare-worker/wrangler.jsonc` and the three Processor/index/delivery
+  regression test files: binding and positive/negative coverage.
+- `docs/CLOUDFLARE_PAPER_WORKSPACE_DESIGN.md`,
+  `docs/CLOUDFLARE_PAPER_WORKSPACE_EXECUTION_PLAN.md`, and
+  `docs/PAPER_PROCESSOR_CLOUDFLARE_MANAGED_RUNBOOK.md`: auditable
+  service-to-service contract and stop conditions.
+- `evidence/IMPLEMENT-20260826-CF-PAPER/PAPER-10/edge-access-subphase.md`,
+  this file, `tests-and-exit-codes.txt`, `secret-scan.txt`, and
+  `checkpoint.md`: read-only findings and local gate evidence.
+
+No Processor client User-Agent/proxy bypass was added. No D1/R2/Redis/Relay/
+Cloudflared code or configuration was changed, no secret value was added, no
+`deployment.txt` was created, and no external Cloudflare write occurred.

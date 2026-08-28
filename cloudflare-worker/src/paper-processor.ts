@@ -19,6 +19,7 @@ import {
 } from "./db";
 import { getPaperObject, putPaperObject, type PaperObjectKind } from "./paper-object-store";
 import { Sha256, hashText } from "./sha256";
+import { isApprovedPaperProcessorRequest, isPaperProcessorNamespacePath } from "./paper-processor-access";
 
 const PREFIX = "/api/paper-processor";
 const SESSION_TTL_SECONDS = 15 * 60;
@@ -367,6 +368,10 @@ async function fail(request: Request, env: Env, context: SessionContext): Promis
 
 export async function handlePaperProcessorApi(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
+  if (!isPaperProcessorNamespacePath(url.pathname)) return null;
+  if (!isApprovedPaperProcessorRequest(request, env)) {
+    return errorJson("Paper Processor source or route is not approved", 403, "PAPER_PROCESSOR_SOURCE_FORBIDDEN");
+  }
   if (url.pathname === "/api/paper-processor/connect") {
     if (request.method !== "POST") return errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED");
     return connect(request, env);

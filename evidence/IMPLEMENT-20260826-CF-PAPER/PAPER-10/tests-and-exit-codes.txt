@@ -244,3 +244,35 @@ recorded exactly; no failed assertion was skipped.
     `a35d110e608d4bfaa07c203c87fb3a8d5e03f657 refs/heads/cloudflare-deploy`.
     The worktree remained clean. This was a GitHub backup only; no Cloudflare
     write occurred in this evidence step.
+
+28. Edge service-to-service access remediation subphase
+    - Read-only local route/client inspection and contract comparison: exit
+      code 0. The fixed connect/poll/input/lease/object endpoints, methods,
+      session/lease headers, and source-IP gate were recorded without values.
+    - Read-only zhangbot egress, service, process, Docker, and listener check:
+      exit code 0. Three public providers agreed on `39.105.204.121`; no
+      Processor service or listener was present; Redis/Relay/Cloudflared were
+      unchanged.
+    - Public invalid probes against the fixed Edge: shell exit code 0 for the
+      requests; HTTP results were 405 for wrong-method connect, 401 for
+      invalid Processor credentials, and 401 for an unknown Processor path.
+      These probes did not create D1 state.
+    - Read-only Cloudflare identity/zone/deployment checks: exit code 0.
+      Ruleset/Firewall reads returned API error `10000 Authentication error`
+      and security-setting reads returned `9109 Unauthorized to access
+      requested resource`; no Cloudflare rule write was attempted.
+    - Focused Edge regression tests: exit code 0, 3 files and 23 tests passed.
+    - Mandatory Edge `npm run check && npm test`: exit code 0; typecheck and
+      23 files/128 tests passed.
+    - Processor focused pytest under `pyenv shell Agent`: exit code 0; 11
+      tests passed. The pyenv rehash warning was non-fatal and unrelated to
+      the test result.
+    - Frontend `npm run typecheck && npm run lint && npm run test:unit`:
+      exit code 0; typecheck/lint passed and 12 files/50 tests passed.
+    - Frontend E2E: first sandbox-only attempt exit code 1 because the local
+      test server could not bind `127.0.0.1:3000`; the permitted local
+      test-server rerun exit code 0 with 13 tests passed. The optional absent
+      backend proxy diagnostics were non-fatal.
+    - No Cloudflare write, D1/R2 object write, Edge deployment, zhangbot
+      release/service/token write, Redis change, or Cloudflared change was
+      made in this subphase.

@@ -78,6 +78,7 @@ function assertDeliveryDefinition(value: DeliveryDefinition): void {
   expect(value.environment?.required_non_secret_names).toEqual(expect.arrayContaining([
     "PAPER_PROCESSOR_EDGE_URL",
     "PAPER_PROCESSOR_ID",
+    "PAPER_PROCESSOR_SOURCE_IP",
     "PAPER_PROCESSOR_INSTANCE_ID",
     "PAPER_PROCESSOR_WORK_ROOT",
   ]));
@@ -111,6 +112,30 @@ function assertDeliveryDefinition(value: DeliveryDefinition): void {
   });
   expect(value.logging).toMatchObject({ redaction_policy: expect.any(String), raw_payloads_forbidden: true });
   expect(value.rollback).toMatchObject({ preserve_d1_r2: true, revoke_capabilities_first: true, operation: expect.any(String) });
+  expect(value.runtime?.edge_access).toMatchObject({
+    stable_source_ipv4: "39.105.204.121",
+    cloudflare_action: "skip",
+    skipped_products: ["bic"],
+    allowed_methods_and_paths: [
+      { method: "POST", path: "/api/paper-processor/connect" },
+      { method: "POST", path: "/api/paper-processor/poll" },
+      { method: "GET", path: "/api/paper-processor/attempts/*/input" },
+      { method: "GET", path: "/api/paper-processor/attempts/*/input/object" },
+      { method: "POST", path: "/api/paper-processor/attempts/*/renew" },
+      { method: "POST", path: "/api/paper-processor/attempts/*/stage" },
+      { method: "POST", path: "/api/paper-processor/attempts/*/finalize" },
+      { method: "POST", path: "/api/paper-processor/attempts/*/cancel" },
+      { method: "POST", path: "/api/paper-processor/attempts/*/fail" },
+      { method: "PUT", path: "/api/paper-processor/attempts/*/objects/source_pdf" },
+      { method: "PUT", path: "/api/paper-processor/attempts/*/objects/text_pages" },
+      { method: "PUT", path: "/api/paper-processor/attempts/*/objects/text_manifest" },
+      { method: "PUT", path: "/api/paper-processor/attempts/*/objects/image" },
+      { method: "PUT", path: "/api/paper-processor/attempts/*/objects/image_manifest" },
+    ],
+    non_processor_paths_excepted: false,
+    non_source_ips_excepted: false,
+  });
+  expect(value.environment?.fixed_values).toMatchObject({ PAPER_PROCESSOR_SOURCE_IP: "39.105.204.121" });
 }
 
 describe("versioned dedicated Paper Processor delivery definition", () => {
@@ -124,6 +149,8 @@ describe("versioned dedicated Paper Processor delivery definition", () => {
     expect(() => assertDeliveryDefinition(missingCommit)).toThrow();
     const missingSecret = { ...definition, secret_boundary: { ...definition.secret_boundary, processor_secret_names: [] } };
     expect(() => assertDeliveryDefinition(missingSecret)).toThrow();
+    const missingAccess = { ...definition, runtime: { ...definition.runtime, edge_access: undefined } };
+    expect(() => assertDeliveryDefinition(missingAccess)).toThrow();
   });
 
   it("defines a non-Docker, single-instance systemd service and pinned dependencies", () => {
@@ -155,6 +182,7 @@ describe("versioned dedicated Paper Processor delivery definition", () => {
     const serviceHash = createHash("sha256").update(service).digest("hex");
     expect(definition.artifact?.artifact_hashes).toMatchObject({ service_unit_sha256: serviceHash });
     expect(wranglerConfig).toContain('"PAPER_PROCESSOR_ID": "paper-processor-zhangbot-v1"');
+    expect(wranglerConfig).toContain('"PAPER_PROCESSOR_SOURCE_IP": "39.105.204.121"');
     expect(requirements).toMatch(/^pypdf==[0-9]+\.[0-9]+\.[0-9]+$/m);
     expect(requirements).toMatch(/^PyMuPDF==[0-9]+\.[0-9]+\.[0-9]+$/m);
     expect(requirements).not.toMatch(/>=|<=|~=|\^/);
@@ -173,6 +201,10 @@ describe("versioned dedicated Paper Processor delivery definition", () => {
     expect(runbook).toContain("PrivateTmp=yes");
     expect(runbook).toContain("218/CAPABILITIES");
     expect(runbook).toContain("PrivateDevices");
+    expect(runbook).toContain("Browser Integrity Check");
+    expect(runbook).toContain('products: ["bic"]');
+    expect(runbook).toContain("ip.src eq 39.105.204.121");
+    expect(runbook).toContain("Non-zhangbot");
     expect(runbook).not.toMatch(/https?:\/\/[^\s]+:[^\s]+@/);
     expect(runbook).not.toMatch(/(?:sk-|-----BEGIN|Bearer\s+[A-Za-z0-9._-]{40,})/i);
     expect(runbook).not.toMatch(/(?:source\.pdf|pages\.jsonl|object_key|raw_pdf|full_text|image_bytes)/i);

@@ -3,6 +3,7 @@ import type { AuthedUser } from "../src/auth";
 import type { Env } from "../src/env";
 import { createPaperResource, linkPaperResource } from "../src/db";
 import { handlePaperProcessorApi } from "../src/paper-processor";
+import { isPaperProcessorNamespacePath, isPaperProcessorProtocolRoute } from "../src/paper-processor-access";
 import { Sha256 } from "../src/sha256";
 import { makeEnv } from "./fake-d1";
 
@@ -40,7 +41,7 @@ class MemoryBucket {
 function request(path: string, init: RequestInit = {}): Request {
   return new Request(`https://app.test${path}`, {
     ...init,
-    headers: { "content-type": "application/json", ...(init.headers ?? {}) },
+    headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.10", ...(init.headers ?? {}) },
   });
 }
 
@@ -64,7 +65,7 @@ function processorHeaders(sessionToken: string, leaseToken?: string): HeadersIni
 describe("dedicated Paper Processor control protocol", () => {
   it("connects, claims one resource, renews, uploads, and finalizes exactly once", async () => {
     const bucket = new MemoryBucket();
-    const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
+    const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SOURCE_IP: "203.0.113.10", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
     env.RESOURCE_BUCKET = bucket as unknown as Env["RESOURCE_BUCKET"];
     db.seedChatSession("s1", "alice");
     const resource = await createPaperResource(env, { resource_id: "resource-1", session_id: "s1", user_id: "alice", source_kind: "arxiv", source_ref: "2401.00001", canonical_ref: "2401.00001", title: "Paper" });
@@ -116,7 +117,7 @@ describe("dedicated Paper Processor control protocol", () => {
   });
 
   it("rejects a second claim, stale renewal, resource/attempt swaps, cancellation, and broad listing", async () => {
-    const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
+    const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SOURCE_IP: "203.0.113.10", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
     db.seedChatSession("s1", "alice");
     for (const id of ["resource-1", "resource-2"]) {
       const resource = await createPaperResource(env, { resource_id: id, session_id: "s1", user_id: "alice", source_kind: "arxiv", source_ref: id, canonical_ref: id, title: id });
@@ -141,11 +142,12 @@ describe("dedicated Paper Processor control protocol", () => {
     const cancelled = await handlePaperProcessorApi(request(`/api/paper-processor/attempts/${firstGrant.attempt_id}/cancel`, { method: "POST", headers: processorHeaders(firstSession.processor_session_token, firstGrant.lease_token), body: JSON.stringify({ resource_id: firstGrant.resource_id, fencing_epoch: 1 }) }), env);
     expect(cancelled?.status).toBe(409);
     const broad = await handlePaperProcessorApi(request("/api/paper-processor/resources", { method: "GET", headers: processorHeaders(firstSession.processor_session_token) }), env);
-    expect(broad?.status).toBe(404);
+    expect(broad?.status).toBe(403);
+    expect(await broad!.json()).toMatchObject({ error: { code: "PAPER_PROCESSOR_SOURCE_FORBIDDEN" } });
   });
 
   it("cancels an active attempt once and rejects the expired session after restart", async () => {
-    const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
+    const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SOURCE_IP: "203.0.113.10", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
     db.seedChatSession("s1", "alice");
     const resource = await createPaperResource(env, { resource_id: "resource-cancel", session_id: "s1", user_id: "alice", source_kind: "arxiv", source_ref: "cancel-me", canonical_ref: "cancel-me", title: "Cancel" });
     await linkPaperResource(env, "s1", resource.resource_id, "alice", "read");
@@ -165,7 +167,7 @@ describe("dedicated Paper Processor control protocol", () => {
 
   it("serves a private uploaded source only through the exact leased attempt", async () => {
     const bucket = new MemoryBucket();
-    const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
+    const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SOURCE_IP: "203.0.113.10", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
     env.RESOURCE_BUCKET = bucket as unknown as Env["RESOURCE_BUCKET"];
     db.seedChatSession("s1", "alice");
     const resource = await createPaperResource(env, { resource_id: "resource-upload", session_id: "s1", user_id: "alice", source_kind: "user_upload", source_ref: "upload-1", canonical_ref: null, title: "Private" });
@@ -182,13 +184,13 @@ describe("dedicated Paper Processor control protocol", () => {
   });
 
   it("does not accept a public Worker credential at Processor routes", async () => {
-    const { env } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
+    const { env } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SOURCE_IP: "203.0.113.10", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
     const response = await handlePaperProcessorApi(request("/api/paper-processor/poll", { method: "POST", headers: { "x-worker-credential": "public-worker-secret" }, body: "{}" }), env);
     expect(response?.status).toBe(401);
   });
 
   it("records a safe failure stage and prevents readiness", async () => {
-    const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
+    const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SOURCE_IP: "203.0.113.10", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
     db.seedChatSession("s1", "alice");
     const resource = await createPaperResource(env, { resource_id: "resource-fail", session_id: "s1", user_id: "alice", source_kind: "arxiv", source_ref: "2401.00002", canonical_ref: "2401.00002", title: "Bad PDF" });
     await linkPaperResource(env, "s1", resource.resource_id, "alice", "read");
@@ -201,5 +203,40 @@ describe("dedicated Paper Processor control protocol", () => {
     expect(db.paperAuditEvents).toEqual(expect.arrayContaining([expect.objectContaining({ resource_id: resource.resource_id, stage: "download", outcome: "failed", error_code: "MALFORMED_PDF" })]));
     const duplicate = await handlePaperProcessorApi(request(`/api/paper-processor/attempts/${grant.attempt_id}/fail`, { method: "POST", headers: processorHeaders(session.processor_session_token, grant.lease_token), body: JSON.stringify({ resource_id: grant.resource_id, fencing_epoch: grant.fencing_epoch, error_code: "MALFORMED_PDF" }) }), env);
     expect(duplicate?.status).toBe(409);
+  });
+
+  it("fails closed for a non-zhangbot source, wrong bootstrap secret, and non-Processor path", async () => {
+    const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SOURCE_IP: "203.0.113.10", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
+    const wrongSource = await handlePaperProcessorApi(request("/api/paper-processor/connect", {
+      method: "POST",
+      headers: { "cf-connecting-ip": "198.51.100.20", "x-paper-processor-id": "processor-1", "x-paper-processor-token": "bootstrap-secret" },
+      body: JSON.stringify({ instance_id: "foreign-source" }),
+    }), env);
+    expect(wrongSource?.status).toBe(403);
+    expect(await wrongSource!.json()).toMatchObject({ error: { code: "PAPER_PROCESSOR_SOURCE_FORBIDDEN" } });
+    expect(db.paperProcessorSessions.size).toBe(0);
+
+    const missingSecret = await handlePaperProcessorApi(request("/api/paper-processor/connect", {
+      method: "POST",
+      headers: { "x-paper-processor-id": "processor-1" },
+      body: JSON.stringify({ instance_id: "missing-secret" }),
+    }), env);
+    expect(missingSecret?.status).toBe(401);
+    expect(await missingSecret!.json()).toMatchObject({ error: { code: "PAPER_PROCESSOR_UNAUTHENTICATED" } });
+
+    const wrongSecret = await handlePaperProcessorApi(request("/api/paper-processor/connect", {
+      method: "POST",
+      headers: { "x-paper-processor-id": "processor-1", "x-paper-processor-token": "wrong-bootstrap-secret" },
+      body: JSON.stringify({ instance_id: "wrong-secret" }),
+    }), env);
+    expect(wrongSecret?.status).toBe(401);
+    expect(await wrongSecret!.json()).toMatchObject({ error: { code: "PAPER_PROCESSOR_UNAUTHENTICATED" } });
+    expect(db.paperProcessorSessions.size).toBe(0);
+
+    expect(isPaperProcessorNamespacePath("/api/papers/search")).toBe(false);
+    expect(isPaperProcessorProtocolRoute("POST", "/api/paper-processor/connect")).toBe(true);
+    expect(isPaperProcessorProtocolRoute("POST", "/api/paper-processor/connect/extra")).toBe(false);
+    expect(isPaperProcessorProtocolRoute("GET", "/api/paper-processor/attempts/a/input")).toBe(true);
+    expect(isPaperProcessorProtocolRoute("POST", "/api/paper-processor/attempts/a/objects/text_manifest")).toBe(false);
   });
 });

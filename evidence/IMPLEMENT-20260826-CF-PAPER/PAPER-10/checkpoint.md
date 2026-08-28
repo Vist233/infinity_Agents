@@ -68,3 +68,50 @@
   Cloudflare/zhangbot targets. The already-applied D1 migrations `0017`–`0021`
   must not be rerun. Do not claim PAPER-10 complete before real authenticated
   acceptance and all negative cases pass.
+
+## 2026-08-28 current status: BLOCKED_PROCESSOR_EDGE_ACCESS
+
+This is a new PAPER-10 local-only access-contract subphase. Baseline was
+`e72ad26b5b18b153f9b780dd678e0282aaf188b3`; the existing reviewed Processor
+release remains `3558c1fec9035465407ca121fea94bd77e74d7bd`. The sole objective
+was to resolve the real zhangbot-to-Edge 403/1010 using a narrow,
+service-to-service contract while preserving shared-secret, Processor-ID,
+nonce, session, lease, and fencing validation.
+
+Read-only checks confirmed the fixed routes and methods, zhangbot's stable
+egress `39.105.204.121`, the fixed Edge host, no Processor state on zhangbot,
+and unchanged Redis/Relay/Cloudflared listeners. The current Cloudflare
+session exposes `zone(read)` but no Rulesets/WAF management capability:
+ruleset/Firewall reads returned `10000 Authentication error` and security
+setting reads returned `9109 Unauthorized to access requested resource`.
+The zone is on the Free Website plan. The required dynamic-attempt path
+exception cannot use exact regex semantics on that plan; a wildcard would be
+broader than the requested exact rule, so it was not created.
+
+Local code now fails closed on the injected source IP and exact application
+route family, and the checked-in delivery definition/design/runbook require a
+zone-level custom `skip` limited to BIC (`products: ["bic"]`), fixed host/IP,
+and the Processor methods/paths only. Tests cover foreign source IP,
+missing/wrong bootstrap secret, non-Processor paths, and contract fields. No
+Cloudflare rule, secret, token, Processor release/service, Edge deployment,
+R2 object write, or Redis/Relay/Cloudflared change occurred in this subphase;
+D1 migrations `0017`–`0021` remain applied.
+
+Focused Edge tests passed 23/23; mandatory Edge check/test passed 128/128;
+Processor pytest passed 11/11; frontend typecheck/lint/unit passed 50/50;
+frontend E2E passed 13/13 after the recorded sandbox bind failure. This
+subphase therefore stops at the external capability boundary and does not
+create `deployment.txt` or a PASS checkpoint.
+
+Required next action: provide an authorized Cloudflare zone-level
+Rulesets/WAF-capable session/token and an approved exact dynamic-path
+mechanism (or an equivalent read-back-verifiable capability). Then rerun the
+read-only preflight, create only the BIC-only exact rule, read back its
+expression/scope, and only after that rotate the shared secret/token, deploy
+the single zhangbot Processor and Edge, and run the full authenticated live
+acceptance. Do not use IP Access `Allow`, whole-host/wide-path bypasses,
+browser-signature impersonation, or an alternate host.
+
+Rollback reference remains capability-revocation-first: remove only any new
+rule, secret, token, service, release, or Edge deployment; preserve D1/R2
+metadata and leave Redis/Relay/Cloudflared untouched.

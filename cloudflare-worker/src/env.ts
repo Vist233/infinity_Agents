@@ -56,6 +56,9 @@ export interface Env {
   // Dedicated Paper Processor control-plane identity. This is never accepted
   // by the public Worker-v2 routes and is not a D1/R2/Redis parent credential.
   PAPER_PROCESSOR_ID?: string;
+  // Non-secret fixed zhangbot egress IPv4. The Worker checks the
+  // Cloudflare-injected CF-Connecting-IP as a defense-in-depth gate.
+  PAPER_PROCESSOR_SOURCE_IP?: string;
   PAPER_PROCESSOR_SHARED_SECRET?: string;
   // Explicit opt-in for the bounded Paper image-analysis provider egress.
   PAPER_IMAGE_ANALYSIS_EGRESS?: string;

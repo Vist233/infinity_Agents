@@ -56,7 +56,8 @@
     "TASK_UPLOAD_MAX_BYTES": "26214400",
     "TASK_ARTIFACT_MAX_BYTES": "2147483648",
     "OUTBOX_RELAY_BATCH_SIZE": "25",
-    "PAPER_PROCESSOR_ID": "paper-processor-zhangbot-v1"
+    "PAPER_PROCESSOR_ID": "paper-processor-zhangbot-v1",
+    "PAPER_PROCESSOR_SOURCE_IP": "39.105.204.121"
   },
 
   "d1_databases": [

@@ -13,6 +13,70 @@ source allowlist enforced by `backend/paper_processor/ingest.py`:
 and `pmc.ncbi.nlm.nih.gov`. It exposes no listening socket or inbound port.
 After a source is admitted and downloaded, parsing must not use the network.
 
+## 0. Edge service-to-service access contract
+
+The zhangbot egress preflight on 2026-08-28 returned the same public IPv4
+`39.105.204.121` from three independent read-only providers. This address is a
+non-secret deployment input and must be rechecked before every release; a
+changed address is a blocker, not a reason to widen the rule.
+
+The zone-level Cloudflare custom-rule exception is a `skip` action with only
+`products: ["bic"]` (Browser Integrity Check). It must match the fixed host,
+the exact source IP, and only these method/path families:
+
+```text
+(ip.src eq 39.105.204.121 and http.host eq "infinity.zhangyvjing.com" and (
+  (http.request.method eq "POST" and http.request.uri.path in {
+    "/api/paper-processor/connect"
+    "/api/paper-processor/poll"
+  }) or
+  (http.request.method eq "GET" and (
+    http.request.uri.path wildcard "/api/paper-processor/attempts/*/input" or
+    http.request.uri.path wildcard "/api/paper-processor/attempts/*/input/object"
+  )) or
+  (http.request.method eq "POST" and (
+    http.request.uri.path wildcard "/api/paper-processor/attempts/*/renew" or
+    http.request.uri.path wildcard "/api/paper-processor/attempts/*/stage" or
+    http.request.uri.path wildcard "/api/paper-processor/attempts/*/finalize" or
+    http.request.uri.path wildcard "/api/paper-processor/attempts/*/cancel" or
+    http.request.uri.path wildcard "/api/paper-processor/attempts/*/fail"
+  )) or
+  (http.request.method eq "PUT" and (
+    http.request.uri.path wildcard "/api/paper-processor/attempts/*/objects/source_pdf" or
+    http.request.uri.path wildcard "/api/paper-processor/attempts/*/objects/text_pages" or
+    http.request.uri.path wildcard "/api/paper-processor/attempts/*/objects/text_manifest" or
+    http.request.uri.path wildcard "/api/paper-processor/attempts/*/objects/image" or
+    http.request.uri.path wildcard "/api/paper-processor/attempts/*/objects/image_manifest"
+  ))
+))
+```
+
+The `wildcard` lines above are route-family notation for the reviewed
+contract, not permission to install a broader production rule on the current
+zone. Cloudflare's Free plan does not provide the exact dynamic-segment regex
+operator needed to make those lines strict. Because a wildcard can consume
+slash-containing text, do not create this rule on the current plan unless an
+approved exact dynamic-path mechanism is available and its expression can be
+read back. The Worker route gate remains defense-in-depth and does not make a
+broader edge exception acceptable.
+
+Keep matching requests logged. Do not skip `securityLevel`, `uaBlock`,
+`zoneLockdown`, `waf`, any WAF phase, Bot Fight Mode, or the remaining custom
+rules. Do not use an IP Access `Allow`, whole-host bypass, browser User-Agent
+impersonation, or a rule covering non-Processor paths. The Worker independently
+requires `PAPER_PROCESSOR_SOURCE_IP` and the Cloudflare-injected
+`CF-Connecting-IP` to match before checking `PAPER_PROCESSOR_ID`, the shared
+bootstrap secret, session, nonce, lease, and fencing state. Non-zhangbot source
+IPs and unlisted routes are rejected before authentication. Missing/wrong
+source or route returns `PAPER_PROCESSOR_SOURCE_FORBIDDEN`; missing/wrong
+bootstrap credentials still return `PAPER_PROCESSOR_UNAUTHENTICATED`.
+
+The current Wrangler session has `zone(read)` but no Rulesets/WAF management
+permission, so creating or reading this rule requires a separately authorized
+Cloudflare security-rule capability. A 403/1010 response, a changed egress IP,
+or a control plane that cannot read back this exact expression and `bic`-only
+scope is a blocker. Never replace it with a broad exception.
+
 ## 1. Reviewed release artifact
 
 The release is a reviewed Git commit plus the checked-in hashes in the

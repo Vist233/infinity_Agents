@@ -97,6 +97,38 @@ rules, singleton/lease assumptions, log-redaction rules, and rollback. The
 Dockerfile is retained only as historical/reference material and is not a
 deployable artifact for this runtime.
 
+The Edge ingress has a separate, defense-in-depth service-to-service contract.
+The zhangbot read-only egress preflight on 2026-08-28 agreed on public IPv4
+`39.105.204.121` across three providers. A zone-level Cloudflare custom rule
+may skip only Browser Integrity Check (`action=skip`,
+`action_parameters.products=["bic"]`) for that IP, host
+`infinity.zhangyvjing.com`, and the exact Processor route/method families:
+`POST` connect/poll, `GET` attempt input/input-object, `POST` attempt
+renew/stage/finalize/cancel/fail, and `PUT` attempt object uploads. The rule
+must keep matching requests logged and must not skip Security Level, User Agent
+Blocking, Zone Lockdown, managed/custom WAF phases, rate limiting, Bot Fight
+Mode, or other custom rules. It must not be an IP Access `Allow`, a whole-host
+exception, or a browser-signature workaround. Non-zhangbot IPs and all
+non-Processor paths remain protected by the existing zone controls.
+
+The route-family notation is not an authorization to install a broad wildcard
+rule. The current zone is Free, where the exact dynamic-attempt-segment regex
+operator is unavailable; a wildcard can match slash-containing text. Until an
+approved exact dynamic-path mechanism and read-back-verifiable security-rule
+capability are available, this remains a PAPER-10 blocker and no external
+exception may be created.
+
+The Worker also requires the non-secret `PAPER_PROCESSOR_SOURCE_IP` binding and
+the Cloudflare-injected `CF-Connecting-IP` to match before it evaluates
+Processor ID, bootstrap secret, session, nonce, lease, or fencing state. A
+missing/mismatched source or route fails with
+`PAPER_PROCESSOR_SOURCE_FORBIDDEN`; missing or incorrect Processor bootstrap
+credentials still fail with `PAPER_PROCESSOR_UNAUTHENTICATED`. The source IP
+must be rechecked before every release; a changed address is a blocker, not a
+reason to widen the exception. If the Cloudflare control plane cannot create
+and read back this exact host/IP/method/path expression and BIC-only scope,
+PAPER-10 remains blocked.
+
 The processor may use a temporary local working directory.  That directory is
 not a product storage location: it is deleted after a terminal attempt.  The
 durable equivalent of the user's "current directory" is a resource namespace in
