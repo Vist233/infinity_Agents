@@ -458,3 +458,20 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
 - next exact action when GitHub connectivity returns: read-only verify the
   remote ref, non-force push `d67952b`, and exact `ls-remote` verification;
   only then repeat immutable preflight. Do not run D1 migrations again.
+
+## 2026-08-29 bounded GitHub retry
+
+- status remains: `BLOCKED_GITHUB_BACKUP` (PAPER-10 is not PASS).
+- The local evidence commit `ea0f92e` was created. A fresh read-only
+  `ls-remote` returned exit `128` with TLS `SSL_ERROR_SYSCALL`; two direct
+  variants returned exit `142` after bounded timeouts. Three non-force push
+  variants likewise returned exit `128`, `142`, and `142`; no remote update
+  occurred. The last confirmed remote ref remains
+  `3039acc5cc3b169ecb5d0c4b2090e980b35ee95d`.
+- No Cloudflare or zhangbot write was performed in this retry; the WAF rule,
+  Edge shared secret, Processor token, release, service, and deployment are
+  absent, while D1 is preserved and Redis/Relay/Cloudflared are unchanged.
+- Next exact action: when GitHub connectivity returns, read-only verify the
+  target, non-force push the current local evidence history, and verify the
+  exact remote ref with `ls-remote`; only then repeat immutable PAPER-10
+  preflight. Do not rerun migrations.

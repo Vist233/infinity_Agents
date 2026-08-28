@@ -641,3 +641,18 @@ recorded exactly; no failed assertion was skipped.
       `3039acc5cc3b169ecb5d0c4b2090e980b35ee95d`.
     - Final local `git status --short --branch` exited `0` with a clean
       `cloudflare-deploy` worktree. PAPER-10 remains blocked on GitHub backup.
+
+57. Bounded GitHub retry after local evidence commit
+    - `git ls-remote --heads origin refs/heads/cloudflare-deploy` under the
+      configured network exited `128` with a TLS `SSL_ERROR_SYSCALL`; it did
+      not return a ref.
+    - The same read-only `ls-remote` with all proxy variables removed exited
+      `142` after the 15-second alarm. Repeating it with direct HTTP/1.1 also
+      exited `142`; no remote state was changed.
+    - Non-force `git push origin HEAD:refs/heads/cloudflare-deploy` under the
+      configured network exited `128` with the same TLS error. The direct
+      retry and direct HTTP/1.1 retry each exited `142` after the 20-second
+      alarm; no remote state was changed.
+    - No Cloudflare, zhangbot, D1, R2, Redis, Relay, or Cloudflared write was
+      performed in this retry. The last confirmed remote ref remains
+      `3039acc5cc3b169ecb5d0c4b2090e980b35ee95d`.
