@@ -595,3 +595,32 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
 - next exact card: repeat immutable preflight, recreate/read back exact WAF
   capability and credentials, transfer the metadata-free replacement archive,
   then continue only if remote validation passes.
+
+## 2026-08-29 systemd verification-order stop and rollback
+
+- status: `BLOCKED_PROCESSOR_SYSTEMD_VERIFY_ORDER`; PAPER-10 is not PASS.
+- baseline/current commit: `7505d07012ef1e210b7782eff5b6484e0e68d778`, already
+  backed up to `origin/cloudflare-deploy`.
+- one completed outcome: current metadata-free release passed remote archive
+  validation and offline dependency installation; systemd verification was
+  reached with a diagnostic-preserving command.
+- modified files: PAPER-10 evidence only; no product source, D1 migration, or
+  runtime contract changed.
+- real D1/R2/browser evidence: not run; D1 migrations were not rerun, R2 was
+  not written, and Edge code was not deployed.
+- failed required check: `systemd-analyze --user verify` exited `1` because
+  verification preceded activation of the `current` symlink referenced by
+  `ExecStart`.
+- external systems modified: exact WAF rule/entrypoint, Edge Secret, zhangbot
+  token, release, and staging were created then removed. D1/R2 and existing
+  Redis/Relay/Cloudflared were preserved.
+- secret scan result: no secret value was recorded; secure transfer and
+  rollback are recorded in `secret-scan.txt`.
+- rollback operation: WAF rule HTTP `200`, entrypoint HTTP `204` then `404`,
+  Edge Secret name-only absence, token/release/current/unit/staging absence;
+  Processor inactive and existing services active.
+- remaining risks and non-goals: the corrected activation-before-verify
+  release, Edge deployment, and complete live acceptance remain outstanding.
+- next exact card: repeat immutable preflight, recreate/read back the exact
+  WAF capability and credentials, install the verified release with
+  activation before systemd verification, and stop on any failure.

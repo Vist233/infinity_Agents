@@ -388,3 +388,12 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
 - The exact WAF/secret/token/staging changes from this retry were rolled back.
   A metadata-free replacement wheel archive was generated locally; only
   PAPER-10 evidence is being amended.
+
+## 2026-08-29 systemd verification-order retry
+
+- No product source, migration, frontend, Processor protocol, or runtime
+  contract changed. The remote archive and locked dependency installation
+  passed; the release stopped because systemd verification preceded the
+  `current` symlink activation required by the unit's ExecStart path.
+- The exact WAF/secret/token/release/staging changes were rolled back. Only
+  PAPER-10 evidence is being amended.

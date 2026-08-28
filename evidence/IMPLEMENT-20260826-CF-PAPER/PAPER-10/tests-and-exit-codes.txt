@@ -764,3 +764,26 @@ recorded exactly; no failed assertion was skipped.
     - Replacement local wheel archive using explicit files, `ustar`, and
       `COPYFILE_DISABLE=1` passed member validation (exit `0`) with SHA-256
       `6bf318a077fd6e82a12e8a6e70178ea6a64582d002b7ca4f542af4165314ff1c`.
+
+63. systemd verification-order stop and rollback
+    - Current `7505d07…` source/wheel archive generation and local
+      AppleDouble/hash validation exited `0`; remote transfer and source,
+      wheel, source-aggregate, lock, and unit hash validation exited `0`.
+    - Exact WAF creation/readback exited HTTP `200`/exactness `0`; secure Edge
+      Secret and zhangbot token handoff plus token-file shape readback exited
+      `0`.
+    - Release extraction, venv/ensurepip/pip, offline dependency installation,
+      and install-record preparation reached the systemd verification step.
+      `systemd-analyze --user verify` exited `1` with the safe diagnostic that
+      `current/.venv/bin/python` did not yet exist; no unit was installed,
+      enabled, or started.
+    - Capability rollback exited `0`: WAF rule delete HTTP `200`, entrypoint
+      delete HTTP `204`, final readback HTTP `404`; Edge Secret deletion and
+      name-only readback exited `0`/zero entries; zhangbot release/current/
+      unit/token/staging removal completed. The first aggregate rollback
+      command returned exit `3` only because the absent Processor unit made
+      `systemctl is-active` return its normal inactive status; a follow-up
+      non-failing check returned exit `0` with Processor exit `3` and existing
+      Cloudflared/Redis/Relay exit `0` active. No D1/R2/Edge deploy occurred.
+    - Post-rollback Edge health exited `0` with
+      `paper_processor: unconfigured`; `deployment.txt` remains absent.

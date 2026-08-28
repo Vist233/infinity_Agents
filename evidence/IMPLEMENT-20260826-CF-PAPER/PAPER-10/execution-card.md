@@ -356,3 +356,26 @@ acceptance. PAPER-10 is not complete.
   next exact action is to repeat immutable preflight, recreate/read back the
   exact WAF rule and credentials, and validate the replacement archive on
   zhangbot before release installation.
+
+## 2026-08-29 systemd verification-order stop and rollback
+
+- From backed-up `7505d07012ef1e210b7782eff5b6484e0e68d778`, immutable local
+  and remote archive validation passed, including source/wheel SHA-256,
+  source/lock/unit aggregates, and AppleDouble exclusion. The exact WAF
+  rule/entrypoint and secure Edge/zhangbot secret handoff also passed.
+- The diagnostic-preserving release command extracted the commit-named
+  release and installed the offline locked dependencies, then exited `1` at
+  `systemd-analyze --user verify`: the unit's `ExecStart` resolves through
+  `current/.venv/bin/python`, but `current` had not yet been activated. No
+  unit was installed or enabled, and no Processor process or listener was
+  created.
+- Capability-first rollback removed WAF rule `e282f79611e94eb59341a792b4ef465a`
+  (HTTP `200`), entrypoint `972bf26e0fdd478bbcc97c17ceb54881` (HTTP `204`,
+  readback `404`), Edge Secret by name, zhangbot token, release, current,
+  unit, and staging. Edge health returned `paper_processor: unconfigured`.
+  D1/R2, Edge code, Redis/Relay/Cloudflared were not modified; existing
+  services remained active.
+- Status: `BLOCKED_PROCESSOR_SYSTEMD_VERIFY_ORDER`; PAPER-10 is not PASS. The
+  next retry must activate the exact commit-named current symlink before the
+  systemd verify step, then continue only after read-only hash and service
+  checks pass.

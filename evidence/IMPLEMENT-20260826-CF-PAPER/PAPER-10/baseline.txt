@@ -210,3 +210,15 @@ or persisted in this local phase.
 - A local replacement wheel archive was rebuilt with metadata disabled and
   explicit `ustar` members; it has not yet been accepted remotely or used for
   a release. D1/R2 and existing services remain unchanged.
+
+## 2026-08-29 systemd verification-order retry baseline
+
+- The clean backed-up starting commit was
+  `7505d07012ef1e210b7782eff5b6484e0e68d778`. Current source/lock/unit hashes
+  and the metadata-free remote staging archive matched the delivery contract.
+- The exact WAF rule and one stdin-only secret/token pair were created after
+  preflight. Release extraction and offline dependency installation passed;
+  the unit verification order stopped before unit installation because the
+  unit references the not-yet-activated `current` symlink.
+- The exact release/staging/capabilities were rolled back. No D1 migration,
+  R2 write, Edge deploy, or existing-service change occurred.
