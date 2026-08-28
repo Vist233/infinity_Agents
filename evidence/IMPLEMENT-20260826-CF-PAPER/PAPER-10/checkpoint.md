@@ -28,6 +28,11 @@
   `ls-remote` exited 128 because `github.com` could not be resolved. This is
   recorded as a network-verification blocker, not as a successful live ref
   check.
+- evidence backup: commit
+  `7c0b01b25205ed87aacacbc9f646f313b509fcc7` was pushed non-force to
+  `origin/cloudflare-deploy` (exit 0), and an elevated read-only
+  `ls-remote` independently returned the exact same SHA. The local tracking
+  ref was updated to that verified value.
 - rollback: before external writes, restore the prior Git commit. After any
   authorized external write, follow the runbook's capability-revocation-first
   rollback and preserve D1/R2 metadata.

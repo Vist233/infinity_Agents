@@ -122,3 +122,16 @@ recorded exactly; no failed assertion was skipped.
     The no-proxy `ls-remote` exited 128 with exact error
     `Could not resolve host: github.com`; no remote value was inferred from
     that failed live check.
+
+18. GitHub evidence backup and independent ref verification
+    Command: non-force `git push origin HEAD:refs/heads/cloudflare-deploy`
+    for commit `7c0b01b25205ed87aacacbc9f646f313b509fcc7`.
+    Result: exit code 0; GitHub reported `65b9a40..7c0b01b HEAD ->
+    cloudflare-deploy`.
+    Read-only command: elevated no-proxy `git ls-remote --heads origin
+    cloudflare-deploy`.
+    Result: exit code 0; exact output was
+    `7c0b01b25205ed87aacacbc9f646f313b509fcc7 refs/heads/cloudflare-deploy`.
+    Local `git update-ref` used that exact 40-character SHA, and subsequent
+    `git rev-parse origin/cloudflare-deploy` and `git status --short --branch`
+    exited 0 with a clean worktree.

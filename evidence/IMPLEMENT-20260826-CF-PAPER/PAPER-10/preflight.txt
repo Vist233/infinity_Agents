@@ -242,3 +242,16 @@ unchanged. This resumed attempt was limited to the newly authorized
   `Could not resolve host: github.com` after the local `127.0.0.1:7897`
   proxy variables were cleared. No remote ref was inferred from this failed
   check; the local tracking ref above is retained as the last recorded value.
+
+## Evidence backup and precise ref verification
+
+- Local evidence commit `7c0b01b25205ed87aacacbc9f646f313b509fcc7` was pushed
+  with `git push origin HEAD:refs/heads/cloudflare-deploy` (non-force), exit
+  code 0. The push reported `65b9a40..7c0b01b HEAD -> cloudflare-deploy`.
+- An elevated, no-proxy read-only
+  `git ls-remote --heads origin cloudflare-deploy` exited 0 and returned
+  `7c0b01b25205ed87aacacbc9f646f313b509fcc7 refs/heads/cloudflare-deploy`.
+- The local `origin/cloudflare-deploy` tracking ref was updated only from
+  that exact returned SHA; `git rev-parse origin/cloudflare-deploy` exited 0
+  with the same value. `git status --short --branch` exited 0 and remained
+  clean.

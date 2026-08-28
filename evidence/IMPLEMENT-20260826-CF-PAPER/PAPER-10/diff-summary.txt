@@ -40,3 +40,9 @@ The final local repository check found no production diff and passed
 `git diff --check`. A no-proxy live `ls-remote` could not resolve GitHub
 (exit 128); the local tracking ref is not presented as a fresh remote
 verification.
+
+The subsequent no-secret evidence backup commit
+`7c0b01b25205ed87aacacbc9f646f313b509fcc7` was pushed non-force (exit 0)
+and independently verified by an elevated read-only `ls-remote` (exit 0)
+with the exact matching `cloudflare-deploy` ref. No Cloudflare or zhangbot
+state changed.
