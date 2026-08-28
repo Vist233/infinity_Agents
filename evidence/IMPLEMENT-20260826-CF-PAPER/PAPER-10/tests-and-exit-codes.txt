@@ -234,3 +234,13 @@ recorded exactly; no failed assertion was skipped.
     present with no Processor object write; zhangbot Processor state is absent;
     existing services/listeners are unchanged. `deployment.txt` was not
     created and no PASS checkpoint was written.
+
+27. Blocker evidence GitHub backup
+    Commands: `git push origin HEAD:refs/heads/cloudflare-deploy` followed by
+    read-only `git ls-remote --heads origin cloudflare-deploy`; local tracking
+    ref update used only the exact returned SHA.
+    Result: non-force push exit code 0; read-only ref verification exit code 0;
+    exact returned ref was
+    `a35d110e608d4bfaa07c203c87fb3a8d5e03f657 refs/heads/cloudflare-deploy`.
+    The worktree remained clean. This was a GitHub backup only; no Cloudflare
+    write occurred in this evidence step.

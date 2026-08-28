@@ -12,13 +12,15 @@
 - external authorization: explicitly granted for this exact PAPER-10 target,
   including D1 migrations `0017`–`0021`, minimum Edge/R2/Processor setup,
   zhangbot service installation, deployment, and authenticated live acceptance.
-- external systems modified: GitHub `origin/cloudflare-deploy` is currently
-  still at the previously verified backup commit
-  `33d494cb5a402101a48833e46b822b0f04d64d41`; the new release commit above is
-  local and pending a non-force backup. Production D1 migrations `0017`–`0021`
-  were applied and read back. Edge version
-  `4ef4cea2-71ca-402e-aa4a-f5322417da2a` was deployed during the failed attempt;
-  its temporary shared secret and the zhangbot token were then revoked/removed.
+- external systems modified: the reviewed runtime and blocker evidence were
+  backed up non-force through commit
+  `a35d110e608d4bfaa07c203c87fb3a8d5e03f657`; the exact remote ref was
+  independently read back with `ls-remote` exit 0. The runtime release commit
+  above is an ancestor of that backup. Production D1 migrations `0017`–`0021`
+  were applied and read back. Edge versions
+  `4ef4cea2-71ca-402e-aa4a-f5322417da2a` and
+  `ce8c9923-5776-4e5b-82a4-ec322912b6ba` were deployed during failed attempts;
+  the temporary shared secret and zhangbot token were then revoked/removed.
   No R2 object, Redis, Relay, or Cloudflared change occurred.
 - historical blocker: the exact package candidate is correct
   (`python3.10-venv`, `3.10.12-1~22.04.17`), but the earlier authorized
