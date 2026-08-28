@@ -157,3 +157,10 @@ The public browser/API protocol, D1/R2/Redis/Relay/Cloudflared contracts, and
 all external systems remain unchanged. No Cloudflare rule, secret, token,
 deployment, D1/R2 object, zhangbot service, or Redis/Relay/Cloudflared write
 occurred in this amendment.
+
+The fixed-endpoint implementation and its evidence were committed as review
+commit `d87da003a741ac5ed5ef7015946776582c17ab13`. It was pushed non-force
+from the expected `5ca83c60c6247e3271a639544c4233a791ef7860` remote tip, and a
+read-only `git ls-remote --heads origin cloudflare-deploy` returned the exact
+matching SHA with exit code 0. This GitHub backup does not change the
+`BLOCKED_PROCESSOR_EDGE_ACCESS` / `WAITING_MINIMUM_WAF_CAPABILITY` status.

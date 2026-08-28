@@ -173,3 +173,15 @@ metadata and leave Redis/Relay/Cloudflared untouched.
   Processor secret through secure channels, deploy the single zhangbot
   service and Edge, and perform the real authenticated D1/R2/Processor/live
   acceptance. Do not rerun D1 migrations `0017`–`0021`.
+
+## Review backup for the fixed-endpoint amendment
+
+- review commit: `d87da003a741ac5ed5ef7015946776582c17ab13`
+- non-force push: `git push origin HEAD:refs/heads/cloudflare-deploy`, exit
+  code 0; remote advanced from `5ca83c60c6247e3271a639544c4233a791ef7860`.
+- read-only verification: `git ls-remote --heads origin cloudflare-deploy`,
+  exit code 0; exact ref was
+  `d87da003a741ac5ed5ef7015946776582c17ab13 refs/heads/cloudflare-deploy`.
+- post-push local status: clean `cloudflare-deploy`; this is a GitHub source
+  backup only. No Cloudflare rule/secret/token/deployment, zhangbot release or
+  service, D1/R2 object, Redis, Relay, or Cloudflared write occurred.

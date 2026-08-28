@@ -349,3 +349,25 @@ recorded exactly; no failed assertion was skipped.
       Cloudflared change, or live acceptance was performed. The only planned
       external action after local gates is the authorized GitHub backup of the
       review commit; PAPER-10 remains blocked pending minimum WAF capability.
+
+37. Fixed-endpoint review commit and GitHub backup
+    - Pre-push read-only command: `git branch --show-current`,
+      `git status --short --branch`, `git rev-parse HEAD`,
+      `git rev-parse origin/cloudflare-deploy`, and
+      `git ls-remote --heads origin cloudflare-deploy`; exit code 0. The
+      branch was `cloudflare-deploy`, the worktree was clean, HEAD was
+      `d87da003a741ac5ed5ef7015946776582c17ab13`, and the remote ref before
+      push was `5ca83c60c6247e3271a639544c4233a791ef7860`.
+    - Review commit: `git commit -m "fix: move paper processor to fixed
+      endpoints"`; exit code 0, created
+      `d87da003a741ac5ed5ef7015946776582c17ab13` with the 16-file local
+      implementation/test/docs/evidence change.
+    - Non-force push: `git push origin HEAD:refs/heads/cloudflare-deploy`;
+      exit code 0. GitHub advanced `5ca83c6` to `d87da00` on
+      `cloudflare-deploy`.
+    - Read-only post-push verification: `git ls-remote --heads origin
+      cloudflare-deploy`; exit code 0, exact output was
+      `d87da003a741ac5ed5ef7015946776582c17ab13 refs/heads/cloudflare-deploy`.
+      `git rev-parse HEAD` matched that SHA and the final worktree remained
+      clean. This was the only external operation in this subphase: a GitHub
+      source backup, not a Cloudflare or zhangbot change.
