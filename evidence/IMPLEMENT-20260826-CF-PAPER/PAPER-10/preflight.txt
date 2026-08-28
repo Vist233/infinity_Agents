@@ -501,3 +501,40 @@ worktree=clean_before_evidence_update
 - No Secret, Processor release/service, Edge deployment, D1/R2 object,
   zhangbot, Redis, Relay, or Cloudflared write occurred. `deployment.txt`
   remains absent.
+
+---
+
+# PAPER-10 manifest-drift remediation local gate
+
+preflight_date=2026-08-28
+baseline_commit=c73e780b6c9dff342a6dfbbe8f3164ac2b4db520
+branch=cloudflare-deploy
+
+- The manifest's declared source input set is exactly
+  `backend/paper_processor/__init__.py`, `client.py`, `ingest.py`, and
+  `runner.py`, in that order. The declared algorithm hashes each file,
+  reconstructs the `sha256sum` output lines with two spaces and relative
+  filenames, then hashes that complete text once more. Two independent runs
+  produced the same aggregate, exit code `0`.
+- The source aggregate is
+  `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e` and
+  was written to the manifest. The fixed delivery test now asserts both the
+  exact command/input set and equality with the live aggregate, preventing an
+  unsynchronized source change from passing release review.
+- Focused delivery tests passed 5/5 after the update. Before the update, the
+  new regression test intentionally failed 1/5 with exit code `1` against the
+  stale manifest; no test was weakened.
+- All local gates passed: Edge check/test 0 (23 files, 129 tests), Processor
+  pytest 0 (12 tests), frontend typecheck 0, lint 0, unit 0 (50 tests), and
+  E2E 0 with 13 tests after the permitted local-server rerun. The first E2E
+  attempt failed with exit `1` only because sandbox binding to
+  `127.0.0.1:3000` returned `EPERM`; that result is retained.
+- `git diff --check` exited `0`; changed-scope raw no-match secret scan exited
+  `1` and normalized to `0`. No external write was made in this local gate.
+
+## Pre-deployment decision
+
+The manifest/source identity is now locally reconciled. This commit must be
+reviewed, pushed non-force, and verified with `ls-remote` before repeating the
+full immutable production preflight. D1 migrations `0017`–`0021` remain
+applied and must not be rerun.

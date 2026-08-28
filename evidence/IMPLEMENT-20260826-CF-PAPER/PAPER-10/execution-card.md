@@ -87,3 +87,34 @@ acceptance. PAPER-10 is not complete.
   newly created entrypoint are absent on readback; `deployment.txt` is not
   created. The next action is a reviewed local hash reconciliation and fresh
   immutable preflight before any further production write.
+
+## 2026-08-28 source-manifest hash reconciliation
+
+- Baseline: clean `cloudflare-deploy` at
+  `c73e780b6c9dff342a6dfbbe8f3164ac2b4db520`, matching the read-only
+  `origin/cloudflare-deploy` ref. This subphase is limited to the Processor
+  delivery manifest's source hash and its regression test; no runtime or
+  external resource is in scope.
+- Audited hash contract: the fixed input set is, in order,
+  `backend/paper_processor/__init__.py`, `client.py`, `ingest.py`, and
+  `runner.py`; the declared algorithm is the exact `sha256sum ... | sha256sum`
+  command in `delivery.v1.json`. Two independent executions produced the
+  deterministic aggregate
+  `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`.
+- Change: synchronized `processor_source_sha256` to that aggregate and added
+  a delivery regression assertion for the exact command/input set and live
+  aggregate. The intentional pre-update test was red (exit `1`, 4/5); the
+  post-update focused test was green (exit `0`, 5/5).
+- Local gates: Edge `check`/test exit `0` (129 tests), Processor pytest exit
+  `0` (12 tests), frontend typecheck/lint/unit exit `0` (50 unit tests), and
+  permitted frontend E2E exit `0` (13 tests). `git diff --check` and the
+  changed-scope secret scan also pass. The first sandbox-only E2E attempt
+  remains recorded as exit `1` for `127.0.0.1:3000` `EPERM`.
+- External state: no Cloudflare or zhangbot write occurred in this
+  reconciliation; the WAF entrypoint/rule is absent, Edge secret/token are
+  absent from this subphase, D1 migrations remain applied and are not to be
+  rerun, and no R2/Redis/Relay/Cloudflared change was made.
+- Next gate: create and verify the review backup commit, then repeat the
+  complete immutable read-only preflight. Only if that preflight passes may
+  the exact four-path BIC-only WAF rule be recreated and read back before the
+  remaining authorized PAPER-10 operations. `deployment.txt` remains absent.

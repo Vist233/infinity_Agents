@@ -429,3 +429,45 @@ recorded exactly; no failed assertion was skipped.
     - Net Cloudflare WAF state was restored. No Secret/token, service,
       release, Edge deployment, D1/R2 object, zhangbot, Redis, Relay, or
       Cloudflared rollback was needed.
+
+43. Processor source manifest drift remediation
+    - Clean baseline readback: branch `cloudflare-deploy`, worktree clean,
+      local HEAD and `origin/cloudflare-deploy` both
+      `c73e780b6c9dff342a6dfbbe8f3164ac2b4db520`; each command exited 0.
+    - Exact hash input/algorithm audit: two runs of the declared
+      `sha256sum <four fixed files> | sha256sum` algorithm exited 0 and
+      produced the same aggregate
+      `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`.
+    - Focused delivery test before manifest update: exit code 1 as an
+      intentional red test (4/5 passed; the new synchronization assertion
+      detected the old value). After the manifest update: exit code 0, 5/5.
+
+44. Full local PAPER-10 gates after manifest reconciliation
+    - Edge `npm run check && npm test`: TypeScript exit 0; 23 files and 129
+      tests passed; overall exit 0.
+    - Processor `eval "$(pyenv init - zsh)"; pyenv shell Agent; PYTHONPATH=.
+      python -m pytest -q tests/test_paper_processor_runtime.py
+      tests/test_paper_processor_ingestion.py`: exit 0; 12 tests passed.
+      The pyenv shim rehash warning was non-fatal.
+    - Frontend `npm run typecheck && npm run lint && npm run test:unit`:
+      typecheck, lint, and overall exits 0; 50 unit tests passed.
+    - Frontend first `npm run test:e2e`: exit 1 because the sandbox denied
+      binding `127.0.0.1:3000` with `EPERM`. The permitted local-server rerun:
+      exit 0; 13 E2E tests passed. Backend proxy refusals were optional and
+      non-fatal to the browser assertions.
+    - `git diff --check`: exit 0. Changed-source raw no-match secret scan:
+      exit 1; normalized gate exit 0.
+
+45. Manifest-remediation review backup
+    - The review diff contained only the delivery source hash and the exact
+      source-input/algorithm regression test before evidence files were
+      included; no secret or runtime architecture change was made.
+    - The follow-up commit and non-force GitHub push/`ls-remote` verification
+      are recorded after the evidence update. Cloudflare and zhangbot remain
+      untouched pending the fresh immutable preflight.
+
+46. Manifest-reconciliation pre-commit safety gate
+    - `git diff --check`: exit code 0.
+    - Changed-scope secret scan: raw no-match `rg` exit code 1; normalized
+      secret-scan gate exit code 0. No secret value or raw paper payload was
+      present in the current local change.

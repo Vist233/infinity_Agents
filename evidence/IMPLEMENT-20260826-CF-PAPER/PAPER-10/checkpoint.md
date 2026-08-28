@@ -252,3 +252,37 @@ metadata and leave Redis/Relay/Cloudflared untouched.
   hash with `delivery.v1.json` in a reviewed local change, rerun local gates
   and immutable preflight, then recreate only the exact WAF rule and continue
   PAPER-10. Preserve D1 migrations and do not rerun `0017`–`0021`.
+
+## 2026-08-28 manifest drift reconciliation checkpoint
+
+- status: `READY_FOR_PAPER_10_IMMUTABLE_PREFLIGHT` (PAPER-10 is not PASS).
+- baseline: clean `cloudflare-deploy` at
+  `c73e780b6c9dff342a6dfbbe8f3164ac2b4db520`, with the local and remote
+  branch refs equal before this local change.
+- contract audit: `delivery.v1.json` names the fixed four-file source set
+  `__init__.py`, `client.py`, `ingest.py`, `runner.py` under
+  `backend/paper_processor/`, in that order, and declares the exact
+  `sha256sum <files> | sha256sum` algorithm. Two deterministic runs returned
+  aggregate
+  `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`.
+- reconciliation: the manifest now contains that exact aggregate. A new
+  delivery test verifies both the command/input contract and equality with
+  the current source. It failed intentionally before the manifest update
+  (exit `1`, 4/5) and passed after the update (exit `0`, 5/5).
+- local gates: Edge `npm run check && npm test` exit `0` (23 files/129
+  tests); Processor pytest exit `0` (12); frontend typecheck, lint, and unit
+  exit `0` (50 unit tests); frontend E2E exit `0` after the permitted local
+  server rerun (13 tests). The first sandbox-only E2E attempt exited `1`
+  because binding `127.0.0.1:3000` was denied with `EPERM`; it is retained in
+  the test record. Diff and secret gates pass.
+- external changes: none in this reconciliation. The WAF rule/entrypoint is
+  currently rolled back and absent; no Edge shared secret, zhangbot token,
+  Processor release/service, Edge deployment, D1/R2 object, Redis, Relay, or
+  Cloudflared write occurred. D1 migrations `0017`–`0021` remain applied and
+  must not be rerun.
+- next exact action: review and non-force-push the reconciliation commit,
+  verify the exact remote ref with `ls-remote`, then redo the full immutable
+  read-only preflight. If and only if it passes, recreate the exact
+  fixed-path `products=["bic"]` rule and immediately read it back. Any later
+  external failure must use capability-first rollback. `deployment.txt`
+  remains absent and no PASS is asserted.

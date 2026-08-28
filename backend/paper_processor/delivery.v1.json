@@ -73,7 +73,7 @@
     "service_unit": "backend/paper_processor/infinity-paper-processor.service",
     "artifact_hash_command": "sha256sum backend/paper_processor/__init__.py backend/paper_processor/client.py backend/paper_processor/ingest.py backend/paper_processor/runner.py | sha256sum",
     "artifact_hashes": {
-      "processor_source_sha256": "ce76a75997ebff53c10a1baf2beb2631b66c8fb5a6740b469ba8bf04bf381813",
+      "processor_source_sha256": "510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e",
       "dependency_lock_sha256": "7910fd24e531e02f8b79a87ddc6bf5742ad67f2593b01172162f6c99901436d7",
       "service_unit_sha256": "424a6846ef7b30d1eb505811da53620156e9186dae60ece38f3826e8338a2b2f"
     }

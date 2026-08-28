@@ -208,3 +208,40 @@ was absent, the custom entrypoint returned HTTP 404, and the zone ruleset list
 returned the original four non-custom rulesets. Net Cloudflare WAF state was
 restored. No Secret, Processor, Edge, D1/R2 object, zhangbot, Redis, Relay, or
 Cloudflared write occurred; `deployment.txt` remains absent.
+
+## 2026-08-28 Processor delivery manifest hash reconciliation
+
+Starting from clean commit
+`c73e780b6c9dff342a6dfbbe8f3164ac2b4db520` on `cloudflare-deploy`, the
+current source-hash inputs and algorithm were audited before editing. The
+manifest's exact four-file input set is:
+
+```text
+backend/paper_processor/__init__.py
+backend/paper_processor/client.py
+backend/paper_processor/ingest.py
+backend/paper_processor/runner.py
+```
+
+The exact declared command is:
+
+```text
+sha256sum backend/paper_processor/__init__.py backend/paper_processor/client.py backend/paper_processor/ingest.py backend/paper_processor/runner.py | sha256sum
+```
+
+Two independent runs agreed on aggregate
+`510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`.
+`backend/paper_processor/delivery.v1.json` now pins that exact value. The
+delivery test additionally computes the declared aggregate from the exact
+input set and fails if source content changes without a manifest update.
+
+Changed files are limited to the delivery manifest, its delivery regression
+test, and PAPER-10 evidence. No runtime architecture, endpoint, secret
+boundary, D1/R2 contract, or external system was changed. The WAF rule and
+entrypoint remain absent from the prior rollback. `deployment.txt` remains
+absent because PAPER-10 has not passed.
+
+Review status: local gates and safety scans passed; the review commit and
+non-force GitHub backup must be recorded/verified before the complete
+immutable production preflight is repeated. D1 migrations `0017`–`0021` must
+not be rerun.

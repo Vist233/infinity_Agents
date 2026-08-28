@@ -71,3 +71,16 @@ or persisted in this local phase.
 - The owner-provided WAF token metadata check passed with mode `0600` and the
   current owner. The token value was used only through an stdin header pipe;
   it was never printed, persisted, hashed, or included in evidence.
+
+2026-08-28 manifest-drift remediation baseline
+
+- The local remediation began from clean commit
+  `c73e780b6c9dff342a6dfbbe8f3164ac2b4db520` on `cloudflare-deploy`; a
+  read-only `ls-remote` confirmed the exact same SHA at
+  `origin/cloudflare-deploy`.
+- The scoped change is limited to the Processor delivery manifest's source
+  aggregate hash and a regression test that fixes the four source-file inputs,
+  the `sha256sum` line format, and the second SHA-256 aggregation step.
+- The WAF rule/entrypoint from the preceding attempt was verified absent before
+  this local change. No Cloudflare, D1, R2, Secret, zhangbot, Redis, Relay, or
+  Cloudflared write is part of this remediation baseline.

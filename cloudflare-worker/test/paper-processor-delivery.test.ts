@@ -45,6 +45,26 @@ function readWranglerConfig(): string {
   return readFileSync(repoPath("cloudflare-worker", "wrangler.jsonc"), "utf8");
 }
 
+const PROCESSOR_SOURCE_FILES = [
+  "backend/paper_processor/__init__.py",
+  "backend/paper_processor/client.py",
+  "backend/paper_processor/ingest.py",
+  "backend/paper_processor/runner.py",
+] as const;
+
+const PROCESSOR_SOURCE_HASH_COMMAND =
+  "sha256sum backend/paper_processor/__init__.py backend/paper_processor/client.py backend/paper_processor/ingest.py backend/paper_processor/runner.py | sha256sum";
+
+function processorSourceAggregateHash(): string {
+  const input = PROCESSOR_SOURCE_FILES.map((relativePath) => {
+    const digest = createHash("sha256")
+      .update(readFileSync(join(process.cwd(), "..", relativePath)))
+      .digest("hex");
+    return `${digest}  ${relativePath}\n`;
+  }).join("");
+  return createHash("sha256").update(input).digest("hex");
+}
+
 function assertDeliveryDefinition(value: DeliveryDefinition): void {
   expect(value.schema_version).toBe("paper-processor.delivery/v2");
   expect(value.status).toBe("ready_for_zhangbot_rollout");
@@ -136,6 +156,14 @@ function assertDeliveryDefinition(value: DeliveryDefinition): void {
 }
 
 describe("versioned dedicated Paper Processor delivery definition", () => {
+  it("keeps the manifest source hash synchronized with its fixed input set and algorithm", () => {
+    const definition = readDefinition();
+    expect(definition.artifact?.artifact_hash_command).toBe(PROCESSOR_SOURCE_HASH_COMMAND);
+    expect(definition.artifact?.artifact_hashes).toMatchObject({
+      processor_source_sha256: processorSourceAggregateHash(),
+    });
+  });
+
   it("contains the auditable zhangbot runtime, artifact, secret, health, lease, logging and rollback contract", () => {
     assertDeliveryDefinition(readDefinition());
   });
