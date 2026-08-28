@@ -444,3 +444,60 @@ contract that is explicitly accepted for this runtime. Do not retry, add an
 arbitrary proxy/host, weaken source or credential boundaries, or continue
 live acceptance until that exact resolution is approved and a fresh preflight
 passes.
+
+---
+
+# PAPER-10 corrected-token WAF preflight and artifact stop
+
+preflight_date=2026-08-28
+branch=cloudflare-deploy
+baseline_commit=84edb2cd34919ecb42d3ea7af7f1704c471adc21
+worktree=clean_before_evidence_update
+
+## Read-only WAF capability
+
+- Token metadata check exited `0`: the expected token file was present, owned
+  by the current user, and mode `0600`. The value was not printed or persisted;
+  network use was through a secure stdin header pipe.
+- Token verification exited `0` / HTTP `200` / `active`.
+- Account and zone convenience reads exited `0` / HTTP `403` / API error
+  `9109`; the scoped token does not include those broader reads. The exact
+  target zone's Rulesets read exited `0` / HTTP `200` and returned four
+  existing non-custom rulesets. The custom-firewall entrypoint read exited
+  `0` / HTTP `404` / API error `10003`; no existing custom rule order was
+  present.
+
+## Authorized exact-rule write and readback
+
+- The additive fixed-endpoint zone entrypoint write exited `0` / HTTP `200`.
+  Entrypoint ID: `823074a217994347a3af06ee6e6f4a28`; rule ID:
+  `8ee926f7fcf34736bbe565b2adbe0396`.
+- Immediate entrypoint readback exited `0` / HTTP `200` and exactly matched
+  the required IP, host, POST connect/poll/control paths, PUT object path,
+  `skip` action, `products=["bic"]`, enabled logging, and enabled status.
+
+## Immutable release preflight stop
+
+- The local source aggregate command exited `0` but produced
+  `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`,
+  while `backend/paper_processor/delivery.v1.json` requires
+  `ce76a75997ebff53c10a1baf2beb2631b66c8fb5a6740b469ba8bf04bf381813`.
+  The pinned dependency-lock hash `7910fd24e531e02f8b79a87ddc6bf5742ad67f2593b01172162f6c99901436d7`
+  and systemd-unit hash
+  `424a6846ef7b30d1eb505811da53620156e9186dae60ece38f3826e8338a2b2f`
+  matched. Status: `BLOCKED_PROCESSOR_ARTIFACT_HASH_MISMATCH`.
+- Because the immutable artifact was not trustworthy, the ordered D1/R2/
+  Secret/zhangbot/Edge deployment preflight was stopped before those checks
+  could authorize another write. D1 migrations `0017`–`0021` were not rerun.
+
+## WAF rollback
+
+- Rule deletion exited `0` / HTTP `200`; post-rule-delete readback exited
+  `0` / HTTP `200`, with zero rules and no marker. Entrypoint deletion exited
+  `0` / HTTP `204` (the wrapper's assertion exit was `45` solely because it
+  incorrectly required `200`). Final entrypoint readback exited `0` / HTTP
+  `404`, and the post-rollback ruleset list exited `0` / HTTP `200` with the
+  original four rulesets and no custom entrypoint. Net WAF state is restored.
+- No Secret, Processor release/service, Edge deployment, D1/R2 object,
+  zhangbot, Redis, Relay, or Cloudflared write occurred. `deployment.txt`
+  remains absent.

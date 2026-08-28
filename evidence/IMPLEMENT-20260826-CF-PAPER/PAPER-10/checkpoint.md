@@ -210,3 +210,45 @@ metadata and leave Redis/Relay/Cloudflared untouched.
   acceptance before those read-only checks pass.
 - rollback: none required; no external write occurred. Existing GitHub and D1
   state are unchanged.
+
+## 2026-08-28 corrected-token WAF capability and artifact preflight stop
+
+- status: `BLOCKED_PROCESSOR_ARTIFACT_HASH_MISMATCH`
+- baseline/current commit: `84edb2cd34919ecb42d3ea7af7f1704c471adc21` on
+  clean `cloudflare-deploy`; no unrelated worktree change was present before
+  this evidence update.
+- WAF preflight: token metadata was mode `0600`; token verification was
+  active. The scoped token's Rulesets read succeeded for the previously
+  verified target zone. Broader account/zone convenience reads returned
+  `9109`, and the custom entrypoint initially returned `404`/`10003` with no
+  existing custom rule order.
+- WAF external operation: one additive zone-level
+  `http_request_firewall_custom` entrypoint/rule was created and immediately
+  read back exactly. Entrypoint ID:
+  `823074a217994347a3af06ee6e6f4a28`; rule ID:
+  `8ee926f7fcf34736bbe565b2adbe0396`. It matched only
+  `39.105.204.121`, `infinity.zhangyvjing.com`, the four fixed endpoint
+  method/path pairs, `skip` with `products=["bic"]`, enabled logging, and
+  enabled status.
+- artifact gate: the current Processor source aggregate is
+  `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`, but
+  the checked-in delivery definition requires
+  `ce76a75997ebff53c10a1baf2beb2631b66c8fb5a6740b469ba8bf04bf381813`.
+  Dependency-lock and service-unit hashes match. The mismatch was found
+  before any Secret, Processor, Edge, D1, R2, or zhangbot deployment write;
+  no D1 migration `0017`–`0021` was rerun.
+- rollback: the new rule DELETE returned HTTP `200`; readback showed zero
+  rules. The new entrypoint DELETE returned HTTP `204`; the first wrapper
+  exited `45` solely because it expected `200`, not because the API rejected
+  the deletion. Independent final entrypoint readback returned HTTP `404` and
+  the ruleset list returned the original four non-custom rulesets. Net WAF
+  state is restored. No Secret/token, Processor service/release, Edge
+  deployment, R2 object, zhangbot, Redis, Relay, or Cloudflared change
+  remains.
+- real D1/R2/browser acceptance: not run because the immutable artifact gate
+  failed before deployment. `deployment.txt` remains absent; no PASS
+  checkpoint is asserted.
+- next exact action: reconcile the current fixed-endpoint source aggregate
+  hash with `delivery.v1.json` in a reviewed local change, rerun local gates
+  and immutable preflight, then recreate only the exact WAF rule and continue
+  PAPER-10. Preserve D1 migrations and do not rerun `0017`–`0021`.

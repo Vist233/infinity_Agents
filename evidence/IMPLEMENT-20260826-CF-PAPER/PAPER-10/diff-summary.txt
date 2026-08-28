@@ -175,3 +175,36 @@ precondition failed, no Cloudflare API request or external write was made, no
 rule/read capability was inferred, and no deployment or live acceptance was
 started. The new evidence file is
 `evidence/IMPLEMENT-20260826-CF-PAPER/PAPER-10/waf-capability-preflight.md`.
+
+## 2026-08-28 corrected-token WAF and immutable-artifact stop
+
+This evidence-only update records the first successful minimum WAF capability
+check after the token metadata was corrected to mode `0600`. The token was
+used only through a secure stdin header pipe and no value was persisted. The
+Rulesets read succeeded for the previously verified target zone; the broader
+account/zone convenience reads returned API error `9109` under the scoped
+token. The custom firewall entrypoint was absent, so there was no existing
+custom rule order to replace.
+
+The authorized exact zone entrypoint/rule was created and read back with
+entrypoint ID `823074a217994347a3af06ee6e6f4a28` and rule ID
+`8ee926f7fcf34736bbe565b2adbe0396`. The readback verified the fixed
+`39.105.204.121` source, fixed host, exact four method/path pairs,
+`action=skip`, `products=["bic"]`, logging enabled, and no wider action
+parameters. No other Cloudflare rule was changed.
+
+The next immutable release check then found the current Processor source
+aggregate `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`
+did not match the delivery-definition value
+`ce76a75997ebff53c10a1baf2beb2631b66c8fb5a6740b469ba8bf04bf381813`.
+The dependency lock and service unit still matched their pinned hashes. This
+is recorded as `BLOCKED_PROCESSOR_ARTIFACT_HASH_MISMATCH`; no deployment
+preflight was continued.
+
+Capability-first rollback deleted the new rule (HTTP 200) and then the empty
+new entrypoint (HTTP 204). The first wrapper exited 45 solely because it
+treated successful HTTP 204 as failure. Independent reads confirmed the rule
+was absent, the custom entrypoint returned HTTP 404, and the zone ruleset list
+returned the original four non-custom rulesets. Net Cloudflare WAF state was
+restored. No Secret, Processor, Edge, D1/R2 object, zhangbot, Redis, Relay, or
+Cloudflared write occurred; `deployment.txt` remains absent.

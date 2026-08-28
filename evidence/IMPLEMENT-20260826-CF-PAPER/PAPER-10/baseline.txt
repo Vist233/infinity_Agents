@@ -58,3 +58,16 @@ or persisted in this local phase.
   Cloudflared write was authorized or performed.
 - No unrelated user modification was present at baseline. The only new
   untracked artifact at start was the scoped subphase record itself.
+
+2026-08-28 WAF capability and immutable-artifact preflight baseline
+
+- The subphase began from clean `cloudflare-deploy` at
+  `84edb2cd34919ecb42d3ea7af7f1704c471adc21`; the local tracking ref matched
+  that commit and no unrelated worktree change was present.
+- Scope was limited to the authorized fixed-endpoint WAF capability check and
+  the subsequent PAPER-10 immutable-release preflight. No D1 migration,
+  R2-object, Edge deployment, Secret, zhangbot, Redis, Relay, or Cloudflared
+  write was in scope before the release identity passed.
+- The owner-provided WAF token metadata check passed with mode `0600` and the
+  current owner. The token value was used only through an stdin header pipe;
+  it was never printed, persisted, hashed, or included in evidence.

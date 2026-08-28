@@ -69,3 +69,21 @@ controls proven incompatible with this unprivileged user manager; the next
 gate is an owner-approved resolution for the Edge access blocker, followed by
 a fresh immutable-release preflight, deployment, and real authenticated
 acceptance. PAPER-10 is not complete.
+
+## 2026-08-28 WAF capability subphase stop
+
+- This subphase started from clean commit
+  `84edb2cd34919ecb42d3ea7af7f1704c471adc21` on `cloudflare-deploy`.
+- The corrected mode-0600 scoped WAF token passed token verification and
+  Rulesets read. One exact BIC-only fixed-endpoint zone rule was created and
+  read back, then fully removed after the immutable release check found that
+  the current Processor source aggregate hash
+  `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`
+  did not match the delivery definition's pinned
+  `ce76a75997ebff53c10a1baf2beb2631b66c8fb5a6740b469ba8bf04bf381813`.
+- Status is `BLOCKED_PROCESSOR_ARTIFACT_HASH_MISMATCH`. No Paper Secret,
+  Processor release/service, Edge deployment, D1/R2 object, zhangbot,
+  Redis, Relay, or Cloudflared write was performed. The WAF rule and its
+  newly created entrypoint are absent on readback; `deployment.txt` is not
+  created. The next action is a reviewed local hash reconciliation and fresh
+  immutable preflight before any further production write.

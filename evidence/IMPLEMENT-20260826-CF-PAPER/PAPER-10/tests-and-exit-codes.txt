@@ -382,3 +382,50 @@ recorded exactly; no failed assertion was skipped.
       was attempted, and no WAF rule, secret, deployment, D1/R2, zhangbot,
       Redis, Relay, or Cloudflared write occurred. WAF capability and target
       preflight therefore remain unverified.
+
+39. Corrected-token WAF read-only preflight
+    - Working directory: repository root.
+    - Token metadata check (existence, owner, mode only): exit code 0; mode
+      was `0600`. Token contents were not printed, persisted, hashed, or
+      included in evidence.
+    - Secure token verification request: curl exit code 0, HTTP 200, API
+      result `active`.
+    - Account and zone convenience reads: curl exit code 0, HTTP 403, API
+      error 9109. Exact target-zone Rulesets list: curl exit code 0, HTTP 200,
+      four existing non-custom rulesets. Custom-firewall entrypoint read:
+      curl exit code 0, HTTP 404, API error 10003.
+
+40. Exact fixed-endpoint WAF rule create/readback
+    - Initial entrypoint GET: curl exit code 0, HTTP 404.
+    - Additive zone entrypoint POST: curl exit code 0, HTTP 200. IDs were
+      recorded as `823074a217994347a3af06ee6e6f4a28` and
+      `8ee926f7fcf34736bbe565b2adbe0396`; no secret value was recorded.
+    - Immediate entrypoint GET: curl exit code 0, HTTP 200; exact expression,
+      method/path set, BIC-only action parameters, enabled logging, and
+      enabled state validated by a dedicated readback assertion (exit code 0).
+
+41. Immutable artifact identity preflight
+    - The exact source aggregate hash command exited 0 and returned
+      `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`,
+      which does not equal the delivery-definition value
+      `ce76a75997ebff53c10a1baf2beb2631b66c8fb5a6740b469ba8bf04bf381813`.
+      Dependency-lock and systemd-unit hash checks exited 0 and matched.
+    - Stop status: `BLOCKED_PROCESSOR_ARTIFACT_HASH_MISMATCH`. No D1/R2,
+      Secret, Processor, Edge, zhangbot, Redis, Relay, or Cloudflared write
+      was attempted after this mismatch. D1 migrations 0017–0021 were not
+      rerun. Full post-deployment/live tests were not run because the
+      immutable release gate failed before deployment.
+
+42. Capability-first WAF rollback
+    - Readback before rollback: curl exit code 0, HTTP 200; exactly one
+      marker rule in the newly created entrypoint.
+    - Rule DELETE: curl exit code 0, HTTP 200. Post-rule-delete GET: curl
+      exit code 0, HTTP 200; zero rules and marker absent.
+    - Entrypoint DELETE: curl exit code 0, HTTP 204. The wrapper returned
+      exit code 45 only for an incorrect local `200`-only assertion; the API
+      deletion was successful. Independent final entrypoint GET: curl exit
+      code 0, HTTP 404; post-rollback ruleset list: curl exit code 0, HTTP
+      200 with the original four rulesets and no custom entrypoint.
+    - Net Cloudflare WAF state was restored. No Secret/token, service,
+      release, Edge deployment, D1/R2 object, zhangbot, Redis, Relay, or
+      Cloudflared rollback was needed.
