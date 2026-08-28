@@ -30,6 +30,14 @@
   `PrivateDevices`/kernel protection controls. The Edge secret, zhangbot token,
   unit, current symlink, and release were revoked or removed by the targeted
   rollback; no R2 object, Redis, Relay, or Cloudflared change occurred.
+- Latest external attempt: the corrected release was installed and the Edge
+  was deployed as version `ce8c9923-5776-4e5b-82a4-ec322912b6ba` (version
+  number 119; the script etag matched the reviewed Edge source). Secret and
+  token shape checks passed, but the real Processor `connect` request received
+  Cloudflare `403 Error 1010 / browser_signature_banned` before the Worker
+  handler. The service was stopped after diagnosis and all newly created
+  Processor capability material was revoked or removed. No live paper flow was
+  attempted after this failure.
 
 ## Required release acceptance
 
@@ -58,5 +66,6 @@ owner-provided package installation and the passing disposable venv checks.
 The first Processor deployment attempt exposed a host-specific systemd
 constraint and was rolled back. The checked-in unit now omits only the
 controls proven incompatible with this unprivileged user manager; the next
-gate is a fresh immutable-release preflight followed by the approved
-deployment and real authenticated acceptance. PAPER-10 is not complete.
+gate is an owner-approved resolution for the Edge access blocker, followed by
+a fresh immutable-release preflight, deployment, and real authenticated
+acceptance. PAPER-10 is not complete.

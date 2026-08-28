@@ -369,3 +369,78 @@ identity, Cloudflare target, migration state, R2 binding, absent secret, and
 clean Processor starting state all match. Do not rerun D1 migrations `0017`–
 `0021`; continue with the ordered secret handoff, release installation,
 Edge deployment, Processor readiness, and real authenticated acceptance.
+
+---
+
+# PAPER-10 external attempt after corrected preflight — stopped at Edge access
+
+execution_date=2026-08-28
+release_commit=3558c1fec9035465407ca121fea94bd77e74d7bd
+edge_version=ce8c9923-5776-4e5b-82a4-ec322912b6ba
+edge_version_number=119
+
+## Ordered external operations
+
+- The one-time Edge shared secret was put through the Wrangler stdin channel;
+  the command exited 0. The same value was written to the exact zhangbot
+  `processor.env` path through SSH stdin; the remote shape check exited 0 with
+  mode 600, one key, 64 hex characters, and no unexpected keys. No value was
+  read or recorded.
+- The verified no-AppleDouble archive was transferred and read back with
+  exit 0, SHA-256
+  `4031b9a3e4f9fe880eeb83e326598b40f06e29db6d5877f80072a3256a96c08c`, and
+  zero `._*` entries. The zhangbot release install exited 0 after venv
+  creation, offline pinned-wheel installation, `pip check`, unit verification,
+  and hash checks. The first package display subcommand attempted `rg` on the
+  host, which returned command-not-found; it was not treated as a pass and a
+  second read-only check with the available `grep` returned exit 0 for all
+  three packages. A sanitized 0600 `install-record.txt` was then written and
+  read back.
+- `npx wrangler deploy` exited 0. Edge version
+  `ce8c9923-5776-4e5b-82a4-ec322912b6ba` was created; read-only version and
+  health checks exited 0 and showed the expected D1/R2 bindings, Processor ID,
+  secret binding, and configured readiness.
+- `systemctl --user daemon-reload`, `enable`, and `start` exited 0, but after
+  the bounded wait the service was `activating/auto-restart`, `MainPID=0`, and
+  the start verification exited 30. Existing Redis/Relay/Cloudflared states
+  and listeners were unchanged.
+
+## Exact blocker and diagnosis
+
+- Read-only `systemctl --user show/status` and `journalctl --user -u
+  infinity-paper-processor.service` diagnosis exited 0. The Processor reached
+  its real fixed Edge `connect` request, which received HTTP 403 from
+  Cloudflare before the Worker handler: Error 1010,
+  `browser_signature_banned`, with owner action required. The default Python
+  urllib client signature was rejected. This is a real provider/Edge access
+  result, not a mock or a health-only 200.
+- No retry or client/header bypass was attempted after the diagnosis. The
+  service's configured `Restart=on-failure` caused its bounded automatic
+  restarts during the short diagnosis window; the service was then stopped.
+
+## Capability-revocation-first rollback
+
+- `systemctl --user stop`, `disable`, and `daemon-reload` exited 0; targeted
+  removal of the new unit, current symlink, release, token, and transfer
+  archive exited 0. The Edge shared-secret deletion exited 0.
+- Post-rollback read-only SSH exited 0: Processor unit/current/release/token
+  are absent; existing `infinity-cloudflared`, `infinity-redis`, and
+  `infinity-redis-relay` remain active; no Processor listener exists.
+- Post-rollback read-only Edge secret-name/health exited 0: the Paper shared
+  secret is absent and health reports D1/R2 configured but
+  `paper_processor=unconfigured`.
+- Post-rollback read-only D1 query exited 0 with zero rows for the approved
+  Processor's sessions and attempts, `rows_written=0`, and
+  `changed_db=false`. The R2 bucket readback exited 0 and no Processor R2
+  object was written. D1 migrations `0017`–`0021` remain applied; no
+  migration rollback was performed.
+
+## Stop decision
+
+`BLOCKED_PROCESSOR_EDGE_ACCESS`: stop PAPER-10. An owner-approved resolution
+is required for Cloudflare Error 1010 on the fixed Processor connect path,
+either as a reviewed Edge access-policy change or a reviewed client transport
+contract that is explicitly accepted for this runtime. Do not retry, add an
+arbitrary proxy/host, weaken source or credential boundaries, or continue
+live acceptance until that exact resolution is approved and a fresh preflight
+passes.

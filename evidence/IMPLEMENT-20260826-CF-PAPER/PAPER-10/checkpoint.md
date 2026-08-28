@@ -1,6 +1,6 @@
 # CHECKPOINT IMPLEMENT-20260826-CF-PAPER / PAPER-10
 
-- status: `IN_PROGRESS`
+- status: `BLOCKED_PROCESSOR_EDGE_ACCESS`
 - branch: `cloudflare-deploy`
 - release commit: `3558c1fec9035465407ca121fea94bd77e74d7bd`
 - one completed outcome: local Paper Processor release contract, all local
@@ -34,6 +34,15 @@
   removes only those directives, updates the delivery hash and runbook, and
   passes all local gates. The failed external attempt was rolled back before
   this new release is installed.
+- latest blocker: with the corrected release and Edge version
+  `ce8c9923-5776-4e5b-82a4-ec322912b6ba`, the real zhangbot `connect` request
+  was rejected by Cloudflare before the Worker handler with HTTP 403 Error
+  1010 `browser_signature_banned` (the Python urllib client signature was
+  banned). The service auto-restarted while diagnosing, then was stopped and
+  disabled. The temporary Edge shared secret, zhangbot token, release,
+  current symlink, and unit were removed; read-only D1/R2/service checks passed.
+  Do not retry or claim readiness until the owner provides a reviewed,
+  authorized resolution for this exact Edge access policy/client contract.
 - blocker resolution: a subsequent owner-provided installation was verified
   read-only over SSH. `dpkg-query` reports
   `python3.10-venv 3.10.12-1~22.04.17 install ok installed`; disposable venv

@@ -198,3 +198,39 @@ recorded exactly; no failed assertion was skipped.
     zhangbot reports exact `python3.10-venv` installed, venv/ensurepip/pip
     passing, no Processor state, active existing services, no Processor
     listener, and no Docker. No write occurred in this preflight.
+
+24. Corrected release install and Edge deployment
+    Commands: stdin-only secret handoff; verified archive transfer; zhangbot
+    venv/offline wheel install; `pip check`; relative artifact/unit hashes;
+    sanitized install record; systemd unit verification; `npx wrangler deploy`;
+    read-only version and health readback.
+    Results: secret put exit 0, token write/shape exit 0, archive transfer and
+    readback exit 0, release install exit 0, install-record write exit 0,
+    systemd verify exit 0, Edge deploy exit 0, version view exit 0, health exit
+    0. One non-gating remote `rg` package-display subcommand returned 127
+    (`rg: command not found`); the required package readback was rerun with
+    available `grep` and exited 0. No secret value was printed.
+
+25. Processor connect failure
+    Commands: `systemctl --user daemon-reload`, `enable`, `start`; bounded
+    state/readiness/listener readback; read-only `systemctl --user
+    show/status` and `journalctl` diagnosis.
+    Results: daemon-reload/enable/start each exit 0; bounded start verification
+    exited 30 because the unit was `activating/auto-restart`, `MainPID=0`, with
+    no Processor process. Journal diagnosis exited 0 and recorded the exact
+    real Edge response: HTTP 403, Cloudflare Error 1010,
+    `browser_signature_banned`, before the Worker handler. No manual retry was
+    performed; only the unit's bounded automatic restart occurred during
+    diagnosis.
+
+26. Latest capability-revocation-first rollback
+    Commands: targeted systemd stop/disable/daemon-reload and removal of the
+    new Processor unit/current/release/token/archive; Edge secret delete;
+    read-only Edge secret/health, D1 session/attempt aggregate, R2 bucket,
+    zhangbot service/listener checks.
+    Results: all rollback and readback commands exited 0. Edge health reports
+    `paper_processor=unconfigured`; D1 reports zero sessions/attempts for the
+    Processor with `rows_written=0` and `changed_db=false`; R2 target remains
+    present with no Processor object write; zhangbot Processor state is absent;
+    existing services/listeners are unchanged. `deployment.txt` was not
+    created and no PASS checkpoint was written.

@@ -68,3 +68,14 @@ no-listener/single-instance contract remain. The delivery definition, design,
 runbook, service hash, and regression coverage were updated together. The
 failed deployment was rolled back before this remediation; D1/R2 metadata was
 preserved and existing Redis/Relay/Cloudflared services were not changed.
+
+## 2026-08-28 Edge access blocker
+
+The corrected release installed successfully and passed unit/hash checks, but
+the real zhangbot connect request was rejected at the fixed Edge hostname by
+Cloudflare Error 1010 `browser_signature_banned` before the Worker handler.
+The service, token, and Edge secret were then removed by the documented
+capability-revocation-first rollback. No client/header bypass, arbitrary proxy,
+alternate host, R2 write, Redis change, or migration rollback was attempted.
+PAPER-10 remains blocked on a reviewed resolution for the exact Edge access
+policy/client transport contract.
