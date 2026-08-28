@@ -47,6 +47,56 @@ Blockers:
 
 No external write operation was performed. The pending migrations are preserved as the expected pre-migration state; they were not applied.
 
+## 2026-08-29 backed-up immutable preflight and release retry
+
+- Baseline was clean `cloudflare-deploy` at local/remote commit
+  `7f1944a6e056e469509e1eecf5f7df88b5358a12`; the current delivery source,
+  dependency-lock, and unit hashes matched exactly:
+  `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`,
+  `51a30c24dc3af956d30e9891dbb3fb605c813b72f608f23507c7860c7a8c4775`, and
+  `424a6846ef7b30d1eb505811da53620156e9186dae60ece38f3826e8338a2b2f`.
+- No-proxy Wrangler read-only checks exited `0`: account
+  `3cfba3bb2ec69798aa4881b05d80810f`, Worker `infinity-agents-edge`, D1
+  `infinity-agents-db` (`9ee9ec94-cb42-40b5-8372-681c7b57c105`), R2
+  `infinity-agents-resources`, and current 100%-deployed Worker version
+  `5c395875-1ec7-457e-9987-2f3b904f148f`/number `129` were confirmed. D1
+  reported no migrations to apply and all five Paper tables were present with
+  `changes=0`, `changed_db=false`, and `rows_written=0`. R2 bucket info was
+  `15` objects / `41.9 MB`; no object was read or written. Paper secret name
+  was absent and Edge health reported Paper Processor unconfigured.
+- WAF token metadata/verify and Rulesets reads exited `0`; mode was `0600`,
+  token status was active, and the correct custom entrypoint read exited
+  HTTP `404`/`10003`. The broader zone convenience read returned
+  `403`/`9109`, which was not used as a substitute for scoped Rulesets access.
+- zhangbot read-only checks exited `0`: Ubuntu 22.04, Python 3.10.12,
+  installed `python3.10-venv` `3.10.12-1~22.04.17`, venv/ensurepip/pip
+  success, fixed egress `39.105.204.121`, allowlisted source connectivity
+  `200`, no old Processor env/current/unit/process/listener, and existing
+  cloudflared/Redis/Relay services active.
+- The exact four-path BIC-only rule was created/read back as entrypoint
+  `269dc257455245f597fe05a0f04e5bc8`, rule
+  `dabe1fe242ab493e8d6ee33ff2bf29d8`; both HTTP responses were `200` and the
+  semantic exactness gate passed.
+- The Edge shared-secret write/name readback exited `0`. A safe same-value
+  rotation then wrote the Edge secret and zhangbot one-line token (`0` each);
+  mode/shape verification exited `0`. Secret values were never recorded.
+- Release deployment stopped before service registration because a remote
+  hash assertion used paths relative to `$HOME` instead of the extracted
+  release directory. The SSH command exited `1` with missing-file errors for
+  the six relative paths. The release rollback trap removed the release;
+  release/current/unit were absent and the Processor was inactive on readback.
+- Capability-first rollback removed the zhangbot token (exit `0`), deleted the
+  Edge shared secret (exit `0`, name absent on readback), deleted the WAF rule
+  (HTTP `200`), deleted the empty entrypoint (HTTP `204`), and confirmed final
+  entrypoint readback HTTP `404`/`10003`. D1/R2 metadata was preserved; no
+  Edge code deployment, Processor service, R2 object, Redis, Relay, or
+  Cloudflared write occurred.
+
+Decision: `BLOCKED_PROCESSOR_RELEASE_SCRIPT` for this retry only; external
+state is restored. The next action is a fresh immutable read-only preflight,
+then exact WAF recreation/readback and corrected installation with absolute
+release paths. D1 migrations `0017`–`0021` must not be rerun.
+
 ---
 
 # PAPER-10 zhangbot-only preflight superseding the historical runtime blocker

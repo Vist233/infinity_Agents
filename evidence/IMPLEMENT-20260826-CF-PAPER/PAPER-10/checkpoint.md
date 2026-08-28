@@ -475,3 +475,24 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
   target, non-force push the current local evidence history, and verify the
   exact remote ref with `ls-remote`; only then repeat immutable PAPER-10
   preflight. Do not rerun migrations.
+
+## 2026-08-29 release retry rollback
+
+- status: `BLOCKED_PROCESSOR_RELEASE_SCRIPT` for this retry; PAPER-10 is not
+  PASS.
+- The clean backed-up baseline was
+  `7f1944a6e056e469509e1eecf5f7df88b5358a12`. Read-only immutable preflight,
+  exact four-path BIC-only WAF creation/readback, safe Edge/zhangbot token
+  handoff, and no-AppleDouble archive/hash checks passed.
+- Release setup stopped with exit `1` because the remote hash assertion used
+  paths relative to `$HOME`, not the extracted release directory. No unit was
+  registered, no Processor was started, and no R2 object or Edge code deploy
+  occurred.
+- Rollback is verified: token env absent; Edge Secret deleted and absent by
+  name; WAF rule deleted (HTTP `200`), empty entrypoint deleted (HTTP `204`),
+  final entrypoint readback `404`; D1 preserved and existing
+  Redis/Relay/Cloudflared services unchanged.
+- Next exact action: commit/back up this evidence, repeat the full read-only
+  preflight, recreate/read back the exact WAF rule, and retry release setup
+  with absolute paths for all extracted-file hash calculations. Do not rerun
+  D1 migrations.

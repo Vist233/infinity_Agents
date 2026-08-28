@@ -656,3 +656,26 @@ recorded exactly; no failed assertion was skipped.
     - No Cloudflare, zhangbot, D1, R2, Redis, Relay, or Cloudflared write was
       performed in this retry. The last confirmed remote ref remains
       `3039acc5cc3b169ecb5d0c4b2090e980b35ee95d`.
+
+58. Backed-up immutable preflight, exact WAF, secret/token, and release retry
+    - Local source/lock/unit hash verification exited `0`; no-proxy Wrangler
+      account, Worker version, D1 list/migration/schema, R2 bucket info,
+      Secret-name, and health reads exited `0`. D1 migrations were not run.
+    - WAF token metadata/verify and Rulesets/entrypoint reads exited `0`, with
+      token mode `0600`, active token, custom entrypoint HTTP `404`, and no
+      existing custom rule. Exact rule create/readback exited HTTP `200` and
+      the exactness gate exited `0`.
+    - Edge Secret initial write/name readback exited `0`; safe same-value
+      rotation plus single-stdin zhangbot token handoff and value-free
+      mode/shape check exited `0`.
+    - Corrected release archive transfer and remote archive/hash checks exited
+      `0`. The first corrected release install command exited `2` before any
+      action due a remote shell syntax error; the next command reached
+      installation but exited `1` because six hash paths were evaluated from
+      `$HOME` rather than the release directory. Its remote release rollback
+      trap exited effectively `0`, leaving no release/current/unit/process.
+    - Token removal exited `0`; Edge Secret deletion/name readback exited
+      `0`; WAF rule deletion/readback exited HTTP `200`/zero rules, entrypoint
+      deletion exited HTTP `204`, and final entrypoint readback exited HTTP
+      `404`/`10003`. No D1/R2 object, Edge deploy, Redis, Relay, or
+      Cloudflared write occurred.

@@ -151,3 +151,16 @@ or persisted in this local phase.
 - Direct and proxied GitHub connectivity failed; no new remote ref was
   observed. No Cloudflare or zhangbot write was attempted after the artifact
   verifier rollback.
+
+## 2026-08-29 release retry baseline and rollback
+
+- Starting baseline: clean `cloudflare-deploy`, local and remote
+  `7f1944a6e056e469509e1eecf5f7df88b5358a12`.
+- The exact current source, dependency, and unit hashes matched the checked-in
+  delivery definition. The WAF token was mode `0600`; the target zone and
+  fixed endpoints were rechecked read-only before the rule write.
+- This retry used only the existing production account/Worker/D1/R2 targets,
+  the approved `zhangbot` host, and the existing fixed-IP rule contract. It
+  did not rerun D1 migrations or alter Redis/Relay/Cloudflared.
+- The release script path assertion failed before unit registration. All
+  capabilities created in this retry were removed and read back absent.

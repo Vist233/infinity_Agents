@@ -341,3 +341,13 @@ The artifact-verifier rollback evidence was committed locally as
 failed (proxy connection refused; direct HTTPS timeout), so this commit is not
 presented as remotely backed up. No Cloudflare/zhangbot state changed after
 the rollback; the worktree is clean and `deployment.txt` is absent.
+
+## 2026-08-29 release retry diff summary
+
+- No product source, migration, frontend, Processor protocol, or runtime
+  contract change was made in this retry. The release archive was built from
+  backed-up commit `7f1944a6e056e469509e1eecf5f7df88b5358a12` and matched the
+  checked-in source/lock/unit hashes.
+- Only the PAPER-10 evidence records were amended after the controlled
+  external attempt. The remote release path error and complete capability-
+  first rollback are recorded without secret values or payloads.

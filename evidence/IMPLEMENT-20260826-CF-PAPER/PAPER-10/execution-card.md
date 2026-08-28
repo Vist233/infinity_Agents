@@ -255,3 +255,21 @@ acceptance. PAPER-10 is not complete.
 - This is a source-control backup blocker only. The local worktree is clean,
   but PAPER-10 remains stopped with WAF/secret/token/release/service absent,
   D1/R2 preserved, and Redis/Relay/Cloudflared unchanged.
+
+## 2026-08-29 release retry stop and rollback
+
+- The current clean/backed-up baseline was
+  `7f1944a6e056e469509e1eecf5f7df88b5358a12`. Immutable preflight, exact
+  WAF read/write/readback, secure Edge/zhangbot secret handoff, and archive
+  hash checks passed.
+- Release installation reached the venv/dependency phase but stopped at a
+  remote hash assertion that accidentally evaluated six paths from `$HOME`.
+  The command exited `1`; no service was registered or started. The release
+  trap removed the incomplete release, then capability-first rollback removed
+  the token, Edge Secret, WAF rule, and empty entrypoint with final readbacks.
+- Status: `BLOCKED_PROCESSOR_RELEASE_SCRIPT` for this retry; PAPER-10 is not
+  PASS. D1 `0017`–`0021` remain applied and were not rerun. No R2 object or
+  Edge deployment exists, and Redis/Relay/Cloudflared were unchanged.
+- Next exact action: repeat read-only preflight from the clean backed-up
+  commit, recreate the exact WAF rule, and retry the release with all hash
+  calculations explicitly rooted in the extracted release directory.
