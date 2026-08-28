@@ -680,6 +680,24 @@ recorded exactly; no failed assertion was skipped.
       `404`/`10003`. No D1/R2 object, Edge deploy, Redis, Relay, or
       Cloudflared write occurred.
 
+60. Processor listener assertion retry and rollback
+    - From backed-up commit `6a70062186b68b2cd4703f762d3a8f62d3b6eb1e`, the
+      fresh immutable preflight, exact WAF rule/readback, secret/token handoff,
+      archive transfer/hash checks, venv, offline dependency install, import
+      check, and systemd start all reached success before the post-start
+      listener assertion.
+    - The assertion exited `81` because it rejected the pre-existing
+      cloudflared loopback metrics listener `127.0.0.1:20242` (and did not
+      distinguish existing SSH/DNS listeners). Read-only `ss -ltnp` identified
+      `20242` as cloudflared, `8090` as Redis Relay, and `6379` as Redis; no
+      socket belonged to the Processor main PID. The failure was therefore in
+      the acceptance assertion, not an observed Processor listener.
+    - The release trap removed release/current/unit/process. Token removal,
+      Edge Secret deletion/name readback, WAF rule deletion/readback, empty
+      entrypoint deletion, and final entrypoint readback exited `0`, `0`, HTTP
+      `200`/zero rules, HTTP `204`, and HTTP `404`. No D1 migration, R2
+      object, Edge deployment, or existing-service write occurred.
+
 59. Corrected release retry smoke-check stop and rollback
     - From backed-up commit `a270b30ad4d144aad5431713d163dee8e7fcac4b`, the
       second exact WAF rule/readback and same-value Edge/zhangbot secret

@@ -360,3 +360,11 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
 - The install reached venv/dependency completion, then stopped at a
   quote-unsafe import check. The release and newly issued capabilities were
   rolled back; only evidence is being amended.
+
+## 2026-08-29 listener assertion retry
+
+- No product source or runtime contract changed. The release reached
+  systemd start, then the host-wide listener assertion rejected an existing
+  cloudflared loopback port; no Processor listener was observed.
+- The release and all newly created capabilities were rolled back. Only
+  evidence is being amended.

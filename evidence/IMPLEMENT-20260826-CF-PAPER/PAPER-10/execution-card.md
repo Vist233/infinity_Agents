@@ -274,6 +274,20 @@ acceptance. PAPER-10 is not complete.
   commit, recreate the exact WAF rule, and retry the release with all hash
   calculations explicitly rooted in the extracted release directory.
 
+## 2026-08-29 listener assertion retry stop and rollback
+
+- The next backed-up baseline was `6a70062186b68b2cd4703f762d3a8f62d3b6eb1e`.
+  The Processor release reached venv/dependency/import completion and systemd
+  start, but the post-start assertion rejected pre-existing cloudflared
+  loopback metrics on port `20242`. Read-only process mapping showed no
+  Processor socket.
+- The release trap and capability-first rollback completed: release/current/
+  unit/process, token, Edge Secret, WAF rule, and empty entrypoint were all
+  removed/read back absent. Existing Redis/Relay/Cloudflared and D1/R2 were
+  preserved.
+- Status: `BLOCKED_PROCESSOR_LISTENER_ASSERTION`; PAPER-10 is not PASS. The
+  next retry uses a Processor-main-PID-specific listener check.
+
 ## 2026-08-29 corrected release smoke-check stop and rollback
 
 - The next backed-up baseline was `a270b30ad4d144aad5431713d163dee8e7fcac4b`.

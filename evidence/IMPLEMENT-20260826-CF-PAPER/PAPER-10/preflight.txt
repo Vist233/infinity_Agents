@@ -927,6 +927,20 @@ status=BLOCKED_GITHUB_BACKUP
 - The local worktree is clean. PAPER-10 remains stopped until the local commit
   is pushed and verified; `deployment.txt` remains absent.
 
+## 2026-08-29 listener assertion retry
+
+- From backed-up commit `6a70062186b68b2cd4703f762d3a8f62d3b6eb1e`, the fresh
+  immutable preflight and exact WAF/secret/token/archive checks passed. The
+  Processor venv, offline dependency lock, import check, and user systemd
+  start also completed before a post-start assertion failed with exit `81`.
+- The assertion incorrectly required the host to have no listeners beyond
+  `8090`/`6379`; the host's pre-existing `127.0.0.1:20242` is cloudflared
+  metrics, and SSH/DNS listeners are host services. `ss -ltnp` showed no
+  listener owned by the Processor main PID.
+- The release trap and capability-first rollback were verified. No D1/R2
+  object, Edge deploy, or existing-service write occurred; migrations were
+  not rerun.
+
 ## 2026-08-29 corrected release smoke-check retry
 
 - A fresh clean-baseline preflight from `a270b30ad4d144aad5431713d163dee8e7fcac4b`

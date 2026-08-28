@@ -173,3 +173,12 @@ or persisted in this local phase.
 - Venv creation and offline dependency installation completed, but the
   quote-unsafe import smoke check failed before systemd registration. The
   release and all newly created capabilities were removed and verified absent.
+
+## 2026-08-29 listener assertion retry baseline
+
+- The fresh backed-up baseline was `6a70062186b68b2cd4703f762d3a8f62d3b6eb1e`.
+  Release installation, import, and systemd start completed; the only stop
+  was an over-broad host-listener assertion that misclassified existing
+  cloudflared metrics. The Processor PID had no listener.
+- All capabilities from this retry were removed and read back absent; no
+  existing service or data resource was changed.

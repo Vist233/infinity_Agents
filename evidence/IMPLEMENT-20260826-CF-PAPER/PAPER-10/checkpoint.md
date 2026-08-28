@@ -516,3 +516,23 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
 - Next exact action: commit/back up this evidence, repeat immutable preflight,
   recreate/read back the exact WAF rule, and rerun the release without a
   nested shell-quoted smoke-check expression. Do not rerun migrations.
+
+## 2026-08-29 Processor listener assertion retry and rollback
+
+- status: `BLOCKED_PROCESSOR_LISTENER_ASSERTION` for this retry; PAPER-10 is
+  not PASS.
+- From the clean backed-up `6a70062186b68b2cd4703f762d3a8f62d3b6eb1e`
+  baseline, immutable preflight, exact WAF, secure secret/token handoff,
+  archive checks, venv/dependency/import validation, and systemd start
+  completed before the post-start listener assertion.
+- The assertion exited `81` after treating the existing cloudflared
+  `127.0.0.1:20242` metrics socket as unexpected. Read-only process mapping
+  confirmed 20242 is cloudflared, 8090 is Relay, and 6379 is Redis; the
+  Processor main PID had no listener. No Processor inbound socket was
+  observed.
+- Rollback is verified: release/current/unit/process absent; token removed;
+  Edge Secret absent by name; WAF rule/entrypoint deleted with final readback
+  `404`; D1/R2 preserved and Redis/Relay/Cloudflared unchanged.
+- Next exact action: back up this evidence, repeat immutable preflight, then
+  use a PID-specific no-Processor-listener assertion before continuing live
+  acceptance. Do not rerun migrations.
