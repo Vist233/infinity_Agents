@@ -2,7 +2,9 @@
 
 - Branch: `cloudflare-deploy`
 - Card: PAPER-10 — external release, deployment and live acceptance
-- Release commit: `61cc66d509a86ac93cebef9fd955644d68d278c0`
+- Previous release commit: `61cc66d509a86ac93cebef9fd955644d68d278c0`
+  (superseded after the zhangbot user-systemd capability probe; the revised
+  immutable release commit is recorded in the checkpoint after commit)
 - Reviewed Processor source commit pinned by the delivery definition:
   `455ae849c572aa285cc752a10e21fd69f031b18d`
 - Runtime decision: the user explicitly approved `zhangbot` as the sole
@@ -15,14 +17,20 @@
   outside the change scope.
 - Local outcome: the fixed-source contract, PubMed/approved-URL boundaries,
   Python 3.10 virtualenv delivery definition, pinned dependencies, fixed Edge
-  URL validation, unique instance identity, hardened systemd-user unit, and
-  operator runbook are implemented and tested.
+  URL validation, unique instance identity, host-compatible systemd-user unit,
+  and operator runbook are implemented and tested. The unit retains the
+  required privilege, filesystem, network, resource, and singleton controls;
+  unsupported user-manager capability controls are explicitly documented and
+  tested as absent.
 - External outcome at this checkpoint: the previously applied D1 migrations
-  `0017`–`0021` remain recorded and will not be rerun. A fresh read-only SSH
-  verification now confirms `python3.10-venv` is installed and disposable
-  venv/ensurepip/pip checks pass. The Processor service is still absent; no
-  new secret, Edge deploy, Processor registration/start, R2 write, Redis
-  change, or live acceptance has occurred in this resumed phase.
+  `0017`–`0021` remain recorded and will not be rerun. The Edge was deployed as
+  version `4ef4cea2-71ca-402e-aa4a-f5322417da2a` and its readiness response
+  showed D1, R2, and Processor configuration while the temporary secret was
+  present. Processor startup then failed at systemd status
+  `218/CAPABILITIES` because the old unit requested unsupported
+  `PrivateDevices`/kernel protection controls. The Edge secret, zhangbot token,
+  unit, current symlink, and release were revoked or removed by the targeted
+  rollback; no R2 object, Redis, Relay, or Cloudflared change occurred.
 
 ## Required release acceptance
 
@@ -48,5 +56,8 @@
 
 The earlier `BLOCKED_OS_PACKAGE_PRIVILEGE` condition is resolved by the
 owner-provided package installation and the passing disposable venv checks.
-The next gate is the full read-only artifact/Cloudflare/zhangbot preflight;
-PAPER-10 is not complete.
+The first Processor deployment attempt exposed a host-specific systemd
+constraint and was rolled back. The checked-in unit now omits only the
+controls proven incompatible with this unprivileged user manager; the next
+gate is a fresh immutable-release preflight followed by the approved
+deployment and real authenticated acceptance. PAPER-10 is not complete.

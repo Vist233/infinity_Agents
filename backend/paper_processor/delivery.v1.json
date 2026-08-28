@@ -36,7 +36,7 @@
     "artifact_hashes": {
       "processor_source_sha256": "ce76a75997ebff53c10a1baf2beb2631b66c8fb5a6740b469ba8bf04bf381813",
       "dependency_lock_sha256": "7910fd24e531e02f8b79a87ddc6bf5742ad67f2593b01172162f6c99901436d7",
-      "service_unit_sha256": "706ce12b9f63a6dfeda4620d6517483e2e2db7ae5657ebd09dae98fcc3a17029"
+      "service_unit_sha256": "424a6846ef7b30d1eb505811da53620156e9186dae60ece38f3826e8338a2b2f"
     }
   },
   "environment": {
@@ -88,7 +88,19 @@
     "memory_max": "256M",
     "tasks_max": 32,
     "no_public_listener": true,
-    "hardening": ["PrivateTmp=yes", "NoNewPrivileges=yes", "ProtectSystem=strict", "ProtectHome=read-only", "UMask=0077"]
+    "hardening": [
+      "PrivateTmp=yes",
+      "NoNewPrivileges=yes",
+      "ProtectSystem=strict",
+      "ProtectHome=read-only",
+      "UMask=0077",
+      "LockPersonality=yes",
+      "RestrictSUIDSGID=yes",
+      "RestrictRealtime=yes",
+      "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
+      "SystemCallArchitectures=native"
+    ],
+    "user_systemd_constraint": "zhangbot's unprivileged systemd user manager rejects PrivateDevices and ProtectKernelTunables/ProtectKernelModules/ProtectControlGroups with status 218/CAPABILITIES; disposable probes established that these controls cannot be enabled without preventing service startup, so they are not part of the approved unit."
   },
   "logging": {
     "format": "structured safe events",

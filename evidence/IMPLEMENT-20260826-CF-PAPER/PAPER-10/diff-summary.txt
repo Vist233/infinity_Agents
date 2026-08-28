@@ -52,3 +52,19 @@ write by SSH: package status, venv help/creation, ensurepip, and pip all
 passed in a disposable directory. This only clears the host prerequisite;
 no deployment or production resource change has occurred in the resumed
 phase.
+
+## 2026-08-28 systemd capability remediation
+
+The first zhangbot start of the reviewed release failed with systemd
+`218/CAPABILITIES` because the unprivileged user manager rejected
+`PrivateDevices=yes`, `ProtectKernelTunables=yes`,
+`ProtectKernelModules=yes`, and `ProtectControlGroups=yes`. A disposable
+read-only probe matrix reproduced the failure for each unsupported control and
+passed for the retained minimum hardening set. The checked-in unit now removes
+only those four incompatible directives; `PrivateTmp`, `NoNewPrivileges`,
+`ProtectSystem`, `ProtectHome`, `UMask`, identity/network restrictions,
+`MemoryMax`, `TasksMax`, `LimitNOFILE`, controlled `ReadWritePaths`, and the
+no-listener/single-instance contract remain. The delivery definition, design,
+runbook, service hash, and regression coverage were updated together. The
+failed deployment was rolled back before this remediation; D1/R2 metadata was
+preserved and existing Redis/Relay/Cloudflared services were not changed.

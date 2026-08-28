@@ -85,9 +85,13 @@ the ability to list another user's resources.
 Its release artifact is a reviewed Git commit plus source, dependency-lock,
 and systemd-unit hashes, installed in a Python 3.10 virtualenv under a
 commit-named release directory. The `systemd-user` service uses
-`PrivateTmp`, `NoNewPrivileges`, `ProtectSystem`, bounded memory/tasks, a
-controlled work directory, and a mode-0600 env file containing only
-`PAPER_PROCESSOR_TOKEN`. The Edge separately holds
+`PrivateTmp`, `NoNewPrivileges`, `ProtectSystem`, `ProtectHome`, bounded
+memory/tasks, identity/network restrictions, a controlled work directory, and
+a mode-0600 env file containing only `PAPER_PROCESSOR_TOKEN`. On this
+unprivileged user manager, disposable host probes reject `PrivateDevices` and
+the kernel protection controls with systemd status `218/CAPABILITIES`, so the
+approved unit records those controls as unsupported rather than claiming they
+are active. The Edge separately holds
 `PAPER_PROCESSOR_SHARED_SECRET`. The definition also fixes health/restart
 rules, singleton/lease assumptions, log-redaction rules, and rollback. The
 Dockerfile is retained only as historical/reference material and is not a

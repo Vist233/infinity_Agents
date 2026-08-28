@@ -67,10 +67,17 @@ Install and manage
 `backend/paper_processor/infinity-paper-processor.service` as a user-level
 systemd unit. Validate the unit with `systemd-analyze --user verify` before
 starting it. The unit must retain `PrivateTmp=yes`, `NoNewPrivileges=yes`,
-`ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateDevices=yes`,
-`UMask=0077`, bounded `MemoryMax=256M`, `TasksMax=32`, `LimitNOFILE=256`, and
-the explicit address-family restriction. Its only write path is the controlled
-temporary work directory. Do not add a socket, port, timer that creates a
+`ProtectSystem=strict`, `ProtectHome=read-only`, `UMask=0077`,
+`LockPersonality=yes`, `RestrictSUIDSGID=yes`, `RestrictRealtime=yes`, the
+explicit address-family restriction, bounded `MemoryMax=256M`, `TasksMax=32`,
+and `LimitNOFILE=256`. Its only write path is the controlled temporary work
+directory. On the owner-approved unprivileged `zhangbot` user manager,
+`PrivateDevices` and `ProtectKernelTunables`/`ProtectKernelModules`/
+`ProtectControlGroups` are intentionally not enabled: disposable probes on
+the host reject those controls with systemd status `218/CAPABILITIES` and the
+service cannot spawn when they are present. This is a recorded host-runtime
+constraint, not a relaxation of the network, filesystem, privilege, resource,
+or singleton boundaries. Do not add a socket, port, timer that creates a
 second instance, or a second service name.
 
 The D1 control plane remains authoritative for Processor sessions, attempts,

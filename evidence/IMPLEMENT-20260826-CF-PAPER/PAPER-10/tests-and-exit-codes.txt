@@ -145,3 +145,40 @@ recorded exactly; no failed assertion was skipped.
     installed`; venv help/create, ensurepip, and pip all exit 0. Temporary
     venv was removed. Processor remains absent; Redis/Relay/Cloudflared remain
     active; listeners remain loopback-only 8090/6379.
+
+20. Systemd hardening compatibility regression
+    Commands: focused delivery test before remediation; then the checked-in
+    service edit, service-hash update, delivery-definition test, and JSON/diff
+    validation.
+    Result: the first focused delivery assertion correctly failed exit code 1
+    because `PrivateDevices=yes` was still present after the initial patch. It
+    was removed without weakening the required controls; the corrected
+    delivery test then passed 4/4 (exit code 0), Processor focused tests passed
+    11/11 (exit code 0), JSON parsing and `git diff --check` both exited 0.
+    The host probe evidence is preserved in the prior execution log: the old
+    unit failed with systemd `218/CAPABILITIES`; the disposable compatible
+    minimum-hardening probe exited 0.
+
+21. Mandatory local gates after hardening remediation
+    Commands and results:
+    - `cd cloudflare-worker && npm run check && npm test`: TypeScript check
+      exit 0; 23 files/127 tests passed; overall exit 0.
+    - `cd frontend && npm run typecheck && npm run lint && npm run test:unit`:
+      typecheck exit 0, lint exit 0, 12 files/50 tests passed; overall exit 0.
+    - `cd frontend && npm run test:e2e`: 13 tests passed; exit 0. The run used
+      the permitted local test-server capability; optional absent-backend
+      proxy diagnostics were non-fatal and all assertions passed.
+    - `git diff --check`: exit 0.
+
+22. External failure rollback readback
+    Commands: read-only systemd/journal diagnosis; targeted Edge secret delete;
+    targeted Processor stop/disable/daemon-reload; targeted removal of the
+    new token, unit, current symlink, and commit-named release; read-only
+    service/listener/existing-service checks.
+    Result: diagnosis exit 0 and recorded only the safe systemd error code;
+    each rollback operation exited 0; post-rollback readback exited 0. No
+    Processor unit, token, release, or current symlink remains. Existing
+    Redis/Relay/Cloudflared services and loopback listeners are unchanged. The
+    Edge deployment version remains recorded as `4ef4cea2-71ca-402e-aa4a-
+    f5322417da2a`; the shared secret is absent after rollback. D1 migrations
+    remain applied and no R2 object was written.

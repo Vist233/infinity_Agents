@@ -31,3 +31,18 @@ Source-control state before final evidence commit:
 No Cloudflare account/API credential, D1/R2 parent credential, Redis
 credential, Processor token, provider key, or Secret value was read, written,
 or persisted in this local phase.
+
+2026-08-28 post-start failure and remediation baseline
+
+- The first start of release `61cc66d509a86ac93cebef9fd955644d68d278c0`
+  reached systemd `activating/auto-restart` with no main process. Read-only
+  journal diagnosis reported `218/CAPABILITIES` while spawning Python.
+- Disposable user-manager probes identified `PrivateDevices` and
+  `ProtectKernelTunables`/`ProtectKernelModules`/`ProtectControlGroups` as
+  incompatible on this host; the compatible minimum-hardening probe passed.
+- The targeted rollback removed only the attempted Processor secret, token,
+  unit, current symlink, and release. D1 migrations and metadata were
+  preserved; R2, Redis, Relay, and Cloudflared were not changed.
+- The checked-in service, delivery hash, runbook, design note, and regression
+  test now record this host constraint. The next release must be rebuilt from
+  the resulting immutable commit; the old release must not be redeployed.
