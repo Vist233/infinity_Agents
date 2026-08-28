@@ -35,3 +35,8 @@ the authorized read-only OS preflight, found the exact candidate
 `python3.10-venv=3.10.12-1~22.04.17`, and stopped when
 `sudo -n apt-get update` returned `sudo: a password is required`. No APT write,
 alternative package, or sudo-policy change was attempted.
+
+The final local repository check found no production diff and passed
+`git diff --check`. A no-proxy live `ls-remote` could not resolve GitHub
+(exit 128); the local tracking ref is not presented as a fresh remote
+verification.

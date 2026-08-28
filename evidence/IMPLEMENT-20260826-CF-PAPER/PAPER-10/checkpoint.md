@@ -22,6 +22,12 @@
   with `sudo: a password is required`. The package was not installed and no
   substitute or sudo-policy change was attempted. The earlier
   Cloudflare-managed runtime/OCI blocker remains historical evidence only.
+- repository verification: local HEAD and the local
+  `origin/cloudflare-deploy` tracking ref are both
+  `65b9a409f58197e81d47c0fc90e28002ac915987`; a fresh no-proxy
+  `ls-remote` exited 128 because `github.com` could not be resolved. This is
+  recorded as a network-verification blocker, not as a successful live ref
+  check.
 - rollback: before external writes, restore the prior Git commit. After any
   authorized external write, follow the runbook's capability-revocation-first
   rollback and preserve D1/R2 metadata.

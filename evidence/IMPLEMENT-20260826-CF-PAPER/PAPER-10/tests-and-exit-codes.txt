@@ -112,3 +112,13 @@ recorded exactly; no failed assertion was skipped.
     env/release/unit, and existing service state.
     Result: exit code 0; package remains absent, candidate unchanged, no
     Processor state exists, and Redis/Relay/Cloudflared remain unchanged.
+
+17. Final local repository and remote-ref verification
+    Commands: `git status --short --branch`; `git rev-parse HEAD`;
+    `git rev-parse origin/cloudflare-deploy`; `git diff --check`; and
+    no-proxy `git ls-remote --heads origin cloudflare-deploy`.
+    Results: local status/hash/diff checks exited 0 with clean
+    `cloudflare-deploy` at `65b9a409f58197e81d47c0fc90e28002ac915987`.
+    The no-proxy `ls-remote` exited 128 with exact error
+    `Could not resolve host: github.com`; no remote value was inferred from
+    that failed live check.

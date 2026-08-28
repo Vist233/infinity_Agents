@@ -185,8 +185,8 @@ approves the host prerequisite and the preflight is repeated.
 
 preflight_date=2026-08-28
 branch=cloudflare-deploy
-local_commit=4966a2afae21c548e35d21d1ff371c26d4603537
-remote_ref=4966a2afae21c548e35d21d1ff371c26d4603537 refs/heads/cloudflare-deploy
+local_commit_before_evidence=65b9a409f58197e81d47c0fc90e28002ac915987
+local_tracking_ref=65b9a409f58197e81d47c0fc90e28002ac915987 refs/heads/cloudflare-deploy
 worktree=clean_before_os_preflight
 
 The prior D1 migration and secret/release rollback facts above remain
@@ -229,3 +229,16 @@ unchanged. This resumed attempt was limited to the newly authorized
   `apt-get install --yes python3.10-venv` available (or the user performs those
   exact commands). Do not provide or store a sudo password in chat, logs, or
   evidence.
+
+## Final local repository verification before evidence backup
+
+- `git status --short --branch`, `git rev-parse HEAD`,
+  `git rev-parse origin/cloudflare-deploy`, and `git diff --check` exited 0;
+  the branch and both local hashes were `cloudflare-deploy` and
+  `65b9a409f58197e81d47c0fc90e28002ac915987`.
+- `env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY -u https_proxy -u
+  http_proxy -u all_proxy git -c http.proxy= -c https.proxy= ls-remote
+  --heads origin cloudflare-deploy` exited 128. The exact error was
+  `Could not resolve host: github.com` after the local `127.0.0.1:7897`
+  proxy variables were cleared. No remote ref was inferred from this failed
+  check; the local tracking ref above is retained as the last recorded value.
