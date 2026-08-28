@@ -624,3 +624,37 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
 - next exact card: repeat immutable preflight, recreate/read back the exact
   WAF capability and credentials, install the verified release with
   activation before systemd verification, and stop on any failure.
+
+## 2026-08-29 live acceptance browser blocker and full rollback
+
+- status: `BLOCKED_AUTHENTICATED_BROWSER_ACCEPTANCE`; PAPER-10 is not PASS.
+- baseline/current commit: `5d2c12875296bd7ce1fad824cb122fc44dab76a1`,
+  backed up before the external attempt.
+- one completed outcome: the current Processor release and Edge deployment
+  reached the intended service state, but the required authenticated browser
+  DOM was unavailable before any live case began.
+- modified files: PAPER-10 evidence only; no product source or migration was
+  changed.
+- focused/local gates: Edge `check && test` 0 (129 tests), Processor pytest 0
+  (12), frontend typecheck/lint/unit 0 (50), frontend E2E 0 (13); final
+  evidence diff/secret gate is recorded in `secret-scan.txt`.
+- real D1/R2/browser evidence: no authenticated browser case was run. Root
+  HTTPS 200 without authenticated DOM is explicitly not acceptance evidence.
+- failed required check: in-app Browser was client-blocked and Chrome
+  navigation timed out before DOM; no workaround or unapproved credential was
+  used.
+- D1/R2/Redis/external systems modified: Edge version
+  `4d2a792b-a767-4e91-8a66-09aac0c673e9` was deployed then rolled back to
+  `d287b02d-a94c-4caa-b473-70f2368f4999`; WAF rule/entrypoint, Edge Secret,
+  zhangbot token/release/service were created then removed. D1/R2 metadata
+  was preserved; migrations were not rerun; Redis/Relay/Cloudflared were not
+  modified.
+- secret scan result: no secret value was recorded; see `secret-scan.txt`.
+- rollback operation: WAF HTTP `200`/`204`/`404`, Secret name-only absence,
+  Processor targets absent/inactive, Edge rollback 0 and 100% readback.
+- remaining risks and non-goals: all real authenticated positive/negative
+  cases and final release gate remain outstanding. The project is not
+  complete.
+- next exact card: restore a functioning authenticated browser session/DOM,
+  then rerun PAPER-10 from a fresh read-only preflight; do not reuse this
+  rolled-back capability state or claim PASS from the direct HTML read.

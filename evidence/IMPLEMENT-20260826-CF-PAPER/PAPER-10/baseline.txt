@@ -222,3 +222,16 @@ or persisted in this local phase.
   unit references the not-yet-activated `current` symlink.
 - The exact release/staging/capabilities were rolled back. No D1 migration,
   R2 write, Edge deploy, or existing-service change occurred.
+
+## 2026-08-29 live acceptance browser-blocked baseline
+
+- The clean backed-up commit was
+  `5d2c12875296bd7ce1fad824cb122fc44dab76a1`; the Processor release and Edge
+  deployment were built from its matching artifact hashes.
+- The live release reached Edge version `4d2a792b-a767-4e91-8a66-09aac0c673e9`
+  at 100% and one active Processor instance, but authenticated browser
+  navigation produced no DOM. The release was therefore rolled back to Edge
+  version `d287b02d-a94c-4caa-b473-70f2368f4999`.
+- WAF/Secret/token/release/service state is absent after rollback. D1/R2 and
+  existing Redis/Relay/Cloudflared remain preserved/active; no live paper
+  data was created by this attempt.

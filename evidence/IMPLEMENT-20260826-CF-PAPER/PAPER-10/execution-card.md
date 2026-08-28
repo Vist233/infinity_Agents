@@ -379,3 +379,34 @@ acceptance. PAPER-10 is not complete.
   next retry must activate the exact commit-named current symlink before the
   systemd verify step, then continue only after read-only hash and service
   checks pass.
+
+## 2026-08-29 live acceptance browser blocker and full rollback
+
+- From backed-up `5d2c12875296bd7ce1fad824cb122fc44dab76a1`, the corrected
+  metadata-free archive, remote hashes, exact WAF readback, secure secret/
+  token handoff, Processor release, and Edge deploy all passed. Edge version
+  `4d2a792b-a767-4e91-8a66-09aac0c673e9` reached 100% traffic and health
+  readiness was configured.
+- Real browser acceptance could not start: the in-app Browser reported
+  `ERR_BLOCKED_BY_CLIENT` even for a read-only health navigation, and the
+  available authenticated Chrome extension timed out while navigating the
+  production home page before a DOM was returned. A direct unauthenticated
+  HTTPS read of the root returned HTML 200, but this is not authenticated
+  product evidence. No login data, form, upload, paper query, or user data was
+  entered or transmitted through the browser.
+- Because the required authenticated browser proof was unavailable, no
+  search/materialize/PDF/R2/parse/page/image/tool-refresh or negative-case
+  claim is made. `deployment.txt` was intentionally not created and PAPER-10
+  is not PASS.
+- Capability-first rollback succeeded: WAF rule `00c039445f394c8cab0baab0e2fab1f5`
+  delete HTTP `200`, entrypoint `c812296bcf4c4c418038db5c38ebf37f` delete
+  HTTP `204` and readback `404`; Edge Secret deletion exit `0` with name-only
+  absence; zhangbot stop/disable/daemon-reload exit `0`, token/release/current/
+  unit/staging absent and Processor inactive. Edge rollback exit `0` restored
+  version `d287b02d-a94c-4caa-b473-70f2368f4999` to 100%. D1/R2 metadata was
+  preserved, no D1 migration was rerun, no R2 object was written, and
+  Redis/Relay/Cloudflared remained active.
+- Status: `BLOCKED_AUTHENTICATED_BROWSER_ACCEPTANCE`; PAPER-10 is not PASS.
+  The next exact action requires a functioning authenticated browser session
+  that can return the production DOM, then a fresh full preflight and a new
+  authorized release attempt; no capability is left active from this attempt.

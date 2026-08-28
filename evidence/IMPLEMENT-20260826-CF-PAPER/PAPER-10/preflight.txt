@@ -956,3 +956,24 @@ status=BLOCKED_GITHUB_BACKUP
   registration. The release rollback trap and capability-first rollback
   completed: token absent, Edge Secret absent, WAF final readback HTTP `404`.
   No Edge deploy, R2 object, Redis, Relay, or Cloudflared write occurred.
+
+## 2026-08-29 current release and authenticated-browser blocker
+
+- From backed-up commit `5d2c12875296bd7ce1fad824cb122fc44dab76a1`, the
+  metadata-free source/wheel archives were validated locally and on zhangbot;
+  source aggregate, dependency lock, and service-unit hashes matched the
+  delivery definition. D1 reported no migrations to apply and was not
+  migrated; R2 metadata remained readable.
+- Exact WAF entrypoint `c812296bcf4c4c418038db5c38ebf37f` / rule
+  `00c039445f394c8cab0baab0e2fab1f5` read back as the four fixed method/path
+  pairs, fixed IP/host, `skip` `bic` only, logging enabled. The Processor
+  release reached systemd active/running with one instance and no listener;
+  Edge version `4d2a792b-a767-4e91-8a66-09aac0c673e9` deployed at 100%.
+- The in-app Browser was client-blocked and Chrome navigation timed out before
+  an authenticated DOM. No authenticated live case ran and no browser data
+  was entered or transmitted; the direct HTML 200 read was not counted.
+- Rollback completed: WAF rule/entrypoint delete/readback HTTP `200`/`204`/`404`,
+  Edge Secret name-only absence, zhangbot token/release/current/unit/staging
+  absence and Processor inactive, and Edge 100% rollback to
+  `d287b02d-a94c-4caa-b473-70f2368f4999`. D1/R2 were preserved and existing
+  Redis/Relay/Cloudflared remained active. `deployment.txt` was not created.

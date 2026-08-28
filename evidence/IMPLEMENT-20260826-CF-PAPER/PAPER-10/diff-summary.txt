@@ -397,3 +397,13 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
   `current` symlink activation required by the unit's ExecStart path.
 - The exact WAF/secret/token/release/staging changes were rolled back. Only
   PAPER-10 evidence is being amended.
+
+## 2026-08-29 live acceptance browser blocker
+
+- No product source, migration, frontend, Processor protocol, or runtime
+  contract changed. The reviewed Processor release and fixed-endpoint Edge
+  deployment were exercised only until the browser acceptance entry point.
+- The browser surfaces could not return an authenticated DOM, so all required
+  live cases were stopped before execution. WAF/Secret/token/Processor state
+  was rolled back and Edge was restored to the prior version; only PAPER-10
+  evidence is being amended.

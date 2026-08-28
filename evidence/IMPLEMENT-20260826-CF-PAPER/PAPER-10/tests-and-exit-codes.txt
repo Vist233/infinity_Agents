@@ -787,3 +787,27 @@ recorded exactly; no failed assertion was skipped.
       Cloudflared/Redis/Relay exit `0` active. No D1/R2/Edge deploy occurred.
     - Post-rollback Edge health exited `0` with
       `paper_processor: unconfigured`; `deployment.txt` remains absent.
+
+64. Live acceptance browser blocker and full rollback
+    - Backed-up `5d2c128…` archive/hash/member checks, exact WAF create/readback,
+      secure Secret/token handoff, Processor release, and Edge deploy all
+      exited `0`; Edge version `4d2a792b-a767-4e91-8a66-09aac0c673e9` was
+      deployed at 100%.
+    - Browser skill setup completed. In-app Browser navigation reported
+      `ERR_BLOCKED_BY_CLIENT`; Chrome extension navigation to the production
+      root timed out before a DOM snapshot. No browser form, upload, login
+      input, or user-data transmission occurred. A separate direct HTTPS root
+      read returned 200 HTML only and was not counted as acceptance.
+    - Required authenticated live cases were therefore not run and no mock,
+      HTTP 200, or process-liveness result was substituted.
+    - WAF rule deletion HTTP `200`, entrypoint deletion HTTP `204`, and final
+      WAF readback HTTP `404`; Edge Secret deletion/name-only readback exited
+      `0`/zero entries; zhangbot stop/disable/daemon-reload exited `0` and
+      exact Processor targets were absent. Edge rollback to
+      `d287b02d-a94c-4caa-b473-70f2368f4999` exited `0` and read back at 100%.
+      D1 migration list exited `0` with no migrations to apply; R2 info exited
+      `0` with `15` objects/`41.9 MB`; existing Redis/Relay/Cloudflared were
+      active. `deployment.txt` was not created.
+    - Final evidence `git diff --check` exited `0`; the changed-scope secret
+      detector returned raw no-match exit `1` and normalized gate exit `0`,
+      excluding the detector's own pattern record.
