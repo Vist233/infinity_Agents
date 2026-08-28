@@ -223,3 +223,20 @@ acceptance. PAPER-10 is not complete.
   absent. The next retry must use separate stdin channels: a single-line
   remote shell command that reads only the token pipe, with no here-document,
   followed by a value-free functional verification.
+
+## 2026-08-28 artifact-verifier retry and rollback
+
+- From clean backed-up commit `3039acc5cc3b169ecb5d0c4b2090e980b35ee95d`,
+  the exact WAF rule was recreated and the corrected secret/token handoff was
+  completed without a shell diagnostic. Before any archive transfer, the
+  local verifier itself exited `1` because its no-match branch attempted to
+  raise `None`; the source and wheel archives were not accepted as deployable
+  evidence at that point.
+- The verifier failure occurred before zhangbot upload, release creation,
+  service start, Edge deployment, or R2 use. Capability-first rollback removed
+  the exact WAF rule/entrypoint, Edge secret, and zhangbot token env. Existing
+  Redis/Relay/Cloudflared remained active and D1 was untouched.
+- The corrected local packaging now produces a minimal Processor-only source
+  archive and a three-wheel archive with no `._*` members. `deployment.txt`
+  remains absent and PAPER-10 is not complete; the next action is a fresh
+  backed-up preflight before recreating any external capability.

@@ -606,3 +606,23 @@ recorded exactly; no failed assertion was skipped.
     - The one-time secret was transiently exposed by the malformed shell
       diagnostic; it was not written to the repository, evidence, service
       logs, or a persistent release, and was invalidated before continuation.
+
+55. Artifact packaging verifier retry and rollback
+    - The third retry read-only preflight exited `0` after correcting the
+      repository-root path. Exact WAF create/readback exited `0`/HTTP `200`;
+      the corrected single-stdin secret/token handoff exited `0`, with remote
+      env mode `600`, one key, and one line.
+    - Minimal source/wheel archive generation completed, but its first
+      validation wrapper exited `1` because the no-AppleDouble branch used an
+      invalid `raise None` expression. No archive was transferred and no
+      release/service/Edge deployment/R2 operation followed.
+    - Capability-first WAF rollback exited `0`/HTTP `200` for the rule and
+      `0`/HTTP `204` for the entrypoint; final readback returned not-found.
+      Edge secret deletion/name-only absence exited `0`; zhangbot token
+      removal and final service checks exited `0`; existing services stayed
+      active and D1/R2 were unchanged.
+    - Corrected minimal archive generation/validation exited `0`: source
+      archive SHA-256 `b15487530515787a69b4a2592e796d09c6ca841837236371c472d263141edf8d`,
+      wheel archive SHA-256
+      `0556776a06168ac46933365d7e778d532a4c251c62015e4b46cea69e647aefce`,
+      both with no `._*` members.

@@ -415,3 +415,24 @@ metadata and leave Redis/Relay/Cloudflared untouched.
   stdin-only remote command (no here-document), validate only file shape and
   later functional connect, and stop on any ambiguity. Do not rerun D1
   migrations.
+
+## 2026-08-28 artifact-verifier retry and rollback
+
+- status: `BLOCKED_PROCESSOR_ARTIFACT_VERIFIER` (PAPER-10 is not PASS).
+- The clean baseline was `3039acc5cc3b169ecb5d0c4b2090e980b35ee95d`.
+  Read-only preflight, exact WAF rule/readback, and corrected single-stdin
+  secret/token setup passed. The local archive verifier then exited `1` due
+  to an invalid `raise None` in its no-match branch, before transfer or
+  release installation.
+- Rollback completed: WAF rule/entrypoint deleted/read back absent, Edge
+  secret deleted/read back absent by name, zhangbot token removed, and no
+  release/current/unit/process remained. D1/R2 were preserved and existing
+  Redis/Relay/Cloudflared stayed active.
+- Corrected local packaging now passes: minimal Processor-only source archive
+  and three-wheel dependency archive, both without `._*` members. Source
+  archive hash is `b15487530515787a69b4a2592e796d09c6ca841837236371c472d263141edf8d`;
+  wheel archive hash is
+  `0556776a06168ac46933365d7e778d532a4c251c62015e4b46cea69e647aefce`.
+- next exact action: commit and back up this blocker evidence, then repeat
+  immutable read-only preflight from the new clean commit. Do not recreate
+  WAF/secret/token before that preflight; do not rerun D1 migrations.

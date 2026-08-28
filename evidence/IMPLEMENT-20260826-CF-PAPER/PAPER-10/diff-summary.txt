@@ -324,3 +324,12 @@ the one-time value was revoked and is not present in the repository or
 evidence. Capability-first rollback removed the WAF rule/entrypoint, Edge
 secret, and zhangbot token env. No release/current/unit/process, Edge code
 deployment, D1/R2 write, or existing-service change remained.
+
+## 2026-08-28 artifact-verifier retry
+
+No repository code changed in this subattempt. The local release verifier
+failed before transfer because its no-match branch attempted to raise `None`.
+The exact WAF rule/entrypoint, Edge secret, and zhangbot token created before
+that check were revoked by targeted rollback. A corrected minimal
+Processor-only source archive and three-wheel archive passed local
+AppleDouble validation, but have not yet been transferred or deployed.

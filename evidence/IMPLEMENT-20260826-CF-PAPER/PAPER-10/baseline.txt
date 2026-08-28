@@ -131,3 +131,13 @@ or persisted in this local phase.
   so the handoff was rejected as unsafe despite a non-authoritative shape
   check. The secret/token were revoked immediately; no Processor release or
   service was started.
+
+2026-08-28 artifact-verifier retry baseline
+
+- The current backed-up baseline was `3039acc5cc3b169ecb5d0c4b2090e980b35ee95d`
+  on `cloudflare-deploy`, clean before the retry. Exact WAF/secret/token
+  setup had passed with no Processor release yet.
+- A local archive verification script failed before transfer due to an
+  invalid no-match exception expression. The WAF rule, Edge secret, and
+  zhangbot token were immediately revoked; no release/current/unit/process,
+  Edge deployment, D1/R2 write, or existing-service change remained.

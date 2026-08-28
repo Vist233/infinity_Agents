@@ -813,3 +813,37 @@ one line from stdin and writes the mode-0600 file, with no here-document or
 second stdin consumer. Only value-free mode/key checks and subsequent
 functional authentication can validate the result. `deployment.txt` remains
 absent and no PASS is asserted.
+
+# PAPER-10 artifact-verifier retry and rollback
+
+retry_date=2026-08-28
+baseline_commit=3039acc5cc3b169ecb5d0c4b2090e980b35ee95d
+status=BLOCKED_PROCESSOR_ARTIFACT_VERIFIER
+
+## Failure
+
+- The third retry's read-only preflight initially failed only because the
+  artifact command ran from `cloudflare-worker` while using repository-root
+  paths; the corrected full preflight exited `0`. WAF exact rule creation and
+  corrected single-stdin secret/token handoff also exited `0`.
+- Minimal source/wheel archive generation succeeded, but the first local
+  verifier exited `1` due to an invalid `raise None` no-match branch. It did
+  not transfer archives to zhangbot and did not create a release, service,
+  Edge deployment, or R2 object.
+
+## Rollback
+
+- WAF rule deletion exited `0`/HTTP `200`, empty entrypoint deletion exited
+  `0`/HTTP `204`, and final readback was not-found. Edge secret deletion and
+  name-only absence exited `0`; zhangbot token cleanup/final state exited
+  `0`. Redis/Relay/Cloudflared remained active and D1 was not rerun.
+- The corrected local packaging verifier exited `0` on a minimal
+  Processor-only source archive and a three-wheel archive. Source archive
+  SHA-256 is
+  `b15487530515787a69b4a2592e796d09c6ca841837236371c472d263141edf8d`;
+  wheel archive SHA-256 is
+  `0556776a06168ac46933365d7e778d532a4c251c62015e4b46cea69e647aefce`;
+  both have no `._*` members.
+
+`deployment.txt` remains absent. The next attempt must repeat the full
+immutable preflight and only then recreate the exact WAF rule and capabilities.
