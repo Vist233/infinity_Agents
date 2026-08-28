@@ -377,3 +377,21 @@ metadata and leave Redis/Relay/Cloudflared untouched.
 - next exact action: create and back up the review commit, then repeat the
   immutable read-only preflight. Recreate the exact four-path BIC-only rule
   only after that preflight; do not rerun D1 migrations.
+
+## 2026-08-28 dependency-closure review backup
+
+- status: `READY_FOR_IMMUTABLE_PREFLIGHT` (PAPER-10 is not PASS).
+- The dependency-closure review commit is
+  `96dce21a302ebe258f1ae6de343ae8b148bde76e` and contains the exact lock
+  pin, delivery hash/test, and the no-secret retry/rollback evidence.
+- Non-force push exited `0`; direct read-only `git ls-remote --heads origin
+  cloudflare-deploy` exited `0` and returned exactly
+  `96dce21a302ebe258f1ae6de343ae8b148bde76e` for the target ref. The local
+  branch is `cloudflare-deploy` and the worktree is clean.
+- External state after rollback is unchanged: no WAF rule/entrypoint, Edge
+  shared secret, zhangbot token/release/service, Edge deployment, D1/R2
+  write, Redis, Relay, or Cloudflared write. D1 migrations remain applied and
+  must not be rerun.
+- next exact action: repeat the full immutable read-only Cloudflare and
+  zhangbot preflight from this backed-up commit; only if it passes may the
+  exact four-path BIC-only rule be recreated.

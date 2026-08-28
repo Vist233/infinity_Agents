@@ -191,3 +191,13 @@ acceptance. PAPER-10 is not complete.
   local-server retry). `deployment.txt` remains absent and PAPER-10 is not
   complete; the next action is a review commit/backup followed by a fresh
   immutable preflight.
+
+## 2026-08-28 dependency-closure review backup
+
+- The local review commit is
+  `96dce21a302ebe258f1ae6de343ae8b148bde76e`; non-force push and exact
+  read-only remote-ref verification both exited `0` for
+  `origin/cloudflare-deploy`. The worktree is clean.
+- This is a source-control backup only. PAPER-10 remains pending a fresh
+  immutable preflight and real production acceptance; no new Cloudflare or
+  zhangbot write occurred after the rollback.
