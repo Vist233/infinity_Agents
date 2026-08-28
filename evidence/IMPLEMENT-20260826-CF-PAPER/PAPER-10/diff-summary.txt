@@ -313,3 +313,14 @@ rule, Edge secret, zhangbot token, and transferred archives were rolled back
 by exact identifiers/paths. Net external state after rollback is: D1
 unchanged, R2 unwritten, Processor absent, and existing Redis/Relay/
 Cloudflared active.
+
+## 2026-08-28 secret handoff retry
+
+This retry made no repository code change. It recreated the exact WAF
+entrypoint/rule and wrote a temporary Edge shared secret, then stopped when
+the SSH stdin wiring combined a secret pipe with a here-document and produced
+a remote command-not-found diagnostic. The handoff was rejected as unsafe;
+the one-time value was revoked and is not present in the repository or
+evidence. Capability-first rollback removed the WAF rule/entrypoint, Edge
+secret, and zhangbot token env. No release/current/unit/process, Edge code
+deployment, D1/R2 write, or existing-service change remained.

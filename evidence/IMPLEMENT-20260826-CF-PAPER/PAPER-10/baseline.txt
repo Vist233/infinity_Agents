@@ -120,3 +120,14 @@ or persisted in this local phase.
   rolled back; no Processor release/current/unit/process or R2 object exists.
 - The current local candidate changes are limited to the zhangbot dependency
   lock, its delivery manifest hash, and one delivery regression assertion.
+
+2026-08-28 secret-handoff retry baseline
+
+- The backed-up candidate was `343738798619546e313a0030f7b7391a6d32cec1` on
+  `cloudflare-deploy`, with a clean worktree before the retry. Read-only
+  Cloudflare and zhangbot preflight passed; D1 `0017`–`0021` were not rerun.
+- The exact WAF rule was created/read back, then the Edge secret was written
+  and a Processor token handoff was attempted. The stdin wiring was invalid,
+  so the handoff was rejected as unsafe despite a non-authoritative shape
+  check. The secret/token were revoked immediately; no Processor release or
+  service was started.

@@ -201,3 +201,25 @@ acceptance. PAPER-10 is not complete.
 - This is a source-control backup only. PAPER-10 remains pending a fresh
   immutable preflight and real production acceptance; no new Cloudflare or
   zhangbot write occurred after the rollback.
+
+## 2026-08-28 secret handoff retry and rollback
+
+- From the clean backed-up commit
+  `343738798619546e313a0030f7b7391a6d32cec1`, the complete read-only
+  preflight passed and the exact WAF rule was recreated/read back as
+  entrypoint `1aa5798c03814e48a95466764dc9d9c6`, rule
+  `ac11b4092cf64d3b8a912c455f6f75bd`.
+- The Edge secret write returned success, but the SSH command incorrectly
+  combined a secret pipe with a here-document. The remote shell printed a
+  command-not-found diagnostic, proving the input stream was not a safe
+  one-time token handoff. The resulting env-file shape was not trusted even
+  though the shape check returned success. The one-time value was immediately
+  invalidated and is not recorded anywhere in this evidence.
+- Capability-first rollback deleted the exact WAF rule/entrypoint, deleted the
+  Edge secret, removed the zhangbot token env, and verified no release/current/
+  unit/process remained. Redis/Relay/Cloudflared stayed active; D1/R2 were
+  not written and Edge code was not deployed.
+- Status is `BLOCKED_PROCESSOR_SECRET_HANDOFF_PIPE`; `deployment.txt` is
+  absent. The next retry must use separate stdin channels: a single-line
+  remote shell command that reads only the token pipe, with no here-document,
+  followed by a value-free functional verification.

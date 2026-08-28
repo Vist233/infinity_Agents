@@ -586,3 +586,23 @@ recorded exactly; no failed assertion was skipped.
       cloudflare-deploy` exited `0` and exactly matched the same SHA/ref.
       Final `git status --short --branch` exited `0` with a clean
       `cloudflare-deploy` worktree.
+
+54. Secret handoff retry and capability-first rollback
+    - The fresh read-only preflight exited `0`; exact WAF creation exited
+      `0`/HTTP `200`, and immediate readback exited `0`/HTTP `200` with
+      entrypoint `1aa5798c03814e48a95466764dc9d9c6`, rule
+      `ac11b4092cf64d3b8a912c455f6f75bd`, and validation `PASS`.
+    - Edge secret write exited `0`. The combined SSH handoff wrapper returned
+      `0` but emitted a remote `command not found` diagnostic because a
+      here-document competed with the secret stdin pipe. The reported env
+      shape was therefore not accepted as a valid handoff; no Processor
+      process or release was started.
+    - Exact WAF rule deletion exited `0`/HTTP `200`; empty entrypoint deletion
+      exited `0`/HTTP `204`; final readback returned the expected not-found
+      error. Edge secret deletion and name-only absence check exited `0`.
+      zhangbot token removal and final Processor/release/current checks exited
+      `0`; Redis/Relay/Cloudflared remained active. No D1 migration, R2 write,
+      Edge deployment, or Redis/Relay/Cloudflared write occurred.
+    - The one-time secret was transiently exposed by the malformed shell
+      diagnostic; it was not written to the repository, evidence, service
+      logs, or a persistent release, and was invalidated before continuation.

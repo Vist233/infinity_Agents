@@ -766,4 +766,50 @@ status=READY_FOR_DEPENDENCY_CLOSURE_COMMIT
   (`129`); Processor pytest exited `0` (`12`); frontend typecheck/lint/unit
   exited `0` (`50`); E2E exited `1` in sandbox and `0` after the permitted
   local-server retry (`13`). Diff check exited `0`; normalized secret gate
-  exited `0`. `deployment.txt` is absent and no PASS is asserted.
+exited `0`. `deployment.txt` is absent and no PASS is asserted.
+
+# PAPER-10 secret handoff retry and rollback
+
+retry_date=2026-08-28
+baseline_commit=343738798619546e313a0030f7b7391a6d32cec1
+status=BLOCKED_PROCESSOR_SECRET_HANDOFF_PIPE
+
+## Preflight and WAF operation
+
+- The backed-up branch/worktree and exact remote ref were clean/matching.
+  Direct read-only Cloudflare checks passed: the target account/Worker was
+  correct, `PAPER_PROCESSOR_SHARED_SECRET` was absent before this retry, D1
+  returned no pending migrations, R2 remained `15` objects/`41.9 MB`, public
+  health showed the Processor unconfigured, the target Rulesets capability
+  read returned the original four rulesets, and the custom entrypoint was
+  absent. zhangbot OS/venv/ensurepip, existing service/PID/listener, no-stale
+  Processor, and four-provider egress checks passed.
+- The exact WAF rule was created/read back with HTTP/command exits `200/0` and
+  validation `PASS`: entrypoint `1aa5798c03814e48a95466764dc9d9c6`, rule
+  `ac11b4092cf64d3b8a912c455f6f75bd`; only BIC was skipped and logging was
+  enabled.
+
+## Unsafe handoff and rollback
+
+- The Edge secret write exited `0`. The SSH delivery command mistakenly
+  attached both a secret pipe and a here-document to `bash -s`; the remote
+  shell emitted a command-not-found diagnostic. The env-file shape check was
+  not treated as proof of matching content. No Processor release, service,
+  connect, Edge code deployment, or R2 object operation followed.
+- The exact WAF rule delete exited `0`/HTTP `200`, entrypoint delete exited
+  `0`/HTTP `204`, and final readback returned the expected not-found error.
+  Secret deletion/name-only absence exited `0`; zhangbot cleanup exited `0`
+  with token env/release/current/unit/process absent and Redis/Relay/
+  Cloudflared active. D1 was not rerun and no R2/Redis/Relay/Cloudflared
+  write occurred.
+- A one-time secret was transiently present in the malformed shell diagnostic;
+  it was immediately invalidated and was not written to repository, evidence,
+  service logs, or a persistent release. Its value is intentionally omitted.
+
+## Retry control
+
+The next handoff must use a single command string over SSH that reads exactly
+one line from stdin and writes the mode-0600 file, with no here-document or
+second stdin consumer. Only value-free mode/key checks and subsequent
+functional authentication can validate the result. `deployment.txt` remains
+absent and no PASS is asserted.

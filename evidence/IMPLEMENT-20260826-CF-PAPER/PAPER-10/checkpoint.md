@@ -395,3 +395,23 @@ metadata and leave Redis/Relay/Cloudflared untouched.
 - next exact action: repeat the full immutable read-only Cloudflare and
   zhangbot preflight from this backed-up commit; only if it passes may the
   exact four-path BIC-only rule be recreated.
+
+## 2026-08-28 secret handoff retry and rollback
+
+- status: `BLOCKED_PROCESSOR_SECRET_HANDOFF_PIPE` (PAPER-10 is not PASS).
+- From clean backed-up commit
+  `343738798619546e313a0030f7b7391a6d32cec1`, read-only preflight passed and
+  exact WAF rule creation/readback passed. The Edge secret write returned
+  success, but the combined SSH stdin/here-document handoff emitted a remote
+  command-not-found diagnostic; the token was not accepted as a trustworthy
+  match and Processor startup was not attempted.
+- Rollback completed: WAF rule/entrypoint deleted/read back absent, Edge
+  secret deleted/read back absent by name, zhangbot token env removed, and no
+  release/current/unit/process remained. Existing Redis/Relay/Cloudflared
+  stayed active; D1/R2 were preserved and no Edge code deployment occurred.
+  The one-time value was invalidated and is not recorded in evidence.
+- next exact action: commit and back up this blocker evidence, then repeat
+  preflight and exact WAF creation. Deliver the new secret through a single
+  stdin-only remote command (no here-document), validate only file shape and
+  later functional connect, and stop on any ambiguity. Do not rerun D1
+  migrations.
