@@ -27,8 +27,20 @@ const LEASE_SECONDS = 5 * 60;
 const MAX_ID_BYTES = 255;
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const MAX_PDF_BYTES = 64 * 1024 * 1024;
+const MAX_UPLOAD_ENVELOPE_BYTES = 8 * 1024;
 const OBJECT_KINDS = new Set<PaperObjectKind>(["source_pdf", "text_pages", "text_manifest", "image", "image_manifest"]);
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/;
+
+type ControlOperation = "input" | "input_source" | "renew" | "stage" | "finalize" | "cancel" | "fail";
+const CONTROL_FIELDS: Record<ControlOperation, ReadonlySet<string>> = {
+  input: new Set(["operation", "attempt_id", "resource_id", "fencing_epoch"]),
+  input_source: new Set(["operation", "attempt_id", "resource_id", "fencing_epoch"]),
+  renew: new Set(["operation", "attempt_id", "resource_id", "fencing_epoch"]),
+  stage: new Set(["operation", "attempt_id", "resource_id", "fencing_epoch", "stage"]),
+  finalize: new Set(["operation", "attempt_id", "resource_id", "fencing_epoch", "manifest"]),
+  cancel: new Set(["operation", "attempt_id", "resource_id", "fencing_epoch"]),
+  fail: new Set(["operation", "attempt_id", "resource_id", "fencing_epoch", "error_code", "error_message"]),
+};
 
 type SessionContext = { session: PaperProcessorSessionRow; now: number };
 
@@ -61,6 +73,36 @@ function numberField(body: Record<string, unknown> | null, name: string): number
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 
+function validateControlEnvelope(body: Record<string, unknown> | null): ControlOperation | Response {
+  const operation = stringField(body, "operation") as ControlOperation;
+  if (!body || !Object.prototype.hasOwnProperty.call(CONTROL_FIELDS, operation)) {
+    return errorJson("Paper Processor operation is not allowed", 400, "PAPER_PROCESSOR_OPERATION_NOT_ALLOWED");
+  }
+  if (Object.keys(body).some((key) => !CONTROL_FIELDS[operation].has(key))) {
+    return errorJson("Paper Processor operation fields are not allowed", 400, "PAPER_PROCESSOR_OPERATION_FIELDS_FORBIDDEN");
+  }
+  return operation;
+}
+
+function uploadEnvelope(request: Request): Record<string, unknown> | Response {
+  const serialized = request.headers.get("x-paper-processor-envelope")?.trim() ?? "";
+  if (!serialized || serialized.length > MAX_UPLOAD_ENVELOPE_BYTES) {
+    return errorJson("Paper object envelope is required", 400, "PAPER_PROCESSOR_OPERATION_NOT_ALLOWED");
+  }
+  try {
+    const value = JSON.parse(serialized);
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("not an object");
+    const envelope = value as Record<string, unknown>;
+    const allowedFields = new Set(["operation", "attempt_id", "resource_id", "fencing_epoch", "kind", "object_id"]);
+    if (Object.keys(envelope).some((key) => !allowedFields.has(key)) || stringField(envelope, "operation") !== "upload") {
+      return errorJson("Paper Processor upload operation is not allowed", 400, "PAPER_PROCESSOR_OPERATION_NOT_ALLOWED");
+    }
+    return envelope;
+  } catch {
+    return errorJson("Paper object envelope is invalid", 400, "PAPER_PROCESSOR_OPERATION_NOT_ALLOWED");
+  }
+}
+
 function processorHeaders(request: Request): { token: string } | null {
   const sessionToken = request.headers.get("x-paper-processor-session")?.trim() ?? "";
   if (sessionToken.length < 16 || sessionToken.length > 512) return null;
@@ -84,15 +126,14 @@ function leaseInput(request: Request, body: Record<string, unknown> | null): {
   fencingEpoch: number;
   leaseTokenHash: string;
 } | Response {
-  const match = new URL(request.url).pathname.match(/^\/api\/paper-processor\/attempts\/([^/]+)\//);
-  const attemptId = match ? decodeURIComponent(match[1]) : "";
-  const resourceId = stringField(body, "resource_id") || new URL(request.url).searchParams.get("resource_id")?.trim() || "";
-  const fencingEpoch = numberField(body, "fencing_epoch") ?? Number(new URL(request.url).searchParams.get("fencing_epoch"));
-  const leaseToken = request.headers.get("x-paper-processor-lease-token")?.trim() ?? "";
-  if (!validId(attemptId) || !validId(resourceId) || !Number.isSafeInteger(fencingEpoch) || fencingEpoch <= 0 || leaseToken.length < 16 || leaseToken.length > 512) {
+  const attemptId = stringField(body, "attempt_id");
+  const resourceId = stringField(body, "resource_id");
+  const fencingEpoch = numberField(body, "fencing_epoch");
+  const normalizedLeaseToken = request.headers.get("x-paper-processor-lease-token")?.trim() ?? "";
+  if (!validId(attemptId) || !validId(resourceId) || fencingEpoch === null || fencingEpoch <= 0 || normalizedLeaseToken.length < 16 || normalizedLeaseToken.length > 512) {
     return errorJson("Paper Processor attempt lease is invalid", 409, "PAPER_PROCESSOR_LEASE_CONFLICT");
   }
-  return { attemptId, resourceId, fencingEpoch, leaseTokenHash: hashText(leaseToken) };
+  return { attemptId, resourceId, fencingEpoch, leaseTokenHash: hashText(normalizedLeaseToken) };
 }
 
 async function authorizeAttempt(
@@ -140,7 +181,7 @@ async function connect(request: Request, env: Env): Promise<Response> {
 
 async function poll(request: Request, env: Env, context: SessionContext): Promise<Response> {
   const body = await bodyJson(request);
-  if (body && (Object.prototype.hasOwnProperty.call(body, "resource_ids") || Object.prototype.hasOwnProperty.call(body, "all"))) {
+  if (body && Object.keys(body).length > 0) {
     return errorJson("Processor resource selection is server-controlled", 400, "PAPER_PROCESSOR_SCOPE_FORBIDDEN");
   }
   const leaseToken = token("lease");
@@ -155,8 +196,8 @@ async function poll(request: Request, env: Env, context: SessionContext): Promis
   return grant ? json(grant) : json({ resource: null });
 }
 
-async function input(request: Request, env: Env, context: SessionContext): Promise<Response> {
-  const authorized = await authorizeAttempt(request, env, context, null);
+async function input(request: Request, env: Env, context: SessionContext, body: Record<string, unknown>): Promise<Response> {
+  const authorized = await authorizeAttempt(request, env, context, body);
   if (authorized instanceof Response) return authorized;
   return json({
     resource_id: authorized.resource.resource_id,
@@ -167,8 +208,8 @@ async function input(request: Request, env: Env, context: SessionContext): Promi
   });
 }
 
-async function inputObject(request: Request, env: Env, context: SessionContext): Promise<Response> {
-  const authorized = await authorizeAttempt(request, env, context, null);
+async function inputObject(request: Request, env: Env, context: SessionContext, body: Record<string, unknown>): Promise<Response> {
+  const authorized = await authorizeAttempt(request, env, context, body);
   if (authorized instanceof Response) return authorized;
   if (authorized.resource.source_kind !== "user_upload" || !authorized.resource.pdf_object_key) {
     return errorJson("Private source object is not available", 409, "PAPER_SOURCE_OBJECT_MISSING");
@@ -178,8 +219,7 @@ async function inputObject(request: Request, env: Env, context: SessionContext):
   return new Response(object.body, { status: 200, headers: { "cache-control": "no-store", "content-type": "application/pdf" } });
 }
 
-async function renew(request: Request, env: Env, context: SessionContext): Promise<Response> {
-  const body = await bodyJson(request);
+async function renew(request: Request, env: Env, context: SessionContext, body: Record<string, unknown>): Promise<Response> {
   const authorized = await authorizeAttempt(request, env, context, body);
   if (authorized instanceof Response) return authorized;
   const lease = leaseInput(request, body);
@@ -189,8 +229,7 @@ async function renew(request: Request, env: Env, context: SessionContext): Promi
   return renewed ? json({ attempt_id: lease.attemptId, lease_expires_at: leaseExpiresAt }) : errorJson("Paper Processor lease is stale", 409, "PAPER_PROCESSOR_LEASE_CONFLICT");
 }
 
-async function stage(request: Request, env: Env, context: SessionContext): Promise<Response> {
-  const body = await bodyJson(request);
+async function stage(request: Request, env: Env, context: SessionContext, body: Record<string, unknown>): Promise<Response> {
   const stageValue = stringField(body, "stage");
   if (stageValue !== "extracting" && stageValue !== "uploading") return errorJson("Invalid Paper Processor stage", 400, "INVALID_PAPER_PROCESSOR_STAGE");
   const lease = leaseInput(request, body);
@@ -235,15 +274,20 @@ async function readBoundedBody(request: Request, maximumBytes: number): Promise<
   return bytes;
 }
 
-async function upload(request: Request, env: Env, context: SessionContext, kind: PaperObjectKind): Promise<Response> {
-  const url = new URL(request.url);
-  const resourceId = url.searchParams.get("resource_id")?.trim() ?? "";
-  const fencingEpoch = Number(url.searchParams.get("fencing_epoch"));
-  const objectId = kind === "text_pages" ? "pages" : kind === "image" ? url.searchParams.get("image_id")?.trim() ?? "" : undefined;
+async function upload(request: Request, env: Env, context: SessionContext): Promise<Response> {
+  const envelope = uploadEnvelope(request);
+  if (envelope instanceof Response) return envelope;
+  const kind = stringField(envelope, "kind") as PaperObjectKind;
+  if (!OBJECT_KINDS.has(kind)) return errorJson("Paper object kind is not allowed", 400, "INVALID_PAPER_OBJECT");
+  const hasObjectId = Object.prototype.hasOwnProperty.call(envelope, "object_id");
+  const objectId = typeof envelope.object_id === "string" ? envelope.object_id.trim() : undefined;
+  if (hasObjectId && typeof envelope.object_id !== "string") return errorJson("Paper object id is invalid", 400, "INVALID_PAPER_OBJECT");
   if (kind === "text_pages" && objectId !== "pages") return errorJson("Text page object id is fixed", 400, "INVALID_PAPER_OBJECT");
   if (kind === "image" && !/^page-\d{4}-image-\d{4}$/.test(objectId ?? "")) return errorJson("Image object id is invalid", 400, "INVALID_PAPER_OBJECT");
-  const body = { resource_id: resourceId, fencing_epoch: fencingEpoch };
-  const authorized = await authorizeAttempt(request, env, context, body);
+  if (kind !== "text_pages" && kind !== "image" && hasObjectId) return errorJson("Paper object id is not allowed for this kind", 400, "INVALID_PAPER_OBJECT");
+  const lease = leaseInput(request, envelope);
+  if (lease instanceof Response) return lease;
+  const authorized = await authorizeAttempt(request, env, context, envelope);
   if (authorized instanceof Response) return authorized;
   const bytes = await readBoundedBody(request, kind === "source_pdf" ? MAX_PDF_BYTES : MAX_MANIFEST_BYTES);
   if (bytes instanceof Response) return bytes;
@@ -253,14 +297,14 @@ async function upload(request: Request, env: Env, context: SessionContext, kind:
   if (measuredHash !== expectedHash) return errorJson("Paper object checksum mismatch", 422, "PAPER_OBJECT_CHECKSUM_MISMATCH");
   const contentType = kind === "source_pdf" ? "application/pdf" : kind === "image" ? (request.headers.get("content-type")?.split(";", 1)[0] || "image/png") : "application/json";
   if (kind === "image" && !["image/png", "image/jpeg", "image/jp2"].includes(contentType)) return errorJson("Paper image content type is not supported", 400, "INVALID_PAPER_IMAGE");
-  const stored = await putPaperObject(env, resourceId, kind, bytes, contentType, objectId);
+  const stored = await putPaperObject(env, lease.resourceId, kind, bytes, contentType, objectId);
   if (!stored) return errorJson("Paper object storage is unavailable", 503, "PAPER_OBJECT_STORAGE_UNAVAILABLE");
   const recorded = await recordPaperProcessorObject(env, {
     attemptId: authorized.attempt.attempt_id,
-    resourceId,
+    resourceId: lease.resourceId,
     processorId: context.session.processor_id,
     leaseTokenHash: hashText(request.headers.get("x-paper-processor-lease-token")!.trim()),
-    fencingEpoch,
+    fencingEpoch: lease.fencingEpoch,
     now: context.now,
     kind: kind as PaperUploadedObjectKind,
     objectId,
@@ -269,7 +313,7 @@ async function upload(request: Request, env: Env, context: SessionContext, kind:
     contentType,
   });
   if (!recorded) return errorJson("Paper Processor object lease is stale", 409, "PAPER_PROCESSOR_LEASE_CONFLICT");
-  return json({ attempt_id: authorized.attempt.attempt_id, resource_id: resourceId, kind, object_id: objectId ?? null, status: "uploaded" });
+  return json({ attempt_id: authorized.attempt.attempt_id, resource_id: lease.resourceId, kind, object_id: objectId ?? null, status: "uploaded" });
 }
 
 function safeManifestMetadata(value: unknown, resourceId: string): { pageCount: number | null; imageCount: number | null } | Response {
@@ -289,8 +333,7 @@ function safeManifestMetadata(value: unknown, resourceId: string): { pageCount: 
   return { pageCount, imageCount };
 }
 
-async function finalize(request: Request, env: Env, context: SessionContext): Promise<Response> {
-  const body = await bodyJson(request);
+async function finalize(request: Request, env: Env, context: SessionContext, body: Record<string, unknown>): Promise<Response> {
   const lease = leaseInput(request, body);
   if (lease instanceof Response) return lease;
   const authorized = await authorizeAttempt(request, env, context, body);
@@ -322,8 +365,7 @@ async function finalize(request: Request, env: Env, context: SessionContext): Pr
     : errorJson("Paper Processor finalize is stale or out of order", 409, "PAPER_PROCESSOR_STATE_CONFLICT");
 }
 
-async function cancel(request: Request, env: Env, context: SessionContext): Promise<Response> {
-  const body = await bodyJson(request);
+async function cancel(request: Request, env: Env, context: SessionContext, body: Record<string, unknown>): Promise<Response> {
   const lease = leaseInput(request, body);
   if (lease instanceof Response) return lease;
   const cancelled = await cancelPaperProcessorAttempt(env, { ...lease, processorId: context.session.processor_id, now: context.now });
@@ -341,8 +383,7 @@ async function cancel(request: Request, env: Env, context: SessionContext): Prom
   return cancelled ? json({ resource_id: lease.resourceId, status: "cancelled" }) : errorJson("Paper Processor cancellation is stale", 409, "PAPER_PROCESSOR_STATE_CONFLICT");
 }
 
-async function fail(request: Request, env: Env, context: SessionContext): Promise<Response> {
-  const body = await bodyJson(request);
+async function fail(request: Request, env: Env, context: SessionContext, body: Record<string, unknown>): Promise<Response> {
   const authorized = await authorizeAttempt(request, env, context, body);
   if (authorized instanceof Response) return authorized;
   const lease = leaseInput(request, body);
@@ -366,6 +407,21 @@ async function fail(request: Request, env: Env, context: SessionContext): Promis
   return failed ? json({ resource_id: lease.resourceId, status: "failed", error_code: errorCode }) : errorJson("Paper Processor failure is stale", 409, "PAPER_PROCESSOR_STATE_CONFLICT");
 }
 
+async function control(request: Request, env: Env, context: SessionContext): Promise<Response> {
+  const body = await bodyJson(request);
+  const operation = validateControlEnvelope(body);
+  if (operation instanceof Response) return operation;
+  switch (operation) {
+    case "input": return input(request, env, context, body!);
+    case "input_source": return inputObject(request, env, context, body!);
+    case "renew": return renew(request, env, context, body!);
+    case "stage": return stage(request, env, context, body!);
+    case "finalize": return finalize(request, env, context, body!);
+    case "cancel": return cancel(request, env, context, body!);
+    case "fail": return fail(request, env, context, body!);
+  }
+}
+
 export async function handlePaperProcessorApi(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
   if (!isPaperProcessorNamespacePath(url.pathname)) return null;
@@ -380,23 +436,7 @@ export async function handlePaperProcessorApi(request: Request, env: Env): Promi
   const context = await authenticateSession(request, env);
   if (context instanceof Response) return context;
   if (url.pathname === `${PREFIX}/poll` && request.method === "POST") return poll(request, env, context);
-  const inputObjectMatch = url.pathname.match(/^\/api\/paper-processor\/attempts\/([^/]+)\/input\/object$/);
-  if (inputObjectMatch && request.method === "GET") return inputObject(request, env, context);
-  const inputMatch = url.pathname.match(/^\/api\/paper-processor\/attempts\/([^/]+)\/input$/);
-  if (inputMatch && request.method === "GET") return input(request, env, context);
-  const renewMatch = url.pathname.match(/^\/api\/paper-processor\/attempts\/([^/]+)\/renew$/);
-  if (renewMatch && request.method === "POST") return renew(request, env, context);
-  const stageMatch = url.pathname.match(/^\/api\/paper-processor\/attempts\/([^/]+)\/stage$/);
-  if (stageMatch && request.method === "POST") return stage(request, env, context);
-  const uploadMatch = url.pathname.match(/^\/api\/paper-processor\/attempts\/([^/]+)\/objects\/([^/]+)$/);
-  if (uploadMatch && request.method === "PUT" && OBJECT_KINDS.has(uploadMatch[2] as PaperObjectKind)) {
-    return upload(request, env, context, uploadMatch[2] as PaperObjectKind);
-  }
-  const finalizeMatch = url.pathname.match(/^\/api\/paper-processor\/attempts\/([^/]+)\/finalize$/);
-  if (finalizeMatch && request.method === "POST") return finalize(request, env, context);
-  const cancelMatch = url.pathname.match(/^\/api\/paper-processor\/attempts\/([^/]+)\/cancel$/);
-  if (cancelMatch && request.method === "POST") return cancel(request, env, context);
-  const failMatch = url.pathname.match(/^\/api\/paper-processor\/attempts\/([^/]+)\/fail$/);
-  if (failMatch && request.method === "POST") return fail(request, env, context);
+  if (url.pathname === `${PREFIX}/control` && request.method === "POST") return control(request, env, context);
+  if (url.pathname === `${PREFIX}/object` && request.method === "PUT") return upload(request, env, context);
   return errorJson("Not found", 404, "NOT_FOUND");
 }

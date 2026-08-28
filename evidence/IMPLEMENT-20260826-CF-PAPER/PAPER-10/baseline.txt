@@ -46,3 +46,15 @@ or persisted in this local phase.
 - The checked-in service, delivery hash, runbook, design note, and regression
   test now record this host constraint. The next release must be rebuilt from
   the resulting immutable commit; the old release must not be redeployed.
+
+2026-08-28 fixed internal endpoint protocol baseline
+
+- This local-only subphase started from clean `cloudflare-deploy` at
+  `5ca83c60c6247e3271a639544c4233a791ef7860`; the local tracking ref
+  `origin/cloudflare-deploy` matched that commit at start.
+- The sole objective was to replace dynamic Processor URL paths with the four
+  fixed internal paths in the subphase card. No Cloudflare rule, secret,
+  token, deployment, D1/R2 object, zhangbot service, Redis, Relay, or
+  Cloudflared write was authorized or performed.
+- No unrelated user modification was present at baseline. The only new
+  untracked artifact at start was the scoped subphase record itself.

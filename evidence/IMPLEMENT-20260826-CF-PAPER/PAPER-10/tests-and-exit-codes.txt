@@ -287,3 +287,65 @@ recorded exactly; no failed assertion was skipped.
       `fb5ed60d22d9949d00381be41d0f5aea86e805c1 refs/heads/cloudflare-deploy`.
     - Local `git status --short --branch` after the commit: exit code 0 and
       clean `cloudflare-deploy` before this evidence-only amendment.
+
+30. Fixed internal endpoint focused regression gate
+    - Working directory: `cloudflare-worker`.
+    - Command: `npx vitest run test/paper-processor.test.ts test/index.test.ts
+      test/paper-processor-delivery.test.ts`.
+    - Earlier attempts in this subphase exited 1 while the synchronized
+      runbook assertion still expected the former route contract; those
+      failures were corrected in the scoped implementation/docs change and
+      were not treated as acceptance.
+    - Final result: 3 files and 23 tests passed; exit code 0. Coverage
+      includes fixed routes, wrong method/source/path, operation and field
+      allowlists, cross-resource/attempt, stale lease, duplicate/finalize,
+      cancellation, upload, and credential negatives.
+
+31. Final Processor regression gate
+    - Working directory: repository root.
+    - Command: `eval "$(pyenv init - zsh)"; pyenv shell Agent; PYTHONPATH=.
+      python -m pytest -q tests/test_paper_processor_runtime.py
+      tests/test_paper_processor_ingestion.py`.
+    - Result: 12 tests passed; exit code 0. The existing pyenv rehash
+      permission warning was non-fatal. The runtime test asserts that the
+      client emits only the four fixed paths, no query/dynamic attempt path,
+      and the expected control/upload envelopes.
+
+32. Final mandatory Edge gate
+    - Working directory: `cloudflare-worker`.
+    - Command: `npm run check && npm test`.
+    - Result: TypeScript check exit code 0; 23 test files and 128 tests passed;
+      overall exit code 0.
+
+33. Final frontend typecheck, lint and unit gate
+    - Working directory: `frontend`.
+    - Command: `npm run typecheck && npm run lint && npm run test:unit`.
+    - Result: typecheck exit code 0; lint exit code 0; 12 test files and 50
+      unit tests passed; overall exit code 0. Existing React `act(...)`
+      warnings were non-fatal.
+
+34. Final frontend E2E gate
+    - Working directory: `frontend`.
+    - Command: `npm run test:e2e` with the permitted local test-server
+      capability because the ordinary sandbox denied `127.0.0.1:3000`.
+    - Result: 13 tests passed; exit code 0. The optional absent-backend proxy
+      emitted connection-refused diagnostics, but all browser assertions
+      passed. The earlier sandbox-only attempt is retained above as exit 1
+      with `EPERM` and was not counted as a test failure.
+
+35. Final diff and secret gates
+    - Commands: `git diff --check`; changed-scope `rg -l -i --no-messages`
+      scan for private keys, credential prefixes, long bearer values,
+      credential-bearing URLs, and non-placeholder Processor secret
+      assignments. The scan explicitly excluded this detector-pattern record
+      itself.
+    - Results: `git diff --check` exit code 0; raw no-match `rg` exit code 1,
+      normalized secret-scan gate exit code 0. No secret value, parent
+      credential, or raw PDF/image/text/tool payload was found.
+
+36. External-operation boundary for this subphase
+    - Result: no Cloudflare rule/secret/token/deployment, D1 migration or R2
+      object write, zhangbot release/service/token write, Redis/Relay/
+      Cloudflared change, or live acceptance was performed. The only planned
+      external action after local gates is the authorized GitHub backup of the
+      review commit; PAPER-10 remains blocked pending minimum WAF capability.

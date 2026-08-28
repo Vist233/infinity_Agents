@@ -129,3 +129,47 @@ metadata and leave Redis/Relay/Cloudflared untouched.
   The worktree was clean after the commit. This GitHub backup is separate
   from Cloudflare production changes: no rule, secret, token, deployment,
   D1/R2 object, Redis, Relay, or Cloudflared write occurred in this subphase.
+
+## 2026-08-28 fixed internal endpoint protocol status
+
+- status: `BLOCKED_PROCESSOR_EDGE_ACCESS` / `WAITING_MINIMUM_WAF_CAPABILITY`
+- baseline: clean `cloudflare-deploy` at
+  `5ca83c60c6247e3271a639544c4233a791ef7860`; no unrelated worktree change.
+- sole local objective: replace dynamic Processor URL paths with a finite,
+  Free-plan-expressible fixed protocol while preserving the public browser/API
+  contract and C7 D1/R2/Redis/Relay/Worker-v2 boundaries.
+- exact fixed routes:
+  `POST /api/paper-processor/connect`,
+  `POST /api/paper-processor/poll`,
+  `POST /api/paper-processor/control`,
+  `PUT /api/paper-processor/object`.
+- exact control operations: `input`, `input_source`, `renew`, `stage`,
+  `finalize`, `cancel`, `fail`. The object envelope allows only `upload` and
+  the checked-in kinds `source_pdf`, `text_pages`, `text_manifest`, `image`,
+  and `image_manifest`. IDs are carried in validated envelopes; the Worker
+  derives D1/R2 destinations after session, lease, fencing, attempt/resource
+  ownership, source-IP, Processor-ID, and shared-secret/session checks.
+- compatibility impact: all former dynamic Processor paths are removed from
+  the client and handler dispatch and fail closed; no compatibility path can
+  bypass the new source/path gate. Public browser/API paths are unchanged.
+- local gate result: focused Edge 23/23; full Edge 128/128; Processor 12/12;
+  frontend unit 50/50; frontend E2E 13/13; all required typecheck/lint,
+  `git diff --check`, and normalized secret scan passed with the exact exit
+  codes in `tests-and-exit-codes.txt`.
+- external changes: none in this subphase. No Cloudflare rule/secret/token/
+  deployment, D1/R2 object, zhangbot release/service, Redis/Relay/Cloudflared
+  write, or live acceptance was performed. `deployment.txt` remains absent;
+  no PASS checkpoint is asserted.
+- rollback: revert the review commit locally if required; if a later
+  authorized rollout occurs, revoke only newly created rule/capabilities,
+  stop/remove only the new release/service, restore the previous reviewed
+  Edge/Processor versions, and preserve D1/R2 metadata and existing Redis,
+  Relay, and Cloudflared services.
+- next exact user action: authorize only the minimum zone Rulesets/WAF
+  capability needed to create and read back one BIC-only rule matching
+  `ip.src eq 39.105.204.121`, host `infinity.zhangyvjing.com`, and the four
+  exact method/path pairs above. A plan upgrade is not required. After a
+  successful read-back, rerun the PAPER-10 preflight, rotate the Edge/shared
+  Processor secret through secure channels, deploy the single zhangbot
+  service and Edge, and perform the real authenticated D1/R2/Processor/live
+  acceptance. Do not rerun D1 migrations `0017`–`0021`.

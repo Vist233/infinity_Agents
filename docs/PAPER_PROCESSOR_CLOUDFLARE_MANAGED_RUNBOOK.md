@@ -22,43 +22,35 @@ changed address is a blocker, not a reason to widen the rule.
 
 The zone-level Cloudflare custom-rule exception is a `skip` action with only
 `products: ["bic"]` (Browser Integrity Check). It must match the fixed host,
-the exact source IP, and only these method/path families:
+the exact source IP, and only these four fixed method/path pairs:
 
 ```text
 (ip.src eq 39.105.204.121 and http.host eq "infinity.zhangyvjing.com" and (
   (http.request.method eq "POST" and http.request.uri.path in {
     "/api/paper-processor/connect"
     "/api/paper-processor/poll"
+    "/api/paper-processor/control"
   }) or
-  (http.request.method eq "GET" and (
-    http.request.uri.path wildcard "/api/paper-processor/attempts/*/input" or
-    http.request.uri.path wildcard "/api/paper-processor/attempts/*/input/object"
-  )) or
-  (http.request.method eq "POST" and (
-    http.request.uri.path wildcard "/api/paper-processor/attempts/*/renew" or
-    http.request.uri.path wildcard "/api/paper-processor/attempts/*/stage" or
-    http.request.uri.path wildcard "/api/paper-processor/attempts/*/finalize" or
-    http.request.uri.path wildcard "/api/paper-processor/attempts/*/cancel" or
-    http.request.uri.path wildcard "/api/paper-processor/attempts/*/fail"
-  )) or
-  (http.request.method eq "PUT" and (
-    http.request.uri.path wildcard "/api/paper-processor/attempts/*/objects/source_pdf" or
-    http.request.uri.path wildcard "/api/paper-processor/attempts/*/objects/text_pages" or
-    http.request.uri.path wildcard "/api/paper-processor/attempts/*/objects/text_manifest" or
-    http.request.uri.path wildcard "/api/paper-processor/attempts/*/objects/image" or
-    http.request.uri.path wildcard "/api/paper-processor/attempts/*/objects/image_manifest"
-  ))
+  (http.request.method eq "PUT" and
+   http.request.uri.path eq "/api/paper-processor/object")
 ))
 ```
 
-The `wildcard` lines above are route-family notation for the reviewed
-contract, not permission to install a broader production rule on the current
-zone. Cloudflare's Free plan does not provide the exact dynamic-segment regex
-operator needed to make those lines strict. Because a wildcard can consume
-slash-containing text, do not create this rule on the current plan unless an
-approved exact dynamic-path mechanism is available and its expression can be
-read back. The Worker route gate remains defense-in-depth and does not make a
-broader edge exception acceptable.
+All attempt, resource, and object identifiers are in a validated JSON control
+envelope. Binary object uploads use the fixed `/object` path with a bounded
+JSON `x-paper-processor-envelope` header and checksum header. The Worker maps
+the envelope operation and object kind to server-derived D1/R2 records; the
+client cannot choose a URL path or R2 key. No dynamic identifier appears in a
+Processor URL, so this rule is expressible on the current Free plan using only
+exact path equality and a finite path set.
+
+The only allowed control operations are `input`, `input_source`, `renew`,
+`stage`, `finalize`, `cancel`, and `fail`. The only allowed object operation is
+`upload`, and its kinds are `source_pdf`, `text_pages`, `text_manifest`,
+`image`, and `image_manifest`. The Worker rejects unknown operations, extra
+envelope fields, caller-selected object keys, and identifiers that do not
+match the authenticated D1 session, attempt, resource, lease, and fencing
+state.
 
 Keep matching requests logged. Do not skip `securityLevel`, `uaBlock`,
 `zoneLockdown`, `waf`, any WAF phase, Bot Fight Mode, or the remaining custom

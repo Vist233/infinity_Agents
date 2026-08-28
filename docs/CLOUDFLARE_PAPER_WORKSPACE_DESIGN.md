@@ -102,21 +102,33 @@ The zhangbot read-only egress preflight on 2026-08-28 agreed on public IPv4
 `39.105.204.121` across three providers. A zone-level Cloudflare custom rule
 may skip only Browser Integrity Check (`action=skip`,
 `action_parameters.products=["bic"]`) for that IP, host
-`infinity.zhangyvjing.com`, and the exact Processor route/method families:
-`POST` connect/poll, `GET` attempt input/input-object, `POST` attempt
-renew/stage/finalize/cancel/fail, and `PUT` attempt object uploads. The rule
-must keep matching requests logged and must not skip Security Level, User Agent
-Blocking, Zone Lockdown, managed/custom WAF phases, rate limiting, Bot Fight
-Mode, or other custom rules. It must not be an IP Access `Allow`, a whole-host
-exception, or a browser-signature workaround. Non-zhangbot IPs and all
-non-Processor paths remain protected by the existing zone controls.
+`infinity.zhangyvjing.com`, and this finite fixed path set:
 
-The route-family notation is not an authorization to install a broad wildcard
-rule. The current zone is Free, where the exact dynamic-attempt-segment regex
-operator is unavailable; a wildcard can match slash-containing text. Until an
-approved exact dynamic-path mechanism and read-back-verifiable security-rule
-capability are available, this remains a PAPER-10 blocker and no external
-exception may be created.
+```text
+POST /api/paper-processor/connect
+POST /api/paper-processor/poll
+POST /api/paper-processor/control
+PUT  /api/paper-processor/object
+```
+
+The control endpoint accepts only a server-allowlisted JSON operation envelope;
+the object endpoint accepts only a bounded JSON upload envelope plus the
+binary body. Attempt, resource, and object identifiers never occur in the
+Processor URL. The rule must keep matching requests logged and must not skip
+Security Level, User Agent Blocking, Zone Lockdown, managed/custom WAF phases,
+rate limiting, Bot Fight Mode, or other custom rules. It must not be an IP
+Access `Allow`, a whole-host exception, or a browser-signature workaround.
+Non-zhangbot IPs and all non-Processor paths remain protected by the existing
+zone controls. This fixed path set is expressible on the current Free plan and
+does not require a plan upgrade.
+
+The control operation allowlist is exactly `input`, `input_source`, `renew`,
+`stage`, `finalize`, `cancel`, and `fail`. The fixed object endpoint accepts
+only the `upload` operation and the object kinds `source_pdf`, `text_pages`,
+`text_manifest`, `image`, and `image_manifest`; object IDs are accepted only
+where the server-side kind contract requires them. The Worker rejects extra
+envelope fields and derives all D1/R2 destinations from the authorized
+session, attempt, resource, lease, fencing epoch, and object kind.
 
 The Worker also requires the non-secret `PAPER_PROCESSOR_SOURCE_IP` binding and
 the Cloudflare-injected `CF-Connecting-IP` to match before it evaluates

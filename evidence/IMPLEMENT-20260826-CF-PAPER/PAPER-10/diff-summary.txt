@@ -112,3 +112,48 @@ The reviewed amendment was committed as
 same exact ref with exit code 0. This backup does not change the PAPER-10
 status: the required Cloudflare rule was not created because the current
 credential/plan cannot express and verify the exact minimum exception.
+
+## 2026-08-28 fixed internal endpoint protocol amendment
+
+This new local-only amendment is based on clean commit
+`5ca83c60c6247e3271a639544c4233a791ef7860` and is limited to:
+
+- `backend/paper_processor/client.py`: route all Processor traffic through the
+  fixed `connect`, `poll`, `control`, and `object` endpoints; carry operation
+  and leased identifiers in validated JSON/envelope data; never construct a
+  dynamic attempt/object URL or accept a caller-selected R2 key.
+- `cloudflare-worker/src/paper-processor-access.ts`: exact method/path route
+  table with the source-IP gate; no dynamic route family remains eligible.
+- `cloudflare-worker/src/paper-processor.ts`: strict control/upload operation
+  and field allowlists, server-derived lease/resource authorization, and
+  fixed route dispatch; retired dynamic paths fail closed before session use.
+- `cloudflare-worker/test/paper-processor.test.ts`,
+  `cloudflare-worker/test/paper-processor-delivery.test.ts`, and
+  `tests/test_paper_processor_runtime.py`: positive and negative fixed-route,
+  source/method/path, operation, ownership, lease, duplicate, cancellation,
+  upload, and client-envelope coverage.
+- `backend/paper_processor/delivery.v1.json`,
+  `docs/CLOUDFLARE_PAPER_WORKSPACE_DESIGN.md`,
+  `docs/CLOUDFLARE_PAPER_WORKSPACE_EXECUTION_PLAN.md`, and
+  `docs/PAPER_PROCESSOR_CLOUDFLARE_MANAGED_RUNBOOK.md`: synchronized
+  Free-plan BIC-only fixed-path rule, exact operation/object allowlists, and
+  no-bypass/rollback instructions.
+- `evidence/IMPLEMENT-20260826-CF-PAPER/PAPER-10/fixed-endpoint-subphase.md`,
+  `baseline.txt`, `tests-and-exit-codes.txt`, `secret-scan.txt`, and
+  `checkpoint.md`: this subphase's scope, local gates, security scan, and
+  blocked checkpoint.
+
+The exact exception candidate is finite and fixed:
+
+```text
+POST /api/paper-processor/connect
+POST /api/paper-processor/poll
+POST /api/paper-processor/control
+PUT  /api/paper-processor/object
+```
+
+There is no compatibility handler for the former dynamic Processor paths.
+The public browser/API protocol, D1/R2/Redis/Relay/Cloudflared contracts, and
+all external systems remain unchanged. No Cloudflare rule, secret, token,
+deployment, D1/R2 object, zhangbot service, or Redis/Relay/Cloudflared write
+occurred in this amendment.

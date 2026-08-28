@@ -116,21 +116,18 @@ function assertDeliveryDefinition(value: DeliveryDefinition): void {
     stable_source_ipv4: "39.105.204.121",
     cloudflare_action: "skip",
     skipped_products: ["bic"],
+    protocol: "fixed_internal_endpoints",
+    dynamic_path_segments: false,
+    control_endpoint: "/api/paper-processor/control",
+    object_upload_endpoint: "/api/paper-processor/object",
+    control_operations: ["input", "input_source", "renew", "stage", "finalize", "cancel", "fail"],
+    object_operation: "upload",
+    object_kinds: ["source_pdf", "text_pages", "text_manifest", "image", "image_manifest"],
     allowed_methods_and_paths: [
       { method: "POST", path: "/api/paper-processor/connect" },
       { method: "POST", path: "/api/paper-processor/poll" },
-      { method: "GET", path: "/api/paper-processor/attempts/*/input" },
-      { method: "GET", path: "/api/paper-processor/attempts/*/input/object" },
-      { method: "POST", path: "/api/paper-processor/attempts/*/renew" },
-      { method: "POST", path: "/api/paper-processor/attempts/*/stage" },
-      { method: "POST", path: "/api/paper-processor/attempts/*/finalize" },
-      { method: "POST", path: "/api/paper-processor/attempts/*/cancel" },
-      { method: "POST", path: "/api/paper-processor/attempts/*/fail" },
-      { method: "PUT", path: "/api/paper-processor/attempts/*/objects/source_pdf" },
-      { method: "PUT", path: "/api/paper-processor/attempts/*/objects/text_pages" },
-      { method: "PUT", path: "/api/paper-processor/attempts/*/objects/text_manifest" },
-      { method: "PUT", path: "/api/paper-processor/attempts/*/objects/image" },
-      { method: "PUT", path: "/api/paper-processor/attempts/*/objects/image_manifest" },
+      { method: "POST", path: "/api/paper-processor/control" },
+      { method: "PUT", path: "/api/paper-processor/object" },
     ],
     non_processor_paths_excepted: false,
     non_source_ips_excepted: false,
@@ -204,6 +201,9 @@ describe("versioned dedicated Paper Processor delivery definition", () => {
     expect(runbook).toContain("Browser Integrity Check");
     expect(runbook).toContain('products: ["bic"]');
     expect(runbook).toContain("ip.src eq 39.105.204.121");
+    expect(runbook).toContain("/api/paper-processor/control");
+    expect(runbook).toContain("/api/paper-processor/object");
+    expect(runbook).not.toContain("wildcard");
     expect(runbook).toContain("Non-zhangbot");
     expect(runbook).not.toMatch(/https?:\/\/[^\s]+:[^\s]+@/);
     expect(runbook).not.toMatch(/(?:sk-|-----BEGIN|Bearer\s+[A-Za-z0-9._-]{40,})/i);

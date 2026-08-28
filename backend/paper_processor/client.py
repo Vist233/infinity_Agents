@@ -36,6 +36,12 @@ class PaperProcessorProtocolError(RuntimeError):
 
 
 _FIXED_EDGE_HOST = "infinity.zhangyvjing.com"
+_ENDPOINT_PATHS = {
+    "connect": "/api/paper-processor/connect",
+    "poll": "/api/paper-processor/poll",
+    "control": "/api/paper-processor/control",
+    "object": "/api/paper-processor/object",
+}
 
 
 def _validate_edge_url(edge_url: str) -> str:
@@ -73,17 +79,22 @@ class PaperProcessorClient:
         self._instance_id = instance_id
         self._session_token: str | None = None
 
-    def _url(self, path: str) -> str:
-        return f"{self._edge_url}/api/paper-processor/{path.lstrip('/')}"
+    def _url(self, endpoint: str) -> str:
+        path = _ENDPOINT_PATHS.get(endpoint)
+        if path is None:
+            raise PaperProcessorProtocolError("Processor endpoint is not in the fixed protocol")
+        return f"{self._edge_url}{path}"
 
-    def _request(self, method: str, path: str, payload: Any = None, *, lease_token: str | None = None, raw: bytes | None = None, content_type: str = "application/json", extra_headers: dict[str, str] | None = None) -> dict[str, Any]:
-        if not self._session_token and path != "connect":
+    def _request(self, method: str, endpoint: str, payload: Any = None, *, lease_token: str | None = None, raw: bytes | None = None, content_type: str = "application/json", extra_headers: dict[str, str] | None = None) -> dict[str, Any]:
+        if endpoint not in _ENDPOINT_PATHS:
+            raise PaperProcessorProtocolError("Processor endpoint is not in the fixed protocol")
+        if not self._session_token and endpoint != "connect":
             raise PaperProcessorProtocolError("Processor session is not connected")
         body = raw if raw is not None else (json.dumps(payload, separators=(",", ":")).encode("utf-8") if payload is not None else None)
         headers = {"accept": "application/json"}
         if body is not None:
             headers["content-type"] = content_type
-        if path == "connect":
+        if endpoint == "connect":
             headers.update({"x-paper-processor-id": self._processor_id, "x-paper-processor-token": self._bootstrap_token})
         else:
             headers["x-paper-processor-session"] = self._session_token or ""
@@ -91,7 +102,7 @@ class PaperProcessorClient:
                 headers["x-paper-processor-lease-token"] = lease_token
         if extra_headers:
             headers.update(extra_headers)
-        request = urllib.request.Request(self._url(path), data=body, headers=headers, method=method)
+        request = urllib.request.Request(self._url(endpoint), data=body, headers=headers, method=method)
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
                 decoded = response.read().decode("utf-8")
@@ -107,6 +118,30 @@ class PaperProcessorClient:
         if not isinstance(value, dict):
             raise PaperProcessorProtocolError("Processor protocol returned a non-object")
         return value
+
+    def _request_bytes(self, method: str, endpoint: str, payload: dict[str, Any], maximum_bytes: int, *, lease_token: str) -> bytes:
+        if endpoint not in _ENDPOINT_PATHS:
+            raise PaperProcessorProtocolError("Processor endpoint is not in the fixed protocol")
+        if not self._session_token:
+            raise PaperProcessorProtocolError("Processor session is not connected")
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        headers = {
+            "accept": "application/pdf",
+            "content-type": "application/json",
+            "x-paper-processor-session": self._session_token,
+            "x-paper-processor-lease-token": lease_token,
+        }
+        request = urllib.request.Request(self._url(endpoint), data=body, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                response_body = response.read(maximum_bytes + 1)
+        except urllib.error.HTTPError as error:
+            raise PaperProcessorProtocolError(f"Processor source HTTP {error.code}") from error
+        except urllib.error.URLError as error:
+            raise PaperProcessorProtocolError("Processor source transport failed") from error
+        if len(response_body) > maximum_bytes:
+            raise PaperProcessorProtocolError("Processor source exceeds the local limit")
+        return response_body
 
     def connect(self) -> dict[str, Any]:
         value = self._request("POST", "connect", {"instance_id": self._instance_id})
@@ -135,32 +170,39 @@ class PaperProcessorClient:
         )
 
     def input_metadata(self, grant: ProcessorGrant) -> dict[str, Any]:
-        path = f"attempts/{grant.attempt_id}/input?resource_id={grant.resource_id}&fencing_epoch={grant.fencing_epoch}"
-        return self._request("GET", path, lease_token=grant.lease_token)
+        return self._request("POST", "control", {
+            "operation": "input",
+            "attempt_id": grant.attempt_id,
+            "resource_id": grant.resource_id,
+            "fencing_epoch": grant.fencing_epoch,
+        }, lease_token=grant.lease_token)
 
     def input_source(self, grant: ProcessorGrant, maximum_bytes: int) -> bytes:
-        path = f"attempts/{grant.attempt_id}/input/object?resource_id={grant.resource_id}&fencing_epoch={grant.fencing_epoch}"
-        if not self._session_token:
-            raise PaperProcessorProtocolError("Processor session is not connected")
-        request = urllib.request.Request(self._url(path), headers={"accept": "application/pdf", "x-paper-processor-session": self._session_token, "x-paper-processor-lease-token": grant.lease_token}, method="GET")
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                body = response.read(maximum_bytes + 1)
-        except urllib.error.HTTPError as error:
-            raise PaperProcessorProtocolError(f"Processor source HTTP {error.code}") from error
-        except urllib.error.URLError as error:
-            raise PaperProcessorProtocolError("Processor source transport failed") from error
-        if len(body) > maximum_bytes:
-            raise PaperProcessorProtocolError("Processor source exceeds the local limit")
-        return body
+        return self._request_bytes("POST", "control", {
+            "operation": "input_source",
+            "attempt_id": grant.attempt_id,
+            "resource_id": grant.resource_id,
+            "fencing_epoch": grant.fencing_epoch,
+        }, maximum_bytes, lease_token=grant.lease_token)
 
     def renew(self, grant: ProcessorGrant) -> dict[str, Any]:
-        return self._request("POST", f"attempts/{grant.attempt_id}/renew", {"resource_id": grant.resource_id, "fencing_epoch": grant.fencing_epoch}, lease_token=grant.lease_token)
+        return self._request("POST", "control", {
+            "operation": "renew",
+            "attempt_id": grant.attempt_id,
+            "resource_id": grant.resource_id,
+            "fencing_epoch": grant.fencing_epoch,
+        }, lease_token=grant.lease_token)
 
     def stage(self, grant: ProcessorGrant, stage: str) -> dict[str, Any]:
         if stage not in {"extracting", "uploading"}:
             raise ValueError("unsupported processor stage")
-        return self._request("POST", f"attempts/{grant.attempt_id}/stage", {"resource_id": grant.resource_id, "fencing_epoch": grant.fencing_epoch, "stage": stage}, lease_token=grant.lease_token)
+        return self._request("POST", "control", {
+            "operation": "stage",
+            "attempt_id": grant.attempt_id,
+            "resource_id": grant.resource_id,
+            "fencing_epoch": grant.fencing_epoch,
+            "stage": stage,
+        }, lease_token=grant.lease_token)
 
     def upload(self, grant: ProcessorGrant, kind: str, body: bytes, content_type: str, object_id: str | None = None) -> dict[str, Any]:
         if kind not in {"source_pdf", "text_pages", "text_manifest", "image", "image_manifest"}:
@@ -170,21 +212,49 @@ class PaperProcessorClient:
         if kind == "image" and (object_id is None or not re.fullmatch(r"page-\d{4}-image-\d{4}", object_id)):
             raise ValueError("image object id is required")
         digest = hashlib.sha256(body).hexdigest()
-        object_query = f"&image_id={object_id}" if kind == "image" else ""
-        path = f"attempts/{grant.attempt_id}/objects/{kind}?resource_id={grant.resource_id}&fencing_epoch={grant.fencing_epoch}{object_query}"
-        result = self._request("PUT", path, lease_token=grant.lease_token, raw=body, content_type=content_type, extra_headers={"x-paper-object-sha256": digest})
+        envelope: dict[str, Any] = {
+            "operation": "upload",
+            "attempt_id": grant.attempt_id,
+            "resource_id": grant.resource_id,
+            "fencing_epoch": grant.fencing_epoch,
+            "kind": kind,
+        }
+        if object_id is not None:
+            envelope["object_id"] = object_id
+        result = self._request("PUT", "object", lease_token=grant.lease_token, raw=body, content_type=content_type, extra_headers={
+            "x-paper-processor-envelope": json.dumps(envelope, separators=(",", ":")),
+            "x-paper-object-sha256": digest,
+        })
         return result
 
     def finalize(self, grant: ProcessorGrant, manifest: dict[str, Any]) -> dict[str, Any]:
-        return self._request("POST", f"attempts/{grant.attempt_id}/finalize", {"resource_id": grant.resource_id, "fencing_epoch": grant.fencing_epoch, "manifest": manifest}, lease_token=grant.lease_token)
+        return self._request("POST", "control", {
+            "operation": "finalize",
+            "attempt_id": grant.attempt_id,
+            "resource_id": grant.resource_id,
+            "fencing_epoch": grant.fencing_epoch,
+            "manifest": manifest,
+        }, lease_token=grant.lease_token)
 
     def cancel(self, grant: ProcessorGrant) -> dict[str, Any]:
-        return self._request("POST", f"attempts/{grant.attempt_id}/cancel", {"resource_id": grant.resource_id, "fencing_epoch": grant.fencing_epoch}, lease_token=grant.lease_token)
+        return self._request("POST", "control", {
+            "operation": "cancel",
+            "attempt_id": grant.attempt_id,
+            "resource_id": grant.resource_id,
+            "fencing_epoch": grant.fencing_epoch,
+        }, lease_token=grant.lease_token)
 
     def fail(self, grant: ProcessorGrant, error_code: str) -> dict[str, Any]:
         if not re.fullmatch(r"[A-Z0-9_]{1,64}", error_code):
             raise ValueError("invalid processor error code")
-        return self._request("POST", f"attempts/{grant.attempt_id}/fail", {"resource_id": grant.resource_id, "fencing_epoch": grant.fencing_epoch, "error_code": error_code, "error_message": "Paper Processor rejected the resource"}, lease_token=grant.lease_token)
+        return self._request("POST", "control", {
+            "operation": "fail",
+            "attempt_id": grant.attempt_id,
+            "resource_id": grant.resource_id,
+            "fencing_epoch": grant.fencing_epoch,
+            "error_code": error_code,
+            "error_message": "Paper Processor rejected the resource",
+        }, lease_token=grant.lease_token)
 
 
 def from_environment() -> PaperProcessorClient:

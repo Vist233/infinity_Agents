@@ -4,20 +4,21 @@ const PROCESSOR_PREFIX = "/api/paper-processor";
 
 type ProcessorMethod = "GET" | "POST" | "PUT";
 
-const ROUTES: ReadonlyArray<{ method: ProcessorMethod; pattern: RegExp }> = [
-  { method: "POST", pattern: /^\/api\/paper-processor\/(connect|poll)$/ },
-  { method: "GET", pattern: /^\/api\/paper-processor\/attempts\/[^/]+\/input(?:\/object)?$/ },
-  { method: "POST", pattern: /^\/api\/paper-processor\/attempts\/[^/]+\/(renew|stage|finalize|cancel|fail)$/ },
-  { method: "PUT", pattern: /^\/api\/paper-processor\/attempts\/[^/]+\/objects\/(source_pdf|text_pages|text_manifest|image|image_manifest)$/ },
+const ROUTES: ReadonlyArray<{ method: ProcessorMethod; path: string }> = [
+  { method: "POST", path: `${PROCESSOR_PREFIX}/connect` },
+  { method: "POST", path: `${PROCESSOR_PREFIX}/poll` },
+  { method: "POST", path: `${PROCESSOR_PREFIX}/control` },
+  { method: "PUT", path: `${PROCESSOR_PREFIX}/object` },
 ];
 
 /**
  * Keep the application route contract identical to the Cloudflare exception:
- * only the fixed Processor methods and path families are eligible for the
- * BIC skip. Dynamic attempt/resource values remain validated by the handler.
+ * only fixed Processor methods and paths are eligible for the BIC skip.
+ * Attempt/resource/object identifiers are deliberately carried in validated
+ * envelopes instead of URL paths.
  */
 export function isPaperProcessorProtocolRoute(method: string, pathname: string): boolean {
-  return ROUTES.some((route) => route.method === method && route.pattern.test(pathname));
+  return ROUTES.some((route) => route.method === method && route.path === pathname);
 }
 
 /**

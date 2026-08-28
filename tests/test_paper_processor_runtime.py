@@ -1,7 +1,13 @@
+import json
 import re
+from urllib.parse import urlparse
+
+import pytest
 
 from backend.paper_processor.client import (
+    PaperProcessorClient,
     PaperProcessorProtocolError,
+    ProcessorGrant,
     _validate_edge_url,
     from_environment,
 )
@@ -39,3 +45,93 @@ def test_processor_generates_a_unique_boot_and_process_scoped_instance_id(monkey
 
     assert first._instance_id != second._instance_id
     assert re.fullmatch(r"zhangbot-[a-z0-9-]+-[0-9]+-[0-9a-f]{16}", first._instance_id)
+
+
+class _FakeHTTPResponse:
+    def __init__(self, body: bytes):
+        self.body = body
+
+    def read(self, _size: int = -1) -> bytes:
+        return self.body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+
+def test_processor_client_uses_only_fixed_paths_and_envelopes(monkeypatch):
+    client = PaperProcessorClient(
+        "https://infinity.zhangyvjing.com",
+        "paper-processor-zhangbot-v1",
+        "test-bootstrap-token",
+        "instance-1",
+    )
+    requests = []
+
+    def fake_urlopen(request, timeout=0):
+        assert timeout == 30
+        requests.append(request)
+        path = urlparse(request.full_url).path
+        if path == "/api/paper-processor/connect":
+            return _FakeHTTPResponse(json.dumps({"processor_session_token": "session-token-long-enough"}).encode())
+        if path == "/api/paper-processor/poll":
+            return _FakeHTTPResponse(json.dumps({
+                "resource_id": "resource-1",
+                "attempt_id": "attempt-1",
+                "lease_token": "lease-token-long-enough",
+                "fencing_epoch": 1,
+                "lease_expires_at": 999,
+                "source_kind": "arxiv",
+                "source_ref": "2401.00001",
+            }).encode())
+        if path == "/api/paper-processor/control":
+            payload = json.loads(request.data.decode())
+            if payload["operation"] == "input_source":
+                return _FakeHTTPResponse(b"%PDF-1.7\nfixed-endpoint")
+            return _FakeHTTPResponse(json.dumps({"status": payload["operation"]}).encode())
+        if path == "/api/paper-processor/object":
+            return _FakeHTTPResponse(b'{"status":"uploaded"}')
+        raise AssertionError(f"unexpected Processor URL: {request.full_url}")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    client.connect()
+    grant = client.poll()
+    assert isinstance(grant, ProcessorGrant)
+    client.input_metadata(grant)
+    assert client.input_source(grant, 1024).startswith(b"%PDF-")
+    client.renew(grant)
+    client.stage(grant, "extracting")
+    client.upload(grant, "text_pages", b"pages", "application/json", "pages")
+    client.finalize(grant, {"resource_id": grant.resource_id, "page_count": 1})
+    client.cancel(grant)
+    client.fail(grant, "MALFORMED_PDF")
+
+    paths = [urlparse(request.full_url).path for request in requests]
+    assert set(paths) == {
+        "/api/paper-processor/connect",
+        "/api/paper-processor/poll",
+        "/api/paper-processor/control",
+        "/api/paper-processor/object",
+    }
+    assert all("/attempts/" not in request.full_url and "?" not in request.full_url for request in requests)
+    control_operations = [
+        json.loads(request.data.decode())["operation"]
+        for request in requests
+        if urlparse(request.full_url).path == "/api/paper-processor/control"
+    ]
+    assert control_operations == ["input", "input_source", "renew", "stage", "finalize", "cancel", "fail"]
+    object_request = next(request for request in requests if urlparse(request.full_url).path == "/api/paper-processor/object")
+    object_headers = {key.lower(): value for key, value in object_request.header_items()}
+    assert json.loads(object_headers["x-paper-processor-envelope"]) == {
+        "operation": "upload",
+        "attempt_id": "attempt-1",
+        "resource_id": "resource-1",
+        "fencing_epoch": 1,
+        "kind": "text_pages",
+        "object_id": "pages",
+    }
+    with pytest.raises(PaperProcessorProtocolError, match="fixed protocol"):
+        client._url("attempts/attempt-1/renew")
