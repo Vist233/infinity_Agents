@@ -333,3 +333,11 @@ The exact WAF rule/entrypoint, Edge secret, and zhangbot token created before
 that check were revoked by targeted rollback. A corrected minimal
 Processor-only source archive and three-wheel archive passed local
 AppleDouble validation, but have not yet been transferred or deployed.
+
+## 2026-08-29 GitHub backup blocker
+
+The artifact-verifier rollback evidence was committed locally as
+`d67952b5bf560aebfbbf0671fab145fcb66718a6`. Proxy and direct GitHub access
+failed (proxy connection refused; direct HTTPS timeout), so this commit is not
+presented as remotely backed up. No Cloudflare/zhangbot state changed after
+the rollback; the worktree is clean and `deployment.txt` is absent.

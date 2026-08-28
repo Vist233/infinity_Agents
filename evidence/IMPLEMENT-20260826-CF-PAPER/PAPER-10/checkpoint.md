@@ -435,4 +435,26 @@ metadata and leave Redis/Relay/Cloudflared untouched.
   `0556776a06168ac46933365d7e778d532a4c251c62015e4b46cea69e647aefce`.
 - next exact action: commit and back up this blocker evidence, then repeat
   immutable read-only preflight from the new clean commit. Do not recreate
-  WAF/secret/token before that preflight; do not rerun D1 migrations.
+WAF/secret/token before that preflight; do not rerun D1 migrations.
+
+## 2026-08-29 GitHub backup blocker
+
+- status: `BLOCKED_GITHUB_BACKUP` (PAPER-10 is not PASS).
+- Corrected local artifact packaging passed with source archive
+  `b15487530515787a69b4a2592e796d09c6ca841837236371c472d263141edf8d` and
+  wheel archive
+  `0556776a06168ac46933365d7e778d532a4c251c62015e4b46cea69e647aefce`, both
+  without `._*` members. No transfer or production write followed.
+- Local evidence commit
+  `d67952b5bf560aebfbbf0671fab145fcb66718a6` was created. The configured
+  proxy returned connection-refused exit `7`; direct GitHub HTTPS timed out
+  with exit `28`; bounded direct `ls-remote` and non-force push returned
+  `142`. The last confirmed remote ref remains
+  `3039acc5cc3b169ecb5d0c4b2090e980b35ee95d`; the local commit is not claimed
+  as backed up.
+- External state remains rolled back: WAF/secret/token/release/service absent,
+  D1/R2 preserved, Redis/Relay/Cloudflared unchanged. Worktree is clean and
+  `deployment.txt` is absent.
+- next exact action when GitHub connectivity returns: read-only verify the
+  remote ref, non-force push `d67952b`, and exact `ls-remote` verification;
+  only then repeat immutable preflight. Do not run D1 migrations again.

@@ -141,3 +141,13 @@ or persisted in this local phase.
   invalid no-match exception expression. The WAF rule, Edge secret, and
   zhangbot token were immediately revoked; no release/current/unit/process,
   Edge deployment, D1/R2 write, or existing-service change remained.
+
+2026-08-29 GitHub backup blocker baseline
+
+- The clean local baseline is commit
+  `d67952b5bf560aebfbbf0671fab145fcb66718a6` on `cloudflare-deploy`.
+  The last remote ref confirmed before the network failure is
+  `3039acc5cc3b169ecb5d0c4b2090e980b35ee95d`.
+- Direct and proxied GitHub connectivity failed; no new remote ref was
+  observed. No Cloudflare or zhangbot write was attempted after the artifact
+  verifier rollback.

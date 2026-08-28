@@ -847,3 +847,32 @@ status=BLOCKED_PROCESSOR_ARTIFACT_VERIFIER
 
 `deployment.txt` remains absent. The next attempt must repeat the full
 immutable preflight and only then recreate the exact WAF rule and capabilities.
+
+# PAPER-10 GitHub backup blocker
+
+retry_date=2026-08-29
+local_commit=d67952b5bf560aebfbbf0671fab145fcb66718a6
+last_confirmed_remote_commit=3039acc5cc3b169ecb5d0c4b2090e980b35ee95d
+status=BLOCKED_GITHUB_BACKUP
+
+## Local packaging result
+
+- The corrected minimal Processor-only source archive and three-wheel archive
+  were validated locally with no `._*` members. Source SHA-256:
+  `b15487530515787a69b4a2592e796d09c6ca841837236371c472d263141edf8d`.
+  Wheel SHA-256:
+  `0556776a06168ac46933365d7e778d532a4c251c62015e4b46cea69e647aefce`.
+- No archive was transferred to zhangbot after the verifier rollback, and no
+  Cloudflare/zhangbot write was attempted.
+
+## GitHub backup failure
+
+- Local evidence commit `d67952b5bf560aebfbbf0671fab145fcb66718a6` was
+  created successfully. The last confirmed `origin/cloudflare-deploy` ref is
+  `3039acc5cc3b169ecb5d0c4b2090e980b35ee95d`.
+- Proxied GitHub HEAD request exited `7` because `127.0.0.1:7897` refused
+  the connection. Direct no-proxy HTTPS exited `28` after a timeout. Bounded
+  direct `git ls-remote` and non-force `git push` each exited `142` after a
+  15-second alarm, and no remote update was observed.
+- The local worktree is clean. PAPER-10 remains stopped until the local commit
+  is pushed and verified; `deployment.txt` remains absent.

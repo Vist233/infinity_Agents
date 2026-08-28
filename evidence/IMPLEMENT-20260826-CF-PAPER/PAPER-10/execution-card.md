@@ -240,3 +240,18 @@ acceptance. PAPER-10 is not complete.
   archive and a three-wheel archive with no `._*` members. `deployment.txt`
   remains absent and PAPER-10 is not complete; the next action is a fresh
   backed-up preflight before recreating any external capability.
+
+## 2026-08-29 GitHub backup blocker
+
+- The corrected minimal Processor-only source archive and three-wheel archive
+  passed local validation with no `._*` members. No archive was uploaded and
+  no production capability was recreated after the verifier rollback.
+- The evidence-only local commit
+  `d67952b5bf560aebfbbf0671fab145fcb66718a6` was created successfully, but
+  GitHub was unreachable: the configured proxy failed immediately and direct
+  HTTPS timed out. Bounded direct `ls-remote` and non-force `push` both
+  returned signal-alarm exit `142`; the last independently confirmed remote
+  ref remains `3039acc5cc3b169ecb5d0c4b2090e980b35ee95d`.
+- This is a source-control backup blocker only. The local worktree is clean,
+  but PAPER-10 remains stopped with WAF/secret/token/release/service absent,
+  D1/R2 preserved, and Redis/Relay/Cloudflared unchanged.
