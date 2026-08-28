@@ -245,3 +245,49 @@ Review status: local gates and safety scans passed; the review commit and
 non-force GitHub backup must be recorded/verified before the complete
 immutable production preflight is repeated. D1 migrations `0017`–`0021` must
 not be rerun.
+
+## 2026-08-28 immutable preflight and WAF write
+
+The review commit `793dec74a5ca6717e08e9083f673d648622b4095` was clean and
+matched `origin/cloudflare-deploy` before this stage. The exact source,
+dependency-lock, and systemd-unit identities matched the delivery manifest.
+Read-only target checks matched account `3cfba3bb2ec69798aa4881b05d80810f`,
+Worker `infinity-agents-edge`, zone `a6954af7cee9fcecb610d087bdce3e01`, D1
+`infinity-agents-db` (`9ee9ec94-cb42-40b5-8372-681c7b57c105`), and R2
+`infinity-agents-resources`. Production D1 markers/schema were present with
+no pending migrations and no writes; migrations `0017`–`0021` were not rerun.
+
+The exact four fixed endpoint BIC-only rule was then created after read-only
+capability checks and read back exactly. New entrypoint
+`f08c457a6ff54e52b17fda00ead62161` contains only rule
+`7d0a2bb78b1b4634b7523a1c0902d37d`, with the fixed source IP/host/path set,
+`skip`/`products=["bic"]`, enabled logging, and enabled state. This additive
+WAF change is the only external write at this point. Edge secret, zhangbot
+token/release/service, Edge deployment, R2 object, Redis, Relay, and
+Cloudflared remain unchanged. A later failure must delete this rule and empty
+entrypoint first, then revoke any subsequent capability material.
+
+## 2026-08-28 external dependency-install stop and rollback
+
+After the immutable preflight passed, this attempt created the exact
+fixed-path BIC-only WAF rule, securely wrote the Edge shared secret, delivered
+one matching token to zhangbot, and transferred the commit archive. The
+archive's local and remote hash was
+`41f0efd44628c33112d0ce51a2cdf7390a7213d0405188e1c4e1b2bd316375a3`; its
+listing contained no macOS `._*` entries. The extracted source, dependency
+lock, unit hash, and venv creation all passed.
+
+The release stopped at pinned dependency installation. The remote pip command
+exited `2` because the HTTPS read of `pypdf==6.15.0` from the package host
+timed out. The release staging directory was cleaned by the controlled
+failure trap, so no release/current/unit/service or Processor process existed.
+
+Capability-first rollback was complete: WAF rule delete exited `0`/HTTP
+`200`, rule readback showed zero rules, empty entrypoint delete exited
+`0`/HTTP `204`, and final entrypoint readback was `404`/`10003`; Edge secret
+deletion exited `0` and the name-only list showed it absent; zhangbot token
+env and archive were removed; Redis/Relay/Cloudflared remained active and
+unchanged; D1 migrations were not rerun. No R2 write was issued. The R2
+bucket-info read temporarily returned `15/41.9 MB`, then `0/0 B`, then
+`15/41.9 MB`; this read inconsistency is an unresolved retry blocker, not an
+action attributed to this attempt. `deployment.txt` remains absent.

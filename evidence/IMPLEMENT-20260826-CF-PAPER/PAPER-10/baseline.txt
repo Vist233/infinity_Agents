@@ -84,3 +84,20 @@ or persisted in this local phase.
 - The WAF rule/entrypoint from the preceding attempt was verified absent before
   this local change. No Cloudflare, D1, R2, Secret, zhangbot, Redis, Relay, or
   Cloudflared write is part of this remediation baseline.
+
+2026-08-28 immutable preflight / dependency-install failure baseline
+
+- External work began only after review commit
+  `793dec74a5ca6717e08e9083f673d648622b4095` was pushed and read back on
+  `origin/cloudflare-deploy`; the working tree was clean at the preflight.
+- The exact WAF rule/entrypoint was created and read back, then the shared
+  secret and one zhangbot token were delivered through secure channels. The
+  Processor release archive matched locally and remotely, with no `._*` files.
+- The first attempted release install failed while downloading the pinned
+  `pypdf` dependency: the remote package-host read timed out and pip exited
+  `2`. No release directory, current symlink, unit registration, Processor
+  process, or R2 object was created by that failed install.
+- This is a failure baseline, not a successful deployment baseline. The
+  exact WAF rule, Edge secret, zhangbot token, and transfer archive were
+  removed by targeted rollback; D1 migrations/metadata and existing
+  Redis/Relay/Cloudflared were preserved.

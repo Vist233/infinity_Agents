@@ -286,3 +286,69 @@ metadata and leave Redis/Relay/Cloudflared untouched.
   fixed-path `products=["bic"]` rule and immediately read it back. Any later
   external failure must use capability-first rollback. `deployment.txt`
   remains absent and no PASS is asserted.
+
+## 2026-08-28 immutable preflight and WAF rule checkpoint
+
+- status: `READY_FOR_PROCESSOR_SECRET_AND_RELEASE` (PAPER-10 is not PASS).
+- baseline/current commit: clean, backed-up `cloudflare-deploy` commit
+  `793dec74a5ca6717e08e9083f673d648622b4095`; exact remote ref verified.
+- one completed outcome: source manifest drift is reconciled and the exact
+  fixed-path WAF capability has been created and read back.
+- modified files: no repository files since the review commit in the external
+  preflight. Current working tree remained clean through the preflight.
+- focused/full local gates: recorded as passing in items 43–47 of
+  `tests-and-exit-codes.txt`; artifact identity and all read-only preflight
+  checks exited `0`.
+- real D1/R2/browser evidence: D1 markers/schema and R2 bucket metadata were
+  read-only verified; no new D1/R2 object or live browser flow has run.
+- external changes: one additive zone-level custom WAF entrypoint/rule only.
+  Entrypoint `f08c457a6ff54e52b17fda00ead62161`, rule
+  `7d0a2bb78b1b4634b7523a1c0902d37d`; exact source/host/four path pairs,
+  `skip`/`products=["bic"]`, enabled logging, and enabled state read back.
+  D1 migrations were not rerun; Edge secret/token/deployment and zhangbot
+  release/service remain untouched at this checkpoint.
+- rollback operation: if the next step fails, delete rule
+  `7d0a2bb78b1b4634b7523a1c0902d37d` and then empty entrypoint
+  `f08c457a6ff54e52b17fda00ead62161` after read-only confirmation, then
+  revoke any secret/token/release created in the failed attempt. Preserve D1
+  metadata and leave Redis/Relay/Cloudflared unchanged.
+- next exact action: write the minimal shared secret through Wrangler's stdin
+  channel, deliver one Processor token through SSH stdin to the mode-0600
+  env file, install the immutable release, then deploy Edge and run real
+  authenticated acceptance. Stop at the first failure; no PASS yet.
+
+## 2026-08-28 PAPER-10 dependency-install blocker and rollback
+
+- status: `BLOCKED_PROCESSOR_DEPENDENCY_INSTALL_NETWORK_TIMEOUT`.
+- baseline/current commit: `793dec74a5ca6717e08e9083f673d648622b4095`,
+  previously backed up and verified on `origin/cloudflare-deploy`; no code
+  change was made during the failed external attempt.
+- one completed outcome: immutable preflight passed through archive transfer,
+  but pinned zhangbot dependency installation failed with pip exit `2` due to
+  a read timeout fetching `pypdf==6.15.0`; staging was automatically removed.
+- modified files: only uncommitted PAPER-10 evidence is being updated; no
+  source/runtime file changed. `deployment.txt` remains absent.
+- focused/full local gates: all local gates remain passing as recorded in
+  items 43–47. External install command exit `2`; no Processor start or Edge
+  code deployment was attempted after the failure.
+- real D1/R2/browser evidence: no live paper flow ran. D1 remained read-only
+  verified and migrations `0017`–`0021` were not rerun. R2 was not written;
+  its metadata read returned `15/41.9 MB`, then `0/0 B`, then `15/41.9 MB` on
+  immediate repeat, so the inconsistency is an unresolved risk.
+- external systems modified: the exact WAF entrypoint/rule was created and
+  read back, then deleted and read back absent; Edge shared secret was
+  written twice through secure stdin and deleted; one matching zhangbot token
+  was delivered and deleted; one archive was transferred and deleted. No
+  release/current/unit/service remained. Redis, Relay, Cloudflared, D1
+  metadata and R2 objects were not intentionally changed.
+- rollback: capability-first rollback is complete for the resources created
+  in this attempt. WAF entrypoint read is `404`/`10003`; Edge secret name is
+  absent; zhangbot token/archive/release/current are absent; existing services
+  remain active. The local WAF token file is retained at its owner-controlled
+  0600 mode for a separately authorized retry.
+- remaining risks/non-goals: dependency package retrieval is not yet
+  reproducibly available on zhangbot; R2 bucket-info reads were temporarily
+  inconsistent; no live acceptance or deployment PASS is claimed.
+- next exact card/action: remain on PAPER-10 but stop. Resolve the precise
+  dependency network/approved wheel path and R2 read inconsistency, then
+  restart with a fresh preflight. Do not rerun D1 `0017`–`0021`.

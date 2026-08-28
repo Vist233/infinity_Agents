@@ -118,3 +118,40 @@ acceptance. PAPER-10 is not complete.
   complete immutable read-only preflight. Only if that preflight passes may
   the exact four-path BIC-only WAF rule be recreated and read back before the
   remaining authorized PAPER-10 operations. `deployment.txt` remains absent.
+
+## 2026-08-28 immutable preflight passed; exact WAF rule active
+
+- Review commit `793dec74a5ca6717e08e9083f673d648622b4095` is clean and
+  matches `origin/cloudflare-deploy`.
+- The reconciled source, dependency-lock, and service-unit hashes matched the
+  delivery definition. Production D1 markers/schema and R2 target metadata
+  matched; migrations `0017`–`0021` were not rerun.
+- zhangbot passed the Python 3.10 venv/ensurepip/pip, existing service,
+  listener, no-stale-Processor, fixed-egress, and source-connectivity checks.
+- The WAF token was used only by secure stdin header pipe. The exact additive
+  rule is now entrypoint `f08c457a6ff54e52b17fda00ead62161`, rule
+  `7d0a2bb78b1b4634b7523a1c0902d37d`; readback validation passed. This is the
+  only external write so far in this release attempt. No Edge shared secret,
+  Processor token/release/service, D1/R2 object, Edge deployment, Redis,
+  Relay, or Cloudflared write has occurred.
+- Next operation is the authorized secret/token/release sequence. If any
+  later step fails, apply capability-first rollback and retain the exact
+  rollback IDs in the checkpoint. `deployment.txt` remains absent.
+
+## 2026-08-28 dependency installation stop
+
+- The exact WAF rule/readback and secure secret/token setup initially passed.
+  The commit archive was verified end-to-end without macOS `._*` entries and
+  its source/lock/unit hashes matched the delivery definition.
+- Release installation stopped at pinned dependency retrieval: zhangbot pip
+  exited `2` on an HTTPS read timeout from the package host while fetching
+  `pypdf==6.15.0`. The staging directory was cleaned; no release/current,
+  unit registration, Processor process, Edge code deployment, or live flow
+  followed.
+- Rollback removed the exact WAF rule and empty entrypoint, revoked the Edge
+  shared secret, removed the single zhangbot token env and archive, and
+  verified no Processor remained. Redis/Relay/Cloudflared and D1 were
+  preserved. The R2 bucket-info read briefly disagreed (`15/41.9 MB`, then
+  `0/0 B`, then `15/41.9 MB`); no R2 write was issued.
+- Current status is `BLOCKED_PROCESSOR_DEPENDENCY_INSTALL_NETWORK_TIMEOUT`;
+  `deployment.txt` is absent and PAPER-10 is not complete.

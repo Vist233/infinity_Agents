@@ -538,3 +538,175 @@ The manifest/source identity is now locally reconciled. This commit must be
 reviewed, pushed non-force, and verified with `ls-remote` before repeating the
 full immutable production preflight. D1 migrations `0017`–`0021` remain
 applied and must not be rerun.
+
+---
+
+# PAPER-10 immutable preflight after manifest reconciliation
+
+preflight_date=2026-08-28
+branch=cloudflare-deploy
+baseline_commit=793dec74a5ca6717e08e9083f673d648622b4095
+worktree=clean_before_external_operations
+
+## Local immutable identity
+
+- The exact declared source command exited `0` and returned
+  `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`.
+  Dependency lock and systemd unit hashes exited `0` and matched the manifest:
+  `7910fd24e531e02f8b79a87ddc6bf5742ad67f2593b01172162f6c99901436d7` and
+  `424a6846ef7b30d1eb505811da53620156e9186dae60ece38f3826e8338a2b2f`.
+- A Node identity assertion over the same bytes exited `0` (`artifact
+  identity: PASS`). The reviewed source commit exists and is an ancestor of
+  this release commit. No tracked macOS `._*` path exists.
+- Local HEAD was `793dec74a5ca6717e08e9083f673d648622b4095`; the branch was
+  `cloudflare-deploy`, the worktree was clean, and the read-only remote ref
+  matched before the preflight. This is the review commit already backed up
+  to `origin/cloudflare-deploy`.
+
+## Cloudflare target and read-only state
+
+- `npx wrangler whoami` exited `0`; the authenticated account ID was
+  `3cfba3bb2ec69798aa4881b05d80810f`. The checked-in target is Worker
+  `infinity-agents-edge` on `infinity.zhangyvjing.com`, zone ID
+  `a6954af7cee9fcecb610d087bdce3e01`, D1 `infinity-agents-db` ID
+  `9ee9ec94-cb42-40b5-8372-681c7b57c105`, and R2
+  `infinity-agents-resources`.
+- The read-only deployment inventory exited `0`; the latest 100% deployment
+  record was a secret-triggered version
+  `52bde140-8340-4084-8154-8f84b79a49e3`, following the reviewed Edge
+  deployment version `ce8c9923-5776-4e5b-82a4-ec322912b6ba`. Public `/health`
+  returned HTTP `200` and the sanitized body reported `status=ok` and
+  `service=infinity-agents-edge`.
+- `npx wrangler secret list --name infinity-agents-edge` exited `0`; the
+  required `PAPER_PROCESSOR_SHARED_SECRET` was absent before this release
+  write. Existing unrelated secret names were not read back as values.
+- `npx wrangler d1 migrations list infinity-agents-db --remote` exited `0`
+  with `No migrations to apply!`; migrations `0017`–`0021` were not rerun.
+  Read-only D1 marker query exited `0` and returned all five markers with
+  applied times `2026-08-27 11:40:06` through `11:40:08`. The schema/index
+  query exited `0` and returned all eight Paper tables and thirteen required
+  indexes; D1 metadata reported `rows_written=0` and `changed_db=false`.
+- `npx wrangler r2 bucket list` and `r2 bucket info infinity-agents-resources`
+  each exited `0`; the exact bucket exists in `APAC`, with 15 existing
+  objects and 41.9 MB. No object was created, read, or modified in this
+  preflight.
+
+## WAF capability and fixed rule precondition
+
+- The owner-provided WAF token metadata check exited `0`: present, owned by
+  the current user, mode `0600`. The token content was not printed, logged,
+  hashed, or written to evidence. Secure token verification exited `0`/
+  HTTP `200`/`active`.
+- Target-zone Rulesets read exited `0`/HTTP `200` and returned the four
+  existing non-custom rulesets. The custom entrypoint read exited `0`/HTTP
+  `404`/error `10003`, proving there was no existing custom entrypoint to
+  replace. Account/zone convenience reads were not used for authorization;
+  the scoped capability was exercised only on the exact target Rulesets API.
+- The additive exact rule was created only after the above checks. POST exited
+  `0`/HTTP `200`, creating entrypoint
+  `f08c457a6ff54e52b17fda00ead62161` and rule
+  `7d0a2bb78b1b4634b7523a1c0902d37d`. Immediate readback exited `0`/HTTP
+  `200` and the dedicated assertion returned `validation=PASS`: one enabled
+  logged rule, action `skip`, products `['bic']`, exact source
+  `39.105.204.121`, host `infinity.zhangyvjing.com`, and exactly the four
+  fixed method/path pairs. No other action product or rule was changed.
+
+## zhangbot runtime and egress
+
+- SSH read-only preflight exited `0`: Ubuntu `22.04`; exact
+  `python3.10-venv` status `install ok installed 3.10.12-1~22.04.17`, with
+  the same APT candidate; Python `3.10.12`, `python3 -m venv --help` exit `0`,
+  disposable venv creation exit `0`, ensurepip exit `0`, and pip exit `0`
+  (`pip 22.0.2`).
+- Existing `infinity-redis.service`, `infinity-redis-relay.service`, and
+  `infinity-cloudflared.service` were loaded and `active/running`. The Paper
+  Processor unit was `not-found/inactive/dead`, no Paper Processor process
+  was present, the release directory was empty, and the token env/unit paths
+  were absent. Docker and docker-compose binaries were absent.
+- The listener inventory contained only the existing SSH, local relay,
+  local Redis, local DNS, and local tunnel-related ports; no public or local
+  Paper Processor listener was present. The four additional independent
+  IPv4 providers each returned the expected `39.105.204.121`; source checks
+  to `export.arxiv.org` and `pmc.ncbi.nlm.nih.gov` returned HTTP `200`.
+  Existing Redis/Relay/Cloudflared units were not modified.
+
+## Preflight decision
+
+All local identity, target, D1/R2, WAF capability, zhangbot runtime, source
+egress, and no-stale-Processor checks passed. The WAF rule now exists and was
+read back exactly. The next authorized external operation is the minimal Edge
+shared secret write and one mode-0600 zhangbot Processor token delivery;
+failure at any later step requires capability-first rollback. `deployment.txt`
+remains absent and PAPER-10 is not PASS.
+
+---
+
+# PAPER-10 dependency installation stop and capability-first rollback
+
+failure_date=2026-08-28
+status=BLOCKED_PROCESSOR_DEPENDENCY_INSTALL_NETWORK_TIMEOUT
+
+## Failed external step
+
+- The transferred archive had local and remote SHA-256
+  `41f0efd44628c33112d0ce51a2cdf7390a7213d0405188e1c4e1b2bd316375a3`,
+  and the remote archive check passed with `appledouble_entries=none`.
+- The commit-named staging extraction, artifact identity checks, and Python
+  venv creation passed on zhangbot. Pinned dependency installation then
+  failed with pip exit `2` while reading `pypdf==6.15.0` from
+  `files.pythonhosted.org`; the safe failure class was an HTTPS read timeout.
+  The staging directory was removed by the release script trap. No
+  commit-named release, current symlink, systemd unit, Processor process, or
+  R2 object was created.
+- A preceding local archive lookup attempt exited `1` because its broad
+  temporary-directory search hit unrelated macOS sandbox paths and did not
+  reach zhangbot. It was replaced with an explicit, validated archive path;
+  the actual transfer then passed. No external change occurred in the failed
+  lookup attempt.
+
+## External writes and rollback
+
+- Exact WAF entrypoint/rule write: POST exit `0`/HTTP `200`; immediate exact
+  readback exit `0`/HTTP `200`/`validation=PASS`. Rule ID
+  `7d0a2bb78b1b4634b7523a1c0902d37d`, entrypoint ID
+  `f08c457a6ff54e52b17fda00ead62161`.
+- The first Edge shared-secret write exited `0`; its value was not delivered
+  to zhangbot and was immediately superseded by a second secure write. The
+  replacement write exited `0`, and the same replacement value was delivered
+  once over SSH stdin. Remote validation reported `token_delivery=PASS`,
+  mode `600`, one key only. Neither value was printed, logged, hashed, or
+  written to evidence.
+- Capability-first rollback deleted the WAF rule: curl exit `0`/HTTP `200`,
+  then readback exit `0`/HTTP `200` with zero rules and no marker. Empty
+  entrypoint deletion exited `0`/HTTP `204`; final readback exited `0`/HTTP
+  `404`/error `10003`, and the ruleset inventory returned the original four
+  non-custom rulesets.
+- Edge secret deletion exited `0`; the name-only secret list then showed no
+  `PAPER_PROCESSOR_SHARED_SECRET`. The zhangbot token env and transferred
+  archive were removed by exact path. The Processor unit remained
+  `not-found/inactive/dead` and the current/release path was absent.
+- Final zhangbot read-only checks showed Redis, Redis Relay, and Cloudflared
+  still `active/running` with the same main PIDs as the preflight; the listener
+  inventory was unchanged and no Processor process/listener remained. No
+  D1 migration was rerun and no Redis/Relay/Cloudflared write occurred.
+
+## Read-only observation requiring follow-up
+
+- R2 bucket info was read-only `15 objects/41.9 MB` during preflight. The
+  first post-rollback read returned `0 objects/0 B`, while an immediate repeat
+  returned `15 objects/41.9 MB`. No R2 write or delete was issued by this
+  attempt. This metadata read inconsistency is retained as a remaining risk
+  and must be resolved before retrying the release; it is not attributed to
+  this failed install.
+- Public Edge `/health` remained HTTP `200` with sanitized `status=ok` after
+  rollback. `deployment.txt` is absent and no PASS checkpoint is asserted.
+
+## Exact next action
+
+Do not retry production writes in this stopped attempt. First resolve the
+dependency-install network path (or obtain an approved, reproducible pinned
+wheel delivery method without changing the runtime contract) and reconcile
+the R2 metadata-read inconsistency. A new PAPER-10 attempt must repeat the
+full immutable preflight, recreate the exact WAF rule with fresh readback, and
+only then retry secret/token/release/deployment. D1 migrations `0017`–`0021`
+remain applied and must not be rerun.

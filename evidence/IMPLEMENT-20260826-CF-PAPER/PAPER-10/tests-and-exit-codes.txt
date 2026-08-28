@@ -471,3 +471,58 @@ recorded exactly; no failed assertion was skipped.
     - Changed-scope secret scan: raw no-match `rg` exit code 1; normalized
       secret-scan gate exit code 0. No secret value or raw paper payload was
       present in the current local change.
+
+47. Immutable preflight after review backup
+    - Local artifact identity command: exit 0; source aggregate
+      `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`;
+      dependency lock and service unit hash checks: exit 0 and matched.
+      Node identity assertion: exit 0 (`artifact identity: PASS`).
+    - `git status`/branch/HEAD/remote verification: exit 0; clean
+      `cloudflare-deploy`; local and remote review commit
+      `793dec74a5ca6717e08e9083f673d648622b4095` matched.
+    - `npx wrangler whoami`: exit 0; account ID matched the checked-in target.
+      Deployment inventory JSON, secret-name list, R2 bucket list/info, and
+      public health check exited 0. Health was HTTP 200 with sanitized
+      `status=ok`, `service=infinity-agents-edge`.
+    - Remote D1 migrations list: exit 0, no pending migrations. Read-only
+      marker/schema queries: exit 0, all five markers and all required Paper
+      tables/indexes present, with zero writes. Migrations 0017–0021 were not
+      rerun.
+    - WAF token metadata and token verification: exit 0. Target rulesets read:
+      exit 0/HTTP 200; custom entrypoint read: exit 0/HTTP 404 before write.
+      The exact rule POST: exit 0/HTTP 200; immediate exact readback assertion:
+      exit 0 (`validation=PASS`).
+    - zhangbot SSH runtime preflight: exit 0; Ubuntu 22.04, installed
+      `python3.10-venv`, venv/ensurepip/pip all exit 0, existing Redis/Relay/
+      Cloudflared active, Processor unit/process/release/token absent, no
+      Docker, no Processor listener, four independent egress providers
+      matched `39.105.204.121`, and arXiv/PMC checks returned HTTP 200.
+    - No D1/R2 object, Edge secret, Processor token, Processor release/service,
+      or Edge deployment write occurred before the WAF rule. `deployment.txt`
+      remains absent.
+
+48. Processor archive transfer and failed dependency installation
+    - The first local archive lookup command exited `1` after traversing
+      unrelated macOS temporary paths; it did not contact zhangbot. The
+      corrected explicit archive transfer exited `0`; local and remote
+      archive SHA-256 both equaled
+      `41f0efd44628c33112d0ce51a2cdf7390a7213d0405188e1c4e1b2bd316375a3`,
+      and the remote archive contained no `._*` entries.
+    - Remote extraction/artifact checks and `python3 -m venv` exited `0`.
+      Pinned pip installation exited `2` due to an HTTPS read timeout while
+      fetching `pypdf==6.15.0`; no release/current/unit/service was created.
+      Staging cleanup completed through the controlled trap.
+
+49. PAPER-10 capability-first rollback and post-state checks
+    - WAF rule delete: curl exit `0`/HTTP `200`; readback exit `0`/HTTP `200`
+      with zero rules. Entrypoint delete: exit `0`/HTTP `204`; final readback
+      exit `0`/HTTP `404`/`10003`; ruleset inventory exit `0`/HTTP `200` with
+      the original four non-custom rulesets.
+    - Edge secret deletion: Wrangler exit `0`; name-only secret list exit
+      `0` and no `PAPER_PROCESSOR_SHARED_SECRET`. zhangbot token env and
+      archive removal exited `0`; Processor remained not-found/inactive/dead.
+    - Final zhangbot units/listeners check exited `0`; Redis, Relay, and
+      Cloudflared retained the same active state/main PIDs and listener set.
+      D1 migration read exited `0` with no pending migrations. Edge health
+      exited `0`/HTTP `200`. R2 metadata read was inconsistent: `15/41.9 MB`,
+      then `0/0 B`, then `15/41.9 MB`; no R2 write/delete command was issued.
