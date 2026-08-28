@@ -496,3 +496,23 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
   preflight, recreate/read back the exact WAF rule, and retry release setup
   with absolute paths for all extracted-file hash calculations. Do not rerun
   D1 migrations.
+
+## 2026-08-29 corrected release smoke-check stop and rollback
+
+- status: `BLOCKED_PROCESSOR_RELEASE_SMOKE_CHECK` for this retry; PAPER-10 is
+  not PASS.
+- From the backed-up `a270b30ad4d144aad5431713d163dee8e7fcac4b` baseline, the
+  full immutable preflight, second exact WAF rule/readback, and secure
+  Edge/zhangbot token handoff passed. The current-commit archives passed
+  remote hash and AppleDouble checks.
+- The corrected release setup created the venv and installed the offline
+  dependency lock, but the import smoke check exited `1` because nested SSH
+  quoting turned the harmless Python print string into a `NameError`. No unit
+  was registered or started.
+- Rollback is verified: release/current/unit/process absent; zhangbot token
+  removed; Edge Secret deleted and absent by name; WAF rule deleted (HTTP
+  `200`), empty entrypoint deleted (HTTP `204`), and final readback `404`.
+  D1/R2 were preserved and Redis/Relay/Cloudflared were unchanged.
+- Next exact action: commit/back up this evidence, repeat immutable preflight,
+  recreate/read back the exact WAF rule, and rerun the release without a
+  nested shell-quoted smoke-check expression. Do not rerun migrations.

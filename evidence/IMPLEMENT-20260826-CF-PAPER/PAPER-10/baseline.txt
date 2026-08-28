@@ -164,3 +164,12 @@ or persisted in this local phase.
   did not rerun D1 migrations or alter Redis/Relay/Cloudflared.
 - The release script path assertion failed before unit registration. All
   capabilities created in this retry were removed and read back absent.
+
+## 2026-08-29 corrected smoke-check retry
+
+- The fresh release baseline was backed-up commit
+  `a270b30ad4d144aad5431713d163dee8e7fcac4b`; source/lock/unit hashes and
+  remote archive checks matched.
+- Venv creation and offline dependency installation completed, but the
+  quote-unsafe import smoke check failed before systemd registration. The
+  release and all newly created capabilities were removed and verified absent.

@@ -679,3 +679,19 @@ recorded exactly; no failed assertion was skipped.
       deletion exited HTTP `204`, and final entrypoint readback exited HTTP
       `404`/`10003`. No D1/R2 object, Edge deploy, Redis, Relay, or
       Cloudflared write occurred.
+
+59. Corrected release retry smoke-check stop and rollback
+    - From backed-up commit `a270b30ad4d144aad5431713d163dee8e7fcac4b`, the
+      second exact WAF rule/readback and same-value Edge/zhangbot secret
+      handoff passed; the current-commit source archive and remote archive
+      hash/member checks also exited `0`.
+    - The corrected absolute-path release setup created the venv and installed
+      the offline lock, but its import smoke check exited `1` because an SSH
+      shell quote changed `print('imports_ok')` into an invalid Python name
+      expression (`NameError`). No unit was registered or started.
+    - The remote release trap left release/current/unit/process absent. Token
+      removal, Edge Secret deletion/name readback, WAF rule deletion/readback,
+      empty entrypoint deletion, and final entrypoint readback exited
+      `0`, `0`, HTTP `200`/zero rules, HTTP `204`, and HTTP `404` respectively.
+      No D1 migration, R2 object, Edge deployment, or existing-service write
+      occurred.

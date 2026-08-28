@@ -351,3 +351,12 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
 - Only the PAPER-10 evidence records were amended after the controlled
   external attempt. The remote release path error and complete capability-
   first rollback are recorded without secret values or payloads.
+
+## 2026-08-29 corrected smoke-check retry
+
+- No product source or configuration changed. The release used the backed-up
+  `a270b30ad4d144aad5431713d163dee8e7fcac4b` source and matching artifact
+  hashes.
+- The install reached venv/dependency completion, then stopped at a
+  quote-unsafe import check. The release and newly issued capabilities were
+  rolled back; only evidence is being amended.

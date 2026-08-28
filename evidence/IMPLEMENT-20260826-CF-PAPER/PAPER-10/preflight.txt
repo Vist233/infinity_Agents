@@ -926,3 +926,19 @@ status=BLOCKED_GITHUB_BACKUP
   15-second alarm, and no remote update was observed.
 - The local worktree is clean. PAPER-10 remains stopped until the local commit
   is pushed and verified; `deployment.txt` remains absent.
+
+## 2026-08-29 corrected release smoke-check retry
+
+- A fresh clean-baseline preflight from `a270b30ad4d144aad5431713d163dee8e7fcac4b`
+  passed again: exact artifact hashes, D1 no-pending/no-write schema read,
+  R2 metadata, current Worker/health, WAF capability, zhangbot venv and
+  fixed-egress/source checks all matched. D1 migrations were not rerun.
+- The exact WAF rule was recreated/read back as entrypoint
+  `ba1c3999635d4e9a8039ba8dfd61b4c3`, rule
+  `e3e45df0cff242d0aaa0661ae4e882c9`, then the Edge Secret and one token were
+  safely created and shape-verified.
+- The release venv and offline dependencies completed, but the import smoke
+  check exited `1` due to a nested SSH quoting `NameError` before unit
+  registration. The release rollback trap and capability-first rollback
+  completed: token absent, Edge Secret absent, WAF final readback HTTP `404`.
+  No Edge deploy, R2 object, Redis, Relay, or Cloudflared write occurred.

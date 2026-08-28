@@ -273,3 +273,19 @@ acceptance. PAPER-10 is not complete.
 - Next exact action: repeat read-only preflight from the clean backed-up
   commit, recreate the exact WAF rule, and retry the release with all hash
   calculations explicitly rooted in the extracted release directory.
+
+## 2026-08-29 corrected release smoke-check stop and rollback
+
+- The next backed-up baseline was `a270b30ad4d144aad5431713d163dee8e7fcac4b`.
+  Immutable preflight, exact WAF readback, secure secret/token handoff, and
+  current-commit archive validation passed.
+- Release setup successfully created the Python 3.10 venv and installed all
+  locked wheels. The import smoke check then exited `1` because nested SSH
+  quoting converted the test string into a Python `NameError`; no unit or
+  Processor process was started.
+- Capability-first rollback removed the release, token, Edge Secret, WAF
+  rule, and empty entrypoint, with final readbacks confirming absence. D1/R2
+  metadata and existing Redis/Relay/Cloudflared services were preserved.
+- Status: `BLOCKED_PROCESSOR_RELEASE_SMOKE_CHECK`; PAPER-10 is not PASS. The
+  next retry must use a quote-safe smoke check, then repeat immutable
+  preflight before recreating capabilities.
