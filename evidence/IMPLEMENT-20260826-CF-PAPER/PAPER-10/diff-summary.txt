@@ -105,3 +105,10 @@ release surfaces and evidence:
 No Processor client User-Agent/proxy bypass was added. No D1/R2/Redis/Relay/
 Cloudflared code or configuration was changed, no secret value was added, no
 `deployment.txt` was created, and no external Cloudflare write occurred.
+
+The reviewed amendment was committed as
+`fb5ed60d22d9949d00381be41d0f5aea86e805c1` and pushed non-force to
+`origin/cloudflare-deploy`. An independent read-only `ls-remote` returned the
+same exact ref with exit code 0. This backup does not change the PAPER-10
+status: the required Cloudflare rule was not created because the current
+credential/plan cannot express and verify the exact minimum exception.

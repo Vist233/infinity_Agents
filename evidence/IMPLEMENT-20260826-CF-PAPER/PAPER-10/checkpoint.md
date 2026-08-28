@@ -115,3 +115,17 @@ browser-signature impersonation, or an alternate host.
 Rollback reference remains capability-revocation-first: remove only any new
 rule, secret, token, service, release, or Edge deployment; preserve D1/R2
 metadata and leave Redis/Relay/Cloudflared untouched.
+
+## Backup verification
+
+- Review commit: `fb5ed60d22d9949d00381be41d0f5aea86e805c1`.
+- Non-force push command: `git push origin HEAD:refs/heads/cloudflare-deploy`,
+  exit code 0; GitHub advanced the branch from `e72ad26b` to `fb5ed60`.
+- Independent read-only verification: `git ls-remote --heads origin
+  cloudflare-deploy`, exit code 0, returned exactly
+  `fb5ed60d22d9949d00381be41d0f5aea86e805c1 refs/heads/cloudflare-deploy`.
+- The verified commit contains the Paper Workspace access-contract code,
+  tests, synchronized design/runbook/plan, and security/rollback evidence.
+  The worktree was clean after the commit. This GitHub backup is separate
+  from Cloudflare production changes: no rule, secret, token, deployment,
+  D1/R2 object, Redis, Relay, or Cloudflared write occurred in this subphase.

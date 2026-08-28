@@ -276,3 +276,14 @@ recorded exactly; no failed assertion was skipped.
     - No Cloudflare write, D1/R2 object write, Edge deployment, zhangbot
       release/service/token write, Redis change, or Cloudflared change was
       made in this subphase.
+
+29. Review commit and GitHub backup
+    - Local commit `fb5ed60d22d9949d00381be41d0f5aea86e805c1`: exit code 0.
+      The commit contains 17 reviewed files and no secret values.
+    - Non-force `git push origin HEAD:refs/heads/cloudflare-deploy`: exit
+      code 0; target advanced from `e72ad26b` to `fb5ed60`.
+    - Read-only `git ls-remote --heads origin cloudflare-deploy`: exit code 0;
+      exact ref was
+      `fb5ed60d22d9949d00381be41d0f5aea86e805c1 refs/heads/cloudflare-deploy`.
+    - Local `git status --short --branch` after the commit: exit code 0 and
+      clean `cloudflare-deploy` before this evidence-only amendment.
