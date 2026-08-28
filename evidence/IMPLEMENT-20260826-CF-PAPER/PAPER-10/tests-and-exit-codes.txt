@@ -742,3 +742,25 @@ recorded exactly; no failed assertion was skipped.
     - Evidence-only `git diff --check` exited `0`; the changed-scope secret
       detector returned raw no-match exit `1` and normalized gate exit `0`
       when excluding its own detector-record line.
+
+62. Wheel archive metadata stop and rollback
+    - Backed-up branch/worktree and current-commit artifact/hash checks exited
+      `0`; local source archive member/hash validation exited `0` and found no
+      `._*`/`__MACOSX` member. Edge/Processor/frontend local gates were all
+      green before the external attempt.
+    - Exact WAF rule creation/readback exited HTTP `200`/exactness `0`.
+      Secure Edge Secret and zhangbot token handoff exited `0`; token file
+      mode/key/shape readback exited `0`.
+    - `scp` archive transfer exited `0`. Remote source archive validation
+      exited `0`; remote wheel archive validation exited `32` after GNU tar
+      reported macOS extended metadata and the strict AppleDouble check
+      stopped the release. No release install, service start, Edge deploy, or
+      R2 write followed.
+    - Capability rollback exited `0`: WAF rule delete HTTP `200`, entrypoint
+      delete HTTP `204`, final entrypoint readback HTTP `404`; Edge Secret
+      deletion/name-only readback exited `0`/zero entries; exact zhangbot
+      token and staging removal exited `0`. Existing Redis/Relay/Cloudflared
+      checks remained active.
+    - Replacement local wheel archive using explicit files, `ustar`, and
+      `COPYFILE_DISABLE=1` passed member validation (exit `0`) with SHA-256
+      `6bf318a077fd6e82a12e8a6e70178ea6a64582d002b7ca4f542af4165314ff1c`.

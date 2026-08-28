@@ -331,3 +331,28 @@ acceptance. PAPER-10 is not complete.
 - Status: `BLOCKED_PROCESSOR_RELEASE_SCRIPT`; PAPER-10 is not PASS. The next
   retry must use a diagnostic-preserving, quote-safe release command and must
   repeat immutable preflight before recreating capabilities.
+
+## 2026-08-29 wheel archive metadata stop and rollback
+
+- From backed-up `4647fcb761708d89794f63f99baf5317ed215c6d`, the immutable
+  local preflight, full local gates, exact WAF rule/readback, and secure
+  Edge/zhangbot secret handoff passed. The source archive was hash-verified
+  and had no AppleDouble members.
+- Transfer of the source and wheel archives to the commit-named zhangbot
+  staging directory succeeded. Remote GNU tar then emitted macOS extended
+  metadata warnings while validating the wheel archive and the strict
+  AppleDouble check exited `32`; no release installation or service start
+  followed. The failing archive was not accepted as deployable.
+- Capability-first rollback removed WAF rule `d2d9482066bb468db052f52fe7b28bed`
+  (HTTP `200`), empty entrypoint `7885ab9658cb4b9082c34174b67da6c0`
+  (HTTP `204`, readback `404`), the Edge Secret by name, the zhangbot token,
+  and the exact staging directory. D1/R2, Edge code, Redis/Relay/Cloudflared
+  were not modified; existing services remained active.
+- A replacement wheel archive built with explicit files, `ustar`, and
+  `COPYFILE_DISABLE=1` passed local member validation; its SHA-256 is
+  `6bf318a077fd6e82a12e8a6e70178ea6a64582d002b7ca4f542af4165314ff1c`.
+  This is a packaging correction, not a production acceptance result.
+- Status: `BLOCKED_PROCESSOR_ARCHIVE_METADATA`; PAPER-10 is not PASS. The
+  next exact action is to repeat immutable preflight, recreate/read back the
+  exact WAF rule and credentials, and validate the replacement archive on
+  zhangbot before release installation.

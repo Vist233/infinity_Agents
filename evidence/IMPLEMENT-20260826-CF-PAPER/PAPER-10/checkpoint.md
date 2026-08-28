@@ -567,3 +567,31 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
 - next exact card: repeat read-only preflight, recreate/read back the exact
   four-path BIC-only rule, issue one new shared secret/token pair, install a
   diagnostic-preserving immutable zhangbot release, then stop on any failure.
+
+## 2026-08-29 wheel archive metadata stop and rollback
+
+- status: `BLOCKED_PROCESSOR_ARCHIVE_METADATA`; PAPER-10 is not PASS.
+- baseline/current commit: `4647fcb761708d89794f63f99baf5317ed215c6d`, already
+  backed up to `origin/cloudflare-deploy`.
+- one completed outcome: immutable preflight and all local gates passed, but
+  remote wheel archive validation stopped before release installation.
+- modified files: PAPER-10 evidence only; no product source, D1 migration, or
+  runtime contract changed.
+- real D1/R2/browser evidence: not run; D1 migrations were not rerun, R2 was
+  not written, and Edge code was not deployed.
+- failed required check: remote GNU tar/strict AppleDouble validation exited
+  `32` on the wheel archive after macOS extended metadata warnings.
+- external systems modified: exact WAF rule/entrypoint, Edge Secret, zhangbot
+  token, and staging were created then removed. D1/R2 and existing
+  Redis/Relay/Cloudflared were preserved.
+- secret scan result: no secret value was recorded; the secure boundary and
+  rollback are recorded in `secret-scan.txt`.
+- rollback operation: rule HTTP `200`, entrypoint HTTP `204` then `404`, Edge
+  Secret name-only absence, token/staging absence; no release/current/unit/
+  process remained.
+- remaining risks and non-goals: replacement archive still needs remote
+  validation, followed by Processor release, Edge deploy, and complete live
+  acceptance.
+- next exact card: repeat immutable preflight, recreate/read back exact WAF
+  capability and credentials, transfer the metadata-free replacement archive,
+  then continue only if remote validation passes.

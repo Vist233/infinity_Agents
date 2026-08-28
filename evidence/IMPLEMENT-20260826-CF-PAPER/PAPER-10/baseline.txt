@@ -197,3 +197,16 @@ or persisted in this local phase.
   left no Paper Processor release/current/unit/process or token, removed the
   exact WAF capability and Edge Secret, and preserved D1/R2 plus existing
   Redis/Relay/Cloudflared.
+
+## 2026-08-29 wheel archive metadata retry baseline
+
+- The starting backed-up commit was
+  `4647fcb761708d89794f63f99baf5317ed215c6d`; branch and worktree were clean.
+  Local Processor source, lock, unit, and manifest hashes matched.
+- The exact WAF rule and one secret/token pair were created only after
+  read-only preflight. Source/wheel transfer reached zhangbot staging, but
+  remote wheel metadata validation exited `32`; the staging and all newly
+  created capabilities were removed.
+- A local replacement wheel archive was rebuilt with metadata disabled and
+  explicit `ustar` members; it has not yet been accepted remotely or used for
+  a release. D1/R2 and existing services remain unchanged.

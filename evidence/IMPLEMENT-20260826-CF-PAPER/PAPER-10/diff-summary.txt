@@ -379,3 +379,12 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
   surfaced diagnostic. The release and all capabilities created for that
   retry were removed by exact target; only the PAPER-10 evidence records are
   amended.
+
+## 2026-08-29 wheel archive metadata retry
+
+- No product source, migration, frontend, Processor protocol, or runtime
+  contract changed. The first wheel bundle carried macOS extended metadata
+  into remote GNU tar validation; the release was stopped before install.
+- The exact WAF/secret/token/staging changes from this retry were rolled back.
+  A metadata-free replacement wheel archive was generated locally; only
+  PAPER-10 evidence is being amended.
