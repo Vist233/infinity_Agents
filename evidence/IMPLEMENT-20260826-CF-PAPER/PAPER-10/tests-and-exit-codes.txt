@@ -91,3 +91,24 @@ recorded exactly; no failed assertion was skipped.
     deletion exit code 0; all readbacks exit code 0. D1 migrations remain
     applied; Edge health is OK; Processor unit/env/release are absent; existing
     Redis/Relay/Cloudflared state is unchanged.
+
+14. Resumed zhangbot OS preflight
+    Command: read-only SSH check of `/etc/os-release`, architecture, Python,
+    `dpkg-query`, `apt-cache policy python3.10-venv`, Processor unit/process,
+    token/release paths, existing services, and listeners.
+    Result: exit code 0; Ubuntu 22.04.5 LTS amd64, Python 3.10.12, exact
+    candidate `python3.10-venv` version `3.10.12-1~22.04.17`, package absent,
+    Processor state absent, and existing services unchanged.
+
+15. Authorized APT precondition step
+    Command: `ssh zhangbot 'sudo -n apt-get update'`
+    Result: exit code 1; exact error `sudo: a password is required`. The
+    authorized install command `sudo -n apt-get install --yes
+    python3.10-venv` was not attempted. No package or system configuration
+    changed.
+
+16. Post-failure OS readback
+    Command: read-only SSH check of package status/candidate, Processor
+    env/release/unit, and existing service state.
+    Result: exit code 0; package remains absent, candidate unchanged, no
+    Processor state exists, and Redis/Relay/Cloudflared remain unchanged.

@@ -29,3 +29,9 @@ installation stopped at the missing zhangbot `python3.10-venv`/ensurepip
 prerequisite. The temporary secret handoff and inactive release were rolled
 back; service installation, Edge deployment, R2 processing, and authenticated
 live acceptance did not occur.
+
+The 2026-08-28 resume added no production code or configuration. It performed
+the authorized read-only OS preflight, found the exact candidate
+`python3.10-venv=3.10.12-1~22.04.17`, and stopped when
+`sudo -n apt-get update` returned `sudo: a password is required`. No APT write,
+alternative package, or sudo-policy change was attempted.

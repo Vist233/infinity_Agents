@@ -1,11 +1,12 @@
 # CHECKPOINT IMPLEMENT-20260826-CF-PAPER / PAPER-10
 
-- status: `BLOCKED_PROCESSOR_RUNTIME_DEPENDENCY`
+- status: `BLOCKED_OS_PACKAGE_PRIVILEGE`
 - branch: `cloudflare-deploy`
 - release commit: `61cc66d509a86ac93cebef9fd955644d68d278c0`
 - one completed outcome: local Paper Processor release contract, all local
-  PAPER-10 gates, read-only preflight, and production D1 migrations are
-  complete for the explicitly approved zhangbot-only runtime.
+  PAPER-10 gates, read-only OS/Cloudflare/zhangbot preflight, and production
+  D1 migrations are complete for the explicitly approved zhangbot-only
+  runtime.
 - evidence: `execution-card.md`, `baseline.txt`,
   `tests-and-exit-codes.txt`, `diff-summary.txt`, `secret-scan.txt`.
 - external authorization: explicitly granted for this exact PAPER-10 target,
@@ -16,15 +17,16 @@
   were applied and read back. The temporary Edge shared secret and zhangbot
   token were created and then rolled back. No Edge deployment, Processor
   registration/start, R2 write, or Redis/Relay/Cloudflared change occurred.
-- blocker: zhangbot `python3 -m venv` exited 1 because Debian/Ubuntu ensurepip
-  is unavailable; the host needs the explicitly approved `python3.10-venv`
-  prerequisite. The partial release, token file, and temporary Edge secret
-  were rolled back and read-only verification passed. The earlier
+- blocker: the exact package candidate is correct (`python3.10-venv`,
+  `3.10.12-1~22.04.17`), but the authorized `sudo -n apt-get update` exited 1
+  with `sudo: a password is required`. The package was not installed and no
+  substitute or sudo-policy change was attempted. The earlier
   Cloudflare-managed runtime/OCI blocker remains historical evidence only.
 - rollback: before external writes, restore the prior Git commit. After any
   authorized external write, follow the runbook's capability-revocation-first
   rollback and preserve D1/R2 metadata.
-- next exact action: obtain explicit approval to install the exact zhangbot
-  `python3.10-venv`/ensurepip prerequisite, then repeat the full read-only
-  preflight and only retry the commit-named Processor release. Do not claim
-  PAPER-10 complete or proceed to Edge deployment/live acceptance before that.
+- next exact action: use a secure operator path with permission for only
+  `apt-get update` and `apt-get install --yes python3.10-venv` on zhangbot (or
+  have the user run those exact commands), then verify venv/ensurepip and
+  repeat the full read-only preflight. Do not claim PAPER-10 complete or
+  proceed to Edge deployment/live acceptance before that.

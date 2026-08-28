@@ -178,3 +178,54 @@ host dependency through an explicitly approved maintenance action.
 system packages, retry the release transfer, create another secret, register
 the Processor, deploy Edge, or run live acceptance until the owner explicitly
 approves the host prerequisite and the preflight is repeated.
+
+---
+
+# PAPER-10 resumed OS preflight and permission blocker
+
+preflight_date=2026-08-28
+branch=cloudflare-deploy
+local_commit=4966a2afae21c548e35d21d1ff371c26d4603537
+remote_ref=4966a2afae21c548e35d21d1ff371c26d4603537 refs/heads/cloudflare-deploy
+worktree=clean_before_os_preflight
+
+The prior D1 migration and secret/release rollback facts above remain
+unchanged. This resumed attempt was limited to the newly authorized
+`python3.10-venv` prerequisite and stopped at the first missing permission.
+
+## Read-only OS and target preflight
+
+- Read-only SSH exited 0 and identified Ubuntu 22.04.5 LTS (Jammy), amd64,
+  Python 3.10.12, and the exact APT package name `python3.10-venv`.
+- `apt-cache policy python3.10-venv` exited 0 with candidate
+  `3.10.12-1~22.04.17` from the Jammy updates universe. `dpkg-query` confirms
+  the package is not installed.
+- The Processor unit is not found/inactive, no Processor Python process is
+  present, the token file is absent, and the commit-named release directory
+  has no child release. Existing `infinity-cloudflared.service`,
+  `infinity-redis.service`, and `infinity-redis-relay.service` remain active.
+- The read-only Edge secret-name list contains no
+  `PAPER_PROCESSOR_SHARED_SECRET`. No D1/R2/Processor/Redis/Secret write was
+  made in this resumed attempt.
+
+## Authorized package step and stop
+
+- Command: `ssh zhangbot 'sudo -n apt-get update'`.
+- Exit code: 1.
+- Exact error: `sudo: a password is required`.
+- Consequently `apt-get install --yes python3.10-venv` was not attempted. No
+  package, service, runtime, or configuration changed.
+- A post-failure read-only SSH check exited 0: `python3.10-venv` remains
+  absent, candidate remains `3.10.12-1~22.04.17`, Processor env/release/unit
+  remain absent, and the existing three services remain unchanged.
+
+## Stop decision
+
+`BLOCKED_OS_PACKAGE_PRIVILEGE`: the user authorized the exact package, but the
+  current SSH account cannot run the required restricted sudo command without
+  an interactive password. Do not bypass sudo, install a substitute package,
+  alter sudo policy, modify existing services, or continue PAPER-10 until an
+  explicit, secure operator action makes only `apt-get update` and
+  `apt-get install --yes python3.10-venv` available (or the user performs those
+  exact commands). Do not provide or store a sudo password in chat, logs, or
+  evidence.

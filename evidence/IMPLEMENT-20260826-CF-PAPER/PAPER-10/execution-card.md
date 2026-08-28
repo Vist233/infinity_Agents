@@ -46,7 +46,9 @@
 
 ## Stop condition
 
-`BLOCKED_PROCESSOR_RUNTIME_DEPENDENCY`: the exact zhangbot host prerequisite is
-missing. The next action requires an explicit owner-approved installation of
-the host's `python3.10-venv`/ensurepip prerequisite, then a fresh read-only
-preflight and a new release attempt. PAPER-10 is not complete.
+`BLOCKED_OS_PACKAGE_PRIVILEGE`: the exact zhangbot host prerequisite is
+identified (`python3.10-venv`, candidate `3.10.12-1~22.04.17`), but the
+authorized `sudo -n apt-get update` cannot run because a sudo password is
+required. The next action is a secure operator path for only the two
+authorized APT commands, followed by venv/ensurepip verification and a fresh
+read-only preflight. PAPER-10 is not complete.
