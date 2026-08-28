@@ -46,3 +46,9 @@ The subsequent no-secret evidence backup commit
 and independently verified by an elevated read-only `ls-remote` (exit 0)
 with the exact matching `cloudflare-deploy` ref. No Cloudflare or zhangbot
 state changed.
+
+The owner-provided `python3.10-venv` installation was verified without a
+write by SSH: package status, venv help/creation, ensurepip, and pip all
+passed in a disposable directory. This only clears the host prerequisite;
+no deployment or production resource change has occurred in the resumed
+phase.

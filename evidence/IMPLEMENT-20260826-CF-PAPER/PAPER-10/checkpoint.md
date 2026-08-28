@@ -1,6 +1,6 @@
 # CHECKPOINT IMPLEMENT-20260826-CF-PAPER / PAPER-10
 
-- status: `BLOCKED_OS_PACKAGE_PRIVILEGE`
+- status: `IN_PROGRESS`
 - branch: `cloudflare-deploy`
 - release commit: `61cc66d509a86ac93cebef9fd955644d68d278c0`
 - one completed outcome: local Paper Processor release contract, all local
@@ -22,6 +22,11 @@
   with `sudo: a password is required`. The package was not installed and no
   substitute or sudo-policy change was attempted. The earlier
   Cloudflare-managed runtime/OCI blocker remains historical evidence only.
+- blocker resolution: a subsequent owner-provided installation was verified
+  read-only over SSH. `dpkg-query` reports
+  `python3.10-venv 3.10.12-1~22.04.17 install ok installed`; disposable venv
+  creation, ensurepip, and pip all passed. The earlier sudo failure is
+  retained as historical evidence and is no longer the current stop reason.
 - repository verification: local HEAD and the local
   `origin/cloudflare-deploy` tracking ref are both
   `65b9a409f58197e81d47c0fc90e28002ac915987`; a fresh no-proxy
@@ -36,8 +41,8 @@
 - rollback: before external writes, restore the prior Git commit. After any
   authorized external write, follow the runbook's capability-revocation-first
   rollback and preserve D1/R2 metadata.
-- next exact action: use a secure operator path with permission for only
-  `apt-get update` and `apt-get install --yes python3.10-venv` on zhangbot (or
-  have the user run those exact commands), then verify venv/ensurepip and
-  repeat the full read-only preflight. Do not claim PAPER-10 complete or
-  proceed to Edge deployment/live acceptance before that.
+- next exact action: repeat the complete read-only release preflight against
+  the verified immutable artifacts and actual Cloudflare targets, then follow
+  the approved Edge/zhangbot release sequence. The already-applied D1
+  migrations `0017`–`0021` must not be rerun. Do not claim PAPER-10 complete
+  before real authenticated acceptance and all negative cases pass.

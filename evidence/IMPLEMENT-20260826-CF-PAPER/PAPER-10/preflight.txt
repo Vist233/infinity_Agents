@@ -255,3 +255,34 @@ unchanged. This resumed attempt was limited to the newly authorized
   that exact returned SHA; `git rev-parse origin/cloudflare-deploy` exited 0
   with the same value. `git status --short --branch` exited 0 and remained
   clean.
+
+---
+
+# PAPER-10 resumed zhangbot runtime prerequisite verification
+
+verification_date=2026-08-28
+branch=cloudflare-deploy
+reviewed_source_commit=455ae849c572aa285cc752a10e21fd69f031b18d
+release_commit=61cc66d509a86ac93cebef9fd955644d68d278c0
+repository_commit_before_runtime_evidence=33d494cb5a402101a48833e46b822b0f04d64d41
+
+The owner reported that the exact host prerequisite had been installed. The
+following SSH check was read-only apart from a disposable temporary venv;
+the temporary directory was removed by a shell exit trap.
+
+- SSH runtime verification exit code: 0.
+- Host: Ubuntu 22.04.5 LTS, x86_64; Python 3.10.12.
+- `dpkg-query` reported `python3.10-venv 3.10.12-1~22.04.17 install ok
+  installed`.
+- `python3 -m venv --help` exit code: 0.
+- Temporary `python3 -m venv` creation exit code: 0.
+- Temporary venv `python -m ensurepip --version` exit code: 0 and reported
+  pip 22.0.2; temporary venv `python -m pip --version` exit code: 0.
+- `infinity-paper-processor.service` is inactive and not found. Existing
+  `infinity-cloudflared.service`, `infinity-redis.service`, and
+  `infinity-redis-relay.service` are active.
+- Listeners remain only on `127.0.0.1:8090`, `127.0.0.1:6379`, and
+  `[::1]:6379`; no Processor listener exists.
+
+The prerequisite gate therefore passed. No package, service, Edge, D1, R2,
+Processor, Redis, Relay, or Cloudflared write was performed by this check.

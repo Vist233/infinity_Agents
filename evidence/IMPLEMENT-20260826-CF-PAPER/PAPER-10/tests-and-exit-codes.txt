@@ -135,3 +135,13 @@ recorded exactly; no failed assertion was skipped.
     Local `git update-ref` used that exact 40-character SHA, and subsequent
     `git rev-parse origin/cloudflare-deploy` and `git status --short --branch`
     exited 0 with a clean worktree.
+
+19. Resumed zhangbot runtime prerequisite verification
+    Command: SSH read-only check of OS/Python/dpkg status, `python3 -m venv
+    --help`, disposable `python3 -m venv`, temporary `ensurepip` and pip,
+    Processor unit state, existing service state, and listeners.
+    Result: exit code 0. Ubuntu 22.04.5 LTS x86_64; Python 3.10.12;
+    `python3.10-venv` version `3.10.12-1~22.04.17`, status `install ok
+    installed`; venv help/create, ensurepip, and pip all exit 0. Temporary
+    venv was removed. Processor remains absent; Redis/Relay/Cloudflared remain
+    active; listeners remain loopback-only 8090/6379.

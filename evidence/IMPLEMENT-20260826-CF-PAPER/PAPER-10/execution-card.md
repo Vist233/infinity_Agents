@@ -17,12 +17,12 @@
   Python 3.10 virtualenv delivery definition, pinned dependencies, fixed Edge
   URL validation, unique instance identity, hardened systemd-user unit, and
   operator runbook are implemented and tested.
-- External outcome at this checkpoint: read-only preflight passed and D1
-  migrations `0017`–`0021` applied. The shared secret and zhangbot token were
-  created only for the next deployment step, then both were rolled back after
-  zhangbot virtualenv creation failed because ensurepip/
-  `python3.10-venv` is missing. No Processor service started, no Edge deploy,
-  Processor registration, R2 write, Redis change, or live acceptance occurred.
+- External outcome at this checkpoint: the previously applied D1 migrations
+  `0017`–`0021` remain recorded and will not be rerun. A fresh read-only SSH
+  verification now confirms `python3.10-venv` is installed and disposable
+  venv/ensurepip/pip checks pass. The Processor service is still absent; no
+  new secret, Edge deploy, Processor registration/start, R2 write, Redis
+  change, or live acceptance has occurred in this resumed phase.
 
 ## Required release acceptance
 
@@ -46,9 +46,7 @@
 
 ## Stop condition
 
-`BLOCKED_OS_PACKAGE_PRIVILEGE`: the exact zhangbot host prerequisite is
-identified (`python3.10-venv`, candidate `3.10.12-1~22.04.17`), but the
-authorized `sudo -n apt-get update` cannot run because a sudo password is
-required. The next action is a secure operator path for only the two
-authorized APT commands, followed by venv/ensurepip verification and a fresh
-read-only preflight. PAPER-10 is not complete.
+The earlier `BLOCKED_OS_PACKAGE_PRIVILEGE` condition is resolved by the
+owner-provided package installation and the passing disposable venv checks.
+The next gate is the full read-only artifact/Cloudflare/zhangbot preflight;
+PAPER-10 is not complete.
