@@ -182,3 +182,18 @@ or persisted in this local phase.
   cloudflared metrics. The Processor PID had no listener.
 - All capabilities from this retry were removed and read back absent; no
   existing service or data resource was changed.
+
+## 2026-08-29 GitHub backup confirmation and release retry baseline
+
+- The clean branch is `cloudflare-deploy`; local HEAD and the exact
+  `origin/cloudflare-deploy` SSH `ls-remote` readback are
+  `becde2db27aa7ef7e31bfb2ddbe4a0f4ce7be8cf`. The non-force backup push
+  returned `up to date`.
+- The approved Cloudflare account, Worker, D1 database, R2 bucket, fixed
+  zhangbot egress, and current artifact/hash inputs were rechecked read-only.
+  Remote D1 reported no migrations to apply; migrations were not rerun.
+- The retry used the existing exact WAF/secret/token/release targets only.
+  It stopped after systemd user-service registration with exit `1`; rollback
+  left no Paper Processor release/current/unit/process or token, removed the
+  exact WAF capability and Edge Secret, and preserved D1/R2 plus existing
+  Redis/Relay/Cloudflared.

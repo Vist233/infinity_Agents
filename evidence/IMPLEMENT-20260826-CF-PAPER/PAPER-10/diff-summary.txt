@@ -368,3 +368,14 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
   cloudflared loopback port; no Processor listener was observed.
 - The release and all newly created capabilities were rolled back. Only
   evidence is being amended.
+
+## 2026-08-29 backed-up release retry
+
+- No product source, migration, frontend, Processor protocol, or runtime
+  contract changed. The current clean evidence baseline is
+  `becde2db27aa7ef7e31bfb2ddbe4a0f4ce7be8cf`, and the non-force GitHub backup
+  was confirmed by exact SSH `ls-remote`.
+- The external retry reached systemd registration and exited `1` without a
+  surfaced diagnostic. The release and all capabilities created for that
+  retry were removed by exact target; only the PAPER-10 evidence records are
+  amended.

@@ -536,3 +536,34 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
 - Next exact action: back up this evidence, repeat immutable preflight, then
   use a PID-specific no-Processor-listener assertion before continuing live
   acceptance. Do not rerun migrations.
+
+## 2026-08-29 backed-up release retry stop and rollback
+
+- status: `BLOCKED_PROCESSOR_RELEASE_SCRIPT`; PAPER-10 is not PASS.
+- baseline/current commit: `becde2db27aa7ef7e31bfb2ddbe4a0f4ce7be8cf` on
+  `cloudflare-deploy`; exact non-force GitHub push/readback is the same SHA.
+- one completed outcome: backup verification and a fresh immutable preflight
+  completed; a diagnostic-preserving release retry is still required.
+- modified files: PAPER-10 evidence only; no product source or migration was
+  changed.
+- focused/local gates: previously passing gates remain valid; this retry's
+  external command outcomes are recorded in `tests-and-exit-codes.txt`.
+- real D1/R2/browser evidence: no new live case was run; D1 `0017`–`0021`
+  were not rerun, R2 was not written, and browser acceptance was not started.
+- failed required check: zhangbot release setup exited `1` after systemd
+  symlink creation without exposing the failing assertion; no cause is
+  inferred.
+- D1/R2/Redis/external systems modified: the failed retry's WAF rule,
+  entrypoint, Edge Secret, and zhangbot token were created then rolled back;
+  D1/R2 and Redis/Relay/Cloudflared were preserved; Edge code was not
+  deployed.
+- secret scan result: no secret value was recorded; the retry's boundary is
+  recorded in `secret-scan.txt`.
+- rollback commit/operation: WAF rule HTTP `200`, entrypoint HTTP `204` then
+  readback `404`; Edge Secret deletion/name-only absence; token file removal
+  and absence; release/current/unit/process absent.
+- remaining risks and non-goals: Processor release diagnosis, Edge deploy,
+  real D1/R2/Processor/browser acceptance, and final PASS remain outstanding.
+- next exact card: repeat read-only preflight, recreate/read back the exact
+  four-path BIC-only rule, issue one new shared secret/token pair, install a
+  diagnostic-preserving immutable zhangbot release, then stop on any failure.

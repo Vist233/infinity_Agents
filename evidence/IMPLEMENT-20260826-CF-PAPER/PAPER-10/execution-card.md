@@ -303,3 +303,31 @@ acceptance. PAPER-10 is not complete.
 - Status: `BLOCKED_PROCESSOR_RELEASE_SMOKE_CHECK`; PAPER-10 is not PASS. The
   next retry must use a quote-safe smoke check, then repeat immutable
   preflight before recreating capabilities.
+
+## 2026-08-29 backed-up release retry stop and rollback
+
+- The backup prerequisite is now satisfied from clean `cloudflare-deploy`:
+  local HEAD and the exact `origin/cloudflare-deploy` readback are both
+  `becde2db27aa7ef7e31bfb2ddbe4a0f4ce7be8cf`. A non-force SSH push returned
+  `up to date`; no force operation was used.
+- A fresh read-only preflight confirmed the approved account, Worker,
+  `infinity-agents-db`, `infinity-agents-resources`, applied D1 state, current
+  Edge health, Ubuntu/Python/venv capability, fixed egress, and unchanged
+  Redis/Relay/Cloudflared services. The previous failed attempt still had
+  the exact WAF rule, Edge secret name, and a mode-0600 zhangbot token file;
+  it had no release/current symlink/unit/process.
+- The retry reached the zhangbot systemd registration stage and exited `1`.
+  Its only observed output was creation of the user-service symlink; the
+  failing internal assertion was not surfaced, so this record does not infer
+  an unobserved cause. Read-only status after the failure confirmed release,
+  current symlink, unit, and Processor process absent.
+- Capability-first rollback then succeeded: WAF rule delete HTTP `200`, empty
+  entrypoint delete HTTP `204`, final entrypoint readback HTTP `404`; Edge
+  secret deletion exit `0` with name-only absence; and exact zhangbot token
+  removal exit `0` with the file absent. Edge health returned
+  `paper_processor: unconfigured` afterward. D1/R2 were preserved, no D1
+  migration was rerun, no R2 object was written, and Edge code was not
+  deployed. Existing Redis/Relay/Cloudflared remained active and unchanged.
+- Status: `BLOCKED_PROCESSOR_RELEASE_SCRIPT`; PAPER-10 is not PASS. The next
+  retry must use a diagnostic-preserving, quote-safe release command and must
+  repeat immutable preflight before recreating capabilities.

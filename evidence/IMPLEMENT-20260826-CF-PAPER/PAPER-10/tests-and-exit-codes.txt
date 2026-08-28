@@ -713,3 +713,32 @@ recorded exactly; no failed assertion was skipped.
       `0`, `0`, HTTP `200`/zero rules, HTTP `204`, and HTTP `404` respectively.
       No D1 migration, R2 object, Edge deployment, or existing-service write
       occurred.
+
+61. GitHub backup confirmation and fourth release rollback
+    - Local branch/worktree/history check exited `0`; branch was
+      `cloudflare-deploy`, worktree clean, and HEAD was
+      `becde2db27aa7ef7e31bfb2ddbe4a0f4ce7be8cf`.
+    - IPv4 SSH non-force push to the repository's
+      `refs/heads/cloudflare-deploy` exited `0` with `[up to date]`; exact
+      SSH `ls-remote --heads` readback exited `0` and returned the same SHA.
+    - Read-only preflight exited `0` for `wrangler whoami`, remote D1
+      migrations list (`No migrations to apply!`), Worker deployments list,
+      name-only Edge Secret list, Edge health, token verify, WAF entrypoint
+      read, and zhangbot OS/venv/service/listener checks. D1 migrations
+      `0017`–`0021` were not rerun.
+    - The stale exact WAF rule was deleted with HTTP `200`; empty entrypoint
+      deletion returned HTTP `204`, and final readback returned HTTP `404`.
+      Edge Secret deletion exited `0` and name-only readback reported zero
+      `PAPER_PROCESSOR_SHARED_SECRET` entries. Exact zhangbot token removal
+      exited `0`; the file was absent afterward.
+    - The zhangbot release install retry exited `1` after printing only the
+      systemd user-service symlink creation. Read-only post-failure checks
+      showed release/current/unit/process absent; the failure cause was not
+      surfaced and is intentionally not guessed. Edge deploy and R2 write
+      did not occur. Existing Redis/Relay/Cloudflared checks remained active.
+    - Post-rollback Edge health exited `0` and reported
+      `paper_processor: unconfigured`. PAPER-10 remains blocked and
+      `deployment.txt` is absent.
+    - Evidence-only `git diff --check` exited `0`; the changed-scope secret
+      detector returned raw no-match exit `1` and normalized gate exit `0`
+      when excluding its own detector-record line.
