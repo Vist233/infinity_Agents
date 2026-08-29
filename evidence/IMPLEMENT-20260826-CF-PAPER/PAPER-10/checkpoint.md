@@ -783,3 +783,22 @@ preflight. Do not resume the rest of PAPER-10 until all three pass.
 Next exact action: release the same existing authenticated browser tab, then
 rediscover/claim it and run the single harmless Kimi K2.6 text probe. Do not
 start paper tooling or image analysis before a clean text success.
+
+## 2026-08-29 Kimi K2.6 authenticated 401 result
+
+- Status: `BLOCKED_KIMI_API_CREDENTIAL_OR_ENTITLEMENT`; PAPER-10 is not PASS.
+- The coordinator's authenticated browser acceptance record reports a real
+  text probe against Kimi K2.6 returning provider HTTP `401 Invalid
+  Authentication`. The result is recorded as user-visible evidence; no
+  credential value is present.
+- The Kimi candidate `93983647-e6f6-4497-a128-2dfd478d15f5` remains deployed at
+  100% under deployment `5d0122b3-4d06-45b3-8e3f-67c2a684a4a2` by explicit
+  decision. StepFun was not used as a rollback target because it is also
+  unusable.
+- This evidence-only update made no credential, browser, deployment, paper
+  tooling, D1, R2, WAF, Processor, Redis, Relay, or Cloudflared change.
+
+Detailed evidence: `k26-provider-auth-result.md`.
+
+Next exact action: resolve the approved Kimi credential/account entitlement,
+then repeat the text gate before any paper or image operation.
