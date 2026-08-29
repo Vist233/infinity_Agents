@@ -658,3 +658,21 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
 - next exact card: restore a functioning authenticated browser session/DOM,
   then rerun PAPER-10 from a fresh read-only preflight; do not reuse this
   rolled-back capability state or claim PASS from the direct HTML read.
+
+## 2026-08-29 authenticated DOM capability recheck
+
+- status: `BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE`; PAPER-10 is not
+  PASS.
+- the existing Chrome extension exposed the exact target tab metadata:
+  URL `https://infinity.zhangyvjing.com/`, title `Infinity Agents`.
+- read-only `chrome.user.openTabs()` and `chrome.tabs.list()` succeeded, but
+  claiming and reading the exact target tab timed out before a controllable
+  handle or DOM was returned. A selected-tab read timed out as well.
+- no navigation, input, login data, upload, paper operation, or application
+  mutation occurred; no secrets or browser storage were inspected.
+- the direct metadata is not authenticated DOM evidence. No live acceptance
+  case was run and no external write occurred in this recheck.
+- detailed evidence: `browser-recheck.txt` in this directory.
+- next exact action: restore responsive control of this same existing Chrome
+  tab, then repeat a fresh read-only PAPER-10 preflight. Do not create or
+  reset another session, reuse rolled-back state, or claim PASS.
