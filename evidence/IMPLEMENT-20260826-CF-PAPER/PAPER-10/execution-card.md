@@ -548,6 +548,20 @@ acceptance. PAPER-10 is not complete.
   current-HEAD archive transfer and immutable remote release installation;
   failures require WAF-first capability rollback.
 
+## 2026-08-29 archive HEAD mismatch and rollback
+
+- The release step stopped before transfer because the package directory was
+  for prior commit `5e42e4e…`, not clean current HEAD `5c4b7563…`. This was a
+  local packaging precondition, not a remote artifact mismatch; no old package
+  was reused.
+- Rollback deleted the fresh WAF rule/entrypoint and read back 404, removed
+  token/staging, and corrected the Edge-secret deletion command after its
+  unsupported `--yes` invocation returned exit `1`. The supported confirmed
+  delete returned exit `0` and name-only readback showed absence.
+- No Processor release/service, D1 migration, R2 object, Edge code deployment,
+  or existing-service change occurred. The next attempt must package current
+  HEAD and repeat preflight before any capability write.
+
 ## 2026-08-29 exact WAF retry passed
 
 - After the fresh immutable preflight, the first exact WAF create attempt was

@@ -518,6 +518,21 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
   revoke the Edge secret and token and remove only the new release/service;
   preserve D1/R2 metadata and existing Redis/Relay/Cloudflared.
 
+## 2026-08-29 archive precondition stop and rollback
+
+- Status: `BLOCKED_PROCESSOR_ARCHIVE_HEAD_MISMATCH`; PAPER-10 is not PASS.
+- The transfer was stopped before `scp`: package files existed only for the
+  earlier `5e42e4e…` evidence commit, while current clean HEAD was
+  `5c4b7563…`. No stale package was reused.
+- Capability-first rollback removed WAF rule/entrypoint (final readback 404),
+  removed the zhangbot token and staging, and deleted the Edge shared secret
+  after correcting the unsupported `--yes` flag with a supported confirmation
+  input. Name-only Edge readback is absent. D1/R2, Kimi, and existing host
+  services were preserved.
+- The next exact action is to create and validate archives named for current
+  HEAD, then repeat the immutable read-only preflight, recreate the exact WAF
+  rule/readback, and only then redo secret/token handoff. Do not rerun D1.
+
 ## 2026-08-29 corrected release smoke-check stop and rollback
 
 - status: `BLOCKED_PROCESSOR_RELEASE_SMOKE_CHECK` for this retry; PAPER-10 is

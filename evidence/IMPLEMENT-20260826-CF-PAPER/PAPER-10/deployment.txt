@@ -105,6 +105,18 @@ was changed.
   secret, Processor token/release/service, R2 object, or full live acceptance
   has followed. The next action is the paired secret/token handoff.
 
+## 2026-08-29 archive-precondition stop and rollback
+
+- The release transfer stopped before `scp`: the local archive was named for
+  prior HEAD `5e42e4e…`, while current HEAD was `5c4b7563…`. No release or
+  Processor service was created.
+- Capability-first rollback removed the WAF rule/entrypoint and verified 404,
+  removed zhangbot token/staging, and deleted the Edge shared secret after a
+  supported confirmation-input retry. The first `--yes` attempt was a CLI
+  option error and was not treated as deletion.
+- D1/R2, Kimi, and existing Redis/Relay/Cloudflared were preserved. This is a
+  failed pre-install attempt, not a deployment or PAPER-10 PASS.
+
 ## 2026-08-29 Edge/zhangbot capability handoff
 
 - The first local generator check stopped before external mutation at a

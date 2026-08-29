@@ -536,3 +536,16 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
 - The current external capability set is the exact WAF rule plus its paired
   Edge/zhangbot secret material. The next step is immutable release transfer
   and installation with WAF-first rollback on any failure.
+
+## 2026-08-29 archive HEAD mismatch and capability rollback
+
+- Release transfer was blocked locally because current HEAD `5c4b7563…` had
+  no matching archive; only the earlier `5e42e4e…` package existed. No stale
+  package was reused.
+- The active WAF rule/entrypoint, Edge shared secret, zhangbot token, and
+  staging were rolled back. The initial secret-delete exit `1` was a CLI
+  option error (`--yes` unsupported); the supported confirmation retry and
+  name-only absence read passed. No product code, migration, R2 object, or
+  existing service changed.
+- Next attempt: package current HEAD, rerun preflight, then recreate exact WAF
+  and capability material.

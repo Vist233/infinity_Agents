@@ -1053,6 +1053,32 @@ recorded exactly; no failed assertion was skipped.
       excluding `secret-scan.txt`, returned raw no-match exit `1`; normalized
       secret gate exit `0`.
 
+86. Archive-precondition rollback working-tree gate
+    - `git diff --check` exited `0`.
+    - The scoped secret-value detector over all updated PAPER-10 evidence,
+      excluding `secret-scan.txt`, returned raw no-match exit `1`; normalized
+      secret gate exit `0`.
+
+84. Current-HEAD archive precondition stop and rollback
+    - Local expected archive paths for current HEAD `5c4b7563…` were absent;
+      only prior-commit `5e42e4e…` archives existed. The precondition exited
+      `2`, so no `scp`, staging transfer, or Processor install followed.
+    - Capability-first WAF rule delete returned HTTP `200`/curl exit `0`,
+      entrypoint delete HTTP `204`/curl exit `0`, and final entrypoint readback
+      HTTP `404`/curl exit `0`. zhangbot token and staging cleanup each exited
+      `0`.
+    - The first Edge Secret delete returned exit `1` because Wrangler's
+      `secret delete` has no `--yes` option; no deletion was assumed. The
+      supported confirmation-input retry exited `0`; name-only secret read
+      exited `0` and showed `present=0`. No secret value was printed.
+    - No Processor release/unit/process, D1 migration, R2 object, Edge code,
+      Redis/Relay/Cloudflared, or live Paper operation occurred.
+
+85. Archive-precondition rollback evidence gate
+    - Evidence contains only commit prefixes, safe resource IDs, status/exit
+      codes, and absence facts. No secret, token, authorization header,
+      provider key, cookie, paper/image bytes, or raw payload was emitted.
+
 81. Edge shared-secret and zhangbot token handoff
     - The first local generator precondition returned exit `3` because the
       newline-terminated value was 65 bytes; no Cloudflare or zhangbot write
@@ -1081,3 +1107,13 @@ recorded exactly; no failed assertion was skipped.
     - The scoped secret-value detector over all updated PAPER-10 evidence,
       excluding `secret-scan.txt`, returned raw no-match exit `1`; normalized
       secret gate exit `0`.
+
+87. Archive-precondition rollback evidence commit gate
+    - Current branch is `cloudflare-deploy`; current HEAD before this evidence
+      commit is `5c4b7563…`; the read-only remote ref is `e551a599…`.
+    - The scoped secret-value detector over the nine updated PAPER-10 evidence
+      files, excluding `secret-scan.txt`, returned raw no-match exit `1`; the
+      normalized secret gate exited `0`.
+    - `git diff --check` exited `0`. No secret value, token, authorization
+      header, provider credential, cookie, paper/image bytes, or raw payload
+      was emitted.

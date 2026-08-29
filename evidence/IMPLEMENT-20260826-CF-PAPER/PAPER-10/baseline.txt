@@ -344,3 +344,21 @@ or persisted in this local phase.
 - External state at this baseline is the exact WAF rule plus the paired Edge
   secret and zhangbot token. The next step is transfer/validation and
   installation of the current commit-named Processor release.
+
+## 2026-08-29 archive-precondition stop and capability-first rollback
+
+- The release transfer did not start because the local package directory was
+  named for the prior evidence commit `5e42e4e…`, while the clean current HEAD
+  was `5c4b7563ec29fed62a8a5a63fc8c45186461f1b7`; the expected current-HEAD
+  archive paths were absent. No archive was transferred and no release/service
+  was installed.
+- The rollback removed the active WAF rule/entrypoint and read back the
+  entrypoint as HTTP `404`; removed the zhangbot token and staging path; and
+  attempted to delete the Edge shared secret. The first delete returned exit
+  `1` because this Wrangler version does not support `--yes`; a supported
+  confirmation-input retry returned exit `0`, and name-only readback confirmed
+  the binding absent. No secret value was recorded.
+- D1/R2 metadata, Kimi provider configuration, and existing Redis/Relay/
+  Cloudflared services were preserved. The next retry must package the exact
+  current HEAD and repeat the immutable preflight before recreating WAF and
+  capability material.

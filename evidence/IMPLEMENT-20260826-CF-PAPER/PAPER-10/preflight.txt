@@ -1156,6 +1156,21 @@ Edge code deployment exists in this retry.
   is the Edge shared secret and paired zhangbot token; failure requires
   capability-first WAF deletion/readback before revoking the new capability.
 
+## 2026-08-29 archive-precondition stop and capability rollback
+
+- Current clean HEAD was `5c4b7563ec29fed62a8a5a63fc8c45186461f1b7`, but the
+  available local release archives were named for `5e42e4e…`; current-HEAD
+  archive precondition failed before transfer. No zhangbot staging or release
+  write followed.
+- Capability rollback deleted the exact WAF rule/entrypoint and verified the
+  custom entrypoint HTTP `404`; token/staging removal exited `0`. The first
+  Edge Secret deletion returned exit `1` only because Wrangler rejected the
+  unsupported `--yes` option. A supported confirmation-input deletion then
+  exited `0`; name-only readback exited `0` with the Paper secret absent.
+- No D1/R2/Edge code/Redis/Relay/Cloudflared write occurred. A new attempt
+  must rebuild package artifacts for current HEAD and perform a fresh
+  immutable preflight before recreating capabilities.
+
 ## 2026-08-29 Edge/zhangbot capability handoff
 
 - The first local secret-generation attempt stopped at a 65-byte

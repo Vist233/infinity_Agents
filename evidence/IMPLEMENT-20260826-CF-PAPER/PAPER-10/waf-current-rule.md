@@ -110,3 +110,18 @@ Branch: `cloudflare-deploy`
   and entrypoint `6a212d8fb2444135a6b2511e7d8ad8d0`, read back 404, then revoke
   the new Edge secret, remove the zhangbot token, and remove only the new
   release/service. Preserve D1/R2 metadata and existing host services.
+
+## 2026-08-29 archive-precondition rollback
+
+- The current-HEAD archive precondition failed before transfer because the
+  available local package was named for a later evidence state than the HEAD
+  computed by the transfer wrapper. The active rule above was therefore
+  removed before revoking other capability material.
+- Rule deletion returned HTTP `200`/curl exit `0`; empty-entrypoint deletion
+  returned HTTP `204`/curl exit `0`; final entrypoint readback returned HTTP
+  `404`/curl exit `0`. Edge secret deletion was then retried with Wrangler's
+  supported confirmation input after the unsupported `--yes` option returned
+  exit `1`; name-only readback showed the binding absent. zhangbot token and
+  staging were removed.
+- No WAF rule is active now. A future retry must create a fresh rule only after
+  packaging and validating an archive named for the exact current HEAD.
