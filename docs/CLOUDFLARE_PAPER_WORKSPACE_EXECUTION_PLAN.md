@@ -637,10 +637,71 @@ additive and is not remotely applied by this card; a later release must apply it
 before enabling the route.  Preserve existing resource metadata and Processor
 leases; never manufacture completion by editing D1.
 
-**Next exact card:** `PAPER-FIX-02` starts by projecting the durable continuation
-and resource lifecycle into an authenticated frontend progress/task surface,
-including refresh/reconnect replay and ready-to-resume actions, without moving
-PDF/full-text data or ownership decisions into the browser.
+**Next exact card:** `PAPER-FIX-02` starts by exposing the durable continuation
+and resource lifecycle as an authenticated, owner-scoped read model and typed
+event contract; it does not add a visual task card.
+
+### PAPER-FIX-02 — Paper progress read model/events
+
+**Outcome:** the frontend can refresh one known Paper resource and receive a
+safe, restart-stable progress snapshot correlated to the original chat turn.
+The snapshot distinguishes a durably accepted `materialize_paper` invocation
+from a resource that is actually `ready`; model prose is never used as task
+state.
+
+- Add `GET /api/paper/resources/:resource_id/progress?session_id=:session_id`.
+  The Edge requires the authenticated session, checks the D1 resource owner,
+  owning chat session, and active resource link, and returns the same not-found
+  boundary for guessed, revoked, stale, or cross-user IDs.  Deleted resources
+  return `PAPER_RESOURCE_DELETED`.
+- Project only `requested`, `downloading`, `extracting`, `uploading`, `ready`,
+  `failed`, and `cancelled` as both `resource.status` and `resource.stage`,
+  plus bounded page/image counts, timestamps, and a safe error object.  The
+  response includes a deterministic revision, the original turn correlation,
+  bounded continuation summaries, and bounded audit event summaries.
+- Keep the materialize distinction explicit: a successful `materialize` audit
+  event yields `materialize.invocation_status = succeeded`, while
+  `materialize.resource_ready` is true only for the D1/R2/Processor `ready`
+  state.  No PDF, full text, image bytes, source URL, local path, R2 key,
+  provider payload, or audit metadata crosses the browser/API boundary.
+- Include a ready-only resume action that points to the existing
+  `POST /api/paper/continuations/:continuation_id` endpoint and contains only
+  the owning `session_id`.  The server remains authoritative for ownership,
+  readiness, expiry, fencing, and idempotent lease claim; repeated progress
+  reads are read-only and do not enqueue or claim work.
+- Add a typed frontend client/normalizer for the progress response and the
+  existing `paper_processing` stream event.  This card has no visual task card;
+  the next UI card is `PAPER-FIX-03` and must consume this contract rather than
+  recreate ownership or lifecycle decisions in the browser.
+
+**Positive tests:** every supported lifecycle status is projected; a processing
+resource with a successful materialize event remains not-ready; a ready resource
+returns the same snapshot on repeated reads and exposes the bounded resume
+action; continuation and audit correlation are returned without private fields;
+the frontend normalizes valid snapshots and paper events.
+
+**Negative tests:** owner vs non-owner, guessed/missing resource, revoked link,
+deleted resource, failed resource with a path-like error, expired/in-progress
+or duplicate resume, malformed lifecycle/event data, and forbidden object/audit
+fields are rejected or omitted.  Existing continuation, Paper resource,
+Processor, privacy, and event-ledger tests must remain green.
+
+**Local pass gate:** focused Paper progress and continuation tests, `npm run
+check`, the complete Edge `npm test`, and affected frontend contract tests plus
+frontend typecheck/lint/unit checks pass.  `git diff --check` and a repository
+secret scan pass.  Processor code, D1 schema, remote migrations, Cloudflare
+resources, WAF, secrets, zhangbot, browser sessions, deployment, and Git push
+are explicitly out of scope.
+
+**Rollback:** revert the local review commit if needed.  The endpoint is
+additive and reads existing D1 resource/continuation/audit tables; disabling it
+does not alter D1/R2/Processor state or leases.  Preserve durable resource
+metadata and never manufacture a lifecycle transition by editing D1.
+
+**Next exact card:** `PAPER-FIX-03` adds the authenticated frontend progress/task
+surface, refresh/reconnect replay, and user-facing ready-to-resume control using
+this read model and the existing continuation endpoint.  It must not move PDF,
+full-text, R2-key, ownership, or provider authority into the browser.
 
 ## 4. Completion checkpoint template
 

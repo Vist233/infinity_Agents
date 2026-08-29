@@ -199,6 +199,14 @@ export interface PaperResourceAuditEventRow {
   created_at: number;
 }
 
+export type PaperResourceProgressAuditEventRow = Pick<PaperResourceAuditEventRow, "event_id" | "resource_id" | "attempt_id" | "stage" | "outcome" | "error_code" | "created_at">;
+
+export interface PaperResourceProgressSnapshot {
+  resource: PaperResourceRow;
+  continuations: OwnedPaperRequestContinuation[];
+  auditEvents: PaperResourceProgressAuditEventRow[];
+}
+
 export interface PaperCleanupJobRow {
   cleanup_id: string;
   resource_id: string;
@@ -837,6 +845,67 @@ export async function listOwnedPaperRequestContinuationsForTurn(
       ORDER BY c.created_at ASC, c.continuation_id ASC`,
   ).bind(sessionId, userId, turnId).all<OwnedPaperRequestContinuation>();
   return result.results ?? [];
+}
+
+async function listOwnedPaperRequestContinuationsForResource(
+  env: Env,
+  input: { resourceId: string; sessionId: string; userId: string; limit?: number },
+): Promise<OwnedPaperRequestContinuation[]> {
+  const limit = Math.max(1, Math.min(input.limit ?? 20, 20));
+  const result = await env.DB.prepare(
+    `SELECT c.continuation_id, c.session_id, c.user_id, c.turn_id,
+            c.client_request_id, c.resource_id, c.status, c.active_turn_id,
+            c.lease_expires_at, c.expires_at, c.last_error_code, c.created_at,
+            c.updated_at, c.completed_at, r.status AS resource_status
+       FROM paper_request_continuations c
+       JOIN paper_resources r ON r.resource_id = c.resource_id
+       JOIN chat_sessions s ON s.id = c.session_id
+      WHERE c.resource_id = ?1 AND c.session_id = ?2 AND c.user_id = ?3
+        AND r.session_id = c.session_id AND r.user_id = c.user_id
+        AND s.user_id = c.user_id
+      ORDER BY c.updated_at DESC, c.continuation_id ASC
+      LIMIT ?4`,
+  ).bind(input.resourceId, input.sessionId, input.userId, limit).all<OwnedPaperRequestContinuation>();
+  return result.results ?? [];
+}
+
+async function listPaperResourceProgressAuditEvents(
+  env: Env,
+  input: { resourceId: string; sessionId: string; userId: string },
+  limit = 50,
+): Promise<PaperResourceProgressAuditEventRow[]> {
+  const boundedLimit = Math.max(1, Math.min(limit, 50));
+  const result = await env.DB.prepare(
+    `SELECT e.event_id, e.resource_id, e.attempt_id, e.stage, e.outcome, e.error_code, e.created_at
+       FROM paper_resource_audit_events e
+       JOIN paper_resources r ON r.resource_id = e.resource_id
+       JOIN chat_sessions s ON s.id = r.session_id
+       JOIN paper_resource_links l ON l.resource_id = r.resource_id AND l.session_id = r.session_id
+      WHERE e.resource_id = ?1 AND r.session_id = ?2 AND r.user_id = ?3
+        AND s.user_id = ?3
+      ORDER BY e.created_at ASC, e.event_id ASC
+      LIMIT ?4`,
+  ).bind(input.resourceId, input.sessionId, input.userId, boundedLimit).all<PaperResourceProgressAuditEventRow>();
+  return result.results ?? [];
+}
+
+/**
+ * Read one owner-scoped, bounded progress snapshot. The API projection built
+ * from this value must never expose the resource object keys or audit payload.
+ */
+export async function getOwnedPaperResourceProgress(
+  env: Env,
+  resourceId: string,
+  sessionId: string,
+  userId: string,
+): Promise<PaperResourceProgressSnapshot | null> {
+  const resource = await getOwnedPaperResource(env, resourceId, sessionId, userId);
+  if (!resource) return null;
+  const [continuations, auditEvents] = await Promise.all([
+    listOwnedPaperRequestContinuationsForResource(env, { resourceId, sessionId, userId }),
+    listPaperResourceProgressAuditEvents(env, { resourceId, sessionId, userId }),
+  ]);
+  return { resource, continuations, auditEvents };
 }
 
 /** Synchronize a durable continuation with the resource lifecycle before serving it. */

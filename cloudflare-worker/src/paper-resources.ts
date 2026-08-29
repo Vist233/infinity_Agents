@@ -6,11 +6,14 @@ import {
   cancelPaperResource,
   deletePaperResource,
   getChatSession,
+  getOwnedPaperResourceProgress,
   getOwnedPaperResource,
   linkPaperResource,
   recordPaperAuditEvent,
   recordUserPaperUpload,
   revokePaperResourceLink,
+  type PaperResourceProgressSnapshot,
+  type PaperResourceStatus,
   type PaperResourcePurpose,
   type PaperResourceRow,
   type PaperSourceKind,
@@ -24,6 +27,61 @@ const OBJECT_KINDS = new Set<PaperObjectKind>(["source_pdf", "text_manifest", "i
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const MAX_SOURCE_BYTES = 64 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const PAPER_PROGRESS_STATUSES = new Set<Exclude<PaperResourceStatus, "deleted">>([
+  "requested", "downloading", "extracting", "uploading", "ready", "failed", "cancelled",
+]);
+const SAFE_ERROR_CODE = /^[A-Z0-9_]{1,64}$/;
+const SENSITIVE_ERROR_TEXT = /(?:https?:\/\/|r2:\/\/|file:\/\/|\/(?:tmp|var|home|Users)\/|object[_-]?key|local[_-]?path|authorization|cookie|token|secret|credential)/i;
+
+export type PaperProgressStatus = Exclude<PaperResourceStatus, "deleted">;
+
+export interface PaperResourceProgressResponse {
+  resource: {
+    resource_id: string;
+    status: PaperProgressStatus;
+    stage: PaperProgressStatus;
+    source_kind: PaperResourceRow["source_kind"];
+    title: string | null;
+    page_count: number | null;
+    image_count: number | null;
+    error: { code: string; message: string } | null;
+    created_at: number;
+    updated_at: number;
+    ready_at: number | null;
+  };
+  revision: string;
+  materialize: {
+    invocation_status: "succeeded" | "not_recorded";
+    invocation_event_id: string | null;
+    invoked_at: number | null;
+    resource_ready: boolean;
+  };
+  correlation: {
+    continuations: Array<{
+      continuation_id: string;
+      original_turn_id: string;
+      status: "waiting" | "ready" | "running" | "completed" | "failed" | "cancelled" | "expired";
+      expires_at: number;
+      updated_at: number;
+      completed_at: number | null;
+    }>;
+  };
+  events: Array<{
+    event_id: string;
+    stage: "materialize" | "download" | "extraction" | "upload" | "image_analysis" | "cancel" | "delete" | "cleanup";
+    outcome: "started" | "succeeded" | "failed" | "denied" | "cancelled";
+    error_code: string | null;
+    created_at: number;
+  }>;
+  resume: {
+    available: boolean;
+    continuation_id: string | null;
+    method: "POST";
+    path: string | null;
+    body: { session_id: string } | null;
+    reason_code: string | null;
+  };
+}
 
 function boundedText(value: unknown, maxChars: number): string {
   return typeof value === "string" ? value.slice(0, maxChars) : "";
@@ -43,6 +101,105 @@ function safeResource(row: PaperResourceRow): Record<string, unknown> {
     created_at: row.created_at,
     updated_at: row.updated_at,
     ready_at: row.ready_at,
+  };
+}
+
+function safeProgressError(row: PaperResourceRow): { code: string; message: string } | null {
+  if (row.status !== "failed" && !row.error_code && !row.error_message_safe) return null;
+  const code = row.error_code && SAFE_ERROR_CODE.test(row.error_code) ? row.error_code : "PAPER_RESOURCE_FAILED";
+  const rawMessage = typeof row.error_message_safe === "string" ? row.error_message_safe.trim() : "";
+  if (!rawMessage || SENSITIVE_ERROR_TEXT.test(rawMessage)) return { code, message: "Paper processing failed." };
+  return { code, message: rawMessage.replace(/\s+/g, " ").slice(0, 512) || "Paper processing failed." };
+}
+
+function resumeReason(snapshot: PaperResourceProgressSnapshot, now: number): string {
+  const resourceStatus = snapshot.resource.status;
+  if (resourceStatus === "failed") return "PAPER_RESOURCE_FAILED";
+  if (resourceStatus === "cancelled") return "PAPER_RESOURCE_CANCELLED";
+  if (snapshot.continuations.length === 0) return "PAPER_CONTINUATION_NOT_FOUND";
+  if (snapshot.continuations.some((continuation) => continuation.status === "expired" || continuation.expires_at <= now)) {
+    return "PAPER_CONTINUATION_EXPIRED";
+  }
+  if (snapshot.continuations.some((continuation) => continuation.status === "running")) {
+    return "PAPER_CONTINUATION_IN_PROGRESS";
+  }
+  if (snapshot.continuations.some((continuation) => continuation.status === "completed")) {
+    return "PAPER_CONTINUATION_COMPLETED";
+  }
+  if (resourceStatus !== "ready") return "PAPER_RESOURCE_NOT_READY";
+  return "PAPER_CONTINUATION_NOT_READY";
+}
+
+function progressResponse(snapshot: PaperResourceProgressSnapshot, sessionId: string, now = nowSeconds()): PaperResourceProgressResponse {
+  const resource = snapshot.resource;
+  if (!PAPER_PROGRESS_STATUSES.has(resource.status as PaperProgressStatus)) {
+    throw new Error("Deleted paper resources do not have a progress snapshot");
+  }
+  const materializeEvents = snapshot.auditEvents
+    .filter((event) => event.stage === "materialize" && event.outcome === "succeeded")
+    .sort((left, right) => right.created_at - left.created_at || right.event_id.localeCompare(left.event_id));
+  const materializeEvent = materializeEvents[0] ?? null;
+  const resumable = resource.status === "ready"
+    ? snapshot.continuations.find((continuation) => continuation.status === "ready" && continuation.expires_at > now)
+    : undefined;
+  const latestContinuationUpdated = Math.max(0, ...snapshot.continuations.map((continuation) => continuation.updated_at));
+  const latestEventCreated = Math.max(0, ...snapshot.auditEvents.map((event) => event.created_at));
+
+  return {
+    resource: {
+      resource_id: resource.resource_id,
+      status: resource.status as PaperProgressStatus,
+      stage: resource.status as PaperProgressStatus,
+      source_kind: resource.source_kind,
+      title: resource.title,
+      page_count: resource.page_count,
+      image_count: resource.image_count,
+      error: safeProgressError(resource),
+      created_at: resource.created_at,
+      updated_at: resource.updated_at,
+      ready_at: resource.ready_at,
+    },
+    revision: `${resource.updated_at}:${latestContinuationUpdated}:${latestEventCreated}`,
+    materialize: {
+      invocation_status: materializeEvent ? "succeeded" : "not_recorded",
+      invocation_event_id: materializeEvent?.event_id ?? null,
+      invoked_at: materializeEvent?.created_at ?? null,
+      resource_ready: resource.status === "ready",
+    },
+    correlation: {
+      continuations: snapshot.continuations.map((continuation) => ({
+        continuation_id: continuation.continuation_id,
+        original_turn_id: continuation.turn_id,
+        status: continuation.status,
+        expires_at: continuation.expires_at,
+        updated_at: continuation.updated_at,
+        completed_at: continuation.completed_at,
+      })),
+    },
+    events: snapshot.auditEvents.map((event) => ({
+      event_id: event.event_id,
+      stage: event.stage,
+      outcome: event.outcome,
+      error_code: event.error_code && SAFE_ERROR_CODE.test(event.error_code) ? event.error_code : null,
+      created_at: event.created_at,
+    })),
+    resume: resumable
+      ? {
+        available: true,
+        continuation_id: resumable.continuation_id,
+        method: "POST",
+        path: `/api/paper/continuations/${encodeURIComponent(resumable.continuation_id)}`,
+        body: { session_id: sessionId },
+        reason_code: null,
+      }
+      : {
+        available: false,
+        continuation_id: null,
+        method: "POST",
+        path: null,
+        body: null,
+        reason_code: resumeReason(snapshot, now),
+      },
   };
 }
 
@@ -116,6 +273,17 @@ async function getResource(request: Request, env: Env, user: AuthedUser, resourc
   if (result instanceof Response) return result;
   if (result.resource.status === "deleted") return errorJson("Paper resource was deleted", 410, "PAPER_RESOURCE_DELETED");
   return json(safeResource(result.resource));
+}
+
+async function getProgress(request: Request, env: Env, user: AuthedUser, resourceId: string): Promise<Response> {
+  const sessionId = sessionIdFrom(request);
+  if (!sessionId || resourceId.includes("/") || resourceId.length > 255) {
+    return errorJson("Invalid paper resource reference", 400, "INVALID_PAPER_RESOURCE");
+  }
+  const snapshot = await getOwnedPaperResourceProgress(env, resourceId, sessionId, user.userId);
+  if (!snapshot) return errorJson("Paper resource not found", 404, "PAPER_RESOURCE_NOT_FOUND");
+  if (snapshot.resource.status === "deleted") return errorJson("Paper resource was deleted", 410, "PAPER_RESOURCE_DELETED");
+  return json(progressResponse(snapshot, sessionId));
 }
 
 async function getManifest(request: Request, env: Env, user: AuthedUser, resourceId: string): Promise<Response> {
@@ -269,11 +437,12 @@ async function unlinkResource(request: Request, env: Env, user: AuthedUser, reso
 export async function handlePaperResourceApi(request: Request, env: Env, user: AuthedUser): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname === "/api/paper/resources" && request.method === "POST") return createResource(request, env, user);
-  const match = url.pathname.match(/^\/api\/paper\/resources\/([^/]+)(?:\/(manifest|object|link|image|cancel))?$/);
+  const match = url.pathname.match(/^\/api\/paper\/resources\/([^/]+)(?:\/(manifest|object|link|image|cancel|progress))?$/);
   if (!match) return null;
   const resourceId = decodeURIComponent(match[1]);
   const suffix = match[2];
   if (!suffix && request.method === "GET") return getResource(request, env, user, resourceId);
+  if (suffix === "progress" && request.method === "GET") return getProgress(request, env, user, resourceId);
   if (suffix === "manifest" && request.method === "GET") return getManifest(request, env, user, resourceId);
   if (suffix === "object" && request.method === "GET") return getObject(request, env, user, resourceId);
   if (suffix === "object" && request.method === "PUT") return uploadUserSource(request, env, user, resourceId);

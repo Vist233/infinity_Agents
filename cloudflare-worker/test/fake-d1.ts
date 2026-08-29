@@ -549,6 +549,20 @@ class FakeStatement {
 
   async all<T>(): Promise<{ results: T[] }> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("FROM paper_request_continuations c") && sql.includes("WHERE c.resource_id = ?1")) {
+      const [resourceId, sessionId, userId, limit] = this.args as [string, string, string, number];
+      const rows = [...this.db.paperRequestContinuations.values()]
+        .filter((row) => row.resource_id === resourceId && row.session_id === sessionId && row.user_id === userId)
+        .filter((row) => {
+          const resource = this.db.paperResources.get(row.resource_id);
+          const session = this.db.chatSessions.get(row.session_id);
+          return Boolean(resource && session && resource.session_id === row.session_id && resource.user_id === row.user_id && session.user_id === row.user_id);
+        })
+        .sort((left, right) => right.updated_at - left.updated_at || left.continuation_id.localeCompare(right.continuation_id))
+        .slice(0, Number(limit))
+        .map((row) => ({ ...row, resource_status: this.db.paperResources.get(row.resource_id)!.status }));
+      return { results: rows as unknown as T[] };
+    }
     if (sql.includes("FROM paper_request_continuations c")) {
       const [sessionId, userId, turnId] = this.args as [string, string, string];
       const rows = [...this.db.paperRequestContinuations.values()]
@@ -560,6 +574,23 @@ class FakeStatement {
         })
         .sort((left, right) => left.created_at - right.created_at || left.continuation_id.localeCompare(right.continuation_id))
         .map((row) => ({ ...row, resource_status: this.db.paperResources.get(row.resource_id)!.status }));
+      return { results: rows as unknown as T[] };
+    }
+    if (sql.includes("FROM paper_resource_audit_events") && sql.includes("WHERE e.resource_id = ?1")) {
+      const [resourceId, sessionId, userId, limit] = this.args as [string, string, string, number];
+      const rows = this.db.paperAuditEvents
+        .filter((event) => event.resource_id === resourceId)
+        .filter((event) => {
+          const resource = this.db.paperResources.get(event.resource_id);
+          const session = resource ? this.db.chatSessions.get(resource.session_id) : undefined;
+          const linked = [...this.db.paperResourceLinks.values()].some((link) => link.resource_id === event.resource_id && link.session_id === resource?.session_id);
+          return Boolean(resource && session && linked && resource.session_id === sessionId && resource.user_id === userId && session.user_id === userId);
+        })
+        .sort((left, right) => left.created_at - right.created_at || left.event_id.localeCompare(right.event_id))
+        .slice(0, Number(limit))
+        .map(({ event_id, resource_id, attempt_id, stage, outcome, error_code, created_at }) => ({
+          event_id, resource_id, attempt_id, stage, outcome, error_code, created_at,
+        }));
       return { results: rows as unknown as T[] };
     }
     if (sql.includes("FROM paper_cleanup_jobs")) {

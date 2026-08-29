@@ -43,6 +43,41 @@ describe("chat stream event normalization", () => {
     expect((result as { summary?: string }).summary?.length).toBeLessThanOrEqual(2048);
   });
 
+  it("normalizes a durable paper processing event without treating it as assistant prose", () => {
+    expect(normalizeChatEvent(JSON.stringify({
+      type: "paper_processing",
+      correlation_id: "client:paper-1",
+      continuation_id: "continuation-1",
+      resource_id: "resource-1",
+      status: "extracting",
+      message: "Paper processing is durable and can be resumed.",
+    }))).toMatchObject({
+      type: "paper_processing",
+      correlation_id: "client:paper-1",
+      continuation_id: "continuation-1",
+      resource_id: "resource-1",
+      status: "extracting",
+    });
+  });
+
+  it("rejects a paper processing event without a correlation or valid lifecycle status", () => {
+    expect(normalizeChatEvent(JSON.stringify({
+      type: "paper_processing",
+      continuation_id: "continuation-1",
+      resource_id: "resource-1",
+      status: "extracting",
+      message: "progress",
+    }))).toBeNull();
+    expect(normalizeChatEvent(JSON.stringify({
+      type: "paper_processing",
+      correlation_id: "client:paper-1",
+      continuation_id: null,
+      resource_id: null,
+      status: "complete",
+      message: "progress",
+    }))).toBeNull();
+  });
+
   it("normalizes only a structured task draft event for the To-Do card", () => {
     const event = normalizeChatEvent(JSON.stringify({
       type: "task_draft_created",

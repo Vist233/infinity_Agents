@@ -1,0 +1,11 @@
+PAPER-FIX-02 baseline record
+
+Repository: /Users/zhangyvjing/Code/infinity_Agents
+Branch: cloudflare-deploy
+Baseline HEAD: 02fb834ab2f2759ba8c17df9b3bc164cdcfc5658
+Baseline subject: docs: finalize PAPER-FIX-01 checkpoint
+Baseline worktree: clean before card changes
+Local origin/cloudflare-deploy tracking ref observed before card: becde2db27aa7ef7e31bfb2ddbe4a0f4ce7be8cf
+
+No remote system was contacted or modified for this card.  No credential or
+secret value was read, emitted, or placed in this evidence.

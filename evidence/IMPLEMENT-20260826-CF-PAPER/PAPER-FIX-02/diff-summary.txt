@@ -1,0 +1,44 @@
+# PAPER-FIX-02 diff summary
+
+## Worker/D1 read model
+
+- `cloudflare-worker/src/db.ts` adds an owner-scoped progress snapshot assembled
+  from the existing `paper_resources`, `paper_request_continuations`,
+  `paper_resource_links`, `chat_sessions`, and `paper_resource_audit_events`
+  tables.  Continuations are capped at 20 rows and audit events at 50 rows;
+  audit metadata is never selected.  All queries carry resource/session/user
+  ownership conditions.
+- `cloudflare-worker/src/paper-resources.ts` adds
+  `GET /api/paper/resources/:resource_id/progress?session_id=:session_id`.
+  The response projects only the seven supported lifecycle statuses, stage,
+  page/image counts, timestamps, bounded safe error, deterministic revision,
+  original turn correlation, safe event columns, and a ready-only POST resume
+  action.  It excludes PDF/full-text bytes, source URLs, local paths, R2
+  object keys, provider payloads, and audit metadata.
+- `cloudflare-worker/test/fake-d1.ts` adds only the matching owner-constrained
+  read behavior for the test database.
+- `cloudflare-worker/test/paper-progress.test.ts` is new focused positive and
+  negative coverage.  It is under the repository's broad Worker ignore rule
+  and will be force-added explicitly as a test file.
+
+## Frontend contract
+
+- `frontend/lib/api/papers.ts` adds typed safe normalization for the progress
+  response, an owner/session-bound GET client, and a continuation resume client
+  that sends only `{session_id}` with an opaque continuation ID.
+- `frontend/lib/ws/chat-stream.ts` recognizes the existing durable
+  `paper_processing` event without converting it to assistant prose.
+- The corresponding frontend tests validate safe field projection, malformed
+  response rejection, encoded request construction, and exact resume body.
+  No visual task card or polling loop is included.
+
+## Contract documents
+
+- `docs/CLOUDFLARE_PAPER_WORKSPACE_DESIGN.md` documents the endpoint, safe
+  schema, revision/read-only behavior, materialize-vs-ready distinction, and
+  resume contract.
+- `docs/CLOUDFLARE_PAPER_WORKSPACE_EXECUTION_PLAN.md` defines PAPER-FIX-02,
+  its gates/non-goals, rollback, and the next UI card `PAPER-FIX-03`.
+
+No migration, dependency, Processor, WAF, secret, Redis, R2, or deployment
+artifact was changed.

@@ -46,6 +46,15 @@ export interface ChatToolResultEvent {
   summary: string;
 }
 
+export interface ChatPaperProcessingEvent {
+  type: "paper_processing";
+  correlation_id: string;
+  continuation_id: string | null;
+  resource_id: string | null;
+  status: "processing" | "requested" | "downloading" | "extracting" | "uploading" | "ready" | "failed" | "cancelled";
+  message: string;
+}
+
 export interface ChatDoneEvent {
   type: "done";
   token_info?: Partial<TokenInfo>;
@@ -80,7 +89,7 @@ export interface ChatTaskConfirmedEvent {
   duplicate?: boolean;
 }
 
-export type ChatEvent = ChatStatusEvent | ChatChunkEvent | ChatToolCallEvent | ChatToolResultEvent | ChatTaskDraftEvent | ChatTaskDraftCancelledEvent | ChatTaskConfirmationEvent | ChatTaskConfirmedEvent | ChatDoneEvent | ChatErrorEvent;
+export type ChatEvent = ChatStatusEvent | ChatChunkEvent | ChatToolCallEvent | ChatToolResultEvent | ChatPaperProcessingEvent | ChatTaskDraftEvent | ChatTaskDraftCancelledEvent | ChatTaskConfirmationEvent | ChatTaskConfirmedEvent | ChatDoneEvent | ChatErrorEvent;
 
 export interface StartChatStreamOptions {
   apiBase: string;
@@ -99,9 +108,12 @@ export interface ChatStreamHandle {
 const OPEN = 1;
 const CLOSED = 3;
 
-const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "tool_result", "task_draft_created", "task_draft_updated", "task_draft_cancelled", "task_confirmation", "task_confirmed", "done", "error"]);
+const VALID_EVENT_TYPES = new Set(["status", "chunk", "tool_call", "tool_result", "paper_processing", "task_draft_created", "task_draft_updated", "task_draft_cancelled", "task_confirmation", "task_confirmed", "done", "error"]);
 const MAX_EVENT_TEXT_CHARS = 2_048;
 const MAX_ARGUMENTS_CHARS = 1_024;
+const PAPER_PROCESSING_STATUSES = new Set<ChatPaperProcessingEvent["status"]>([
+  "processing", "requested", "downloading", "extracting", "uploading", "ready", "failed", "cancelled",
+]);
 
 function boundedText(value: unknown, maxChars: number): string {
   return typeof value === "string" ? value.slice(0, maxChars) : "";
@@ -159,6 +171,22 @@ export function normalizeChatEvent(rawData: unknown): ChatEvent | null {
         tool_name: boundedText(payload.tool_name, 255),
         status: payload.status,
         summary: boundedText(payload.summary, MAX_EVENT_TEXT_CHARS),
+      };
+    }
+    if (payload.type === "paper_processing") {
+      if (typeof payload.correlation_id !== "string" || !payload.correlation_id
+        || (payload.continuation_id !== null && (typeof payload.continuation_id !== "string" || !payload.continuation_id))
+        || (payload.resource_id !== null && (typeof payload.resource_id !== "string" || !payload.resource_id))
+        || typeof payload.message !== "string"
+        || typeof payload.status !== "string"
+        || !PAPER_PROCESSING_STATUSES.has(payload.status as ChatPaperProcessingEvent["status"])) return null;
+      return {
+        type: "paper_processing",
+        correlation_id: boundedText(payload.correlation_id, 255),
+        continuation_id: payload.continuation_id === null ? null : boundedText(payload.continuation_id, 255),
+        resource_id: payload.resource_id === null ? null : boundedText(payload.resource_id, 255),
+        status: payload.status as ChatPaperProcessingEvent["status"],
+        message: boundedText(payload.message, MAX_EVENT_TEXT_CHARS),
       };
     }
     if (payload.type === "task_draft_created" || payload.type === "task_draft_updated") {

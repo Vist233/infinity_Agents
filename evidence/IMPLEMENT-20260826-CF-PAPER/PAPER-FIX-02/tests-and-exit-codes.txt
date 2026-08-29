@@ -1,0 +1,53 @@
+# PAPER-FIX-02 tests and exit codes
+
+Exit codes below are process exit codes.  No output included credentials,
+provider keys, R2 keys, PDF bytes, or full text.
+
+## TDD red phase
+
+- `cd cloudflare-worker && npm test -- --run test/paper-progress.test.ts`:
+  exit `1` before the Worker read model existed; the five new tests failed at
+  the absent route/implementation.  This was an expected red result.
+- `cd frontend && npm run test:unit -- lib/api/papers.test.ts lib/ws/chat-stream.test.ts`:
+  exit `1` before the frontend contract existed; the new API contract import
+  was unresolved and the new paper event assertion was red.  Existing event
+  tests still ran; no test was removed or weakened.
+
+## Focused final gates
+
+- `cd cloudflare-worker && npm test -- --run test/paper-progress.test.ts`:
+  exit `0`; 1 file, 6 tests passed.  Covers all seven resource lifecycle
+  statuses, materialize-vs-ready distinction, stable ready resume action,
+  safe failed error, owner/guessed/revoked/deleted boundaries, and active
+  duplicate resume rejection.
+- `cd cloudflare-worker && npm test -- --run test/paper-progress.test.ts test/paper-resources.test.ts test/paper-continuation.test.ts`:
+  exit `0`; 3 files, 20 tests passed.
+- `cd frontend && npm run test:unit -- lib/api/papers.test.ts lib/ws/chat-stream.test.ts`:
+  exit `0`; 2 files, 19 tests passed.
+
+## Mandatory and affected suites
+
+- `cd cloudflare-worker && npm run check && npm test`:
+  exit `0`; TypeScript check passed; 26 test files and 148 tests passed.
+- An earlier post-implementation `cd cloudflare-worker && npm run check`:
+  exit `2` because the new projection needed an explicit narrowed lifecycle
+  cast; the implementation was corrected and the mandatory combined gate was
+  rerun successfully.  This failure is retained as evidence, not hidden.
+- `cd frontend && npm run typecheck`: exit `0`.
+- `cd frontend && npm run lint`: exit `0`.
+- `cd frontend && npm run test:unit`: exit `0`; 13 files and 56 tests passed.
+  Existing React `act(...)` messages were warnings only.
+- Processor checks were not rerun: this card changes no Processor source,
+  runtime, dependency, or protocol; the affected frontend contract gates and
+  mandatory Edge suite were run.
+
+## Final review gates
+
+- `git diff --check`: exit `0` before staging evidence; it is rerun after
+  staging and recorded in `secret-scan.txt`.
+- Changed-scope secret scan: recorded in `secret-scan.txt`; no secret value was
+  read or printed.
+
+No deployment, browser claim, remote migration, R2 write, Processor/zhangbot
+write, WAF/Cloudflare configuration write, Redis/Relay/Cloudflared write, or
+Git push was performed.

@@ -404,6 +404,93 @@ emits `paper_processing` and a processing assistant event, never a final
 completion.  Frontend task/progress projection is intentionally a later card;
 the durable ledger and event contract are the source of truth.
 
+### 6.2 Paper progress read model and event projection
+
+The frontend reads one owner-scoped progress snapshot through the fixed route
+`GET /api/paper/resources/:resource_id/progress?session_id=:session_id`.
+Authentication is the existing session cookie; the `session_id` query value is
+required and is checked against the authenticated user, the resource owner, and
+an active `paper_resource_links` row.  A missing, guessed, revoked, or
+cross-user resource has the same `PAPER_RESOURCE_NOT_FOUND` boundary.  A
+known deleted resource returns `PAPER_RESOURCE_DELETED` and no progress body.
+There is no resource-list endpoint in this contract, so refresh cannot be used
+to enumerate another user's resources.
+
+The response is a bounded, read-only projection of D1 authority:
+
+```json
+{
+  "resource": {
+    "resource_id": "opaque-resource-id",
+    "status": "requested|downloading|extracting|uploading|ready|failed|cancelled",
+    "stage": "same lifecycle value as status",
+    "source_kind": "arxiv|pubmed_pmc|user_upload",
+    "title": "optional bounded title",
+    "page_count": null,
+    "image_count": null,
+    "error": null,
+    "created_at": 0,
+    "updated_at": 0,
+    "ready_at": null
+  },
+  "revision": "resource-updated:latest-continuation:latest-event",
+  "materialize": {
+    "invocation_status": "succeeded|not_recorded",
+    "invocation_event_id": "opaque-event-id",
+    "invoked_at": 0,
+    "resource_ready": false
+  },
+  "correlation": {
+    "continuations": [{
+      "continuation_id": "opaque-continuation-id",
+      "original_turn_id": "opaque-chat-turn-id",
+      "status": "waiting|ready|running|completed|failed|cancelled|expired",
+      "expires_at": 0,
+      "updated_at": 0,
+      "completed_at": null
+    }]
+  },
+  "events": [{
+    "event_id": "opaque-event-id",
+    "stage": "materialize|download|extraction|upload|image_analysis|cancel|delete|cleanup",
+    "outcome": "started|succeeded|failed|denied|cancelled",
+    "error_code": null,
+    "created_at": 0
+  }],
+  "resume": {
+    "available": true,
+    "continuation_id": "opaque-continuation-id",
+    "method": "POST",
+    "path": "/api/paper/continuations/opaque-continuation-id",
+    "body": {"session_id": "owning-session-id"},
+    "reason_code": null
+  }
+}
+```
+
+`stage` is a lifecycle projection, not model prose.  `materialize.invocation_status
+= succeeded` records that the tool invocation was durably accepted; it does not
+mean the resource is ready.  `resource.status = ready` is established only by
+the D1/R2/Processor completion contract.  Failed progress exposes only a
+validated error code and bounded safe message; audit `metadata_json`, provider
+payloads, PDF/full text, image bytes, source URLs, local paths, and R2 object
+keys never cross this API boundary.  Events are limited to safe D1 columns and
+the response is capped to recent bounded continuation/event rows.
+
+Repeated GETs do not claim leases, mutate state, or enqueue work.  The
+`revision` changes only when the resource, continuation, or audit event
+projection changes, allowing reconnect/refresh code to discard an unchanged
+snapshot safely.  A ready snapshot may expose one action only: the existing
+`POST /api/paper/continuations/:continuation_id` contract with a session-only
+body.  The server still rechecks ownership, resource readiness, continuation
+expiry, and the atomic execution lease; the browser cannot choose a resource,
+R2 key, page object, or provider payload.
+
+The frontend contract client normalizes this response and the existing
+`paper_processing` stream event into bounded typed data.  It does not render a
+task card in this card.  UI projection, refresh polling/reconnect behavior, and
+user-facing resume controls are the next `PAPER-FIX-03` card.
+
 Image bytes are retrieved through an authorized same-origin route or a narrowly
 scoped, short-lived capability.  Do not Base64-embed large images into SSE or
 model context.  The image-analysis tool sends only the selected authorized image
