@@ -760,3 +760,26 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
 Next exact action: correct/reissue the approved Kimi credential through its
 secret channel, then repeat the fresh authenticated text, tool, and image
 preflight. Do not resume the rest of PAPER-10 until all three pass.
+
+## 2026-08-29 Kimi K2.6 browser-probe blocker and rollback
+
+- Status: `BLOCKED_AUTHENTICATED_BROWSER_TAB_OWNERSHIP`; PAPER-10 is not PASS.
+- The expected existing authenticated Infinity Agents tab was rediscovered,
+  but two claims were refused because the tab remained owned by the source
+  browser session. No alternate session was created and no provider request was
+  sent. Provider status is `NOT_VERIFIED`; no provider HTTP response or model
+  result was obtained.
+- The Kimi K2.6 candidate was read-only confirmed at 100% before the rollback.
+  Per the non-clean-success rule, Edge traffic was restored to
+  `d287b02d-a94c-4caa-b473-70f2368f4999` at 100%; deployment and health
+  readbacks succeeded.
+- The only Cloudflare write in this subphase was that Worker traffic rollback.
+  D1 migrations were not rerun. No R2 object, WAF rule, new Edge secret,
+  zhangbot Processor, Redis/Relay/Cloudflared, or live paper workflow write
+  occurred.
+- Detailed redacted evidence: `k26-browser-probe.md`; no credential value was
+  read or recorded.
+
+Next exact action: release the same existing authenticated browser tab, then
+rediscover/claim it and run the single harmless Kimi K2.6 text probe. Do not
+start paper tooling or image analysis before a clean text success.

@@ -81,6 +81,18 @@ Current status remains: BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE
 - No other browser, Cloudflare, D1, R2, WAF, Processor, zhangbot, Redis,
   Relay, or Cloudflared operation was performed in this probe.
 
+## Kimi K2.6 text-only probe attempt (2026-08-29T05:20:58Z)
+
+- The expected current Infinity Agents tab was found from `openTabs()`, but
+  two claims of that same tab were refused because it remained owned by the
+  source browser session. No alternate tab/session was created.
+- Provider status: `NOT_VERIFIED`; candidate model: `Kimi K2.6`; redacted
+  error: `BLOCKED_AUTHENTICATED_BROWSER_TAB_OWNERSHIP`. The text request was
+  never sent, so no provider response was obtained.
+- The candidate's Worker traffic was rolled back to the approved
+  `d287b02d-a94c-4caa-b473-70f2368f4999` version at 100%, with successful
+  readback. No other production operation was performed.
+
 ## Fresh-tab ownership retry (2026-08-29T04:04:58Z)
 
 - The new user tab was found from the current `openTabs()` result with the

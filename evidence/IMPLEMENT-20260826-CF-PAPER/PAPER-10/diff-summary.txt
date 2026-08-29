@@ -410,6 +410,17 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
 - PAPER-10 remains blocked; no deployment artifact or PASS checkpoint was
   created. The provider credential value was never read or recorded.
 
+## 2026-08-29 Kimi K2.6 browser-probe rollback
+
+- This subphase added only `k26-browser-probe.md` and corresponding browser,
+  checkpoint, test/exit-code, and diff evidence. No product source, migration,
+  paper protocol, WAF, R2, Processor, or existing-service change was made.
+- The authenticated browser tab remained owned by the source session, so the
+  Kimi text provider result was not obtained. The Kimi candidate was rolled
+  back to `d287b02d-a94c-4caa-b473-70f2368f4999` at 100% and read back.
+- PAPER-10 remains blocked; no deployment artifact or PASS checkpoint was
+  created. No credential value was read or recorded.
+
 ## 2026-08-29 live acceptance browser blocker
 
 - No product source, migration, frontend, Processor protocol, or runtime

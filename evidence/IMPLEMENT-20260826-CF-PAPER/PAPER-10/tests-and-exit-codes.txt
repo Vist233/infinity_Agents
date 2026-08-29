@@ -836,3 +836,19 @@ recorded exactly; no failed assertion was skipped.
       was read or recorded.
     - Scoped evidence `git diff --check` exited `0`; the no-secret detector
       returned raw no-match exit `1` and normalized gate exit `0`.
+
+66. Kimi K2.6 browser text-probe blocker and rollback
+    - Two fresh `openTabs()` discovery/claim attempts targeted the existing
+      authenticated Infinity Agents tab; both were refused by browser-session
+      ownership. No provider request was sent, so provider status remained
+      `NOT_VERIFIED` and no tool/image test was started.
+    - Read-only `npx wrangler deployments list --name infinity-agents-edge
+      --json` exited `0`; candidate `93983647-e6f6-4497-a128-2dfd478d15f5`
+      was at 100%.
+    - `npx wrangler versions deploy d287b02d-a94c-4caa-b473-70f2368f4999@100
+      --name infinity-agents-edge --yes --message "Rollback Kimi K2.6 provider
+      after browser probe could not be completed"` exited `0`; read-only
+      deployment readback exited `0` with the exact rollback version at 100%.
+      Public `/health` returned HTTP `200`.
+    - No D1 migration, R2 object, WAF, Edge secret, zhangbot Processor,
+      Redis/Relay/Cloudflared, or live paper workflow operation occurred.
