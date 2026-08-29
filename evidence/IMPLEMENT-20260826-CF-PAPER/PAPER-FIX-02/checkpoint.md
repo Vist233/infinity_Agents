@@ -3,8 +3,9 @@
 - status: `COMPLETE` for PAPER-FIX-02 only; this does not mark PAPER-10 or the
   overall Paper Workspace complete.
 - baseline/current commit: baseline `02fb834ab2f2759ba8c17df9b3bc164cdcfc5658`;
-  final review commit is the local commit containing this card's code and
-  evidence (exact hash reported after commit).
+  implementation review commit `e706d37` (`feat: add Paper progress read
+  model`) contains this card's code and complete evidence.  This exact-hash
+  checkpoint amendment is a follow-up local documentation commit.
 - one completed outcome: an authenticated owner-scoped progress snapshot and
   typed event/resume contract now expose durable Paper lifecycle state without
   moving ownership or content authority into the browser.
