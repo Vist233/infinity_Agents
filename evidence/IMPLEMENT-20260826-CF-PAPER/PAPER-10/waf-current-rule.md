@@ -47,3 +47,12 @@ Branch: `cloudflare-deploy`
   `65e15547ea3144feb70791fc155d1df0`, and read back absence before revoking
   the newly created secret/token and removing the Processor release. Preserve
   D1 migrations and existing Redis/Relay/Cloudflared services.
+
+## Post-failure rollback (2026-08-29)
+
+- The rule and entrypoint listed above were deleted after the failed token
+  handoff. Rule deletion returned HTTP `200`; entrypoint deletion returned
+  successful HTTP `204`, and a read-only readback returned HTTP `404`.
+- The active-rule section above is historical for that attempt. No WAF rule is
+  active after this rollback; a later retry must create a new exact rule and
+  read it back before any capability handoff.

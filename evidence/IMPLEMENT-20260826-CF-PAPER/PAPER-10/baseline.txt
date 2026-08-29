@@ -257,3 +257,15 @@ or persisted in this local phase.
 - External state at this baseline is exactly the corrected Edge deployment and
   the newly active exact WAF rule. Edge shared secret, zhangbot token/release/
   service, R2 object, and Paper live acceptance remain pending.
+
+## 2026-08-29 secret-handoff retry rollback baseline
+
+- The retry began after a fresh immutable preflight and exact WAF readback. It
+  created only the new Edge shared-secret binding before the SSH token step.
+- The token handoff wrapper exited `1` before writing `processor.env` because
+  `set -e` treated EOF on the no-newline stdin value as fatal. The exact WAF
+  entrypoint/rule, Edge Secret, zhangbot staging, and local temporary secret
+  were then removed and read back absent. No Processor release/service or data
+  object was created.
+- This failure is retained as a wrapper diagnosis. It does not change the
+  reviewed delivery contract or require a migration/data rollback.

@@ -474,3 +474,18 @@ acceptance. PAPER-10 is not complete.
   Existing Redis/Relay/Cloudflared services remain active; Docker is absent.
 - The next step is the authorized secure Edge shared-secret and zhangbot token
   handoff followed by the single release install. PAPER-10 remains incomplete.
+
+## 2026-08-29 token handoff wrapper failure and rollback
+
+- The Edge shared-secret write succeeded, but the one-time SSH token handoff
+  exited `1` before writing the env file: `set -e` terminated on EOF from the
+  generated no-newline stdin value before the read-status guard. This is not
+  treated as a Token or Provider acceptance result.
+- Read-only checks confirmed no zhangbot token env, Processor service, release,
+  process, or listener. Capability-first rollback deleted the WAF rule and
+  entrypoint (readback `404`), deleted the Edge Secret (name absent), removed
+  the exact staging path, and removed the local temporary secret. Existing
+  Redis/Relay/Cloudflared and D1/R2 were preserved.
+- PAPER-10 remains incomplete. The next attempt must repeat immutable
+  preflight and use a quote-safe EOF-tolerant stdin handoff before releasing
+  the Processor.

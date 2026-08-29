@@ -1022,3 +1022,31 @@ status=BLOCKED_GITHUB_BACKUP
   process remains, Docker is absent, and no Processor listener exists.
 - This preflight is ready for the authorized next write. It does not claim
   Processor readiness or any Paper live acceptance.
+
+## 2026-08-29 secret handoff failure and capability-first rollback
+
+- The preflight above passed, and the exact WAF rule was active before this
+  attempt. The Edge write of `PAPER_PROCESSOR_SHARED_SECRET` exited `0`, with
+  name-only readback confirming the binding. The matching token was then
+  supplied over one SSH stdin stream.
+- The SSH handoff exited `1` before writing the env file. The remote command
+  used `set -e`; because the generated 64-hex secret intentionally had no
+  trailing newline, `read -r` returned EOF and the shell exited before the
+  guarded read-status check. No Token file, Processor release, unit, process,
+  or listener was created.
+- Read-only post-state showed the Processor env file absent and the service
+  inactive. The exact WAF rule deletion returned HTTP `200` and curl/semantic
+  validation exit `0`; empty-entrypoint deletion returned curl exit `0` (the
+  body-based JSON validator returned `1` because a successful HTTP `204` has no
+  JSON body), and readback returned HTTP `404`/not found. The Edge Secret
+  deletion exited `0` and name-only readback showed absence. zhangbot staging
+  cleanup exited `0`; the local temporary secret file was removed.
+- No D1 migration, R2 object, Edge code deployment, Redis/Relay/Cloudflared
+  change, or user data operation occurred. D1 migrations remain applied and
+  must not be rerun.
+
+Status for this attempt: `BLOCKED_PROCESSOR_TOKEN_HANDOFF_READ`; the failure
+was in the delivery wrapper, not a provider or runtime result. A new attempt
+must repeat the immutable read-only preflight, recreate/read back the exact
+WAF rule, and use a quote-safe EOF-tolerant one-line handoff before any
+Processor installation.

@@ -920,3 +920,20 @@ commit-named single Processor release. If any later step fails, remove the
 new WAF rule/entrypoint first, then revoke only newly created capability
 material and remove the new release/service; preserve D1/R2 metadata and
 existing Redis/Relay/Cloudflared services.
+
+## 2026-08-29 token handoff wrapper failure and rollback
+
+- Status: `BLOCKED_PROCESSOR_TOKEN_HANDOFF_READ`; PAPER-10 is not PASS.
+- The exact WAF rule was active and read back before this attempt. Edge Secret
+  creation succeeded, but the SSH token handoff stopped before writing because
+  `set -e` treated EOF from the deliberately newline-free stdin value as a
+  fatal `read` status. No Processor token file, release, unit, process, or
+  listener was created.
+- Capability-first rollback completed: the WAF rule and entrypoint were
+  deleted and the entrypoint read back `404`; the Edge Secret was deleted and
+  absent by name-only readback; the zhangbot staging directory and local
+  temporary secret were removed. D1/R2 metadata and existing Redis/Relay/
+  Cloudflared services were preserved.
+- No credential value is recorded. The next exact action is a fresh immutable
+  preflight followed by recreation/readback of the exact WAF rule and a
+  corrected EOF-tolerant one-line token handoff. Do not rerun D1 migrations.

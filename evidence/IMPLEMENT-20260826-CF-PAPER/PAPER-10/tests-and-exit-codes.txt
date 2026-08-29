@@ -944,6 +944,25 @@ recorded exactly; no failed assertion was skipped.
       service, Redis/Relay/Cloudflared, or Edge code write occurred during
       this preflight. The next authorized write is the secret/token handoff.
 
+73. Secret handoff wrapper failure and capability-first rollback
+    - Edge Secret write exited `0`; name-only readback exited `0` and showed
+      the expected binding. The SSH token handoff exited `1` before writing:
+      the remote `set -e` stopped on EOF from the no-newline stdin value before
+      the intended read-status guard. Post-state SSH read exited `0` with the
+      token env absent and Processor service inactive.
+    - WAF rule deletion exited `0`/HTTP `200`; empty-entrypoint deletion curl
+      exited `0` but its JSON-body validator exited `1` on the successful empty
+      HTTP `204` response. A separate entrypoint readback exited `0`/HTTP
+      `404`. Edge Secret deletion/name-only absence exited `0`; zhangbot
+      staging cleanup and local temporary-secret removal exited `0`.
+    - No Processor release/unit/process, D1 migration, R2 object, Edge code,
+      Redis/Relay/Cloudflared, or live Paper operation followed.
+
+74. Handoff rollback evidence consistency gate
+    - The rollback evidence records only safe IDs, statuses, exit codes, and
+      absence facts. No token, secret value, authorization header, or payload
+      was emitted. The next attempt must use a fresh preflight.
+
 72. Preflight evidence consistency gate
     - `git diff --check` exited `0`.
     - The changed-scope no-secret detector over the updated PAPER-10 evidence,

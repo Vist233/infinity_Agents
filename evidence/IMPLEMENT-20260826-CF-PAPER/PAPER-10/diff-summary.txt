@@ -478,3 +478,12 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
   migration, and a clean zhangbot single-instance starting state.
 - The actual remote branch ref was read only and is older than the local
   evidence HEAD; no GitHub push was performed in this continuation.
+
+## 2026-08-29 secret handoff failure / rollback
+
+- Added factual evidence for the failed newline-free SSH handoff and the
+  subsequent capability-first removal of the exact WAF rule/entrypoint, Edge
+  Secret, zhangbot staging, and local temporary secret.
+- No product source, migration, R2 object, existing service, or Kimi provider
+  configuration changed. The next retry changes only the wrapper's EOF
+  handling and repeats the preflight before recreating capabilities.

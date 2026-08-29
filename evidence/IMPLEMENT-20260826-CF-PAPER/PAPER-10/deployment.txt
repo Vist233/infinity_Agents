@@ -60,3 +60,13 @@ was changed.
 - This is not a PAPER-10 completion record. No Edge shared secret, zhangbot
   Processor token/release/service, R2 object, or D1 migration write has
   followed yet; D1 migrations remain applied and are not to be rerun.
+
+## 2026-08-29 secret-handoff failure and rollback
+
+- The Edge shared-secret write succeeded, but the matching SSH token handoff
+  stopped before writing because the remote wrapper treated EOF on the
+  newline-free stdin value as fatal. No Processor release or service started.
+- Capability-first rollback removed the current WAF rule/entrypoint and read it
+  back absent, deleted the Edge Secret, removed zhangbot staging, and removed
+  the local temporary secret. This is a stopped attempt, not a deployment
+  success; D1/R2 and existing Redis/Relay/Cloudflared were preserved.
