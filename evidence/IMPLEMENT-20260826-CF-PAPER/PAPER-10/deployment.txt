@@ -1,0 +1,45 @@
+# PAPER-10 Kimi K2.6 mainland endpoint correction deployment
+
+Date: 2026-08-29
+Branch: cloudflare-deploy
+Local review commit: 286d0c177f5ebc89b740709bcb3f466c493d83ce
+
+## Authorized external operation
+
+- Dry-run command: `npx wrangler deploy --dry-run --message
+  'PAPER-10 Kimi K2.6 mainland endpoint correction'`; exit `0`.
+- Deploy command: `npm run deploy -- --message 'PAPER-10 Kimi K2.6 mainland
+  endpoint correction'`; exit `0`.
+- Target: Cloudflare Worker `infinity-agents-edge`, custom domain
+  `infinity.zhangyvjing.com`.
+- New Worker version: `79755db3-c12d-4737-b601-aa99f11e3f93`.
+- Deployment readback: deployment
+  `a98fd1bd-ff46-4768-8cd8-af23dcc53fca`, version percentage `100`.
+- Version readback: version number `151`, annotation
+  `PAPER-10 Kimi K2.6 mainland endpoint correction`.
+- Read-only `/health` readback: HTTP `200`, D1 and R2 configured, Paper
+  Processor unconfigured.
+
+The deployed non-secret provider variables are the reviewed mainland contract:
+`MODEL_BASE_URL=https://api.moonshot.cn/v1` and `MODEL_ID=kimi-k2.6`.
+The model credential was not read, changed, printed, or recorded.
+
+## Acceptance stop
+
+The existing authenticated Chrome tab was rediscovered by its current visible
+URL/title (`https://infinity.zhangyvjing.com/` / `Infinity Agents`) on each
+attempt. Three claim attempts were refused because the tab remained owned by
+the source browser session. No DOM, cookie, storage, login data, or provider
+request was read or sent. Therefore no `.cn` text-probe result is claimed,
+and no Paper search, image, tool, D1, R2, or Processor acceptance was run.
+
+PAPER-10 remains blocked on a controllable authenticated DOM. The corrected
+Worker version is intentionally left at 100% so the next verified probe tests
+the corrected endpoint; no StepFun rollback was performed.
+
+## External-state boundary
+
+This subphase changed only the authorized Edge Worker deployment. D1
+migrations were not rerun; no D1 row, R2 object, WAF rule, Edge shared secret,
+zhangbot token/release/service, Redis/Relay/Cloudflared state, or GitHub ref
+was changed.

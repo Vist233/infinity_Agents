@@ -833,3 +833,29 @@ endpoint through the already-authorized Edge path, and run one harmless
 authenticated text probe. If the real result remains `401 Invalid
 Authentication`, record the upstream Kimi credential/account-entitlement
 blocker and do not switch to StepFun.
+## 2026-08-29 Kimi mainland deployment and authenticated-tab blocker
+
+- Status: `BLOCKED_KIMI_MAINLAND_AUTHENTICATED_BROWSER_TAB`; PAPER-10 is not
+  PASS.
+- Local commit `286d0c177f5ebc89b740709bcb3f466c493d83ce` passed its local gates.
+  The corrected Worker was deployed as version
+  `79755db3-c12d-4737-b601-aa99f11e3f93` under deployment
+  `a98fd1bd-ff46-4768-8cd8-af23dcc53fca`, read back at 100%, and `/health`
+  returned HTTP `200`.
+- The existing authenticated Chrome tab was found by its current URL/title on
+  three fresh `openTabs()` attempts, but every claim was refused because the
+  tab remained owned by the source browser session. No DOM or provider request
+  was obtained; the prior international-endpoint `401` must not be reused as
+  the mainland-endpoint result.
+- No Paper operation, D1 migration, R2 write, WAF, Edge Secret, zhangbot
+  Processor, Redis/Relay/Cloudflared, or GitHub write occurred in this
+  subphase. The corrected Edge version remains at 100%; StepFun was not used.
+- Detailed deployment evidence: `deployment.txt`; local contract evidence:
+  `k26-mainland-contract.md`.
+
+Next exact action: obtain control of the same existing authenticated tab after
+the source session releases it, read the visible DOM, and run only the
+harmless text probe against Worker version `79755db3-c12d-4737-b601-aa99f11e3f93`.
+If that real result is still `401 Invalid Authentication`, record the upstream
+Kimi credential/account-entitlement blocker and then resume only the
+non-model PAPER-10 work.

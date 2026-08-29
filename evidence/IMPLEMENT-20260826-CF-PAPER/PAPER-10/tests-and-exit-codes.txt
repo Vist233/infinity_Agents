@@ -879,3 +879,17 @@ recorded exactly; no failed assertion was skipped.
     - No Cloudflare, D1, R2, WAF, Edge Secret, zhangbot, Processor,
       Redis/Relay/Cloudflared, browser, or deployment write occurred in this
       subphase.
+68. Kimi K2.6 mainland correction deployment and browser stop
+    - `npx wrangler deploy --dry-run --message 'PAPER-10 Kimi K2.6 mainland
+      endpoint correction'` exited `0`.
+    - `npm run deploy -- --message 'PAPER-10 Kimi K2.6 mainland endpoint
+      correction'` exited `0`; Worker version
+      `79755db3-c12d-4737-b601-aa99f11e3f93` was read back at 100% under
+      deployment `a98fd1bd-ff46-4768-8cd8-af23dcc53fca`.
+    - Read-only `/health` returned HTTP `200`, curl exit `0`.
+    - Three fresh Chrome `openTabs()`/claim attempts found the exact existing
+      authenticated URL/title but each returned the safe blocker
+      `tab_owned_by_another_browser_session`; no DOM or provider request was
+      obtained.
+    - No D1 migration, R2 object, WAF rule, Edge Secret, zhangbot Processor,
+      Redis/Relay/Cloudflared, browser data, or GitHub write occurred.

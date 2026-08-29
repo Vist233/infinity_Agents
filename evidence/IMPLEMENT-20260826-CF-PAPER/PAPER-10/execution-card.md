@@ -422,3 +422,14 @@ acceptance. PAPER-10 is not complete.
 - No remote write has occurred in this subphase. `deployment.txt` remains
   absent and PAPER-10 remains incomplete pending deployment and a real
   authenticated text probe.
+## 2026-08-29 mainland endpoint deployment / browser stop
+
+- The TDD-corrected Worker configuration was deployed to version
+  `79755db3-c12d-4737-b601-aa99f11e3f93` at 100%; read-only health and
+  deployment checks passed.
+- The required harmless authenticated text probe could not start because the
+  same existing Infinity Agents tab remained owned by the source browser
+  session across three fresh claim attempts. No browser state or application
+  data was inspected or modified.
+- `deployment.txt` records the external Edge deployment. PAPER-10 is not PASS;
+  no Processor/WAF/Secret/R2 operation was started in this stop.

@@ -445,3 +445,14 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
   or zhangbot state was changed.
 - Local gates passed as recorded in `tests-and-exit-codes.txt`. No remote write
   has occurred yet; deployment and live acceptance remain outstanding.
+## 2026-08-29 mainland endpoint deployment stop
+
+- The local commit corrected the Kimi base URL to the official mainland
+  endpoint and added text/image request-contract tests. The authorized Edge
+  deployment created Worker version
+  `79755db3-c12d-4737-b601-aa99f11e3f93` at 100%.
+- The authenticated browser probe was stopped before any request because the
+  exact existing tab was still owned by the source session. No browser or
+  Paper data was transmitted, and no prior `.ai` 401 was attributed to `.cn`.
+- No D1, R2, WAF, Edge Secret, zhangbot, Redis/Relay/Cloudflared, or GitHub
+  change occurred in this subphase. PAPER-10 remains blocked.
