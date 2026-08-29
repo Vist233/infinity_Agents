@@ -56,3 +56,15 @@ Updated status: BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE
   screenshot, or application mutation occurred.
 
 Current status remains: BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE
+
+## Latest current-tab retry (2026-08-29T03:56:00Z)
+
+- A fresh Chrome connection selected the same existing Infinity Agents tab,
+  ID `876490032`; no alternate tab or session was created.
+- `dom_cua.get_visible_dom()` timed out again. A separate fresh handle for the
+  same selected tab was obtained, but `playwright.domSnapshot()` also timed
+  out.
+- No navigation, reload, click, typing, credential entry, upload, download,
+  screenshot, or application mutation occurred.
+
+Current status remains: BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE
