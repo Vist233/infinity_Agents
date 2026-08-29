@@ -26,6 +26,17 @@ Safety boundary:
 
 Status: BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE
 External writes: none.
+
+## Post-release claim retry (2026-08-29T04:09:22Z)
+
+- The current `openTabs()` result supplied the exact current object matching
+  URL `https://infinity.zhangyvjing.com/` and title `Infinity Agents`.
+- Claiming that current object was still refused because tab `876490061` is
+  part of browser session `01a03d69-25c4-7ff0-94e7-9b3af0a8e627`.
+- No hard-coded tab was used for discovery, no alternate browser/session was
+  created, and no DOM or page operation was performed.
+
+Current status: BLOCKED_BROWSER_TAB_OWNED_BY_SOURCE_SESSION
 Next exact action: restore a responsive control handle for this same existing
 Chrome tab, then repeat PAPER-10 from a fresh read-only preflight. Do not
 create or reset another tab/session and do not reuse rolled-back capability

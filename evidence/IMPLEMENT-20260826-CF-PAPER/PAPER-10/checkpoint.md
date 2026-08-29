@@ -728,3 +728,14 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
 - detailed evidence is in `browser-recheck.txt`. Next exact action is for the
   source session to release this same tab; then claim it and read the DOM
   before beginning a fresh PAPER-10 preflight.
+
+## 2026-08-29 post-release claim retry
+
+- status remains `BLOCKED_BROWSER_TAB_OWNED_BY_SOURCE_SESSION`; PAPER-10 is
+  not PASS.
+- the current `openTabs()` result supplied the requested URL/title object, but
+  claim was still refused because the tab remained owned by the source
+  browser session. No alternate tab or session was used.
+- no DOM was read and no browser, Cloudflare, zhangbot, D1, R2, WAF, Secret,
+  or deployment write occurred. Detailed evidence is in
+  `browser-recheck.txt`.
