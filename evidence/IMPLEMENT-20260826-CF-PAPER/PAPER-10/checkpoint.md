@@ -690,3 +690,17 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
 - detailed results are in `browser-recheck.txt`; the existing rollback state
   is unchanged. Next exact action is to restore a responsive control/read
   path for this same tab, then start a fresh read-only PAPER-10 preflight.
+
+## 2026-08-29 current-tab DOM retry
+
+- status remains `BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE`; PAPER-10 is
+  not PASS.
+- the selected handle again matched the existing tab ID `876490032` and its
+  known public URL/title, but both documented visible-DOM extraction and the
+  Playwright DOM snapshot timed out.
+- no browser or production mutation occurred. No credential, storage, or
+  application payload was inspected or transmitted.
+- detailed attempt evidence is in `browser-recheck.txt`; the previous
+  capability-first rollback remains unchanged. Next exact action is to make
+  the same tab's DOM control channel responsive, then begin a fresh read-only
+  PAPER-10 preflight.

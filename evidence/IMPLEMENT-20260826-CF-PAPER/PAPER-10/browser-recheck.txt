@@ -43,3 +43,16 @@ state as acceptance evidence.
   performed.
 
 Updated status: BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE
+
+## Current-tab retry (2026-08-29T03:49:54Z)
+
+- The currently selected tab was confirmed as ID `876490032`, matching the
+  existing Infinity Agents tab at `https://infinity.zhangyvjing.com/` with
+  title `Infinity Agents`.
+- `dom_cua.get_visible_dom()` timed out on the selected handle.
+- A fresh selected handle for the same ID was obtained, but
+  `playwright.domSnapshot()` also timed out.
+- No navigation, reload, click, typing, credential entry, upload, download,
+  screenshot, or application mutation occurred.
+
+Current status remains: BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE
