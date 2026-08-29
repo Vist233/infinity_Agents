@@ -153,3 +153,14 @@ was changed.
 - No Edge shared secret, zhangbot token/release/service, D1 migration, R2
   object, or existing service change has followed. The next operation is the
   paired secret/token handoff, and any failure must remove this WAF rule first.
+
+## 2026-08-29 Processor install hash-check failure and rollback
+
+- The commit-named archive transfer and remote SHA/member checks passed. The
+  install stopped before venv creation because its absolute-path aggregate did
+  not match the relative-path manifest hash; lock/unit hashes matched.
+- Capability-first rollback removed the WAF rule/entrypoint, Edge Paper secret,
+  zhangbot token, and all new release/service/staging paths. No deployment,
+  D1 migration, R2 object, or existing-service change occurred.
+- This is a failed installer attempt, not a deployment or PAPER-10 PASS. The
+  retry uses the manifest-relative hash command and a fresh preflight.

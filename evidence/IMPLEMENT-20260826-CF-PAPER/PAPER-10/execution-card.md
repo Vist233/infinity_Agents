@@ -546,6 +546,19 @@ acceptance. PAPER-10 is not complete.
   paired shared-secret/token capability handoff, with this entrypoint/rule as
   the first rollback handles.
 
+## 2026-08-29 Processor install hash-check stop
+
+- Transfer SHA/member validation passed, then the release installer stopped
+  before venv creation because its absolute-path source aggregate did not
+  equal the manifest's relative-path aggregate. Dependency-lock and unit
+  hashes matched; no source modification was found.
+- Capability-first rollback passed for the WAF rule/entrypoint, Edge secret,
+  zhangbot token, and all new release/service/staging paths. Existing
+  Redis/Relay/Cloudflared remained active; D1/R2 and Edge code were untouched.
+- The bounded retry uses `cd <release-dir>` before the exact manifest hash
+  command, followed by a new current-HEAD artifact and fresh read-only
+  preflight.
+
 ## 2026-08-29 rebuilt current-HEAD preflight
 
 - Baseline is clean `cloudflare-deploy` HEAD

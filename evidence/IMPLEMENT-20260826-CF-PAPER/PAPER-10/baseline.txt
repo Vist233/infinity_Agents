@@ -392,3 +392,14 @@ or persisted in this local phase.
   No D1/R2/zhangbot/Redis/Relay/Cloudflared write occurred in this step. The
   next capability write is the paired Edge secret/token handoff, with WAF
   deletion/readback first on failure.
+
+## 2026-08-29 Processor install hash-check rollback
+
+- The exact current package transferred and its remote archive SHA/member
+  checks passed. The install script then falsely rejected the source aggregate
+  because it hashed absolute path text instead of the delivery definition's
+  relative path text; lock and unit identity checks passed and installation
+  stopped before venv/service creation.
+- WAF, Edge secret, zhangbot token, release/current/unit/staging were all
+  rolled back successfully. No D1/R2/Edge code/Redis/Relay/Cloudflared
+  change occurred. The retry will use the corrected relative-path check only.

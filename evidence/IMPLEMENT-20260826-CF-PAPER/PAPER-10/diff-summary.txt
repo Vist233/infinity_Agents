@@ -570,3 +570,12 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
 - This subphase added no repository source or migration diff and made no
   secret/token or zhangbot change. Next external change is the minimum paired
   Processor capability handoff; PAPER-10 remains incomplete.
+
+## 2026-08-29 Processor install check rollback
+
+- The transfer was valid, but installation stopped at the source aggregate
+  check due to an absolute-vs-relative path hashing mistake in the installer;
+  lock/unit checks passed. No release/service became active.
+- WAF, Edge secret, zhangbot token, and new remote paths were removed with
+  successful readbacks. D1/R2 and existing services were preserved. Retry is
+  limited to the relative-path hash check and a fresh preflight.

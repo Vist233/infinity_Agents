@@ -1283,3 +1283,22 @@ first and preserve D1/R2 and the existing host services.
   or additional skipped security product was present. This is the sole new
   external change. The next write is the paired Edge shared secret and
   zhangbot token; failure requires deleting this rule/entrypoint first.
+
+## 2026-08-29 Processor install hash-check stop and rollback
+
+- The validated commit-named archives transferred and passed remote SHA and
+  member checks. Processor installation then stopped before venv creation at
+  `step=extracted_hash`: source comparison exited `1`, while lock and unit
+  comparisons exited `0`. The package was not corrupted; the installer had
+  passed absolute paths into a path-sensitive aggregate command although the
+  delivery definition specifies relative paths from the release root.
+- No unit, process, venv, release activation, Edge deploy, D1 migration, or R2
+  object operation followed. Capability-first rollback deleted the WAF rule
+  (HTTP `200`), deleted the entrypoint (HTTP `204`), and read it back as HTTP
+  `404`; Edge secret deletion and name-only absence read both exited `0`.
+  zhangbot targeted service/file/directory cleanup exited `0` with all new
+  paths absent. Existing Redis/Relay/Cloudflared checks remained active.
+- The retry condition is changed to compute the aggregate from the release
+  root using the manifest's relative paths. It must rebuild the exact current
+  commit artifact and repeat read-only preflight before recreating WAF or
+  capability material.

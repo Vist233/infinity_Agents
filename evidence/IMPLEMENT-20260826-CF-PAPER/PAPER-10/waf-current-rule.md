@@ -154,3 +154,13 @@ Branch: `cloudflare-deploy`
   product besides BIC. The WAF token value was not printed, hashed, copied,
   or recorded. This rule is the only new external change so far; its
   entrypoint and rule IDs are the rollback handles.
+
+## 2026-08-29 Processor install hash-check rollback
+
+- The WAF rule/readback was valid, but the following Processor install stopped
+  before venv creation at an absolute-path source aggregate mismatch. The
+  source bytes, lock hash, and unit hash were not changed; the check used the
+  wrong path representation.
+- WAF deletion returned HTTP `200` for the rule and `204` for the entrypoint;
+  final entrypoint readback returned HTTP `404`. The Edge secret and zhangbot
+  token were then revoked/removed. No WAF rule is active now.

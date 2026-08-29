@@ -1156,6 +1156,27 @@ recorded exactly; no failed assertion was skipped.
       the exact four fixed method/path pairs. No wildcard or broad exception
       was present. The WAF token value was never emitted.
 
+92. Processor install hash-check stop and capability-first rollback
+    - Transfer mkdir/source-scp/wheels-scp and remote archive SHA/member
+      validation each exited `0`. Installation stopped at `step=extracted_hash`:
+      source comparison exited `1`, lock/unit comparisons exited `0` because
+      the installer aggregated absolute paths instead of the manifest-relative
+      paths. Venv, pip, import, unit registration, and service start did not
+      run.
+    - Rollback exited `0`: WAF rule delete HTTP `200`, entrypoint delete HTTP
+      `204`, final readback HTTP `404`; Edge secret delete/name-only absence
+      both exited `0`; zhangbot cleanup exited `0` with new paths absent and
+      existing Redis/Relay/Cloudflared active. No D1/R2/Edge deploy occurred.
+    - Retry changes only the hash working directory to the release root before
+      repeating the exact manifest command; a fresh artifact/preflight is
+      required before any new capability write.
+
+93. Processor install failure evidence gate
+    - `git diff --check` exited `0`.
+    - The scoped secret-value detector over updated PAPER-10 evidence,
+      excluding `secret-scan.txt`, returned raw no-match exit `1`; normalized
+      secret gate exited `0`.
+
 91. WAF evidence working-tree gate
     - `git diff --check` exited `0`.
     - The scoped secret-value detector over updated PAPER-10 evidence,

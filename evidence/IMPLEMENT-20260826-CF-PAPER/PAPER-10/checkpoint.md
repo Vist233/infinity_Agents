@@ -1057,6 +1057,22 @@ existing Redis/Relay/Cloudflared services.
   Edge shared-secret write and one-time zhangbot token handoff. If it fails,
   delete this rule and entrypoint first; preserve D1/R2 and existing services.
 
+## 2026-08-29 Processor install hash-check stop and rollback
+
+- Status: `BLOCKED_PROCESSOR_RELEASE_HASH_CHECK`; PAPER-10 is not PASS.
+- The remote package transfer passed, but installation stopped before venv
+  creation because the script used absolute release paths in a path-sensitive
+  source aggregate; lock/unit hashes matched. This was an installer-check
+  error, not evidence of changed source bytes.
+- Rollback passed: WAF rule delete HTTP `200`, entrypoint delete HTTP `204`,
+  final readback HTTP `404`; Edge Paper secret deletion/name-only absence
+  passed; zhangbot new release/current/unit/token/staging cleanup passed.
+  Existing services remained active; no D1/R2/Edge code write occurred.
+- Remediation is local and bounded: compute the source aggregate after
+  `cd` to the release root with the manifest's relative paths, then rebuild
+  the exact current-HEAD archive and rerun immutable read-only preflight. No
+  broader architecture or dependency change is authorized.
+
 ## 2026-08-29 exact WAF rule recreated and read back
 
 - Status: `READY_FOR_PROCESSOR_CAPABILITY_HANDOFF`; PAPER-10 is not PASS.
