@@ -532,3 +532,18 @@ or persisted in this local phase.
   rolled back, and Edge returned to `dc1e6477-4f5c-4e6a-b61d-331620719be2`.
 - Final D1/R2 and existing-host readbacks are unchanged and safe. PAPER-10
   is blocked only at the real browser acceptance gate; no PASS is claimed.
+
+## 2026-08-30 root-cause audit baseline
+
+- Branch/worktree: `cloudflare-deploy`, clean; local HEAD
+  `154f9e16ddeffcccc2398dbbdf545497ed065bec`. Read-only
+  `git ls-remote --heads origin cloudflare-deploy` returned the exact same
+  SHA and ref.
+- Scope was read-only diagnosis of the real paper turn observed between
+  00:37:49 and 00:41:46 CST. No browser, code, deployment, D1/R2 write,
+  provider change, or host write was performed.
+- D1 read-only metadata proved one turn with five `search_paper` calls, one
+  `materialize_paper` call, six succeeded tool results, and no
+  `read_paper`/`analyze_paper_image` call. The associated paper resource and
+  Processor attempt both completed successfully; details are in
+  `root-cause-audit-20260830.md`.

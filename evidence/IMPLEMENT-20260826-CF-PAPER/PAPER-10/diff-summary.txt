@@ -723,3 +723,21 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
   claim that PAPER-10 overall is complete. The required next step is the
   coordinator's authenticated real-paper acceptance; no browser action was
   taken here.
+
+## 2026-08-30 real-paper root-cause audit (evidence only)
+
+- This amendment contains no product, runtime, migration, deployment, or
+  frontend implementation change. It adds the no-secret audit report and
+  records the read-only D1/zhangbot/local-test evidence in the existing
+  PAPER-10 evidence set.
+- The audited real turn did execute five `search_paper` calls and one
+  `materialize_paper` call. D1 contains the corresponding resource, Processor
+  attempt, and extraction/upload audit; the resource reached `ready` after the
+  chat stream had ended. `read_paper` and `analyze_paper_image` were not called.
+- The single causal chain is an observability/continuation gap: the materialize
+  tool's `processing` result is treated as an invocation success, not a Paper
+  lifecycle state; no ready-triggered model continuation exists; the frontend
+  renders only generic chat/tool/C7-task state and has no Paper progress card.
+- The exact evidence and line-level code references are in
+  `root-cause-audit-20260830.md`. PAPER-10 remains not PASS; no external write
+  was performed and no GitHub push was performed.

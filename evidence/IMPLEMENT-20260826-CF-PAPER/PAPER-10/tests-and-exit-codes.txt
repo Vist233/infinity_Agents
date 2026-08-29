@@ -1587,3 +1587,61 @@ recorded exactly; no failed assertion was skipped.
      - Changed-scope no-match secret detector (excluding its own detector
        record) returned raw exit `1`; normalized secret-scan gate exited `0`.
        No secret value or raw paper/provider payload was found.
+
+122. 2026-08-30 root-cause audit preflight and read-only production evidence
+     - `git status --porcelain=v1 --branch` and `git rev-parse HEAD`: exit `0`;
+       branch `cloudflare-deploy`, clean worktree, HEAD
+       `154f9e16ddeffcccc2398dbbdf545497ed065bec`.
+     - `git ls-remote --heads origin cloudflare-deploy`: exit `0`; exact remote
+       ref matched the local HEAD. No push was performed.
+     - Wrangler D1 read-only aggregate/metadata `SELECT` queries for
+       chat events, paper resources, processing attempts, Paper audit events,
+       C7 tasks, and outbox: every command exit `0`; every response reported
+       `changes=0` and `rows_written=0`.
+     - The target turn's event sequence was read without content/argument/
+       result bodies: event IDs `50–63` showed one user event, five
+       `search_paper` calls/results, one `materialize_paper` call/result, and
+       one completed assistant event. No `read_paper` or
+       `analyze_paper_image` row existed in that turn.
+     - Non-content D1 checks: event 61 content length `134` and the exact
+       phrase presence flag was `1`; event 62 result length `206` and the
+       `processing` flag was `1`; event 63 assistant content was `NULL`.
+       No message body was output or written to evidence.
+     - D1 Paper lifecycle readback: one arXiv resource, final `ready`, 12 pages,
+       28 images; one `paper-processor-zhangbot-v1` attempt, `succeeded`; audit
+       stages materialize, extraction, and upload all present. The Processor
+       attempt is the grant evidence because only `poll/claimPaperResource`
+       creates it.
+     - zhangbot read-only service/status/port checks: exit `0`; Processor
+       active/running, `MainPID=2052141`, `NRestarts=0`; Redis, Relay and
+       Cloudflared active; Processor PID had no listening socket. The corrected
+       journal read exited `0` and contained only the systemd start line;
+       runner source has no per-poll logging.
+
+123. Local audit-related gates
+     - `cd cloudflare-worker && npm run check && npm test`: exit `0`; 24 files /
+       134 tests passed.
+     - `eval "$(pyenv init - zsh)"; pyenv shell Agent; python -m pytest
+       tests/test_paper_agent_runner.py tests/test_paper_processor_ingestion.py
+       tests/test_paper_processor_runtime.py tests/test_paper_reader_workflow.py
+       tests/test_search_papers.py tests/tools/test_paper_search.py`: exit `0`;
+       43 passed, 1 skipped. The pyenv rehash warning was non-fatal.
+     - `cd frontend && npm run typecheck`: exit `0`.
+     - First concurrent `cd frontend && npm run lint`: exit `2` because the
+       concurrent E2E run removed `frontend/test-results` during ESLint walk;
+       serial retry: exit `0`.
+     - `cd frontend && npm run test:unit`: exit `0`; 12 files / 50 tests passed.
+     - First sandbox `cd frontend && npm run test:e2e`: exit `1` before tests
+       because local port `127.0.0.1:3000` returned `EPERM`; restricted local
+       retry: exit `0`; 13 passed.
+     - The full audit conclusion and exact code/UI locations are in
+       `root-cause-audit-20260830.md`; no implementation test was added because
+       the user explicitly limited this card to diagnosis.
+
+124. Final evidence-only closure gates after all audit edits
+     - `git diff --check`: exit `0`.
+     - Changed-scope no-match secret detector over the five audit evidence
+       files other than `secret-scan.txt`: raw no-match exit `1`; normalized
+       gate exit `0`; no file was reported.
+     - No code, deployment, browser, or external write was performed by
+       these closure checks.

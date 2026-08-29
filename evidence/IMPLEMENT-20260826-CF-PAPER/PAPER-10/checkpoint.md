@@ -1042,6 +1042,34 @@ existing Redis/Relay/Cloudflared services.
   preserve D1/R2 metadata and existing Redis/Relay/Cloudflared. Do not rerun
   D1 migrations.
 
+## 2026-08-30 real-paper root-cause audit (diagnostic only)
+
+- Status: `ROOT_CAUSE_AUDIT_COMPLETE`; PAPER-10 overall remains not PASS.
+- The audited real turn executed five `search_paper` calls and one
+  `materialize_paper` call. It did not execute `read_paper` or
+  `analyze_paper_image`; the visible “现在开始下载并解析 PDF” wording was
+  model/tool-call content, not a Paper lifecycle status.
+- Read-only D1 evidence shows one Paper resource created from the turn, one
+  `paper_processing_attempts` row claimed by
+  `paper-processor-zhangbot-v1`, and Paper audit stages through extraction and
+  upload. The resource later reached `ready` with 12 pages and 28 images.
+  No C7 task or Paper-specific outbox row was created for this turn; C7 tasks
+  are a separate task contract.
+- Read-only zhangbot evidence shows the Processor active with no listener;
+  the succeeded attempt is the direct poll/claim evidence. Redis, Relay, and
+  Cloudflared remained active. No browser, code, deployment, Cloudflare,
+  D1/R2, provider, Redis, or zhangbot write was performed in this audit.
+- Primary root cause: the asynchronous Paper resource lifecycle is not wired
+  into a durable chat continuation or a frontend Paper progress read model.
+  The Worker treats the `processing` tool result as invocation success and
+  completes when the next model response has no tool call; the Processor's
+  later `ready` transition is not re-driven into the model or UI. The frontend
+  only restores generic chat/tool/C7 state, so no Paper task card appears.
+- The full evidence, code locations, reproducible read-only procedure, and
+  three bounded follow-up repair cards are in
+  `root-cause-audit-20260830.md`. This audit must not be used to claim that
+  PAPER-10's original release acceptance is complete.
+
 ## 2026-08-30 Processor health closure
 
 - Status: `PROCESSOR_HEALTH_PASS_BROWSER_ACCEPTANCE_PENDING`; PAPER-10 is not
