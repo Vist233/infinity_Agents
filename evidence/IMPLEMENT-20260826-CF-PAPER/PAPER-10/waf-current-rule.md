@@ -250,3 +250,19 @@ Branch: `cloudflare-deploy`
   browser acceptance could not be controlled. Rule deletion returned HTTP
   `200`, entrypoint deletion HTTP `204`, final readback/inventory showed
   no custom Processor entrypoint. No WAF exception is active.
+
+## 2026-08-30 active Processor-health rule
+
+- A new zone-level custom entrypoint was created for the current health
+  subphase. Entrypoint ID `68dd39f74fee45d0a4c5b5120956eeb9`; rule ID
+  `4a6264b8d93849ef9d0f20139268a08a`.
+- Strict readback exited `0`: one enabled/logged rule, action `skip`, action
+  parameters exactly `products=["bic"]`, and expression limited to source IP
+  `39.105.204.121`, host `infinity.zhangyvjing.com`, POST paths
+  `/api/paper-processor/connect`, `/poll`, `/control`, and PUT path
+  `/api/paper-processor/object`. No wildcard or other security product is
+  skipped.
+- This rule remains active while the Processor is healthy. If a later step
+  requires rollback, delete rule `4a6264b8d93849ef9d0f20139268a08a` first,
+  then empty entrypoint `68dd39f74fee45d0a4c5b5120956eeb9`; preserve D1/R2 and
+  existing services. The WAF token value was never exposed.

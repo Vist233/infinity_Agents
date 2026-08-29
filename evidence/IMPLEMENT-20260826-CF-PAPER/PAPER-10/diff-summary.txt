@@ -702,3 +702,24 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
 - This is a capability precondition stop, not an installation failure. No
   Clash, Cloudflare, D1, R2, WAF, Secret, Edge deployment, zhangbot release or
   service, Redis, Relay, or Cloudflared write occurred.
+
+## 2026-08-30 Processor health closure
+
+- No product source, configuration, or runtime contract diff was made. The
+  current evidence-only HEAD has zero changes under the Processor source and
+  lock scope relative to the already-reviewed release content.
+- The exact WAF exception now active is one zone custom rule only: BIC skip,
+  logged/enabled, fixed source IP `39.105.204.121`, fixed host, POST
+  connect/poll/control, and PUT object. No wildcard, broad host, IP Access
+  Allow, or other product skip was added.
+- The used release is commit-named and immutable, with source/lock/unit hashes
+  matching `delivery.v1.json`; the used Linux wheelhouse was USTAR-repacked
+  to remove macOS `._*` entries. The service unit is hardened as defined and
+  runs as one enabled user-systemd instance with no inbound listener.
+- Edge health is configured and the real runner remained stable through
+  connect/poll. Existing Redis/Relay/Cloudflared were unchanged. The
+  coordinator-provisioned secret/token pair was not read or overwritten.
+- This subphase is `PROCESSOR_HEALTH_PASS_BROWSER_ACCEPTANCE_PENDING`, not a
+  claim that PAPER-10 overall is complete. The required next step is the
+  coordinator's authenticated real-paper acceptance; no browser action was
+  taken here.

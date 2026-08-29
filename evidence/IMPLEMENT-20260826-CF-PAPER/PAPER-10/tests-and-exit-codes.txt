@@ -1546,3 +1546,44 @@ recorded exactly; no failed assertion was skipped.
        write was run.
      - No Clash or external write occurred. Stop status is
        `BLOCKED_CLOUDFLARE_WORKER_SECRET_CAPABILITY`.
+
+120. Processor health closure on zhangbot (2026-08-30)
+     - Local branch/worktree and release-source delta checks exited `0`.
+       Local source archive hash/member check exited `0`.
+     - Isolated remote incoming directory creation exited `0`. Source SCP
+       plus remote SHA readback exited `0`. The first wheel SCP plus remote
+       member check exited `0` but correctly reported four macOS `._*`
+       members; that archive was not used. Local USTAR repack/member check
+       exited `0`; replacement wheel SCP plus remote SHA/member readback
+       exited `0` with zero unsafe members.
+     - Remote archive extraction/tree validation exited `0`; relative source,
+       dependency-lock, and service-unit hash comparison exited `0`; atomic
+       release assembly exited `0`.
+     - zhangbot Python 3.10.12 venv creation, ensurepip/pip check, offline
+       `pip --require-hashes`, `pip check`, imports, and non-secret install
+       record exited `0`.
+     - Unit layout, `systemd-analyze --user verify`, daemon reload/enable,
+       and service start/readback exited `0`. The final status readback was
+       `active/running`, enabled, MainPID `2052141`, `ExecMainStatus=0`, and
+       `NRestarts=0`.
+     - The first 8-second stability wrapper exited `1` solely because its
+       assertion used the wrong `systemctl --value` field order; it emitted
+       no secret and did not change state. The corrected stability wrapper
+       exited `0`: same PID across both samples, zero restarts, zero recent
+       error-priority journal lines.
+     - Edge `/health` curl from zhangbot exited `0`, HTTP `200`, and returned
+       `paper_processor=configured`; no Processor PID listening socket was
+       found. Existing Redis/Relay/Cloudflared status readback exited `0`.
+     - Corrected WAF strict readback exited `0`; an earlier read-only jq
+       diagnostic used the wrong `action_parameters.products` path and was
+       not accepted as evidence. No WAF write was associated with that
+       diagnostic; the corrected readback proved BIC-only exact scope.
+     - Temporary staging cleanup and release-preservation readback exited `0`.
+       D1 migrations were not rerun; no R2, Kimi, browser, Edge deployment,
+       or existing-service write occurred.
+
+121. Final evidence gate for Processor health closure
+     - `git diff --check` exited `0`.
+     - Changed-scope no-match secret detector (excluding its own detector
+       record) returned raw exit `1`; normalized secret-scan gate exited `0`.
+       No secret value or raw paper/provider payload was found.

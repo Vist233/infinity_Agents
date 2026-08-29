@@ -1800,3 +1800,31 @@ not installed because the Edge shared secret cannot be paired safely. Do not
 rerun D1 migrations. Required next action is a secure non-chat handoff of a
 narrowly scoped Cloudflare Worker-secret credential, followed by a fresh
 read-only preflight.
+
+## 2026-08-30 Processor health subphase preflight and post-write readback
+
+- Local branch/worktree preflight: `cloudflare-deploy`, HEAD
+  `e30187cc11b2c0a555b4e10da03484ca6fed32cd`, clean before this amendment.
+  The already-validated release content `aa2306fe…` has zero source changes
+  relative to this evidence-only HEAD under the Processor source/lock scope.
+- Local source archive SHA `f827dc40…` and the remote SHA readback matched.
+  The original wheel archive was not used after remote GNU tar showed four
+  AppleDouble entries; the replacement USTAR wheel archive SHA is
+  `9ffe54a2…`, with zero unsafe members locally and remotely.
+- Remote release-relative source, dependency-lock, and service-unit hashes
+  matched the delivery definition. Extraction, venv/ensurepip, offline
+  locked installation, package import, and install-record checks exited `0`.
+  No D1 migration command was run; prior applied-migration evidence remains
+  authoritative and migrations `0017`–`0021` were not rerun.
+- The exact WAF readback is active with entrypoint
+  `68dd39f74fee45d0a4c5b5120956eeb9` and rule
+  `4a6264b8d93849ef9d0f20139268a08a`, one enabled/logged BIC-only rule for
+  the fixed zhangbot IP/host and four fixed method/path pairs.
+- Post-start readback shows the user unit enabled/active/running, stable PID
+  `2052141`, zero restarts, zero recent error-priority journal lines, and zero
+  Processor-owned listening sockets. Edge health from zhangbot is HTTP `200`
+  with `paper_processor=configured`; existing host services remain active.
+- The coordinator-provisioned Edge secret and zhangbot token were not read or
+  overwritten. No Edge deployment, Kimi, browser, R2, Redis/Relay/Cloudflared,
+  or unrelated host write occurred. Temporary upload material was removed;
+  the immutable release and service remain active for the next browser gate.

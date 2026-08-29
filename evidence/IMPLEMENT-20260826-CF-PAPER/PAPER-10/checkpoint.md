@@ -1042,6 +1042,30 @@ existing Redis/Relay/Cloudflared services.
   preserve D1/R2 metadata and existing Redis/Relay/Cloudflared. Do not rerun
   D1 migrations.
 
+## 2026-08-30 Processor health closure
+
+- Status: `PROCESSOR_HEALTH_PASS_BROWSER_ACCEPTANCE_PENDING`; PAPER-10 is not
+  overall PASS. Detailed redacted evidence is in
+  `processor-health-live-20260830.md`.
+- The exact WAF BIC-only rule is active and read back strictly: entrypoint
+  `68dd39f74fee45d0a4c5b5120956eeb9`, rule
+  `4a6264b8d93849ef9d0f20139268a08a`, one enabled/logged rule, and only the
+  fixed zhangbot IP/host plus POST connect/poll/control and PUT object paths.
+- The already-provisioned secret/token pair was not read or overwritten. The
+  immutable release was installed at the commit-named zhangbot path with
+  source/lock/unit hashes matching the delivery definition; the used Linux
+  wheelhouse has zero `._*` members.
+- User systemd is `enabled/active/running`, MainPID `2052141`, zero restarts;
+  two stable samples plus zero recent error lines prove the runner entered
+  its real connect/poll loop. Edge `/health` from zhangbot is HTTP `200` with
+  `paper_processor=configured`. The Processor has no listening socket and
+  existing Redis/Relay/Cloudflared remain active.
+- No D1 migrations were rerun; no R2, Kimi, browser, Edge deployment,
+  Redis/Relay/Cloudflared, or unrelated host write occurred. The exact next
+  action is the coordinator's required authenticated real-paper acceptance;
+  do not roll back this healthy Processor merely because that browser gate is
+  still pending.
+
 ## 2026-08-29 zhangbot Processor-only retry — Cloudflare secret capability blocker
 
 - Status: `BLOCKED_CLOUDFLARE_WORKER_SECRET_CAPABILITY`; PAPER-10 is not PASS.

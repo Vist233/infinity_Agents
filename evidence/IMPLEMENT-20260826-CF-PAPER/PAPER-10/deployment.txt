@@ -426,3 +426,36 @@ was changed.
   `dc1e6477-4f5c-4e6a-b61d-331620719be2` exit `0`. Final health is
   `200/unconfigured`; no D1 migration, R2 write, or existing-service
   change occurred.
+
+## 2026-08-30 Processor health deployment closure
+
+- The fresh exact WAF rule was created and strictly read back before the host
+  install: entrypoint `68dd39f74fee45d0a4c5b5120956eeb9`, rule
+  `4a6264b8d93849ef9d0f20139268a08a`; enabled/logged action `skip`, BIC only,
+  exact fixed source-IP/host/method/path expression.
+- Source archive transfer, remote extraction, release hash checks, venv,
+  ensurepip, offline `pip --require-hashes`, imports, install record, unit
+  verification, daemon reload, enable, and start all exited `0`. The first
+  wheel transfer was deliberately not used after remote tar exposed four
+  AppleDouble members; the replacement USTAR archive used for installation
+  has SHA `9ffe54a2e27cad1b0840479d9d2decf8ec092ac48028bff9073796f3385a3d66`
+  and zero `._*` members.
+- The release is
+  `aa2306fe291fa31da73dd2d55223112cafafc580`, with source/lock/unit hashes
+  matching `delivery.v1.json`, and `current` points to its immutable path.
+  The service is enabled and `active/running` at MainPID `2052141`, with
+  `ExecMainStatus=0` and `NRestarts=0`. Two stable samples, zero recent
+  error-priority journal lines, and the runner's real request loop establish
+  connect/poll health; no mock was used.
+- Read-only zhangbot health returned HTTP `200` with
+  `paper_processor=configured`. The Processor PID has no listening socket;
+  Redis, Redis Relay, and Cloudflared remained active. The temporary upload
+  directory was removed after installation.
+- The Edge shared secret and zhangbot token were pre-provisioned by the
+  coordinator and were not read or overwritten; no secret value is recorded.
+  No D1 migration, R2 write, Kimi/provider change, Edge deployment, browser
+  action, or existing-service change occurred in this subphase.
+- Status: `PROCESSOR_HEALTH_PASS_BROWSER_ACCEPTANCE_PENDING`. PAPER-10 is not
+  overall PASS. Rollback handles are the WAF IDs above, followed by stopping
+  and removing only this new unit/current/release after read-only checks;
+  preserve D1/R2 metadata and existing services.
