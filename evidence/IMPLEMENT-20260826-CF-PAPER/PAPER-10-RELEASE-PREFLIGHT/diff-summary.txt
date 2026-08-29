@@ -1,0 +1,36 @@
+# PAPER-10-RELEASE-PREFLIGHT diff summary
+
+## Intended changes in this card
+
+Only this new, redacted read-only preflight evidence directory is intended to
+be committed:
+
+- `execution-card.md`
+- `baseline.txt`
+- `tests-and-exit-codes.txt`
+- `diff-summary.txt`
+- `secret-scan.txt`
+- `checkpoint.md`
+- `release-checklist.md`
+
+## Intentional non-changes
+
+- No Edge, frontend, Processor, migration, or runtime source was changed.
+- No design or execution-plan text was changed; the current documents already
+  describe FIX-01/02/03 and the additive 0022 prerequisite.
+- No D1 migration was applied or rerun.
+- No R2 object was read or written.
+- No WAF rule, Cloudflare variable, secret, Processor token, systemd unit,
+  release symlink, Redis, Relay, or Cloudflared state was changed.
+- No browser tab was claimed and no live paper request was sent.
+- No Git push was performed. The remote branch remains behind local HEAD by
+  instruction for this preflight-only card.
+- `deployment.txt` is intentionally absent because no deployment occurred.
+
+## Release-readiness interpretation
+
+The local FIX implementation and all local gates are ready for a controlled
+release. The remote D1 schema is not yet release-ready for FIX-01/02/03 because
+`paper_request_continuations` is absent and migration 0022 is the sole pending
+file. This is a precise, reversible next-step prerequisite, not evidence that
+the Worker or Processor is unhealthy.

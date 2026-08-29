@@ -1,0 +1,124 @@
+# PAPER-10-RELEASE-PREFLIGHT tests, readbacks, and exit codes
+
+All commands below were read-only unless explicitly described as local build or
+test work. No command in this card applied a migration, uploaded a Worker,
+changed traffic, wrote R2, changed WAF/secrets, or changed zhangbot.
+
+## Local Git and artifact checks
+
+1. `git status --short --branch && git rev-parse HEAD && git log -12 --oneline`
+   — exit `0`; clean `cloudflare-deploy`, HEAD
+   `6d8016cbefe0cba9a29dd96a896b38d6cc30b4df`.
+2. `git show -s --format='%H%n%s' ad0dd13 e706d37 06529ff cf41ab9 6d8016c`
+   — exit `0`; all three FIX implementation commits resolved.
+3. Three `git merge-base --is-ancestor ... HEAD` checks — exit `0`, `0`, `0`.
+4. `git diff --check` before evidence — exit `0`.
+5. `git ls-remote --heads origin cloudflare-deploy` — exit `0`; exact remote
+   ref `154f9e16ddeffcccc2398dbbdf545497ed065bec` (intentionally not pushed).
+6. Local hash commands for Processor source, dependency lock, and service unit
+   — exit `0`; hashes match `delivery.v1.json` as recorded in `baseline.txt`.
+
+## Wrangler behavior and local release dry-runs
+
+7. `./node_modules/.bin/wrangler --version` — exit `0`; `4.120.0`.
+8. `./node_modules/.bin/wrangler versions upload --help` — exit `0`; confirms
+   `--secrets-file` is additive with previous deployment secrets and omitted
+   secrets are not deleted, `--keep-vars` preserves vars, and `--strict` is
+   available.
+9. `./node_modules/.bin/wrangler versions secret put --help` — exit `0`;
+   confirms the versioned secret command exists. It was not invoked.
+10. `./node_modules/.bin/wrangler versions deploy --help` — exit `0`; confirms
+    positional `<version-id>@<percentage>` traffic specs and `--dry-run`.
+11. `./node_modules/.bin/wrangler d1 migrations apply --help` — exit `0`;
+    confirms apply prompts, captures a backup, prints progress, and rolls back
+    the migration on error. It was not invoked.
+12. `./node_modules/.bin/wrangler versions upload --dry-run --keep-vars
+    --strict --message "PAPER-10 release preflight only"` — exit `0`; local
+    bundle was `387.17 KiB` / gzip `80.51 KiB`, expected DB/R2/DO/KV/assets and
+    Paper bindings were printed, and Wrangler exited at `--dry-run` without
+    uploading.
+13. `./node_modules/.bin/wrangler versions deploy
+    1891abf4-9fcf-4f5a-bc8c-7e059ef285e7@100 --name infinity-agents-edge
+    --yes --message "PAPER-10 release preflight dry-run only" --dry-run` — exit
+    `0`; it resolved the current 100% version and exited before deployment.
+
+The local Wrangler bundle implementation was also inspected read-only. The
+installed `wrangler-dist/cli.js` posts version uploads with
+`bindings_inherit=strict`; the `versions secret put` handler reads a non-TTY
+secret from stdin and calls the versioned patch flow; and `versions deploy`
+returns before `createDeployment` when `--dry-run` is set. These are local
+installed CLI facts, not an external documentation assumption.
+
+## Cloudflare readbacks
+
+14. `./node_modules/.bin/wrangler whoami` — exit `0`; target account identity
+    confirmed; no credential value recorded.
+15. `wrangler deployments list --name infinity-agents-edge --json` — exit `0`;
+    current deployment is `1891abf4...` at 100%.
+16. `wrangler deployments status --name infinity-agents-edge --json` — exit
+    `0`; deployment ID `f80a9438...`, version `1891abf4...` at 100%.
+17. `wrangler versions list --name infinity-agents-edge --json` — exit `0`;
+    current version history read-only.
+18. `wrangler versions view 1891abf4-9fcf-4f5a-bc8c-7e059ef285e7 --name
+    infinity-agents-edge --json` — exit `0`; binding metadata readback
+    confirmed DB/R2/Processor/Kimi bindings and only names/types for secrets.
+19. `wrangler versions secret list --name infinity-agents-edge` — exit `0`;
+    name-only listing includes `PAPER_PROCESSOR_SHARED_SECRET`; no value read.
+20. `wrangler versions secret list --name infinity-agents-edge
+    --latest-version` — exit `1`; Wrangler 4.120.0 error
+    `Cannot read properties of undefined (reading 'bindings')`. This command is
+    not used as the authoritative check; item 18 plus item 19 is.
+21. `wrangler d1 list` — exit `0`; target D1 exists in production.
+22. `wrangler d1 info infinity-agents-db --json` — exit `0`; target metadata
+    readable, 42 tables, no writes.
+23. `wrangler d1 migrations list infinity-agents-db --remote` — exit `0`; only
+    pending file is `0022_paper_request_continuations.sql`.
+24. `wrangler d1 execute infinity-agents-db --remote --json --command
+    "SELECT name, type FROM sqlite_master WHERE name IN (...) ORDER BY name"`
+    — exit `0`; required 0017–0021 tables present, continuation table absent,
+    `changed_db=false`, `rows_written=0`.
+25. `wrangler r2 bucket list` — exit `0`; target bucket present.
+26. `wrangler r2 bucket info infinity-agents-resources` — exit `0`; APAC,
+    47 objects, 43.9 MB; no object body read.
+27. `curl -fsS --max-time 20 https://infinity.zhangyvjing.com/health` — exit
+    `0`; public health `status=ok`, service name correct. HTTP 200 was not
+    treated as Paper readiness.
+
+## WAF and zhangbot readbacks
+
+28. WAF token mode/nonempty metadata check — exit `0`; mode `0600`; token was
+    used only through stdin curl configuration.
+29. Scoped WAF `GET /zones/{known-target-zone-id}` — shell exit `0`, API
+    `success=false`, error `9109`; convenience zone metadata is unavailable
+    to this token.
+30. Scoped WAF `GET
+    /zones/{known-target-zone-id}/rulesets/phases/http_request_firewall_custom/entrypoint`
+    — shell exit `0`, API `success=true`; one exact enabled/logged BIC-only rule
+    read back. No WAF write was made.
+31. `ssh zhangbot '<safe systemd/stat/hash/listener probes>'` — exit `0`;
+    Processor active/enabled, env mode 600/name present, release venv/source/
+    lock/unit hashes valid, Redis/Relay/Cloudflared active, no public
+    Processor listener.
+32. `curl` to the public health endpoint — exit `0`; only generic healthy
+    status is exposed. No Processor task was enqueued by this card.
+
+## Local gates
+
+33. `cd cloudflare-worker && npm run check && npm test` — exit `0`;
+    26 files, 148 tests passed.
+34. `pyenv shell Agent` followed by
+    `python -m pytest -q tests/test_paper_processor_ingestion.py
+    tests/test_paper_processor_runtime.py tests/test_paper_agent_runner.py` —
+    exit `0`; 13 tests passed.
+35. `cd frontend && npm run lint` — exit `0`.
+36. `cd frontend && npm run test:unit` — exit `0`; 16 files, 75 tests passed.
+37. `cd frontend && npm run build` — exit `0`; production static build passed.
+38. `cd frontend && npm run typecheck` run after the build — exit `0`.
+39. `cd frontend && npm run test:e2e` — exit `0`; 14 tests passed. The local
+    proxy emitted expected `localhost:8000` connection-refused warnings for
+    unrelated fixtures; no test failed.
+
+One intermediate frontend typecheck launched concurrently with the build
+exited `2` because `.next/types` files were temporarily absent. It was rerun
+after the build completed and exited `0`; the intermediate race is retained as
+an honest diagnostic, not counted as the final gate result.

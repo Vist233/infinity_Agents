@@ -1,0 +1,104 @@
+PAPER-10-RELEASE-PREFLIGHT baseline record
+
+Captured: 2026-08-30 Asia/Shanghai
+
+Git baseline
+- `git status --short --branch`: exit 0; `## cloudflare-deploy`; clean before
+  this evidence directory was created.
+- `git rev-parse HEAD`: exit 0;
+  `6d8016cbefe0cba9a29dd96a896b38d6cc30b4df`.
+- FIX-01 implementation: `ad0dd13e387026309399de6c161be72205e1e296`.
+- FIX-02 implementation: `e706d37c8fd8eb30f3ba56223289abe25ceac893`.
+- FIX-03 implementation: `06529ffc62e0bfe980eda7594047e9e2add27c15`.
+- The three implementation commits are all ancestors of HEAD (three
+  `git merge-base --is-ancestor` checks exited 0). Their checkpoint-only
+  follow-ups are `02fb834`, `cc00064`, and `6d8016c`.
+- FIX-01 migration blob at HEAD:
+  `4ada73d60bbbc3a93e368cf5e205b5863ff19cfb`.
+- Reviewed Processor definition commit:
+  `455ae849c572aa285cc752a10e21fd69f031b18d`.
+- Read-only `git ls-remote --heads origin cloudflare-deploy`: exit 0;
+  remote is `154f9e16ddeffcccc2398dbbdf545497ed065bec`, which is behind the
+  local HEAD. This card intentionally did not push.
+
+Local artifact/config baseline
+- Wrangler package: `4.120.0`.
+- `backend/paper_processor/delivery.v1.json` source aggregate:
+  `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`.
+- Processor dependency-lock hash:
+  `e7b669892e0e5790179ee84dedd106d04ac40005ca49943059d2ee585f63ff97`.
+- Processor systemd-unit hash:
+  `424a6846ef7b30d1eb505811da53620156e9186dae60ece38f3826e8338a2b2f`.
+- Current config binds D1 `DB` to the target database, R2
+  `RESOURCE_BUCKET` to the target bucket, and fixed Paper variables
+  `PAPER_PROCESSOR_ID=paper-processor-zhangbot-v1` and
+  `PAPER_PROCESSOR_SOURCE_IP=39.105.204.121`.
+
+Cloudflare read-only baseline
+- `wrangler whoami`: exit 0; OAuth account is the configured target account.
+  No credential value was read or recorded.
+- Current production deployment: 100% version
+  `1891abf4-9fcf-4f5a-bc8c-7e059ef285e7`, deployment
+  `f80a9438-9538-4bed-b8a8-80e9d7751f39`, version number 187. Current
+  script etag is `32109f9e6e687f01a28c32927dcf445d5b3f1fc0c0abd1cc958bd3953c6f4171`.
+- Current version binding readback includes `DB` with the exact D1 ID,
+  `RESOURCE_BUCKET` with the exact R2 bucket name, `ASSETS`, the existing DO/KV
+  bindings, `PAPER_PROCESSOR_ID`, `PAPER_PROCESSOR_SOURCE_IP`,
+  `MODEL_BASE_URL=https://api.moonshot.cn/v1`, `MODEL_ID=kimi-k2.6`, and a
+  `secret_text` binding named `PAPER_PROCESSOR_SHARED_SECRET`. Secret values
+  were not read.
+- Name-only secret listing without `--latest-version`: exit 0 and includes
+  `PAPER_PROCESSOR_SHARED_SECRET`. The `--latest-version` variant exited 1 in
+  Wrangler 4.120.0 with `Cannot read properties of undefined (reading
+  'bindings')`; the stable readback used `versions view` plus the non-latest
+  name listing.
+- D1 `migrations list infinity-agents-db --remote`: exit 0; the only pending
+  migration is `0022_paper_request_continuations.sql`. Therefore 0017–0021
+  are recorded as applied by Wrangler's pending-migration result; none was
+  rerun.
+- Read-only D1 `sqlite_master` query: exit 0; all tables from 0017–0021 are
+  present (`chat_events`, `paper_resources`, `paper_processing_attempts`,
+  `paper_resource_links`, `paper_processor_sessions`,
+  `paper_processor_objects`, `paper_resource_audit_events`, and
+  `paper_cleanup_jobs`), while `paper_request_continuations` is absent.
+  D1 metadata reported `changed_db=false` and `rows_written=0`.
+- `wrangler d1 info infinity-agents-db --json`: exit 0; 42 tables,
+  876544-byte database, no read replication, running in WNAM.
+- `wrangler r2 bucket list`: exit 0; target bucket exists.
+- `wrangler r2 bucket info infinity-agents-resources`: exit 0; APAC,
+  47 objects, 43.9 MB. No object was read or written.
+- Public health read: exit 0; `status=ok`, `service=infinity-agents-edge`.
+  The public endpoint does not expose Paper readiness fields, so HTTP 200 is
+  not treated as Processor/Paper acceptance.
+
+WAF read-only baseline
+- The 0600 WAF token file precondition passed; its content was used only via
+  a stdin curl configuration and was never printed, put in argv, logged,
+  hashed, or recorded.
+- Convenience `GET /zones/{id}` returned API error 9109 with the scoped WAF
+  token; this is a missing convenience read, not an authorization bypass.
+- Exact target custom ruleset read succeeded. Ruleset ID is
+  `68dd39f74fee45d0a4c5b5120956eeb9`, phase
+  `http_request_firewall_custom`, with one enabled/logged rule ID
+  `4a6264b8d93849ef9d0f20139268a08a`. Its action is `skip` with exactly
+  `products=["bic"]`; its expression matches only source IP
+  `39.105.204.121`, host `infinity.zhangyvjing.com`, POST
+  `/api/paper-processor/connect`, `/api/paper-processor/poll`,
+  `/api/paper-processor/control`, and PUT `/api/paper-processor/object`.
+  No broader path/host/IP exception was observed.
+
+zhangbot read-only baseline
+- SSH read: exit 0; Ubuntu 22.04.
+- `infinity-paper-processor.service`: enabled, `ActiveState=active`,
+  `SubState=running`, `MainPID=2052141`; EnvironmentFile path is the approved
+  path only. The env file is mode 600 and the name
+  `PAPER_PROCESSOR_TOKEN` is present; its value was not read or recorded.
+- Current release resolves to
+  `/home/zhangyvjing/.local/share/infinity-paper-processor/releases/aa2306fe291fa31da73dd2d55223112cafafc580`.
+  Its venv is present and its Processor source aggregate is the expected
+  `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`.
+  Its lock and unit hashes equal the local delivery definition.
+- Existing `infinity-redis.service`, `infinity-redis-relay.service`, and
+  `infinity-cloudflared.service` are all active. Listeners are the existing
+  loopback Redis/Relay ports plus SSH/DNS; no Processor public listener is
+  present.
