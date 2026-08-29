@@ -38,7 +38,7 @@
     "STEPFUN_BASE_URL": "https://api.stepfun.com/step_plan/v1",
     "STEPFUN_MODEL": "step-3.5-flash",
     "MODEL_BASE_URL": "https://api.moonshot.ai/v1",
-    "MODEL_ID": "kimi-k2.5",
+    "MODEL_ID": "kimi-k2.6",
     "APP_BASE_URL": "https://infinity.zhangyvjing.com",
     "ZHANG_AUTH_BASE_URL": "https://auth.zhangyvjing.com",
     "ZHANG_AUTH_JWKS_URL": "https://auth.zhangyvjing.com/.well-known/jwks.json",

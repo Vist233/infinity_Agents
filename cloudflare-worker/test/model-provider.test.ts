@@ -15,12 +15,12 @@ describe("modelProvider", () => {
   it("uses the replacement provider only when all replacement values are supplied", () => {
     const { env } = makeEnv({
       MODEL_BASE_URL: "https://api.moonshot.ai/v1/",
-      MODEL_ID: "kimi-k2.5",
+      MODEL_ID: "kimi-k2.6",
       MODEL_API_KEY: "replacement-key",
     });
     expect(modelProvider(env)).toEqual({
       baseUrl: "https://api.moonshot.ai/v1",
-      model: "kimi-k2.5",
+      model: "kimi-k2.6",
       apiKey: "replacement-key",
     });
   });
@@ -28,7 +28,7 @@ describe("modelProvider", () => {
   it("falls back entirely when a replacement credential is absent", () => {
     const { env } = makeEnv({
       MODEL_BASE_URL: "https://api.moonshot.ai/v1",
-      MODEL_ID: "kimi-k2.5",
+      MODEL_ID: "kimi-k2.6",
     });
     expect(modelProvider(env)).toEqual({
       baseUrl: "https://stepfun.test/v1",
