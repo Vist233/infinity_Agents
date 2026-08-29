@@ -1042,6 +1042,21 @@ existing Redis/Relay/Cloudflared services.
   preserve D1/R2 metadata and existing Redis/Relay/Cloudflared. Do not rerun
   D1 migrations.
 
+## 2026-08-29 exact WAF rule readback
+
+- Status: `READY_FOR_PROCESSOR_CAPABILITY_HANDOFF`; PAPER-10 is not PASS.
+- The fresh exact fixed-endpoint zone custom rule was created and read back:
+  entrypoint `4eee604bde8646adbe441d3b1f8f5660`, rule
+  `08b7fc2ef8814ba2ba5250f528a27774`, HTTP `200`, semantic validator exit
+  `0`. It is enabled and logged, action `skip`, and `products=["bic"]` only.
+- The expression matches only source IP `39.105.204.121`, host
+  `infinity.zhangyvjing.com`, POST `/api/paper-processor/connect|poll|control`,
+  and PUT `/api/paper-processor/object`; no wildcard or broad path/host/IP
+  exception exists. The WAF token value was never exposed.
+- This is the only new external change. The next exact action is the paired
+  Edge shared-secret write and one-time zhangbot token handoff. If it fails,
+  delete this rule and entrypoint first; preserve D1/R2 and existing services.
+
 ## 2026-08-29 exact WAF rule recreated and read back
 
 - Status: `READY_FOR_PROCESSOR_CAPABILITY_HANDOFF`; PAPER-10 is not PASS.

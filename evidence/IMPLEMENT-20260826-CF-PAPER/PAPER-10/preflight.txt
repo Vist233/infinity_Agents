@@ -1264,3 +1264,22 @@ immediate semantic readback. D1 migrations remain applied and must not be
 rerun. If that rule readback is exact, continue with the shared secret/token
 handoff and release installation; on failure revoke the newly created rule
 first and preserve D1/R2 and the existing host services.
+
+## 2026-08-29 exact fixed-endpoint WAF rule recreate
+
+- The approved mode-`0600` WAF token was supplied only through the secure
+  stdin header channel. Body validation exited `0`; the additive create
+  returned curl exit `0` / HTTP `200` with entrypoint
+  `4eee604bde8646adbe441d3b1f8f5660` and rule
+  `08b7fc2ef8814ba2ba5250f528a27774`.
+- Immediate readback returned curl exit `0` / HTTP `200`; the independent
+  semantic validator exited `0`. It found one enabled/logged zone custom rule
+  in `http_request_firewall_custom`, action `skip`, exactly
+  `products=["bic"]`, no phase skip, and the exact expression:
+
+  `(ip.src eq 39.105.204.121 and http.host eq "infinity.zhangyvjing.com" and ((http.request.method eq "POST" and http.request.uri.path in { "/api/paper-processor/connect" "/api/paper-processor/poll" "/api/paper-processor/control" }) or (http.request.method eq "PUT" and http.request.uri.path eq "/api/paper-processor/object")))`
+
+- No wildcard, whole-host exception, non-zhangbot source, non-Processor path,
+  or additional skipped security product was present. This is the sole new
+  external change. The next write is the paired Edge shared secret and
+  zhangbot token; failure requires deleting this rule/entrypoint first.

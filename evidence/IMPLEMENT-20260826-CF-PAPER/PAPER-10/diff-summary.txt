@@ -561,3 +561,12 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
   allowlist. The remote ref remains read-only `e551a599…`; no push occurred.
 - The next change is limited to recreating and reading back the exact
   fixed-endpoint BIC-only WAF rule. PAPER-10 remains incomplete.
+
+## 2026-08-29 WAF exact-rule closure
+
+- Created and semantically read back one zone custom rule for the fixed
+  Processor paths. Entrypoint `4eee604b…`; rule `08b7fc2e…`; action is BIC-only
+  `skip`, enabled/logged, with no wildcard or broad exception.
+- This subphase added no repository source or migration diff and made no
+  secret/token or zhangbot change. Next external change is the minimum paired
+  Processor capability handoff; PAPER-10 remains incomplete.

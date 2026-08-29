@@ -532,6 +532,20 @@ acceptance. PAPER-10 is not complete.
   deleting this rule/entrypoint first and preserving D1/R2 and existing host
   services.
 
+## 2026-08-29 exact WAF capability recreate
+
+- The exact four-path zone custom rule was created only after the current-HEAD
+  artifact and read-only preflight passed. Entrypoint
+  `4eee604bde8646adbe441d3b1f8f5660` / rule
+  `08b7fc2ef8814ba2ba5250f528a27774` read back HTTP `200` and semantic exit
+  `0`.
+- The rule is enabled/logged, `skip` with BIC only, and matches only the fixed
+  zhangbot IP, host, three POST control paths, and one PUT object path. No
+  wildcard, broad path, whole-host, or additional product exception exists.
+- This is the only new external change. The next permitted write is the
+  paired shared-secret/token capability handoff, with this entrypoint/rule as
+  the first rollback handles.
+
 ## 2026-08-29 rebuilt current-HEAD preflight
 
 - Baseline is clean `cloudflare-deploy` HEAD

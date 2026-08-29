@@ -381,3 +381,14 @@ or persisted in this local phase.
   package, working venv/ensurepip/pip, preserved existing services/listeners,
   fixed egress/source access, and no active Paper Processor state. This is a
   ready-to-write preflight only; D1 migrations remain untouched.
+
+## 2026-08-29 exact WAF capability recreate
+
+- After the fresh preflight, the exact fixed-endpoint BIC-only zone rule was
+  created and immediately read back. Entrypoint `4eee604b…` and rule
+  `08b7fc2e…` are enabled/logged and match only `39.105.204.121`, the fixed
+  Worker host, POST connect/poll/control, and PUT object.
+- The rule skips only BIC; no wildcard or broader security bypass is present.
+  No D1/R2/zhangbot/Redis/Relay/Cloudflared write occurred in this step. The
+  next capability write is the paired Edge secret/token handoff, with WAF
+  deletion/readback first on failure.

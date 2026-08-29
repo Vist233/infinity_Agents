@@ -1147,6 +1147,21 @@ recorded exactly; no failed assertion was skipped.
       /release/runner absent; no Processor listener; fixed egress and arXiv/
       PMC checks exited `0` with expected HTTP results.
 
+90. Exact fixed-endpoint WAF rule recreate and readback
+    - WAF request body validation exited `0`; create curl exited `0` with HTTP
+      `200`, producing entrypoint `4eee604b…` and rule `08b7fc2e…`.
+    - Immediate readback curl exited `0` with HTTP `200`; the value-free
+      semantic validator exited `0` and verified one enabled/logged zone
+      custom rule, `skip` with `products=["bic"]` only, no phase skip, and
+      the exact four fixed method/path pairs. No wildcard or broad exception
+      was present. The WAF token value was never emitted.
+
+91. WAF evidence working-tree gate
+    - `git diff --check` exited `0`.
+    - The scoped secret-value detector over updated PAPER-10 evidence,
+      excluding `secret-scan.txt`, returned raw no-match exit `1`; normalized
+      secret gate exited `0`.
+
 89. Current-HEAD preflight evidence working-tree gate
     - `git diff --check` exited `0`.
     - The scoped secret-value detector over all updated PAPER-10 evidence,

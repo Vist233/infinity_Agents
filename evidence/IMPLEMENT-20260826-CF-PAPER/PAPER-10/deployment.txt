@@ -144,3 +144,12 @@ was changed.
   working venv/ensurepip/pip, unchanged existing services/listeners, and no
   Processor unit/release/process/token. This record authorizes only the next
   exact WAF create/readback, not a PAPER-10 completion claim.
+
+## 2026-08-29 exact WAF capability record
+
+- The exact fixed-endpoint BIC-only WAF rule was created and read back with
+  HTTP `200` and semantic validation exit `0`: entrypoint `4eee604b…`, rule
+  `08b7fc2e…`. It is the only new external change in this phase.
+- No Edge shared secret, zhangbot token/release/service, D1 migration, R2
+  object, or existing service change has followed. The next operation is the
+  paired secret/token handoff, and any failure must remove this WAF rule first.

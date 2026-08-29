@@ -136,3 +136,21 @@ Branch: `cloudflare-deploy`
   zhangbot preflight checks passed. No WAF write has occurred in this new
   attempt. The next permitted operation is one fresh exact four-pair
   BIC-only rule create followed immediately by value-free semantic readback.
+
+## 2026-08-29 exact rule recreate and semantic readback
+
+- Entrypoint `4eee604bde8646adbe441d3b1f8f5660`; rule
+  `08b7fc2ef8814ba2ba5250f528a27774`.
+- Create body validation exited `0`; create curl exited `0` with HTTP `200`.
+  Immediate readback curl exited `0` with HTTP `200`, and the semantic
+  validator exited `0`.
+- Readback is exactly one enabled/logged zone custom rule in phase
+  `http_request_firewall_custom`, action `skip`, `products=["bic"]`, with no
+  phase skip and this exact fixed expression:
+
+  `(ip.src eq 39.105.204.121 and http.host eq "infinity.zhangyvjing.com" and ((http.request.method eq "POST" and http.request.uri.path in { "/api/paper-processor/connect" "/api/paper-processor/poll" "/api/paper-processor/control" }) or (http.request.method eq "PUT" and http.request.uri.path eq "/api/paper-processor/object")))`
+
+- The rule contains no wildcard or broader path/source match and skips no
+  product besides BIC. The WAF token value was not printed, hashed, copied,
+  or recorded. This rule is the only new external change so far; its
+  entrypoint and rule IDs are the rollback handles.
