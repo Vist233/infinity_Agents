@@ -497,6 +497,27 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
   with absolute paths for all extracted-file hash calculations. Do not rerun
   D1 migrations.
 
+## 2026-08-29 Edge/zhangbot capability handoff passed
+
+- Status: `READY_FOR_PROCESSOR_RELEASE_INSTALL`; PAPER-10 is not PASS.
+- A first local secret-length check stopped at 65 bytes before external
+  mutation. The corrected one-time value was 64 hex bytes, held only in a
+  mode-0600 temporary file. Edge secret write/name readback passed; zhangbot
+  secure stdin handoff passed with expected EOF status `1`, mode `600`, one
+  line, one key, and 64-hex shape. No secret value is recorded, and the local
+  temporary copy was removed.
+- Post-handoff Edge health was HTTP `200` with
+  `paper_processor=configured`. zhangbot has the token file but no active
+  Processor unit/runner/listener; Redis, Relay, and Cloudflared remain active
+  and unchanged. D1 migrations `0017`–`0021` were not rerun and no R2 object
+  was written.
+- The exact WAF rule remains the only WAF change. The next authorized action
+  is current-HEAD archive transfer and remote immutable artifact validation,
+  followed by venv/locked dependency install and systemd user-service setup.
+  If any release step fails, remove this WAF rule/entrypoint first, then
+  revoke the Edge secret and token and remove only the new release/service;
+  preserve D1/R2 metadata and existing Redis/Relay/Cloudflared.
+
 ## 2026-08-29 corrected release smoke-check stop and rollback
 
 - status: `BLOCKED_PROCESSOR_RELEASE_SMOKE_CHECK` for this retry; PAPER-10 is

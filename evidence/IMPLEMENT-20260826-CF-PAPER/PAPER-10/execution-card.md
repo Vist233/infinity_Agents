@@ -532,6 +532,22 @@ acceptance. PAPER-10 is not complete.
   deleting this rule/entrypoint first and preserving D1/R2 and existing host
   services.
 
+## 2026-08-29 capability handoff passed
+
+- The first local secret-generation check stopped at the expected precondition
+  because the newline-terminated output was 65 bytes; no external write
+  followed. The corrected 64-hex value was then written to the Edge secret
+  binding and delivered once through SSH stdin to the zhangbot 0600 token file.
+- Edge name-only readback and public health passed; zhangbot readback passed
+  token mode/owner/one-line/shape. The EOF return `1` was expected and was
+  accepted only because the token buffer was non-empty and exactly 64 hex
+  characters. The local temporary value was removed. No token value entered
+  logs, evidence, arguments, or the repository.
+- Processor is not yet installed or running. Existing Redis/Relay/Cloudflared
+  remain active and listener inventory is unchanged. The next step is
+  current-HEAD archive transfer and immutable remote release installation;
+  failures require WAF-first capability rollback.
+
 ## 2026-08-29 exact WAF retry passed
 
 - After the fresh immutable preflight, the first exact WAF create attempt was

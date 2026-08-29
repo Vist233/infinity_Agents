@@ -97,3 +97,16 @@ Branch: `cloudflare-deploy`
   or other security products. The next permitted operation is the Edge
   shared-secret write and corrected one-time zhangbot token handoff; D1
   migrations remain untouched.
+
+## 2026-08-29 paired capability handoff
+
+- After the exact WAF readback, the authorized Edge shared-secret write and
+  name-only readback both exited `0`; the value was not read back. The same
+  one-time stdin stream produced a zhangbot token file with mode `600`, one
+  line, one key, and 64-hex shape; independent post-read exited `0`.
+- The exact WAF entrypoint/rule above remains active. No Processor release,
+  service, R2 object, D1 migration, or Edge code deployment has followed.
+  If release or acceptance fails, delete rule `a7f6a28a87624da28d595a11eeb5d92b`
+  and entrypoint `6a212d8fb2444135a6b2511e7d8ad8d0`, read back 404, then revoke
+  the new Edge secret, remove the zhangbot token, and remove only the new
+  release/service. Preserve D1/R2 metadata and existing host services.

@@ -323,3 +323,24 @@ or persisted in this local phase.
 - External state is now limited to that exact WAF rule; Edge shared secret,
   Processor token/release/service, R2 object, and live Paper acceptance remain
   pending. The next write is the paired secret/token handoff.
+
+## 2026-08-29 Edge/zhangbot capability handoff
+
+- The first local secret-generation attempt was stopped before any external
+  write because the generated file included a newline and measured 65 bytes.
+  The corrected generation produced exactly 64 hex bytes in a mode-0600
+  temporary file; the value was never printed or recorded.
+- The authorized Edge `PAPER_PROCESSOR_SHARED_SECRET` write exited `0` and
+  name-only readback exited `0` with the binding present. The same value was
+  delivered once over SSH stdin to zhangbot; remote read returned EOF status
+  `1` with a non-empty token, which the EOF-tolerant handoff intentionally
+  accepts. The remote file readback passed mode `600`, one line, one key, and
+  64-hex shape; the local temporary value was removed successfully.
+- Edge `/health` read back HTTP `200` with D1/R2 configured and
+  `paper_processor=configured`. zhangbot post-read showed the token shape
+  PASS, Processor still inactive/no runner, and existing Redis/Relay/
+  Cloudflared active with unchanged listener inventory. No R2 object, D1
+  migration, or Edge code deployment occurred in this handoff step.
+- External state at this baseline is the exact WAF rule plus the paired Edge
+  secret and zhangbot token. The next step is transfer/validation and
+  installation of the current commit-named Processor release.

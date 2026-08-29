@@ -104,3 +104,15 @@ was changed.
   wildcard. This is not a full deployment or PAPER-10 PASS: no Edge shared
   secret, Processor token/release/service, R2 object, or full live acceptance
   has followed. The next action is the paired secret/token handoff.
+
+## 2026-08-29 Edge/zhangbot capability handoff
+
+- The first local generator check stopped before external mutation at a
+  newline-included 65-byte value. The corrected one-time 64-hex value was
+  written to the Edge `PAPER_PROCESSOR_SHARED_SECRET` binding and delivered
+  once to zhangbot via secure stdin. Edge name-only and zhangbot value-free
+  metadata readbacks passed; the local temporary value was removed.
+- Edge health is HTTP `200` with `paper_processor=configured`. No Processor
+  release/service, R2 object, D1 migration, or Edge code deployment has
+  followed. This remains a pre-install capability record, not a deployment or
+  PAPER-10 PASS.

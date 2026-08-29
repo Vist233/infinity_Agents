@@ -1052,3 +1052,32 @@ recorded exactly; no failed assertion was skipped.
     - The scoped secret-value detector over all updated PAPER-10 evidence,
       excluding `secret-scan.txt`, returned raw no-match exit `1`; normalized
       secret gate exit `0`.
+
+81. Edge shared-secret and zhangbot token handoff
+    - The first local generator precondition returned exit `3` because the
+      newline-terminated value was 65 bytes; no Cloudflare or zhangbot write
+      followed. Corrected strict generator exited `0`, chmod exited `0`, and
+      byte-count validation returned `64`.
+    - `npx wrangler secret put PAPER_PROCESSOR_SHARED_SECRET` exited `0`;
+      name-only `secret list` exited `0` and found the binding. The secure SSH
+      handoff exited `0`; remote `read` returned expected EOF exit `1` with a
+      non-empty value, remote file validation reported mode `600`, one line,
+      and shape `PASS`. Independent token post-read exited `0` with the same
+      safe metadata. No value was printed or recorded.
+    - Edge health post-read curl exited `0`, HTTP `200`, and reported
+      `paper_processor=configured`; local temporary-secret removal exited `0`.
+      zhangbot post-read showed Processor inactive/no runner and existing
+      Redis/Relay/Cloudflared active. No D1 migration, R2 object, Edge code
+      deployment, or existing-service write followed.
+
+82. Capability-handoff evidence gate
+    - This handoff evidence contains only the 65-byte precondition fact, safe
+      statuses, exit codes, metadata/shape results, and absence/readiness
+      facts. No shared secret, token, authorization header, provider key,
+      cookie, paper bytes, image bytes, or full payload was emitted.
+
+83. Capability-handoff working-tree evidence gate
+    - `git diff --check` exited `0`.
+    - The scoped secret-value detector over all updated PAPER-10 evidence,
+      excluding `secret-scan.txt`, returned raw no-match exit `1`; normalized
+      secret gate exit `0`.

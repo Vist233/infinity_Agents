@@ -1155,3 +1155,23 @@ Edge code deployment exists in this retry.
 - Current external state is the new WAF rule only. The next authorized write
   is the Edge shared secret and paired zhangbot token; failure requires
   capability-first WAF deletion/readback before revoking the new capability.
+
+## 2026-08-29 Edge/zhangbot capability handoff
+
+- The first local secret-generation attempt stopped at a 65-byte
+  newline-terminated value before any external write. The corrected strict
+  64-hex value was held in a mode-0600 temporary file only. Edge secret write
+  and name-only readback exited `0`; no secret value was read back.
+- The paired SSH handoff exited `0`. Its remote `read` returned expected EOF
+  exit `1` with a non-empty value; value-free mode/owner/line/shape validation
+  passed (`600`, one line, one 64-hex key). Independent post-read also exited
+  `0`. Local temporary-secret cleanup exited `0` and the path was absent.
+- Edge health post-read exited `0`, HTTP `200`, and reported
+  `paper_processor=configured`. zhangbot post-read showed the Processor unit
+  inactive, anchored runner scan clear, existing Redis/Relay/Cloudflared
+  active, and unchanged SSH/loopback listener inventory. No release, service,
+  R2 object, migration, or Edge code deployment followed.
+- Current external state is the exact WAF rule/entrypoint plus the paired Edge
+  secret and zhangbot token. The next step is immutable current-HEAD archive
+  transfer and release installation; capability-first rollback remains WAF
+  rule/entrypoint, then secret/token, then only the new release/service.

@@ -523,3 +523,16 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
 - This is a capability-only external update. No Edge secret/token, Processor
   release/service, R2 object, D1 migration, or Kimi provider configuration was
   changed after the WAF readback.
+
+## 2026-08-29 Edge/zhangbot capability handoff
+
+- The newline-terminated secret generator was rejected locally at 65 bytes;
+  the corrected 64-hex temporary value was then used only via stdin. Edge
+  secret write/name readback and the EOF-tolerant zhangbot one-line 0600 token
+  handoff passed. No credential value was added to the tree or evidence.
+- Edge health changed to `paper_processor=configured`; Processor installation,
+  R2 object publication, D1 migration, Edge code deployment, and live Paper
+  acceptance remain pending. Existing Redis/Relay/Cloudflared were unchanged.
+- The current external capability set is the exact WAF rule plus its paired
+  Edge/zhangbot secret material. The next step is immutable release transfer
+  and installation with WAF-first rollback on any failure.
