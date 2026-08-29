@@ -811,3 +811,28 @@ recorded exactly; no failed assertion was skipped.
     - Final evidence `git diff --check` exited `0`; the changed-scope secret
       detector returned raw no-match exit `1` and normalized gate exit `0`,
       excluding the detector's own pattern record.
+
+65. Kimi provider authenticated preflight and rollback
+    - Initial sandboxed `npx wrangler versions list --name
+      infinity-agents-edge --json` read-only attempt exited `1` because the
+      Cloudflare API hostname could not be resolved in the restricted network.
+      The same read-only check under the approved no-proxy network condition
+      exited `0` and identified candidate `1f81cfc1-481d-4678-a236-1c854b94b714`
+      (version 148) and rollback reference
+      `d287b02d-a94c-4caa-b473-70f2368f4999` (version 143).
+    - Read-only `npx wrangler deployments list --name infinity-agents-edge
+      --json` exited `0`; the Kimi candidate was at 100% before rollback.
+    - The authenticated browser text probe used only a harmless fixed marker.
+      The application returned real `401 Invalid Authentication`; this required
+      text gate failed, so tool and image probes were not attempted.
+    - `npx wrangler versions deploy d287b02d-a94c-4caa-b473-70f2368f4999@100
+      --name infinity-agents-edge --yes --message "Rollback Kimi provider after
+      authenticated 401 probe"` exited `0`. Read-only deployment readback
+      exited `0` with the exact rollback version at 100%; public `/health`
+      returned HTTP `200`.
+    - No D1 migration was rerun. No WAF, R2 object, new Edge Secret, zhangbot
+      release/service/token, Redis/Relay/Cloudflared, or live paper workflow
+      operation was performed in this subphase. No provider credential value
+      was read or recorded.
+    - Scoped evidence `git diff --check` exited `0`; the no-secret detector
+      returned raw no-match exit `1` and normalized gate exit `0`.

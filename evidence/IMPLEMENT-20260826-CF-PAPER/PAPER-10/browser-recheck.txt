@@ -68,6 +68,19 @@ Updated status: BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE
 
 Current status remains: BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE
 
+## Kimi provider authenticated probe (2026-08-29T04:35:42Z)
+
+- The current claimed Infinity Agents tab exposed the authenticated Analysis
+  composer and sign-out control. Only non-sensitive URL/title/DOM facts were
+  read; browser storage and credentials were not inspected.
+- A harmless text marker probe rendered a real provider error: HTTP `401`,
+  `Invalid Authentication`. This provider gate failed, so no tool or image
+  probe was sent and no PAPER-10 live acceptance was claimed.
+- The provider deployment was restored to the approved rollback version
+  `d287b02d-a94c-4caa-b473-70f2368f4999` at 100% and read back successfully.
+- No other browser, Cloudflare, D1, R2, WAF, Processor, zhangbot, Redis,
+  Relay, or Cloudflared operation was performed in this probe.
+
 ## Fresh-tab ownership retry (2026-08-29T04:04:58Z)
 
 - The new user tab was found from the current `openTabs()` result with the

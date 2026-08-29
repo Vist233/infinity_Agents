@@ -398,6 +398,18 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
 - The exact WAF/secret/token/release/staging changes were rolled back. Only
   PAPER-10 evidence is being amended.
 
+## 2026-08-29 Kimi provider preflight rollback
+
+- This subphase added only `provider-recheck.md` and the corresponding
+  checkpoint/test evidence. No product source, migration, fixed-endpoint
+  contract, WAF rule, Processor release, R2 object, or Redis/Relay/Cloudflared
+  change was made.
+- The real authenticated text probe failed with provider HTTP 401
+  `Invalid Authentication`. The Kimi deployment was rolled back to
+  `d287b02d-a94c-4caa-b473-70f2368f4999` at 100% and read back successfully.
+- PAPER-10 remains blocked; no deployment artifact or PASS checkpoint was
+  created. The provider credential value was never read or recorded.
+
 ## 2026-08-29 live acceptance browser blocker
 
 - No product source, migration, frontend, Processor protocol, or runtime

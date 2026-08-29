@@ -739,3 +739,24 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
 - no DOM was read and no browser, Cloudflare, zhangbot, D1, R2, WAF, Secret,
   or deployment write occurred. Detailed evidence is in
   `browser-recheck.txt`.
+
+## 2026-08-29 Kimi provider authenticated recheck and rollback
+
+- Status: `BLOCKED_KIMI_PROVIDER_AUTHENTICATION`; PAPER-10 is not PASS.
+- The existing authenticated Infinity Agents tab was successfully claimed and
+  its visible DOM was available. A harmless text probe returned the real
+  provider error `401 Invalid Authentication`.
+- Per the provider rollout rollback rule, no tool or image probe and no other
+  PAPER-10 release step was attempted. Analysis Worker traffic was restored to
+  the specified rollback version `d287b02d-a94c-4caa-b473-70f2368f4999` at
+  100%; deployment readback and the public readiness endpoint succeeded.
+- The only external write in this subphase was that Worker traffic rollback.
+  D1 migrations `0017`-`0021` were not rerun. No WAF, R2 object, new Edge
+  Secret, zhangbot Processor, Redis/Relay/Cloudflared, or live paper workflow
+  write occurred in this subphase.
+- Detailed redacted evidence: `provider-recheck.md`. The provider credential
+  value was never read or recorded.
+
+Next exact action: correct/reissue the approved Kimi credential through its
+secret channel, then repeat the fresh authenticated text, tool, and image
+preflight. Do not resume the rest of PAPER-10 until all three pass.
