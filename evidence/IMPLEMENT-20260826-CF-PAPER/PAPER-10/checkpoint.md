@@ -1042,6 +1042,483 @@ existing Redis/Relay/Cloudflared services.
   preserve D1/R2 metadata and existing Redis/Relay/Cloudflared. Do not rerun
   D1 migrations.
 
+## 2026-08-29 browser-control blocker and completed rollback
+
+- Status: `BLOCKED_BROWSER_CONTROL`; PAPER-10 is not PASS. The current
+  Chrome `openTabs()` read returned the exact existing authenticated
+  Infinity Agents tab at `https://infinity.zhangyvjing.com/` titled
+  `Infinity Agents`. Claiming that current object returned
+  `Tab 876490061 is already part of browser session
+  01a03d69-25c4-7ff0-94e7-9b3af0a8e627`; the current browser
+  `tabs.list()` and `tabs.selected()` were empty. A five-second retry
+  returned the same claim error. No DOM was read, no page was refreshed, and
+  no browser message was sent.
+- The live release had already passed non-browser readiness: D1 had one
+  active Processor session with zero-write readback, health was configured,
+  and zhangbot had active/enabled service, one runner, and no public
+  Processor listener. Because the required authenticated browser acceptance
+  could not be controlled, capability-first rollback was performed.
+- Rollback completed: WAF rule `7e3458417b984adcb70b24cad72fdb9f` and
+  entrypoint `7c1feeddaeb744568317625a21557258` deleted with HTTP
+  `200`/`204`, final WAF inventory empty; Edge
+  `PAPER_PROCESSOR_SHARED_SECRET` deleted; zhangbot Processor stopped and
+  disabled with token, unit, current, release, and staging removed; Edge was
+  rolled back to `dc1e6477-4f5c-4e6a-b61d-331620719be2`. D1 migrations and
+  metadata, R2 objects, and existing Redis/Relay/Cloudflared were preserved.
+- Final read-only checks pass: Edge health is HTTP `200` with
+  `paper_processor=unconfigured`, D1 reports no pending migrations and
+  schema read `changes=0/rows_written=0`, R2 is APAC/15 objects/41.9 MB,
+  zhangbot has no Processor state, and existing listeners are unchanged.
+- Exact next action: release the already-authenticated Chrome tab from the
+  coordinating session to this task (or provide an equivalent controllable
+  authenticated tab), then repeat only the real browser acceptance and its
+  read-only post-acceptance checks. Do not rerun D1 migrations or claim
+  project completion before that gate passes.
+
+## 2026-08-29 Kimi mainland text PASS and capability-handoff stop
+
+- The authenticated browser probe submitted exactly `请只回复：KIMI_MAINLAND_TEXT_PROBE_OK`
+  to corrected Worker version `79755db3-c12d-4737-b601-aa99f11e3f93` and the
+  visible response was exactly `KIMI_MAINLAND_TEXT_PROBE_OK`. This supersedes
+  the earlier international-endpoint 401; no credential value is recorded and
+  traffic remains on mainland Kimi, not StepFun.
+- A fresh exact WAF rule was created/read back successfully, then Edge secret
+  put/name readback succeeded. The secure zhangbot handoff stopped before
+  installation because the transport newline made the temporary env file two
+  lines; the value-shape check rejected it. No Processor was started.
+- Capability-first rollback deleted the WAF rule/entrypoint with HTTP
+  `200`/`204`, deleted the Edge Paper secret, and removed the temporary
+  zhangbot token material. Readbacks show no active WAF entrypoint, Paper
+  secret, Processor token, service, release, current symlink, or runner; D1
+  and R2 were untouched and existing Redis/Relay/Cloudflared stayed active.
+- Status: `BLOCKED_PROCESSOR_TOKEN_HANDOFF_SHAPE`; PAPER-10 is not PASS.
+  The next bounded attempt must use newline-tolerant stdin normalization,
+  then independently verify the one-line 0600 env file before installing.
+  D1 migrations `0017`–`0021` remain applied and must not be rerun.
+
+## 2026-08-29 Kimi mainland text PASS and Processor post-start diagnosis
+
+- The authenticated browser probe submitted exactly `请只回复：KIMI_MAINLAND_TEXT_PROBE_OK`
+  to corrected Worker version `79755db3-c12d-4737-b601-aa99f11e3f93` and the
+  visible response was exactly `KIMI_MAINLAND_TEXT_PROBE_OK`. This supersedes
+  the earlier international-endpoint 401; no credential value is recorded and
+  traffic remains on mainland Kimi, not StepFun.
+- The latest zhangbot install reached `systemd --user` start after all
+  immutable artifact, venv, dependency, import, unit, enable, and daemon
+  checks passed, then returned exit `1` at the post-start service readback.
+  WAF-first rollback deleted the new rule/entrypoint (`200`/`204`), removed
+  the Edge Paper secret, and removed the new zhangbot token/release/current/
+  unit. No D1 migration, R2 object, Edge code deployment, Redis, Relay, or
+  Cloudflared change occurred.
+- Read-only state after rollback: Worker `dc1e6477-4f5c-4e6a-b61d-331620719be2`
+  (#181) is 100% with Kimi .cn/`kimi-k2.6` and fixed Processor bindings;
+  Paper secret is absent; health is HTTP `200`/unconfigured; D1 schema read
+  reported zero writes; R2 is APAC with 15 objects/41.9 MB; WAF custom entrypoint
+  inventory is empty. zhangbot has no Processor token/unit/current/release or
+  runner, and existing services/listeners are intact. The staging parent is
+  empty and is not an active release.
+- PAPER-10 is not PASS. The next bounded attempt must repeat the full
+  read-only preflight, then use explicit post-start diagnostics that capture
+  active/enabled/MainPID/runner-count before any assertion. D1 `0017`–`0021`
+  remain applied and must not be rerun.
+
+## 2026-08-29 transfer validator quoting stop and rollback
+
+- Status: `BLOCKED_PROCESSOR_TRANSFER_VALIDATOR`; PAPER-10 is not PASS. Both
+  commit-named archives reached zhangbot and their SHA values matched exactly;
+  the remote validator then returned exit `2` with a bash syntax error caused
+  by nested command quoting. No extraction, release, venv, unit, service, or
+  Processor operation ran.
+- Capability-first rollback completed: WAF rule/entrypoint deletion returned
+  HTTP `200`/`204`, Edge secret deletion exited `0`, and zhangbot token
+  and staging cleanup exited `0`. Read-only state shows health HTTP
+  `200`/unconfigured, WAF entrypoint `404`, Paper secret absent, new
+  Processor paths/runner absent, and existing Redis/Relay/Cloudflared active.
+  No D1 migration, R2 object, Edge code, or existing-service write occurred.
+- The next retry changes only the remote validator to a simple hard-coded
+  host-first command with double-quoted shell arguments; it must repeat the
+  fresh read-only preflight and exact WAF/capability creation.
+
+## 2026-08-29 archive member-name stop and rollback
+
+- Status: `BLOCKED_PROCESSOR_ARCHIVE_MEMBER_CHECK`; PAPER-10 is not PASS.
+  Archive and wheel SHA checks and AppleDouble checks passed. The literal
+  remote member check returned exit `1` because the wheel tar records its
+  three wheel members with a leading `./`; no source member or wheel bytes
+  were changed, and no release/venv/service was created.
+- Capability-first rollback deleted the WAF rule/entrypoint (HTTP `200`/`204`),
+  removed the Edge secret and zhangbot token/staging, and read back the
+  Processor state as absent. Health stayed HTTP `200`/unconfigured, existing
+  Redis/Relay/Cloudflared stayed active, and D1/R2/Edge code were untouched.
+- The next attempt changes only the wheel member comparison to normalize the
+  documented `./` tar prefix, then repeats fresh preflight and the exact
+  WAF/capability sequence.
+
+## 2026-08-29 temporary diagnostic wrapper invalidated
+
+- Status: `BLOCKED_PROCESSOR_DIAGNOSTIC_WRAPPER`; PAPER-10 is not PASS. A
+  temporary diagnostic copied both archives successfully, but its diagnostic
+  script removed the just-created base directory before reading them. The
+  resulting missing-file output is invalid diagnostic evidence; no production
+  release, service, WAF, secret, D1, R2, or Edge-code change occurred.
+- The temporary directory was removed. The next diagnostic preserves the
+  initialized input directory and reports a marker before every assertion;
+  it remains limited to temporary extraction/venv/pip checks and will not
+  register or start systemd.
+
+## 2026-08-29 latest archive-member rollback and fresh preflight
+
+- Status: `READY_FOR_WAF_CAPABILITY_RECREATE`; PAPER-10 is not PASS. The
+  previous fixed transfer reached SHA/AppleDouble checks but stopped at
+  wheel member matching because the valid tar entries have a leading `./`.
+  WAF/secret/token/staging rollback and absence readbacks passed.
+- A new read-only preflight passed after that rollback: local HEAD remains
+  `9e5de68d6d323337002b44b195e68ec4f49921ee` on `cloudflare-deploy`, remote
+  ref is `e551a5994cd228f19a2ae816c4529e4b04cf41a1`, and artifact hashes are
+  unchanged. Current 100% Worker is `3dda1a0e-5851-411a-b135-0fdc10426582`
+  (#175), with `https://api.moonshot.cn/v1`/`kimi-k2.6`, exact D1/R2 and
+  fixed Processor bindings; Paper secret is absent, health is HTTP
+  `200`/unconfigured, WAF entrypoint is `404`, D1 has no pending migrations
+  and zero writes, and R2 remains APAC/15 objects/41.9 MB.
+- zhangbot read-only SSH passed again: exact `python3.10-venv` installed and
+  candidate, venv/ensurepip/pip, fixed egress/source access, existing
+  services/listeners, and no Processor state. No external write occurred.
+- The next bounded retry normalizes only the wheel tar `./` member prefix
+  during validation, then proceeds with the already-approved capability and
+  release steps; D1 migrations `0017`-`0021` remain applied and are not rerun.
+
+## 2026-08-29 marked Processor install early stop and diagnostic pass
+
+- Status: `BLOCKED_PROCESSOR_INSTALL_EARLY_ASSERTION`; PAPER-10 is not PASS.
+  The first full install wrapper returned exit `1` before its first install
+  marker, with no remote error text; its rollback removed WAF/Edge secret/
+  zhangbot token and new paths. Read-only path-permission checks passed.
+- A temporary diagnostic first invalidated itself by deleting its input; that
+  was recorded and cleaned. The corrected temporary diagnostic then passed
+  every marked stage: both archive SHA values, no-AppleDouble, source
+  extraction, relative source/lock/unit/manifest hashes, wheel extraction and
+  members, Python 3.10 venv/ensurepip, and offline locked pip (exit `0`).
+  It did not create a production release or systemd service.
+- The next retry adds the same per-stage markers to the production install
+  wrapper, keeping the proven artifact and wheel extraction logic. D1
+  migrations `0017`-`0021` remain applied and are not rerun.
+
+## 2026-08-29 production archive-root assertion stop and rollback
+
+- Status: `BLOCKED_PROCESSOR_ARCHIVE_ROOT_LAYOUT`; PAPER-10 is not PASS.
+  Marked installation passed input checks and release-parent creation, then
+  stopped at exit `1` because tar extracted the root directory named
+  `infinity-paper-processor-<commit>` while the installer expected the
+  commit-only release directory. No venv, unit, or service was started.
+- Capability-first rollback passed: WAF rule/entrypoint HTTP `200`/`204`,
+  Edge secret deletion `0`, zhangbot token/release/current/unit/staging
+  cleanup `0`, and readbacks showed health `200`/unconfigured, no WAF/secret
+  or Processor state, and existing services active. No D1/R2/Edge-code write.
+- The next retry changes only extraction layout: validate the archive root in
+  a temporary directory, atomically move it to `<releases>/<commit>`, then
+  continue the already-passing relative hash/wheel/venv logic. D1 migrations
+  remain applied and are not rerun.
+
+## 2026-08-29 marked-install retry preflight
+
+- Status: `READY_FOR_MARKED_PROCESSOR_INSTALL`; PAPER-10 is not PASS. The
+  temporary diagnostic passed every install stage, including locked offline
+  pip; the production early-stop wrapper had no marker before exit `1` and
+  was rolled back without a service.
+- Fresh read-only preflight passed: local HEAD `9e5de68d…`, remote ref
+  `e551a599…`, source/wheel/manifest hashes unchanged; active Worker
+  `816e5144-49c6-402d-92aa-596b880ade11` (#177) has mainland
+  `https://api.moonshot.cn/v1`/`kimi-k2.6`, fixed Processor bindings,
+  Paper secret/WAF absent, health HTTP `200`/unconfigured, D1 no pending
+  migrations/zero writes, and R2 APAC/15 objects/41.9 MB.
+- zhangbot read-only preflight passed again for exact package/venv/ensurepip
+  and pip, fixed egress/source access, existing services/listeners, and no
+  Processor state. No external write occurred; D1 migrations remain applied.
+
+## 2026-08-29 latest offline Processor install stop and rollback
+
+- Status: `READY_FOR_WHEEL_ARCHIVE_EXTRACTION_RETRY`; PAPER-10 is not PASS.
+- The latest immutable transfer passed archive/wheel SHA, source aggregate,
+  dependency lock, service-unit, manifest identity, required-member, and
+  no-AppleDouble checks. Installation stopped at offline pip because the wheel
+  archive tar had not yet been extracted into the `--find-links` directory;
+  pip reported no candidate for locked `pypdf==6.15.0` and exited `1`. No
+  venv, release symlink, unit, or Processor runner was started.
+- Capability-first rollback completed: WAF rule/entrypoint deletion returned
+  HTTP `200`/`204`, Edge Paper secret deletion exited `0`, and zhangbot
+  token/staging/release/current/unit cleanup exited `0`; readbacks showed no
+  new Processor state. Health is HTTP `200`/unconfigured, D1/R2 were
+  preserved, and Redis/Relay/Cloudflared stayed active. No D1 migration,
+  R2 object write, or Edge code deployment occurred.
+
+## 2026-08-29 fresh read-only preflight after pip rollback
+
+- Local scope remains `cloudflare-deploy` at HEAD
+  `9e5de68d6d323337002b44b195e68ec4f49921ee`; only PAPER-10 evidence files
+  are modified. No-proxy remote `origin/cloudflare-deploy` is
+  `e551a5994cd228f19a2ae816c4529e4b04cf41a1`. Current source/wheel archive,
+  manifest, and lock/unit hashes remain unchanged.
+- Corrected Wrangler reads confirmed account
+  `3cfba3bb2ec69798aa4881b05d80810f`, Worker `infinity-agents-edge`, active
+  100% version `b70253c2-fe3a-4556-9667-fcbb3c0df053` (#169), mainland Kimi
+  `https://api.moonshot.cn/v1`/`kimi-k2.6`, fixed Processor bindings, and no
+  `PAPER_PROCESSOR_SHARED_SECRET` name. D1 reported `No migrations to apply!`
+  and its read-only schema query reported zero writes; R2 is APAC/15 objects/
+  41.9 MB; health is HTTP `200` with Processor unconfigured. Rulesets reads
+  returned HTTP `200` and the exact custom entrypoint returned HTTP `404`.
+- zhangbot read-only SSH exited `0`: Ubuntu 22.04/x86_64, installed and
+  candidate `python3.10-venv` `3.10.12-1~22.04.17`, `python3 -m venv`,
+  disposable venv, ensurepip, and pip passed; fixed egress and arXiv/PMC
+  checks passed; existing Redis/Relay/Cloudflared are active/enabled with
+  unchanged listeners; Processor token/release/current/unit/runner are absent.
+- One initial preflight wrapper incorrectly supplied the Rulesets-only token to
+  Wrangler (authentication exit `1`); it was not used for a write and no
+  secret value was printed. The corrected read used Wrangler OAuth and the
+  Rulesets token only for Rulesets reads. The first D1 migration command was
+  also run from the repository root (configuration-not-found exit `1`), then
+  rerun from `cloudflare-worker` and passed. No external write occurred.
+- The next bounded attempt recreates the exact WAF rule/capability, extracts
+  the transferred wheel tar before locked offline pip, and rolls back in the
+  same capability-first order on any failure. D1 migrations `0017`-`0021`
+  remain applied and must not be rerun.
+
+## 2026-08-29 capability handoff stop and rollback
+
+- Status: `BLOCKED_PROCESSOR_TOKEN_HANDOFF`; PAPER-10 is not PASS. The exact
+  WAF rule was recreated as entrypoint `2e8384f547f94be78e7422b210bdf557`,
+  rule `d21515091ee64d72aeccca14a11146ae`, and its semantic readback passed.
+- Edge shared-secret write and name-only readback passed. The secure SSH
+  token handoff then exited `1` before a successful file validation; no token
+  value was printed or recorded. The recovery removed the WAF rule/entrypoint
+  (HTTP `200`/`204`), deleted the Edge Paper secret (exit `0`), and cleaned
+  the zhangbot token/staging paths (exit `0`).
+- Final readback passed: Edge health HTTP `200`/Processor unconfigured, WAF
+  custom entrypoint HTTP `404`, Paper secret name absent, zhangbot Processor
+  paths/runner absent, and existing Redis/Relay/Cloudflared active. No D1
+  migration, R2 object, Edge code, or existing-service write occurred.
+- The bounded retry changes only the zhangbot handoff transport/validation:
+  stream the single env line directly to a temporary file, then validate with
+  portable `grep`/line-count checks before atomic rename. D1 migrations remain
+  applied and must not be rerun.
+
+## 2026-08-29 Processor archive-hash precondition stop and completed rollback
+
+- Status: `READY_FOR_ARCHIVE_HASH_RETRY`; PAPER-10 is not PASS. Host-first SSH
+  syntax reached the remote validator, but it compared the archive SHA
+  `c440b41c1f6bd64f7a6c5d3f79e7ed0830860039b2b25ffef395bcd1ffd5cd5d` with the
+  source aggregate expected value `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`.
+  The mismatch was an installer variable error; the wheel archive matched.
+- No release, venv, unit, service, or Processor runner was created. The new
+  WAF rule/entrypoint were deleted HTTP `200`/`204`; Edge Paper secret deletion
+  succeeded and name-only readback showed absence; zhangbot token/staging and
+  new release paths read back absent. Existing Redis/Relay/Cloudflared stayed
+  active. No D1/R2/Edge-code write occurred.
+- The next retry must keep separate archive/source hash variables and repeat a
+  fresh read-only preflight. D1 migrations `0017`–`0021` must not be rerun.
+
+## 2026-08-29 retry preflight after transfer rollback
+
+- Status: `READY_FOR_WAF_CAPABILITY_RECREATE`; PAPER-10 is not PASS. The
+  current HEAD remains `9e5de68d6d323337002b44b195e68ec4f49921ee` on
+  `cloudflare-deploy`; only PAPER-10 evidence files are dirty and the
+  read-only remote ref is `e551a5994cd228f19a2ae816c4529e4b04cf41a1`.
+- Read-only active Worker version is `52860ea1-9f7c-4049-b7eb-fff2a14a6402`
+  (#163), retaining mainland Kimi `.cn`/`kimi-k2.6` and fixed Processor
+  bindings. Paper secret name is absent; health is HTTP `200` with Processor
+  unconfigured; WAF inventory has no custom entrypoint. D1 reports no pending
+  migrations and zero schema changes/writes; R2 is APAC/15 objects/41.9 MB.
+- zhangbot read-only checks pass for Ubuntu 22.04, exact installed/candidate
+  `python3.10-venv` `3.10.12-1~22.04.17`, venv/ensurepip/pip, fixed egress
+  `39.105.204.121`, arXiv/PMC HTTP `200`, existing service/listener
+  preservation, and absence of token/staging/release/current/unit/runner.
+  The current artifact archive hashes remain unchanged and valid.
+- The previous transfer attempt is fully rolled back. The earlier dpkg probe
+  had a shell-quoting defect; the corrected exact dpkg read exited `0`. The
+  next external operation is a newly created exact WAF rule; D1 migrations
+  `0017`–`0021` remain applied and must not be rerun.
+
+## 2026-08-29 archive/source hash input correction and rollback
+
+- Status: `READY_FOR_WAF_CAPABILITY_RECREATE`; PAPER-10 is not PASS. Host-first
+  SSH syntax reached the validator, but a variable mix-up compared archive SHA
+  `c440b41c1f6bd64f7a6c5d3f79e7ed0830860039b2b25ffef395bcd1ffd5cd5d` with the
+  source aggregate `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`.
+  Wheel SHA matched; validation stopped before extraction or installation.
+- WAF rule/entrypoint deletion returned HTTP `200`/`204`; Edge Paper secret
+  deletion and zhangbot token/staging cleanup succeeded. Readbacks show no new
+  Processor state; existing Redis/Relay/Cloudflared remained active. No D1/R2/
+  Edge-code write occurred.
+- A fresh read-only preflight passed afterward with active Worker
+  `e281e88c-8dc9-43db-b1ee-16d5588b2ea1` (#165), mainland Kimi, applied D1,
+  unchanged R2, absent WAF/secret/Processor, and fixed zhangbot prerequisites.
+  The next retry separates archive and source hashes and recreates WAF first.
+
+## 2026-08-29 Processor manifest identity check stop and rollback
+
+- Status: `READY_FOR_PROCESSOR_INSTALL_RETRY`; PAPER-10 is not PASS. Extracted
+  source, dependency lock, and service unit hashes all matched their manifest
+  values. Installation then stopped because the installer incorrectly required
+  the release HEAD `9e5de68d…` inside the manifest; the manifest correctly
+  records the reviewed Processor source commit `455ae849c572aa285cc752a10e21fd69f031b18d`.
+  No venv, service, or runner was started.
+- Capability-first rollback deleted the WAF rule/entrypoint HTTP `200`/`204`,
+  removed the Edge Paper secret, and removed zhangbot token/release/current/
+  unit/staging. Readbacks show clean absence; existing services stayed active.
+  No D1/R2/Edge-code write occurred.
+- The next retry changes only this manifest identity comparison to the reviewed
+  source commit and repeats the read-only preflight. D1 migrations remain
+  applied and must not be rerun.
+
+## 2026-08-29 immutable Processor archive transfer passed
+
+- Status: `READY_FOR_PROCESSOR_INSTALL`; PAPER-10 is not PASS. Host-first SSH
+  transfer created the commit-named staging directory and both SCP operations
+  exited `0`. Remote archive validation exited `0` with archive SHA
+  `c440b41c1f6bd64f7a6c5d3f79e7ed0830860039b2b25ffef395bcd1ffd5cd5d` and wheel
+  SHA `3294170f5e7d8a6d7d68aec3951f86b8dfc9a6e9a68ef11b631d67b3f872d6ab`.
+- Both archives had no AppleDouble entries and all required source/manifest/
+  unit/lock/wheel members were present. No extraction, venv, service, or
+  Processor runner was created in this transfer step. Current rollback handles
+  are WAF entrypoint `421a5184923242af8fb0227620dd2baa` / rule
+  `6dc66d742bef45ada9ab6f4224a0a5cd`, plus the paired Edge secret and
+  zhangbot token.
+- The next step is bounded release install with separate archive/source/
+  lock/unit hashes. Any failure must delete WAF first, revoke capabilities,
+  and remove only new staging/release paths; D1 migrations remain applied.
+
+## 2026-08-29 exact WAF capability recreated and read back
+
+- Status: `READY_FOR_PROCESSOR_CAPABILITY_HANDOFF`; PAPER-10 is not PASS. A
+  first request containing unsupported field `version` was rejected HTTP
+  `400`; inventory readback showed no partial custom entrypoint. The corrected
+  additive request succeeded HTTP `200` and was immediately read back HTTP
+  `200`.
+- New rollback handles are entrypoint
+  `eec4070b89af476a9e806bbc07458fc0` and rule
+  `026d95bb13d149f69ee339bb8aba8ace`. Semantic validation passed: zone phase
+  `http_request_firewall_custom`, exactly one enabled/logged rule, action
+  `skip`, action parameters exactly `products=["bic"]`, and expression only
+  matches `39.105.204.121`, `infinity.zhangyvjing.com`, POST
+  `/api/paper-processor/connect|poll|control`, or PUT
+  `/api/paper-processor/object`.
+- This is the only current Paper-release external change. The next operation
+  is the paired Edge Paper shared-secret write and zhangbot one-line 0600 token
+  handoff. On failure, delete this rule then entrypoint first; do not rerun
+  D1 migrations or modify R2/Redis/Relay/Cloudflared.
+
+## 2026-08-29 Processor transfer precondition stop and completed rollback
+
+- Status: `READY_FOR_PROCESSOR_ARCHIVE_TRANSFER_RETRY`; PAPER-10 is not PASS.
+  The archive staging directory and both SCP copies exited `0`, but remote
+  validation did not run because the SSH invocation placed the non-secret
+  environment assignments before the `zhangbot` host, producing
+  `hostname contains invalid characters` / exit `255`. No release, venv,
+  service, or Processor runner was created.
+- Capability-first rollback deleted the new WAF rule HTTP `200` and entrypoint
+  HTTP `204`; Edge Paper secret deletion exited `0` and name-only readback
+  showed it absent. The first token cleanup used a local-shell-expanded `$HOME`
+  path and therefore left the remote 0600 file; a corrected exact absolute-path
+  removal exited `0` and read back token absence. Staging was absent, existing
+  Redis/Relay/Cloudflared stayed active, and no D1/R2/Edge-code write occurred.
+- The SSH argument-order condition is not retried. The next transfer uses the
+  verified form `ssh zhangbot "P10_COMMIT=... P10_SOURCE_SHA=... P10_WHEELS_SHA=... bash -s"`.
+  D1 migrations `0017`–`0021` remain applied and must not be rerun.
+
+## 2026-08-29 current fresh read-only preflight after mainland Kimi gate
+
+- Status: `READY_FOR_WAF_CAPABILITY_RECREATE`; PAPER-10 is not PASS. The
+  current local HEAD is `9e5de68d6d323337002b44b195e68ec4f49921ee` on
+  `cloudflare-deploy`; the dirty worktree contains only PAPER-10 evidence
+  updates, and read-only `origin/cloudflare-deploy` is
+  `e551a5994cd228f19a2ae816c4529e4b04cf41a1`.
+- The commit-named source and wheel archives are present with SHA-256
+  `c440b41c1f6bd64f7a6c5d3f79e7ed0830860039b2b25ffef395bcd1ffd5cd5d` and
+  `3294170f5e7d8a6d7d68aec3951f86b8dfc9a6e9a68ef11b631d67b3f872d6ab`; exact
+  manifest source/lock/unit hashes, required members, and no-AppleDouble
+  checks pass.
+- Read-only Cloudflare checks confirm account
+  `3cfba3bb2ec69798aa4881b05d80810f`, Worker `infinity-agents-edge`, D1
+  `infinity-agents-db` (`9ee9ec94-cb42-40b5-8372-681c7b57c105`), and R2
+  `infinity-agents-resources` (APAC, 15 objects, 41.9 MB). Active Worker
+  version `f8470d1f-a37d-4de5-b448-be24a32c9a61` (#161) reads back mainland
+  Kimi `.cn`/`kimi-k2.6` and the fixed Processor ID/source IP. The Paper
+  shared-secret name is absent, health is HTTP `200` with Processor
+  unconfigured, and the custom WAF entrypoint is absent (`404`; ruleset list
+  has no `http_request_firewall_custom` entrypoint).
+- D1 reports `No migrations to apply!`; schema readback reports
+  `changes=0`, `changed_db=false`, and `rows_written=0`. Migrations
+  `0017`–`0021` were not rerun. The zhangbot read-only runtime checks pass:
+  Ubuntu 22.04, installed/candidate `python3.10-venv`
+  `3.10.12-1~22.04.17`, venv/ensurepip/pip, fixed egress
+  `39.105.204.121`, arXiv/PMC HTTP `200`, existing services/listeners, and no
+  Processor token/release/current/unit/runner or public Processor listener.
+- Local Edge, Processor, frontend typecheck/lint/unit, and frontend E2E gates
+  pass after the sandbox-only E2E retry. No Cloudflare, D1, R2, zhangbot, or
+  Redis/Relay/Cloudflared write occurred in this preflight. The next exact
+  operation is a newly created and immediately read-back BIC-only WAF rule;
+  D1 migrations remain untouched.
+
+## 2026-08-29 Kimi mainland text gate and latest capability rollback reconciliation
+
+- The real authenticated browser probe submitted exactly `请只回复：KIMI_MAINLAND_TEXT_PROBE_OK`
+  to corrected Worker version `79755db3-c12d-4737-b601-aa99f11e3f93` and
+  rendered exactly `KIMI_MAINLAND_TEXT_PROBE_OK`. This is the mainland Kimi
+  text-gate PASS; it supersedes the earlier international `.ai` 401. No Kimi
+  credential value is recorded and StepFun remains unused.
+- The latest Processor installation attempt stopped before venv/release/unit
+  creation because zhangbot lacks `rg` and the AppleDouble check returned
+  `127`. Capability-first rollback then read back the WAF entrypoint as HTTP
+  `404`, the Paper shared-secret name absent, and zhangbot token/staging/
+  release/current/unit/runner absent. Existing Redis/Relay/Cloudflared stayed
+  active; D1/R2 and Edge code were not changed by that attempt.
+- Status: `READY_FOR_FRESH_READ_ONLY_P10_PREFLIGHT`; PAPER-10 is not PASS. The
+  next operation is a new full read-only preflight, then only the exact WAF
+  recreate and paired capability handoff if all checks still pass. D1
+  migrations `0017`–`0021` remain applied and must not be rerun.
+
+## 2026-08-29 post-recovery preflight
+
+- Status: `READY_FOR_WAF_CAPABILITY_RECREATE`; PAPER-10 is not PASS.
+- After the SSH transfer-command recovery, the current clean release HEAD
+  remains `9e5de68d…` on `cloudflare-deploy`; read-only remote is
+  `e551a599…`, and the exact commit-named archives remain locally validated.
+- Current active 100% Worker is `d59aebd0…` (#159), read back with mainland
+  Kimi `.cn`/`kimi-k2.6` and fixed Processor bindings. Paper secret and WAF
+  entrypoint are absent; D1 reports no pending migrations and zero-write
+  schema; R2 remains 15 objects/41.9 MB; health is 200/unconfigured.
+- zhangbot package/venv/ensurepip/pip, fixed egress/source access, existing
+  services/listeners, and no Processor state all pass read-only checks. The
+  next operation is a fresh exact WAF create/readback; D1 must not be rerun.
+
+## 2026-08-29 transfer command precondition stop and recovery
+
+- Status: `BLOCKED_PROCESSOR_TRANSFER_COMMAND`; PAPER-10 is not PASS.
+- Archive mkdir and both SCP copies exited `0`; the remote validator was not
+  invoked because the local SSH command put the environment assignment where
+  SSH expected a hostname, producing `hostname contains invalid characters`
+  and exit `255`.
+- Recovery passed: WAF was already absent; Edge Paper secret was confirmed
+  absent; zhangbot token/staging/release/current/unit were removed; existing
+  Redis/Relay/Cloudflared stayed active. No D1/R2/Edge code change occurred.
+- The bounded retry fixes only the SSH argument order and repeats a fresh
+  read-only preflight before any new WAF or capability write.
+
+## 2026-08-29 fresh preflight after hash-check rollback
+
+- Status: `READY_FOR_WAF_CAPABILITY_RECREATE`; PAPER-10 is not PASS.
+- Clean baseline is `9e5de68d6d323337002b44b195e68ec4f49921ee` on
+  `cloudflare-deploy`; read-only remote is `e551a599…`. The exact current-HEAD
+  source/wheel archives pass manifest, lock, member, and no-AppleDouble checks.
+- Read-only Cloudflare checks pass for the exact account/Worker/D1/R2 target;
+  current 100% version `dc40c31d…` retains mainland Kimi `.cn`/`kimi-k2.6`
+  and fixed Processor bindings. D1 has no pending migrations and zero-write
+  schema metadata, R2 remains 15 objects/41.9 MB, Paper secret/WAF entrypoint
+  are absent, and health is 200 with Processor unconfigured.
+- Read-only zhangbot checks pass for the exact installed venv package,
+  venv/ensurepip/pip, fixed egress/source access, existing-service
+  preservation, and no active Processor state. The install retry now uses the
+  manifest-relative hash command. No D1 migration is to be rerun.
+
 ## 2026-08-29 exact WAF rule readback
 
 - Status: `READY_FOR_PROCESSOR_CAPABILITY_HANDOFF`; PAPER-10 is not PASS.

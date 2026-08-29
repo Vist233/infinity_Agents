@@ -164,3 +164,89 @@ Branch: `cloudflare-deploy`
 - WAF deletion returned HTTP `200` for the rule and `204` for the entrypoint;
   final entrypoint readback returned HTTP `404`. The Edge secret and zhangbot
   token were then revoked/removed. No WAF rule is active now.
+
+## 2026-08-29 retry preflight after installer-check rollback
+
+- Rulesets read through the mode-`0600` token exited `0`/HTTP `200`; the fixed
+  custom entrypoint read exited `0`/HTTP `404`/error `10003`. No WAF rule is
+  active and no new WAF write has occurred in this retry.
+- The exact current-HEAD archives and the complete read-only Cloudflare and
+  zhangbot preflight passed. The next operation is a fresh exact rule
+  create/readback; its IDs will be the rollback handles.
+
+## 2026-08-29 transfer command rollback
+
+- A transfer command stopped before remote archive validation with SSH exit
+  `255` because safe environment assignments were placed before the host.
+  No WAF write occurred in that attempt; the WAF entrypoint remains absent.
+- Edge secret and zhangbot token/staging were confirmed absent during recovery.
+  Retry uses the corrected SSH ordering only.
+
+## 2026-08-29 latest rollback state
+
+- The latest Processor install guard stopped before installation because
+  zhangbot lacks `rg`; after capability-first rollback the fixed entrypoint
+  read returned HTTP `404` and no Paper WAF rule is active. The next exact
+  rule, if authorized by a fresh passing preflight, must be newly created and
+  immediately read back; no prior rule ID is reused.
+
+## 2026-08-29 current preflight state
+
+- Read-only Rulesets access through the mode-`0600` token returned HTTP `200`;
+  the current custom fixed-endpoint entrypoint is absent, and the previous
+  entrypoint read returned HTTP `404`. No WAF rule is active.
+- All local gates and the current immutable artifact preflight pass. The next
+  rule must be newly created, match only zhangbot IP `39.105.204.121`, host
+  `infinity.zhangyvjing.com`, the three fixed POST paths plus fixed PUT object
+  path, and skip only BIC; it must be read back before any capability write.
+
+## 2026-08-29 current exact WAF rule
+
+- The newly created and immediately read-back entrypoint is
+  `eec4070b89af476a9e806bbc07458fc0`; its rule is
+  `026d95bb13d149f69ee339bb8aba8ace`. HTTP create/readback were both `200`;
+  semantic validator exit was `0`.
+- Readback proves one enabled/logged zone custom rule, action `skip`, action
+  parameters exactly `products=["bic"]`, and the exact fixed expression for
+  `39.105.204.121`, `infinity.zhangyvjing.com`, POST connect/poll/control, and
+  PUT object. The earlier rejected `version` request created no partial rule.
+- This is the only current Paper-release external change. Delete the rule then
+  entrypoint using these IDs before rolling back any later capability or release
+  step; no D1 migration is to be rerun.
+
+## 2026-08-29 transfer rollback state
+
+- After archive transfer stopped at the malformed SSH host ordering, the new
+  rule `026d95bb…` and entrypoint `eec4070b…` were deleted with HTTP `200` and
+  `204`. Read-only inventory now shows no custom entrypoint; no WAF rule is
+  active. Edge Paper secret and zhangbot token were also removed/absent.
+- The next WAF rule must be newly created after a fresh preflight; no deleted
+  ID is reused.
+
+## 2026-08-29 retry preflight after transfer rollback
+
+- Rulesets inventory is read-only clean with no custom entrypoint; Edge Paper
+  secret and zhangbot token are absent. The exact artifact, active mainland
+  Kimi Worker, D1/R2, and zhangbot preflight passed.
+- A newly created exact four-path BIC-only rule is required before the next
+  capability handoff. The host-first SSH transfer form has been corrected and
+  will be used exactly once; no prior WAF ID is reused.
+
+## 2026-08-29 archive-hash rollback state
+
+- The latest host-first transfer stopped at a local archive/source hash input
+  mismatch before installation. New WAF rule/entrypoint, Edge Paper secret,
+  and zhangbot token/staging were removed and read back absent; no WAF rule is
+  active. A newly created rule is required after the next clean preflight.
+
+## 2026-08-29 browser-control blocker final WAF state
+
+- The final exact rule/readback in this attempt used entrypoint
+  `7c1feeddaeb744568317625a21557258` and rule
+  `7e3458417b984adcb70b24cad72fdb9f`; semantic validation passed for one
+  enabled/logged rule with action `skip`, products `["bic"]`, and only
+  the fixed zhangbot IP/host and four method/path pairs.
+- The rule was deleted before stopping because the mandatory authenticated
+  browser acceptance could not be controlled. Rule deletion returned HTTP
+  `200`, entrypoint deletion HTTP `204`, final readback/inventory showed
+  no custom Processor entrypoint. No WAF exception is active.

@@ -1171,6 +1171,32 @@ recorded exactly; no failed assertion was skipped.
       repeating the exact manifest command; a fresh artifact/preflight is
       required before any new capability write.
 
+94. Fresh preflight after relative-path hash correction
+    - Branch/worktree/head/remote checks exited `0`: clean `cloudflare-deploy`,
+      HEAD `9e5de68d…`, read-only remote `e551a599…`.
+    - Current-HEAD archive creation and SHA output exited `0`; source/wheel tar
+      listing and required member checks exited `0`; no-AppleDouble scans
+      returned expected rg exit `1`; manifest source/lock/unit and pinned-wheel
+      hash checks exited `0`.
+    - Wrangler account/deployment/version/secret-name/D1 migration/schema/R2
+      reads all exited `0`; current 100% version is `dc40c31d…` with mainland
+      Kimi and fixed Processor bindings, Paper secret is absent, D1 reports no
+      pending migrations and `changes=0`, `changed_db=false`, `rows_written=0`,
+      R2 remains 15 objects/41.9 MB, and health curl exited `0`/HTTP `200`.
+    - WAF token metadata/Rulesets reads exited `0`, with entrypoint HTTP `404`;
+      SSH runtime/package/venv/ensurepip/pip/service/listener/staging/runner
+      checks exited `0`, fixed egress/source checks passed. No write occurred.
+
+95. Transfer command stop and capability-first recovery
+    - Staging mkdir/source SCP/wheel SCP each exited `0`; remote validation
+      exited `255` before execution because SSH parsed the environment
+      assignment as a hostname. No release install ran.
+    - WAF was already absent; Edge secret-name read exited `0` and showed
+      absent; zhangbot token/staging/release/current/unit cleanup exited `0`
+      and final absence checks passed. Existing Redis/Relay/Cloudflared were
+      active. No D1/R2/Edge deployment occurred.
+    - Retry changes only SSH argument ordering and requires fresh preflight.
+
 93. Processor install failure evidence gate
     - `git diff --check` exited `0`.
     - The scoped secret-value detector over updated PAPER-10 evidence,
@@ -1188,3 +1214,311 @@ recorded exactly; no failed assertion was skipped.
     - The scoped secret-value detector over all updated PAPER-10 evidence,
       excluding `secret-scan.txt`, returned raw no-match exit `1`; normalized
       secret gate exited `0`.
+
+96. Post-recovery fresh preflight
+    - Clean `cloudflare-deploy` HEAD/remote and archive presence checks exited
+      `0`; manifest source/lock/unit and no-AppleDouble checks passed.
+    - Current account/target, active 100% Worker version/bindings, secret-name,
+      D1 migration/schema, R2, and health read checks all exited `0`; D1
+      reported no pending migrations with zero changes/writes and health was
+      HTTP `200` with Processor unconfigured.
+    - WAF token metadata/Rulesets reads exited `0` with the fixed entrypoint
+      HTTP `404`; SSH package/venv/ensurepip/pip/service/listener/staging/
+      runner and fixed-source checks exited `0`. No write occurred.
+
+97. Latest Processor install stop, rollback, and Kimi mainland gate
+    - The real authenticated browser probe against Worker version
+      `79755db3-c12d-4737-b601-aa99f11e3f93` rendered the exact marker
+      `KIMI_MAINLAND_TEXT_PROBE_OK`; no credential value was captured.
+    - The corrected archive transfer and relative source/lock/unit hash checks
+      passed. The subsequent no-AppleDouble guard invoked `rg` on zhangbot,
+      which is not installed; that guard exited `127`, so installation stopped
+      before venv/release/unit creation. This condition is being changed to the
+      already available `grep` utility before any retry.
+    - Capability-first rollback read back WAF HTTP `404`, Paper shared-secret
+      name absent, zhangbot token/staging/release/current/unit absent, and
+      runner count `0`; SSH read-only status exited `0` and existing
+      Redis/Relay/Cloudflared remained active. No D1 migration was rerun and no
+      R2 write or Edge code deployment occurred.
+
+98. Current fresh preflight and local gates after mainland Kimi gate
+    - Branch/HEAD/scope checks exited `0`: `cloudflare-deploy`, HEAD
+      `9e5de68d…`, only PAPER-10 evidence changes; read-only remote ref
+      `e551a599…`. Source archive SHA-256
+      `c440b41c1f6bd64f7a6c5d3f79e7ed0830860039b2b25ffef395bcd1ffd5cd5d` and
+      wheel archive SHA-256
+      `3294170f5e7d8a6d7d68aec3951f86b8dfc9a6e9a68ef11b631d67b3f872d6ab`
+      matched the commit-named artifacts. Manifest hash comparisons and exact
+      source/wheel member checks exited `0`; AppleDouble scans returned the
+      expected no-match exit `1`; `git diff --check` exited `0`.
+    - Cloudflare `whoami`, deployment status/version read, secret-name read,
+      D1 migration/schema read, corrected R2 info, health, and WAF Rulesets
+      reads exited `0`. The explicit-APAC R2 CLI attempt returned `400 invalid
+      jurisdiction` and was not used as the preflight result; the corrected
+      default-jurisdiction read returned APAC/15 objects/41.9 MB. Active Worker
+      is `f8470d1f…` (#161), mainland Kimi bindings are present, Paper secret
+      name is absent, health is HTTP `200`, and WAF custom entrypoint is absent
+      (`404`). D1 reported no pending migrations and zero changes/writes.
+    - zhangbot SSH read-only checks exited `0`: exact dpkg status/candidate
+      `3.10.12-1~22.04.17`, venv/ensurepip/pip, fixed egress
+      `39.105.204.121`, arXiv/PMC HTTP `200`, existing services/listeners, and
+      no Processor state. The first dpkg quoting probe and `ifconfig.me` probe
+      were corrected; the corrected package/egress results exited `0`.
+    - `cd cloudflare-worker && npm run check && npm test` exited `0` (24 files,
+      134 tests); Processor pytest exited `0` (12 passed); frontend typecheck,
+      lint, and unit exited `0` (50 tests); first sandbox E2E exited `1` on
+      local bind EPERM, then elevated `npm run test:e2e` exited `0` (13 passed).
+      Warnings were non-fatal and no test was skipped or weakened.
+    - The real authenticated text probe had already rendered exactly
+      `KIMI_MAINLAND_TEXT_PROBE_OK` against Worker version
+      `79755db3-c12d-4737-b601-aa99f11e3f93`; no credential value was captured.
+      No external write occurred in this preflight.
+
+99. Exact fixed-endpoint WAF create/readback
+    - The first additive body returned HTTP `400`/`unknown field version`;
+      corrected read-only inventory returned HTTP `200` with no partial custom
+      entrypoint. The corrected create returned HTTP `200`, entrypoint
+      `eec4070b…`, rule `026d95bb…`; immediate readback returned HTTP `200`.
+    - Semantic validator exited `0`: one enabled/logged zone custom rule in
+      `http_request_firewall_custom`, action `skip`, action keys exactly
+      `products`, products exactly `["bic"]`, exact source IP/host and the
+      three POST plus one PUT fixed paths. No wildcard or broad bypass.
+    - This is the only current external change. Next is paired secret/token
+      handoff; WAF rule and entrypoint are the rollback handles. No D1
+      migration, R2, Processor, Edge code, or Redis/Relay/Cloudflared write
+      occurred.
+
+100. Processor transfer command precondition stop and rollback
+     - Remote staging mkdir/source SCP/wheel SCP each exited `0`; remote
+       validation exited `255` before execution because environment assignments
+       preceded the SSH host (`hostname contains invalid characters`). No
+       release or service installation ran.
+     - WAF rule/entrypoint deletion returned HTTP `200`/`204`; Edge secret
+       deletion exited `0` and the name-only list showed absence. The first
+       token cleanup path was expanded locally and did not remove the remote
+       file; corrected absolute-path cleanup exited `0`, read back absence, and
+       staging/release/current/unit/runner were absent. Existing services stayed
+       active. No D1 migration or R2/Edge-code write occurred.
+     - The next retry changes SSH ordering only; the failed ordering is not
+       repeated.
+
+106. Processor manifest identity check stop and rollback
+     - Remote archive SHA/wheel SHA/member/AppleDouble checks passed; extracted
+       source aggregate, lock, and unit comparisons each exited `0`. The
+       installer then stopped at an incorrect check requiring release HEAD
+       `9e5de68d…` in the manifest; the manifest correctly pins reviewed
+       Processor source commit `455ae849…`. No venv/service/runner started.
+     - Capability-first WAF rule/entrypoint deletion returned HTTP `200`/`204`,
+       Edge secret deletion exited `0`, zhangbot cleanup exited `0`, and
+       readbacks showed no new Processor state. Existing services stayed
+       active; no D1 migration or R2/Edge-code write occurred.
+     - The bounded fix compares the reviewed manifest source commit separately
+       from the release commit and must repeat a fresh preflight.
+
+101. Retry preflight after transfer rollback
+     - Local branch/HEAD/scope/archive/diff checks exited `0`; the current
+       commit-named source/wheel archive hashes remained
+       `c440b41c…`/`3294170f…` and no-AppleDouble checks returned expected
+       no-match exit `1`. Read-only remote ref remained `e551a599…`.
+     - Cloudflare deployment/version, secret-name, D1 migration/schema, R2,
+       health, and WAF inventory reads exited `0`; active Worker
+       `52860ea1…` (#163) retained mainland Kimi/fixed Processor bindings,
+       Paper secret was absent, health was HTTP `200`/unconfigured, WAF custom
+       entrypoint was absent, D1 had no pending migrations/zero writes, and R2
+       was APAC/15 objects/41.9 MB.
+    - Corrected zhangbot SSH preflight exited `0`: exact dpkg status and apt
+      candidate, venv/ensurepip/pip, fixed egress `39.105.204.121`, arXiv/PMC
+      HTTP `200`, existing services/listeners, and no Processor state. No
+      external write occurred in this retry preflight.
+
+102. Host-first transfer reached archive-hash guard and rolled back
+     - Remote staging mkdir/source SCP/wheel SCP exited `0`; host-first SSH
+       validator exited `1` because the expected source aggregate hash was
+       accidentally supplied for the archive file. Remote archive SHA was
+       `c440b41c…`, while the source aggregate is `510715c4…`; wheel archive
+       SHA matched `3294170f…`. No extraction, release, venv, or unit install
+       ran.
+     - WAF rule/entrypoint deletion returned HTTP `200`/`204`; Edge secret
+       deletion exited `0`; zhangbot token/staging cleanup exited `0`; readback
+       showed no new Processor state and existing services active. No D1
+       migration or R2/Edge-code write occurred.
+     - The next validator keeps separate `P10_ARCHIVE_SHA` and
+       `P10_SOURCE_SHA` values and repeats fresh preflight; the prior variable
+       mix-up is not repeated.
+
+105. Immutable Processor archive transfer with separated archive/source hashes
+     - Host-first remote staging mkdir, source SCP, wheel SCP, and archive
+       validator exited `0`. Archive SHA matched `c440b41c…`; wheel SHA
+       matched `3294170f…`; no-AppleDouble checks reported absent; and all
+       required source/manifest/unit/lock/wheel members matched.
+     - No extraction, release, venv, unit, service, or runner was created in
+       this transfer step. Current WAF entrypoint/rule `421a5184…`/`6dc66d74…`
+       and paired capabilities remain the only Paper external changes. No D1
+       migration or R2 write occurred.
+
+103. Fresh preflight after archive/source hash rollback
+     - Local branch/HEAD/scope/archive/diff checks exited `0`; HEAD remained
+       `9e5de68d…`, remote ref `e551a599…`, archive SHA values remained
+       `c440b41c…`/`3294170f…`, and no-AppleDouble/member checks passed.
+     - Cloudflare deployment/version, secret-name, D1 migration/schema, R2,
+       health, and WAF inventory reads exited `0`. Active Worker
+       `e281e88c…` (#165) retained mainland Kimi/fixed Processor bindings;
+       Paper secret and custom WAF entrypoint were absent; health was HTTP
+       `200`/unconfigured; D1 had no pending migrations/zero writes; R2 was
+       APAC/15 objects/41.9 MB.
+     - Corrected zhangbot read-only checks exited `0`: exact dpkg status and
+       apt candidate, venv/ensurepip/pip, fixed egress `39.105.204.121`,
+       arXiv/PMC HTTP `200`, existing services/listeners, and no Processor
+       state. No external write occurred in this preflight.
+
+107. Latest offline pip install stop and rollback
+     - Immutable archive transfer and archive/member/source/lock/unit/manifest
+       identity guards exited `0`. The offline pip install exited `1` with
+       redacted output `ERROR: Could not find a version that satisfies the
+       requirement pypdf==6.15.0 (from versions: none)` because the wheel tar
+       had not been extracted into the `--find-links` directory. No venv,
+       release, unit, or runner was created.
+     - Capability-first rollback exited cleanly: WAF rule and entrypoint
+       deletes returned HTTP `200`/`204`; Edge secret delete and zhangbot
+       token/staging/release/current/unit cleanup exited `0`; absence and
+       existing-service readbacks passed. No D1 migration, R2 object, or Edge
+       code deployment occurred.
+
+108. Fresh read-only preflight after pip rollback
+     - Local branch/HEAD/scope/archive/hash reads exited `0`; branch is
+       `cloudflare-deploy`, HEAD `9e5de68d…`, remote ref `e551a599…`, and only
+       PAPER-10 evidence files are dirty. No source or lock change occurred.
+     - Corrected Wrangler account/deployment/version/secret-name/D1 migration/
+       schema/R2/health reads exited `0`; active version is
+       `b70253c2-fe3a-4556-9667-fcbb3c0df053` (#169) with mainland Kimi and
+       fixed Processor bindings, Paper secret is absent, D1 has no pending
+       migrations and zero writes, R2 is APAC/15 objects/41.9 MB, health is
+       HTTP `200`/unconfigured, and WAF Rulesets/entrypoint reads are HTTP
+       `200`/`404` respectively.
+     - zhangbot SSH package/venv/ensurepip/pip/service/listener/absence and
+       source-egress checks exited `0`; existing Redis/Relay/Cloudflared are
+       active/enabled and no Processor runner/state exists. The first wrapper
+       used the WAF token with Wrangler and failed auth (exit `1`), and the
+       first D1 read used the wrong directory (exit `1`); both were corrected
+       without any write. D1 migrations `0017`-`0021` were not rerun.
+
+109. Exact capability handoff failure and rollback
+     - Exact WAF create/readback exited `0` with entrypoint
+       `2e8384f5…`, rule `d2151509…`; Edge secret put/name read exited `0`.
+       The SSH token handoff exited `1` before successful env-file validation.
+       No token value was printed or recorded.
+     - Capability-first rollback deleted the WAF rule/entrypoint with HTTP
+       `200`/`204`, Edge secret deletion exited `0`, and zhangbot token/staging
+       cleanup exited `0`; final absence reads and health HTTP `200` passed.
+       Existing Redis/Relay/Cloudflared stayed active. No D1 migration, R2
+       object, or Edge-code deployment occurred.
+     - The retry changes only handoff transport/validation: direct stdin to a
+       temporary file followed by portable `grep` and line-count checks before
+       atomic rename.
+
+110. Archive transfer validator syntax stop and rollback
+     - Local staging, source SCP, wheel SCP, and remote archive/wheel SHA
+       checks exited `0`; the generated remote member/AppleDouble command
+       returned exit `2` with a bash syntax error from nested quoting. No
+       extraction or install ran.
+     - WAF rule/entrypoint deletion returned HTTP `200`/`204`; Edge secret
+       deletion, zhangbot token/staging cleanup, and final absence reads all
+       exited `0`. Health was HTTP `200`/unconfigured and existing services
+       stayed active. No D1 migration, R2 write, or Edge deployment occurred.
+    - The next retry changes only the remote validator representation to a
+      literal, hard-coded host-first command and repeats fresh preflight.
+
+111. Archive wheel member-name stop and rollback
+     - Staging, both SCP transfers, archive/wheel SHA checks, and AppleDouble
+       checks exited `0`; the exact member guard exited `1` because wheel tar
+       entries have a leading `./`. No extraction or installation ran.
+     - WAF rule/entrypoint deletion returned HTTP `200`/`204`; Edge secret,
+       zhangbot token/staging cleanup, absence reads, and existing-service
+       checks exited `0`. No D1 migration, R2 object, or Edge deployment
+       occurred.
+    - The retry normalizes only the wheel tar member prefix and repeats the
+      fresh preflight/capability sequence.
+
+112. Latest archive-member rollback and fresh preflight
+     - The archive/wheel SHA and AppleDouble checks passed; the wheel member
+       guard exited `1` because all three wheel tar members include `./`.
+       Capability-first WAF/secret/token/staging rollback and readbacks exited
+       `0`/HTTP `200`/`204` as applicable; no install ran.
+     - Fresh local, Wrangler, D1, R2, WAF, health, and zhangbot preflight
+       reads exited `0`; active Worker `3dda1a0e…` (#175) retained mainland
+       Kimi/fixed bindings, D1 had no pending migrations and zero writes, R2
+       was APAC/15 objects/41.9 MB, and Processor state was absent.
+    - D1 migrations `0017`-`0021` were not rerun. Next retry only normalizes
+      the documented `./` wheel member prefix before locked installation.
+
+113. Temporary diagnostic wrapper invalidated
+     - Diagnostic directory initialization and both SCP transfers exited `0`,
+       but the diagnostic script removed that directory before reading the
+       copied archives. Its subsequent missing-file/venv output is invalid.
+     - Cleanup exited `0`; no production release, service, WAF, secret, D1,
+       R2, or Edge-code mutation occurred. The next diagnostic preserves its
+       input directory and adds per-step markers.
+
+114. Production install early stop and corrected temporary diagnostic
+     - The production install wrapper exited `1` before its first install
+       marker; rollback and path-permission readbacks exited `0`. The first
+       temporary diagnostic was invalidated by self-deleting its input.
+     - The corrected temporary diagnostic passed archive SHA/AppleDouble,
+       source extraction/relative hashes/manifest, wheel extraction/member
+       checks, Python 3.10 venv/ensurepip, and offline locked pip (exit `0`);
+       no production release or service was created.
+     - The next install wrapper adds stage markers only and retains the
+       proven wheel extraction. D1 migrations `0017`-`0021` are not rerun.
+
+116. Production archive-root assertion stop and rollback
+     - Marked install input and release-parent checks exited `0`; the next
+       release-directory assertion exited `1` because the tar root is
+       `infinity-paper-processor-<commit>` while the required release path
+       is commit-only. No venv/unit/service installation ran.
+     - WAF/Edge secret/zhangbot rollback and absence readbacks passed;
+       health was `200`/unconfigured and existing services stayed active.
+       No D1 migration, R2 object, or Edge-code deployment occurred.
+     - The retry validates the root in a temporary extraction directory and
+       atomically moves it to the commit-only release directory.
+
+115. Marked-install retry preflight
+     - Corrected temporary diagnostic archive/member/source/manifest/wheel/
+       venv/ensurepip/offline-pip checks exited `0` and cleanup completed.
+     - Fresh local/Wrangler/D1/R2/WAF/health/zhangbot preflight reads exited
+       `0`; active Worker `816e5144…` (#177) retained mainland Kimi/fixed
+       bindings, D1 had no pending migrations and zero writes, R2 was APAC/
+       15 objects/41.9 MB, capabilities were absent, and Processor state was
+       absent. D1 migrations were not rerun.
+
+117. Kimi mainland gate and latest Processor post-start stop
+     - The real authenticated browser probe on Worker version
+       `79755db3-c12d-4737-b601-aa99f11e3f93` submitted the exact Chinese
+       text-only prompt and rendered the exact marker
+       `KIMI_MAINLAND_TEXT_PROBE_OK`; this is a provider-gate PASS. No secret
+       value was read or recorded and StepFun was not used.
+     - Latest install stages through `systemd --user start` exited `0`; the
+       wrapper then returned `remote_install_rc=1` before a service-readback
+       pass marker. WAF rule/entrypoint rollback returned HTTP `200`/`204`,
+       Edge secret deletion and host cleanup returned `0`, and post-rollback
+       absence reads passed. No D1 migration, R2 object, or Edge deployment
+       occurred.
+     - Current read-only recovery: secret list has no Paper secret, WAF
+       custom-entrypoint list is empty, health is HTTP `200`/unconfigured,
+       D1 schema read has zero writes, R2 is APAC/15 objects/41.9 MB, zhangbot
+       has no Processor token/unit/current/release/runner, and existing
+       services/listeners are unchanged. The next retry must capture active,
+       enabled, MainPID, and runner-count values before asserting them.
+
+118. Capability handoff shape rejection and rollback
+     - Fresh WAF create/readback returned success; Edge shared-secret put and
+       name-only readback returned exit `0`. The zhangbot handoff validator
+       returned exit `1` because the temporary env file had
+       `line_count=2` from the transport final newline; value shape and
+       temporary mode `600` were valid, so installation was safely refused.
+     - WAF rule/entrypoint deletion returned HTTP `200`/`204`; Edge secret
+       deletion and host token cleanup returned exit `0`. Final reads showed
+       no WAF entrypoint, Paper secret, Processor token/service/runner, and
+       existing services remained active. No D1 migration, R2 object, or Edge
+       deployment occurred.
+     - Next retry changes only stdin newline normalization and keeps the
+       one-line/one-key/mode-`600` checks.

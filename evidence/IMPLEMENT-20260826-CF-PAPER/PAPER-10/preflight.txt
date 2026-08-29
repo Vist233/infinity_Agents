@@ -1302,3 +1302,463 @@ first and preserve D1/R2 and the existing host services.
   root using the manifest's relative paths. It must rebuild the exact current
   commit artifact and repeat read-only preflight before recreating WAF or
   capability material.
+
+## 2026-08-29 transfer command precondition stop and recovery
+
+- Local transfer created the commit-named remote staging directory and both
+  archive copies exited `0`, but the intended remote validation did not run:
+  the SSH invocation placed `P10_COMMIT=...` before the host and returned
+  `hostname contains invalid characters` / exit `255`. No source was
+  installed and no release/service action followed.
+- Recovery was completed in capability order after the WAF rule had already
+  been removed: Edge secret-name read showed absent, zhangbot token/staging/
+  release/current/unit paths were removed and read back absent, and existing
+  Redis/Relay/Cloudflared remained active. No D1/R2/Edge code write occurred.
+- The retry changes only SSH argument ordering so the safe environment values
+  are passed after the `zhangbot` host; it must repeat the read-only preflight
+  before WAF/capability writes.
+
+## 2026-08-29 fresh preflight after relative-path hash correction
+
+- The current clean baseline was `9e5de68d6d323337002b44b195e68ec4f49921ee`
+  on `cloudflare-deploy`; read-only `git ls-remote --heads origin
+  cloudflare-deploy` exited `0` with remote `e551a5994cd228f19a2ae816c4529e4b04cf41a1`.
+  The current-HEAD source and wheel archives were rebuilt and validated:
+  creation/listing/member checks exited `0`, AppleDouble scans returned the
+  expected no-match exit `1`, manifest source/lock/unit comparisons exited
+  `0`, and archive SHA-256 values are recorded in the test log below.
+- Cloudflare read-only checks exited `0`: account
+  `3cfba3bb2ec69798aa4881b05d80810f`, Worker `infinity-agents-edge`, D1
+  `infinity-agents-db` (`9ee9ec94-cb42-40b5-8372-681c7b57c105`), and R2
+  `infinity-agents-resources` remain the targets. Current deployment status
+  read exited `0`; latest 100% secret-change version is
+  `dc40c31d-6d72-43ab-9fe9-ad2c9203eb7b` (#157), and its read-only binding
+  check exited `0` with mainland Kimi `https://api.moonshot.cn/v1` /
+  `kimi-k2.6` and fixed Processor ID/source IP. Only secret names were
+  inspected. The Paper shared secret is absent, `/health` is HTTP `200` with
+  Processor unconfigured, and the fixed WAF entrypoint is absent (`404` /
+  error `10003`).
+- D1 migration listing exited `0` with `No migrations to apply!`; the
+  read-only schema query exited `0` with all Paper tables/indexes and
+  `changes=0`, `changed_db=false`, `rows_written=0`. Migrations `0017`–`0021`
+  were not rerun. R2 list/info exited `0` with APAC, 15 objects, and 41.9 MB.
+- Secure WAF Rulesets read exited `0`/HTTP `200`; token metadata remained
+  mode `0600`. SSH read-only checks exited `0`: Ubuntu `22.04`, Python
+  `3.10.12`, `python3.10-venv` installed/candidate
+  `3.10.12-1~22.04.17`, venv/ensurepip/pip checks passed, existing Redis/
+  Relay/Cloudflared were active, and no Processor token/unit/current/release/
+  staging/runner/listener existed. Fixed egress remained `39.105.204.121`;
+  arXiv and PMC checks returned HTTP `200`.
+
+### Retry preflight decision
+
+The relative-path hash correction is the only installer change. All current
+artifact, Cloudflare target, Kimi, D1/R2, WAF capability, zhangbot runtime,
+service-preservation, egress, and source checks pass. The next authorized
+operation is to recreate the exact four-pair BIC-only WAF rule, then pair the
+Edge shared secret and zhangbot token. D1 migrations remain applied and must
+not be rerun.
+
+## 2026-08-29 post-recovery fresh preflight
+
+- After the transfer-command recovery, the clean release baseline remained
+  `9e5de68d6d323337002b44b195e68ec4f49921ee` on `cloudflare-deploy`; the
+  no-proxy remote ref read exited `0` as `e551a5994cd228f19a2ae816c4529e4b04cf41a1`.
+  The commit-named archive pair remained present and its manifest/source/
+  lock/unit and no-AppleDouble checks remained passing.
+- Cloudflare account/target, current active 100% secret-change version
+  `d59aebd0-3f4f-4575-9b80-2f641b696000` (#159), mainland Kimi bindings,
+  secret-name absence, D1 no-pending/zero-write schema, R2 15 objects/41.9 MB,
+  and HTTP 200 health with Processor unconfigured all read back successfully.
+  No D1 migration was rerun.
+- WAF Rulesets read exited `0`/HTTP `200` and fixed entrypoint read exited
+  `0`/HTTP `404`; zhangbot read-only checks again passed for exact package,
+  venv/ensurepip/pip, no Processor state, fixed egress/source access, and
+  active existing services/listeners. No external write occurred in this
+  recovery preflight.
+
+### Post-recovery decision
+
+The corrected SSH ordering is ready for one fresh exact WAF create/readback,
+followed by the capability handoff and the relative-path Processor install.
+D1 migrations `0017`–`0021` remain applied and must not be rerun.
+
+## 2026-08-29 latest install-stop rollback and provider-gate reconciliation
+
+- The authenticated mainland Kimi text marker `KIMI_MAINLAND_TEXT_PROBE_OK`
+  was visibly returned exactly by Worker version
+  `79755db3-c12d-4737-b601-aa99f11e3f93`; the earlier international `.ai` 401
+  is superseded. No provider credential value was read.
+- The latest remote install stopped at the no-AppleDouble guard because
+  zhangbot has no `rg` (`command not found`, exit `127`); no venv, release,
+  unit, or Processor runner was created. WAF readback is HTTP `404`, the Edge
+  Paper secret name is absent, and zhangbot new paths are absent. Existing
+  Redis/Relay/Cloudflared and their listeners remain active. No D1/R2 write or
+  Edge code deployment occurred in that attempt.
+- This is a rollback-complete state requiring a new read-only preflight before
+  any WAF or capability recreation. PAPER-10 remains incomplete.
+
+## 2026-08-29 current fresh read-only preflight after mainland Kimi gate
+
+- Local read-only checks: branch `cloudflare-deploy`, HEAD
+  `9e5de68d6d323337002b44b195e68ec4f49921ee`, and only PAPER-10 evidence files
+  are modified. No-proxy `git ls-remote --heads origin cloudflare-deploy`
+  exited `0` with `e551a5994cd228f19a2ae816c4529e4b04cf41a1`. The exact
+  current-HEAD archive pair is present; source archive SHA-256 is
+  `c440b41c1f6bd64f7a6c5d3f79e7ed0830860039b2b25ffef395bcd1ffd5cd5d` and
+  wheel archive SHA-256 is
+  `3294170f5e7d8a6d7d68aec3951f86b8dfc9a6e9a68ef11b631d67b3f872d6ab`.
+  Manifest source/lock/unit comparisons exited `0`; exact source/wheel member
+  checks exited `0`; no-AppleDouble scans returned expected no-match exit `1`.
+- Cloudflare read-only checks exited `0` for account/deployment/version/secret
+  names/D1/health/WAF, except the first R2 command with an explicit `APAC`
+  jurisdiction option returned CLI/API `400 invalid jurisdiction`; the
+  corrected default-jurisdiction info read exited `0` and returned APAC, 15
+  objects, and 41.9 MB. Current active deployment readback is
+  `f8470d1f-a37d-4de5-b448-be24a32c9a61` (#161), with
+  `MODEL_BASE_URL=https://api.moonshot.cn/v1`, `MODEL_ID=kimi-k2.6`,
+  `PAPER_PROCESSOR_ID=paper-processor-zhangbot-v1`, and source IP
+  `39.105.204.121`; only non-secret binding names/types were inspected.
+  Paper shared-secret name is absent, health is HTTP `200`/unconfigured, and
+  WAF rulesets read HTTP `200` with no custom entrypoint; the previous exact
+  entrypoint read HTTP `404`.
+- D1 migration read exited `0` with `No migrations to apply!`; read-only schema
+  query exited `0` with all Paper tables/indexes and `changes=0`,
+  `changed_db=false`, `rows_written=0`. No migration was run. WAF token mode
+  is `0600` and Rulesets read is HTTP `200`.
+- zhangbot SSH read-only checks exited `0`: Ubuntu `22.04`, x86_64, Python
+  `3.10.12`, exact `dpkg-query` status `install ok installed 3.10.12-1~22.04.17`,
+  apt candidate the same, `python3 -m venv --help`, disposable venv,
+  ensurepip, and pip all passed. Fixed egress read through
+  `ipv4.icanhazip.com` is exactly `39.105.204.121`; arXiv and PMC returned
+  HTTP `200`. Redis, Relay, and Cloudflared are active/enabled; their existing
+  listeners are unchanged. Processor token env, staging, release, current
+  link, unit, and runner are absent; Docker/Compose are absent.
+- Local gates exited `0`: Edge `npm run check && npm test` (24 files/134
+  tests), Processor pytest (12 passed), frontend typecheck/lint/unit, and
+  elevated frontend E2E (13 passed). The first E2E attempt exited `1` only
+  because the sandbox forbade local port `3000`; the permitted retry passed.
+  The real authenticated mainland Kimi text marker was already exactly
+  `KIMI_MAINLAND_TEXT_PROBE_OK` against Worker version
+  `79755db3-c12d-4737-b601-aa99f11e3f93`; no provider credential value was
+  read. This preflight is write-ready but no external write has occurred.
+
+## 2026-08-29 exact WAF create/readback
+
+- After the passing fresh preflight, the first create body was rejected HTTP
+  `400` because the API does not accept a `version` field; a read-only ruleset
+  inventory immediately returned HTTP `200` with no custom entrypoint. The
+  corrected additive request then created entrypoint
+  `eec4070b89af476a9e806bbc07458fc0` with rule
+  `026d95bb13d149f69ee339bb8aba8ace`, HTTP `200`.
+- Immediate readback returned HTTP `200` and semantic validation exit `0`:
+  exactly one enabled/logged zone custom rule, action `skip`, action parameters
+  exactly `products=["bic"]`, and the exact fixed expression for zhangbot IP
+  `39.105.204.121`, host `infinity.zhangyvjing.com`, POST connect/poll/control,
+  and PUT object. No wildcard, whole-host, IP Access Allow, or other skipped
+  product was present. The WAF token value was never exposed.
+- No secret/token, Processor, Edge code, D1, R2, or Redis/Relay/Cloudflared
+  write has occurred after this rule. These two IDs are the immediate rollback
+  handles for the next capability handoff.
+
+## 2026-08-29 Processor transfer precondition stop and rollback
+
+- Both commit-named archives were copied to zhangbot staging successfully, but
+  the remote validator was not invoked: the SSH command supplied
+  `P10_COMMIT=...` before the host and returned `hostname contains invalid
+  characters` / exit `255`. Installation therefore did not start.
+- The new WAF rule/entrypoint were deleted with HTTP `200`/`204`; Edge Paper
+  secret deletion succeeded and name-only readback showed absence. A token
+  cleanup quoting error initially left the new 0600 file; an exact absolute
+  path removal then exited `0` and read back absence. Staging/release/current/
+  unit/runner remain absent and existing host services remain active.
+- This is a command precondition failure, not a Processor artifact failure.
+  The next attempt must use host-first SSH ordering, repeat read-only preflight,
+  and then recreate/read back the exact WAF capability before pairing secrets.
+
+## 2026-08-29 retry preflight after transfer rollback
+
+- Branch/HEAD/scope/archive checks passed: `cloudflare-deploy`, HEAD
+  `9e5de68d6d323337002b44b195e68ec4f49921ee`, only PAPER-10 evidence dirty,
+  read-only remote `e551a5994cd228f19a2ae816c4529e4b04cf41a1`, and unchanged
+  commit-named source/wheel archive hashes. No source or migration changed.
+- Cloudflare read-only checks passed for the exact account/Worker/D1/R2 target,
+  active Worker `52860ea1-9f7c-4049-b7eb-fff2a14a6402` (#163), mainland Kimi
+  `.cn`/`kimi-k2.6`, fixed Processor bindings, no Paper secret, health HTTP
+  `200`/unconfigured, no custom WAF entrypoint, D1 no pending migrations and
+  zero changes/writes, and R2 APAC/15 objects/41.9 MB. The WAF token remains
+  mode `0600`; no secret value was read.
+- zhangbot read-only checks passed for Ubuntu 22.04/x86_64/Python 3.10.12,
+  exact `python3.10-venv` installed/candidate `3.10.12-1~22.04.17`, venv,
+  ensurepip, pip, fixed egress `39.105.204.121`, arXiv/PMC HTTP `200`, active
+  Redis/Relay/Cloudflared, and no Processor token/staging/release/current/
+  unit/runner/listener. The corrected dpkg read exited `0` after the prior
+  quoting-only probe; no host state changed.
+- No external capability is present after rollback. This preflight is ready
+  for one newly created/read-back exact WAF rule; D1 migrations remain applied
+  and must not be rerun.
+
+## 2026-08-29 fresh preflight after archive/source hash rollback
+
+- Local branch/HEAD/scope/archive checks passed: `cloudflare-deploy`, HEAD
+  `9e5de68d6d323337002b44b195e68ec4f49921ee`, only PAPER-10 evidence changes,
+  remote `e551a5994cd228f19a2ae816c4529e4b04cf41a1`, source archive SHA
+  `c440b41c1f6bd64f7a6c5d3f79e7ed0830860039b2b25ffef395bcd1ffd5cd5d`, and
+  wheel archive SHA `3294170f5e7d8a6d7d68aec3951f86b8dfc9a6e9a68ef11b631d67b3f872d6ab`.
+  No source or dependency changed.
+- Cloudflare reads passed: active Worker
+  `e281e88c-8dc9-43db-b1ee-16d5588b2ea1` (#165) with mainland
+  `https://api.moonshot.cn/v1`/`kimi-k2.6` and fixed Processor bindings;
+  Paper secret absent; health HTTP `200`/unconfigured; WAF custom entrypoint
+  absent; D1 `No migrations to apply!` with `changes=0`, `changed_db=false`,
+  `rows_written=0`; R2 APAC/15 objects/41.9 MB. WAF token mode is `0600`.
+- zhangbot reads passed: Ubuntu 22.04/x86_64/Python 3.10.12,
+  `python3.10-venv` installed/candidate `3.10.12-1~22.04.17`, venv/
+  ensurepip/pip, fixed egress `39.105.204.121`, arXiv/PMC HTTP `200`, existing
+  Redis/Relay/Cloudflared active, and no Processor token/staging/release/
+  current/unit/runner/listener. No external write occurred in this preflight.
+- The hash correction is bounded to separate archive SHA from extracted source
+  aggregate SHA. Next is a new exact WAF create/readback; D1 migrations remain
+  applied and must not be rerun.
+
+## 2026-08-29 immutable Processor archive transfer passed
+
+- Host-first SSH staging mkdir/source SCP/wheel SCP and remote validator all
+  exited `0`. Remote archive SHA matched `c440b41c1f6bd64f7a6c5d3f79e7ed0830860039b2b25ffef395bcd1ffd5cd5d`; wheel SHA matched
+  `3294170f5e7d8a6d7d68aec3951f86b8dfc9a6e9a68ef11b631d67b3f872d6ab`.
+- No-AppleDouble checks reported absent and all required source/manifest/
+  unit/lock/wheel members matched. No source extraction, release, venv, unit,
+  or service installation occurred. The current WAF/secret/token capability
+  is retained only for the next bounded install step; no D1/R2 write occurred.
+
+## 2026-08-29 Processor archive-hash precondition stop and rollback
+
+- Host-first SSH transfer reached the remote validator and both archives were
+  present. The wheel SHA matched, but the validator compared archive SHA
+  `c440b41c1f6bd64f7a6c5d3f79e7ed0830860039b2b25ffef395bcd1ffd5cd5d` against
+  the source aggregate `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`; the variable mix-up returned exit `1` before extraction/install.
+- WAF/Edge secret/token/staging rollback completed with read-only absence
+  checks; active Worker health returned `200`/unconfigured, and existing
+  Redis/Relay/Cloudflared remained active. No D1 migration, R2 write, or
+  Edge-code deployment occurred. The next retry separates archive SHA from
+  the extracted source aggregate and must repeat preflight.
+
+## 2026-08-29 Processor manifest identity stop and rollback
+
+- The install reached extraction and all three content hashes passed: source
+  aggregate `510715c4…`, dependency lock `e7b66989…`, and unit `424a6846…`.
+  It then stopped because the script incorrectly looked for release HEAD
+  `9e5de68d…` in the manifest; the delivery definition's reviewed Processor
+  source commit is `455ae849…`. No venv, service, or runner was started.
+- WAF/Edge secret/zhangbot release/current/unit/token/staging rollback and
+  readbacks passed; health is HTTP `200`/unconfigured, existing services remain
+  active, and no D1/R2/Edge-code write occurred. The next bounded retry uses
+  the reviewed source commit field and repeats preflight.
+
+## 2026-08-29 latest pip install failure and clean rollback
+
+- Immutable transfer and all content identity checks passed: source archive
+  SHA `c440b41c1f6bd64f7a6c5d3f79e7ed0830860039b2b25ffef395bcd1ffd5cd5d`,
+  wheel archive SHA
+  `3294170f5e7d8a6d7d68aec3951f86b8dfc9a6e9a68ef11b631d67b3f872d6ab`,
+  extracted source aggregate `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`,
+  lock `e7b669892e0e5790179ee84dedd106d04ac40005ca49943059d2ee585f63ff97`,
+  and unit `424a6846ef7b30d1eb505811da53620156e9186dae60ece38f3826e8338a2b2f`.
+- Installation stopped before venv creation because the wheel archive tar was
+  not extracted before pip was given `--find-links`; redacted pip output was
+  `ERROR: Could not find a version that satisfies the requirement
+  pypdf==6.15.0 (from versions: none)` and exit `1`. No source or lock change
+  was detected.
+- Rollback passed: WAF rule/entrypoint delete HTTP `200`/`204`, Edge secret
+  delete exit `0`, zhangbot new token/staging/release/current/unit cleanup
+  exit `0`, and final absence reads passed. Health remained HTTP
+  `200`/unconfigured; D1/R2 and existing Redis/Relay/Cloudflared were
+  preserved. No D1 migration, R2 object, or Edge-code deployment occurred.
+
+## 2026-08-29 fresh preflight after latest pip rollback
+
+- Branch/scope/target reads passed: `cloudflare-deploy`, HEAD
+  `9e5de68d6d323337002b44b195e68ec4f49921ee`, only PAPER-10 evidence dirty,
+  remote ref `e551a5994cd228f19a2ae816c4529e4b04cf41a1`, and unchanged
+  current-HEAD archive and manifest hashes.
+- Corrected Wrangler reads exited `0`: account and exact Worker/D1/R2 targets,
+  active 100% Worker `b70253c2-fe3a-4556-9667-fcbb3c0df053` (#169),
+  `MODEL_BASE_URL=https://api.moonshot.cn/v1`, `MODEL_ID=kimi-k2.6`, fixed
+  Processor bindings, secret-name absence, D1 no pending migrations/zero
+  writes, R2 APAC/15 objects/41.9 MB, and health HTTP `200`/unconfigured.
+  Rulesets list returned HTTP `200`; custom entrypoint read returned `404`.
+- zhangbot SSH read-only exited `0`: exact package/candidate
+  `3.10.12-1~22.04.17`, venv/ensurepip/pip, fixed egress/source HTTP `200`,
+  existing service/listener preservation, and no Processor state. No external
+  write occurred in the preflight. D1 migrations `0017`-`0021` were not run.
+- The first wrapper pass used the WAF token with Wrangler and failed auth
+  (exit `1`); the corrected pass kept WAF and Wrangler credential channels
+  separate. The first D1 migration read from the repository root failed due
+  missing config (exit `1`); the corrected Worker-directory read passed.
+
+## 2026-08-29 capability handoff failure and rollback
+
+- The exact WAF rule create/readback passed with entrypoint
+  `2e8384f547f94be78e7422b210bdf557` and rule
+  `d21515091ee64d72aeccca14a11146ae`. Edge secret put and secret-name
+  readback passed, but the zhangbot SSH token handoff exited `1` before its
+  validation completed. No token value was emitted.
+- Capability-first recovery deleted the WAF rule/entrypoint with HTTP
+  `200`/`204`, removed the Edge Paper secret with exit `0`, and cleaned the
+  zhangbot token/staging paths with exit `0`. Read-only readback showed WAF
+  `404`, secret name absent, Processor paths/runner absent, health HTTP
+  `200`/unconfigured, and existing services active. No D1/R2/Edge-code write
+  occurred.
+- Diagnosis is bounded to the handoff wrapper's `read`/portable validation
+  path; the next attempt streams stdin directly to a temporary file and uses
+  a portable line/shape check before atomic rename. D1 migrations remain
+  applied and are not rerun.
+
+## 2026-08-29 transfer validator quoting stop and rollback
+
+- The current-HEAD source and wheel archives were copied successfully and
+  remote archive/wheel SHA values matched the local expected values. The
+  remote member/AppleDouble validator did not run because its generated SSH
+  command had unbalanced nested quoting; bash returned exit `2` with a syntax
+  error. No release or service installation started.
+- Recovery readbacks passed: WAF rule/entrypoint deleted with HTTP `200`/`204`,
+  Edge Paper secret deleted, zhangbot token/staging removed, health HTTP
+  `200`/unconfigured, and Processor paths/runner absent. Existing services
+  stayed active; D1/R2 and Edge code were not changed.
+- This is an installer-wrapper syntax failure. The next attempt uses a
+  literal remote validation script without nested interpolated quoting and
+  repeats the read-only preflight before any new external capability write.
+
+## 2026-08-29 archive member-name stop and rollback
+
+- The fixed remote validator reached the archive/member stage: archive and
+  wheel SHA values and AppleDouble checks passed. It returned exit `1` on
+  wheel member matching because the wheel tar records members with a leading
+  `./`; no extraction, release, venv, unit, or service installation ran.
+- Capability-first recovery deleted the WAF rule/entrypoint with HTTP
+  `200`/`204`, removed the Edge Paper secret and zhangbot token/staging,
+  and read back health `200`/unconfigured, WAF `404`, no Paper secret,
+  and no Processor state. Existing services stayed active; D1/R2 and Edge
+  code were not changed.
+- The next bounded validator normalizes only the wheel tar's `./` prefix
+  for member comparison and repeats fresh preflight before capability writes.
+
+## 2026-08-29 temporary diagnostic wrapper invalidated
+
+- The temporary diagnostic wrapper copied both archives, then removed its own
+  base directory before the diagnostic read. Its missing-file/venv output is
+  invalid and is not treated as a preflight or install result.
+- Cleanup removed the temporary directory; no production release, service,
+  WAF, secret, D1, R2, or Edge-code state changed. The next run preserves the
+  input directory and emits per-step markers.
+
+## 2026-08-29 latest archive-member rollback and fresh preflight
+
+- After the archive member-name failure, read-only rollback checks passed: WAF
+  entrypoint `404`, Paper secret absent, zhangbot token/staging/release/
+  current/unit/runner absent, health HTTP `200`/unconfigured, and existing
+  Redis/Relay/Cloudflared active. The failure caused no D1/R2/Edge-code write.
+- A fresh preflight then passed with local HEAD `9e5de68d…`, remote ref
+  `e551a599…`, unchanged artifact hashes, active 100% Worker
+  `3dda1a0e-5851-411a-b135-0fdc10426582` (#175), mainland Kimi `.cn`/
+  `kimi-k2.6`, fixed Processor bindings, D1 no pending/zero writes, R2
+  APAC/15 objects/41.9 MB, absent capability/WAF, and health 200.
+- zhangbot SSH read-only again passed for Ubuntu 22.04/Python 3.10.12, exact
+  `python3.10-venv`, venv/ensurepip/pip, fixed egress/source HTTP 200, and
+  existing service/listener/no-Processor checks. D1 migrations were not run.
+
+## 2026-08-29 marked install early stop and temporary diagnostic pass
+
+- The production install wrapper returned exit `1` before its first install
+  marker and emitted no remote error text; automated WAF/Edge secret/host
+  rollback completed. Separate read-only checks showed the release/config
+  parents writable, so no permission blocker was found.
+- A first temporary diagnostic was invalid because it removed its own input
+  directory. After correction, a fresh temporary diagnostic passed archive
+  SHA/AppleDouble, source extraction and relative hashes, manifest identity,
+  wheel extraction/member checks, Python 3.10 venv/ensurepip, and offline
+  locked pip. It created no production release or service and cleaned its
+  temporary directory.
+- The next production retry adds per-stage markers only; D1 migrations remain
+  applied and are not rerun.
+
+## 2026-08-29 marked-install retry preflight
+
+- The corrected temporary diagnostic passed all install prerequisites and
+  was cleaned. A new read-only production preflight passed with local HEAD
+  `9e5de68d…`, remote ref `e551a599…`, unchanged artifact hashes, active
+  Worker `816e5144-49c6-402d-92aa-596b880ade11` (#177), mainland Kimi
+  `.cn`/`kimi-k2.6`, fixed Processor bindings, absent Paper capability/WAF,
+  health `200`/unconfigured, D1 no pending/zero writes, and R2 APAC/15
+  objects/41.9 MB.
+- zhangbot SSH preflight passed for Ubuntu 22.04/Python 3.10.12, exact
+  `python3.10-venv`, venv/ensurepip/pip, fixed egress/source HTTP 200,
+  unchanged existing services/listeners, and absent Processor state. No
+  D1 migration or production resource write occurred.
+
+## 2026-08-29 production archive-root assertion stop and rollback
+
+- The marked install passed input and release-parent checks, then exited
+  `1` at the release-directory assertion: tar's root is named
+  `infinity-paper-processor-<commit>`, not the commit-only release path.
+  No venv, unit, or service was started.
+- WAF/Edge secret/zhangbot cleanup and readbacks passed; health stayed
+  `200`/unconfigured, WAF was `404`, the Paper secret was absent, new
+  Processor paths/runner were absent, and existing services stayed active.
+  No D1/R2/Edge-code write occurred.
+- The next retry validates the archive root in a temporary directory and
+  atomically moves it to the defined commit-only release path.
+
+## 2026-08-29 post-install rollback readback
+
+- Read-only Cloudflare verification returned secret-list success with no
+  `PAPER_PROCESSOR_SHARED_SECRET`, Worker deployments status showed the
+  current 100% version `dc1e6477-4f5c-4e6a-b61d-331620719be2` (#181), and
+  version bindings retained `MODEL_BASE_URL=https://api.moonshot.cn/v1`,
+  `MODEL_ID=kimi-k2.6`, and the fixed Processor ID/source IP. Health returned
+  HTTP `200` with `paper_processor=unconfigured`.
+- Read-only D1 migration status returned `No migrations to apply!`; the Paper
+  table query returned the expected tables with `changes=0`,
+  `changed_db=false`, and `rows_written=0`. R2 info remained APAC, 15
+  objects, 41.9 MB. No migration was rerun and no R2 object was written.
+- WAF Rulesets read returned HTTP `200` with no custom Processor entrypoint.
+  zhangbot read-only checks returned venv/ensurepip/pip success, no Processor
+  token/unit/current/release/runner, empty staging content, unchanged active
+  Redis/Relay/Cloudflared and loopback listeners. Today's journal showed only
+  the attempted service start/stop; the previously observed 403/1010 trace is
+  historical. PAPER-10 remains blocked at explicit post-start diagnostics.
+
+## 2026-08-29 capability-handoff rollback readback
+
+- The exact WAF rule was created and semantically read back before the
+  capability handoff. Edge shared-secret put/name-readback returned success.
+  The zhangbot one-line validator rejected the transport's extra final newline
+  with `line_count=2`; no token env file was installed and no Processor was
+  started.
+- Rollback readbacks passed: WAF rule/entrypoint deleted with HTTP
+  `200`/`204`, Edge Paper secret name absent, zhangbot token/temp paths
+  absent, Processor inactive with zero runner, and existing services/listeners
+  unchanged. D1 migrations were not rerun and R2 was not written.
+- This is a transport-validation blocker only. The next attempt must remove
+  the one transport newline before constructing the single-line 0600 env file,
+  then perform the same independent shape/readback checks.
+
+## 2026-08-29 final browser-blocker rollback readback
+
+- Current branch remains `cloudflare-deploy`, local HEAD remains
+  `9e5de68d6d323337002b44b195e68ec4f49921ee`, and the read-only remote
+  branch remains `e551a5994cd228f19a2ae816c4529e4b04cf41a1`. No non-PAPER-10
+  worktree change exists.
+- Final Edge readback: rollback deployment status is 100% on
+  `dc1e6477-4f5c-4e6a-b61d-331620719be2`; secret-list succeeds with no
+  `PAPER_PROCESSOR_SHARED_SECRET`; health is HTTP `200` with
+  `paper_processor=unconfigured`. WAF Rulesets read is HTTP `200` with no
+  `http_request_firewall_custom` entrypoint.
+- Final D1 migration list is `No migrations to apply!`; the Paper schema
+  read returns `changes=0`, `changed_db=false`, `rows_written=0`. R2
+  remains `infinity-agents-resources`, APAC, 15 objects, 41.9 MB.
+- Final zhangbot readback shows Processor inactive/disabled, runner count 0,
+  token/unit/current/release/staging absent, and the three existing services
+  active/enabled with only their prior SSH/DNS/Redis/Relay/Cloudflared
+  listeners. The authenticated tab blocker prevented browser DOM/live
+  acceptance; PAPER-10 remains blocked and no migration is to be rerun.

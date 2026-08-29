@@ -403,3 +403,132 @@ or persisted in this local phase.
 - WAF, Edge secret, zhangbot token, release/current/unit/staging were all
   rolled back successfully. No D1/R2/Edge code/Redis/Relay/Cloudflared
   change occurred. The retry will use the corrected relative-path check only.
+
+## 2026-08-29 fresh preflight after relative-path correction
+
+- Clean baseline `9e5de68d…` was repackaged with the exact commit-named source
+  and wheel archives. Source/lock/unit identity, locked wheels, required
+  members, and no-AppleDouble checks passed. No source or migration changed.
+- Read-only Cloudflare checks pass for the current mainland Kimi deployment,
+  exact D1/R2 target, no pending migration/zero-write schema, unchanged R2,
+  absent Paper secret/WAF entrypoint, and 200 health with Processor
+  unconfigured. zhangbot checks pass for the exact venv package, fixed
+  egress/source access, preserved existing services, and no Processor state.
+- This is a write-ready preflight only; D1 migrations remain untouched.
+
+## 2026-08-29 transfer command rollback
+
+- The current archives reached zhangbot staging, but SSH environment/host
+  ordering prevented remote validation (`hostname contains invalid characters`,
+  exit `255`). No release/service installation ran.
+- WAF/Edge/zhangbot capability and staging rollback completed with safe
+  absence readbacks; Redis/Relay/Cloudflared, D1, R2, and Edge code were
+  preserved. Retry is limited to command ordering plus fresh preflight.
+
+## 2026-08-29 latest rollback and mainland provider gate
+
+- The authenticated mainland Kimi probe returned the exact requested marker
+  against Worker version `79755db3-c12d-4737-b601-aa99f11e3f93`; provider
+  credentials remain excluded from evidence.
+- The latest install guard failed only because `rg` is absent on zhangbot
+  (`127`); no Processor release was installed. WAF/Edge Paper secret and all
+  new zhangbot paths were read back absent after rollback, while existing
+  services remained active. This is not a clean deployment baseline yet; a
+  fresh read-only preflight is required.
+
+## 2026-08-29 current clean release preflight
+
+- Local implementation source is unchanged at HEAD `9e5de68d…` on
+  `cloudflare-deploy`; only evidence edits are uncommitted. The exact archive
+  pair and manifest identity checks pass. Read-only GitHub ref is
+  `e551a599…`.
+- Cloudflare target/account, active mainland Kimi Worker, D1 applied schema,
+  unchanged R2, absent Paper capability/WAF, and health all read back as
+  expected. zhangbot exact Python runtime/venv prerequisites, fixed egress,
+  source access, existing service preservation, and no Processor state pass.
+- The real authenticated Kimi mainland text marker is a separate exact PASS;
+  the Processor release and remaining PAPER-10 end-to-end acceptance are still
+  pending. No external write occurred in this preflight.
+
+## 2026-08-29 Processor transfer rollback baseline
+
+- The latest transfer stopped before remote validation due to SSH argument
+  ordering, not artifact content; the new WAF/Edge secret/zhangbot token and
+  staging were removed and read back absent. Existing host services, D1, R2,
+  and Edge code were preserved.
+- The corrected next baseline keeps the same HEAD/archive hashes and changes
+  only the host-first SSH invocation. PAPER-10 remains incomplete.
+
+## 2026-08-29 retry preflight baseline after corrected rollback
+
+- WAF, Edge Paper secret, and zhangbot Processor token/state are absent after
+  the last transfer rollback; existing Redis/Relay/Cloudflared remain active.
+  Current Worker remains mainland Kimi and D1/R2 are unchanged.
+- Current HEAD/archive identity is unchanged and the corrected read-only
+  package/egress checks pass. The next write is a newly created exact WAF rule;
+  no deleted capability ID will be reused.
+
+## 2026-08-29 archive-hash guard rollback
+
+- Host-first transfer reached remote validation but stopped before extraction
+  because archive SHA and source aggregate SHA were supplied to the wrong
+  variables. Wheel SHA matched. WAF/secret/token/staging cleanup and absence
+  readbacks passed; existing services, D1/R2, and Edge code were preserved.
+- The next attempt changes only the hash variable names/inputs and repeats a
+  fresh preflight. PAPER-10 remains incomplete.
+
+## 2026-08-29 post-install readback diagnosis and Kimi mainland reconciliation
+
+- The real authenticated browser probe remains a precise mainland Kimi text
+  PASS: Worker version `79755db3-c12d-4737-b601-aa99f11e3f93` rendered exactly
+  `KIMI_MAINLAND_TEXT_PROBE_OK` for the exact requested prompt. No credential
+  value is recorded and StepFun is not used.
+- The latest marked zhangbot install passed archive/root/hash/manifest,
+  wheel extraction, Python 3.10 venv, ensurepip, offline locked pip, imports,
+  install record, unit install, daemon reload, enable, and start. Its
+  post-start readback then returned `1`; the wrapper performed WAF-first
+  rollback (rule HTTP `200`, entrypoint HTTP `204`), Edge Paper secret
+  deletion, and host cleanup. No D1 migration, R2 object, or Edge code deploy
+  occurred.
+- A read-only follow-up found no Processor token, unit, current symlink,
+  commit release, or runner; the staging parent was present but empty. Redis,
+  Relay, Cloudflared, and their listeners remained unchanged. Today's journal
+  contains only the start/stop pair for this attempt; an older journal entry
+  contains the already-recorded 403/1010 browser-signature failure and is not
+  attributed to the latest start.
+- Current Cloudflare readback is clean: Worker version
+  `dc1e6477-4f5c-4e6a-b61d-331620719be2` is 100% with mainland Kimi .cn /
+  `kimi-k2.6` and fixed Processor bindings, the Paper secret name is absent,
+  health is `200`/`paper_processor=unconfigured`, D1 schema read has zero
+  writes, R2 remains APAC/15 objects/41.9 MB, and the custom WAF entrypoint is
+  absent. PAPER-10 remains incomplete; the next retry adds explicit
+  post-start status diagnostics only.
+
+## 2026-08-29 capability handoff shape rejection and rollback
+
+- After a fresh exact WAF rule/readback, Edge shared-secret creation and
+  name-only readback returned `0`. The zhangbot stdin handoff correctly
+  rejected the temporary env file because the source stream's final newline
+  produced `line_count=2` (the token value shape was valid and mode was
+  `600`); no production token env file was installed and no Processor was
+  started.
+- Capability-first rollback passed: WAF rule/entrypoint deletion returned
+  HTTP `200`/`204` with final absence, Edge secret deletion returned
+  `0`, and host cleanup removed the temporary token material. Read-only
+  state shows no Processor token/runner/service and no active WAF entrypoint;
+  existing Redis/Relay/Cloudflared remain active. The handoff retry must
+  strip transport-only trailing newlines before the one-line env-file check.
+
+## 2026-08-29 browser-control blocker final baseline
+
+- Mainland Kimi text gate is independently PASS with the exact visible marker
+  on Worker version `79755db3-c12d-4737-b601-aa99f11e3f93`; no credential
+  value is recorded and StepFun is not used.
+- The zhangbot-only Processor release, fixed BIC-only WAF rule, Edge shared
+  secret, and Edge version `0c6a212f-b442-4872-b182-e32ccd0702e3` were
+  created and read back through non-browser readiness, but required
+  authenticated browser DOM control was unavailable because the tab belonged
+  to the coordinating session. All new capabilities/release/service were
+  rolled back, and Edge returned to `dc1e6477-4f5c-4e6a-b61d-331620719be2`.
+- Final D1/R2 and existing-host readbacks are unchanged and safe. PAPER-10
+  is blocked only at the real browser acceptance gate; no PASS is claimed.

@@ -68,6 +68,19 @@ Updated status: BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE
 
 Current status remains: BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE
 
+## PAPER-10 release acceptance ownership blocker (2026-08-29)
+
+- After the Processor/Edge readiness release, the current Chrome
+  `openTabs()` again returned the exact existing tab ID `876490061`, URL
+  `https://infinity.zhangyvjing.com/`, title `Infinity Agents`.
+- Claiming that fresh returned object failed with
+  `already part of browser session 01a03d69-25c4-7ff0-94e7-9b3af0a8e627`.
+  A five-second retry returned the same ownership error; current
+  `tabs.list()` and `tabs.selected()` returned no controllable tab.
+- No DOM was read, no navigation/reload/click/typing/download/upload/message
+  was performed. The mandatory authenticated live Paper acceptance therefore
+  remains unverified; the release was rolled back and no PASS is claimed.
+
 ## Kimi provider authenticated probe (2026-08-29T04:35:42Z)
 
 - The current claimed Infinity Agents tab exposed the authenticated Analysis
