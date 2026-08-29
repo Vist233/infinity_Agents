@@ -1,0 +1,56 @@
+# PAPER-FIX-03 tests and exit codes
+
+Exit codes below are process exit codes.  Test fixtures are local and no
+output contains credentials, PDF bytes, full text, image bytes, R2 keys, or
+provider secrets.
+
+## TDD red phase
+
+- `cd frontend && npm run test:unit -- --run lib/paper-task.test.ts hooks/use-paper-progress.test.tsx components/chat/PaperProgressPanel.test.tsx`:
+  exit `1`; the three new suites initially failed because the planned
+  implementation modules did not exist.  No existing test was removed or
+  weakened.
+
+## Focused final gates
+
+- `cd frontend && npm run test:unit -- --run hooks/use-paper-progress.test.tsx components/chat/PaperProgressPanel.test.tsx lib/paper-task.test.ts lib/ws/chat-stream.test.ts`:
+  exit `0`; 4 files, 34 tests passed.  Covers timeline correlation and
+  prose-only rejection, all seven lifecycle labels, materialize-vs-ready,
+  active polling/terminal stop, safe failure, absent/denied hiding, duplicate
+  resume suppression, continuation SSE, and stale-session response fencing.
+- `cd frontend && npm run test:e2e -- e2e/chat.spec.ts -g "rehydrates a Paper task"`:
+  first sandbox run exit `1` because the local test server could not bind
+  `127.0.0.1:3000` (`EPERM`); the approved local-server run exit `0`, 1 test
+  passed.  The failure was an environment permission boundary, not an
+  implementation result.
+
+## Mandatory and affected suites
+
+- `cd cloudflare-worker && npm run check && npm test`:
+  exit `0`; TypeScript check passed; 26 files and 148 tests passed.  No Edge
+  source changed, but the mandatory suite was rerun.
+- `cd frontend && npm run typecheck`: exit `0`.
+- `cd frontend && npm run lint`: exit `0`.
+- `cd frontend && npm run test:unit`: exit `0`; 16 files and 75 tests passed.
+  Existing unrelated React `act(...)` warnings in ImageJudge/Task Center
+  tests were warnings only; the FIX-03 stale-generation test has no warning in
+  the final focused run.
+- `cd frontend && npm run test:e2e`: approved local-server run exit `0`; 14
+  tests passed, including the Paper rehydration/ready/resume/refresh scenario.
+  The local Task Center proxy logged expected `ECONNREFUSED` because no
+  backend was started; affected tests still passed and no external system was
+  contacted.
+- Processor/Python checks: not run; this card changes no Processor source,
+  runtime, dependency, or protocol.  The mandatory Edge and affected frontend
+  gates were run.
+
+## Final review gates
+
+- `git diff --check`: final result is recorded in `secret-scan.txt` after all
+  evidence is staged.
+- Changed-scope secret scan: final result is recorded in `secret-scan.txt`;
+  no secret values were read or printed.
+
+No deployment, browser claim, remote migration, R2 write, Processor/zhangbot
+write, WAF/Cloudflare configuration write, Redis/Relay/Cloudflared write, or
+Git push was performed.

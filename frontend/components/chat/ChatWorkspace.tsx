@@ -13,6 +13,7 @@ import { useLanguage } from "@/lib/i18n";
 import { TaskConfirmationCard } from "@/components/analysis/TaskConfirmationCard";
 import { MobileWorkspaceMenu } from "@/components/chat/MobileWorkspaceMenu";
 import { WorkspaceUserFooter } from "@/components/chat/WorkspaceUserFooter";
+import { PaperProgressPanel } from "@/components/chat/PaperProgressPanel";
 
 /** Workspace for the Analysis Agent conversation. */
 export function ChatWorkspace() {
@@ -118,6 +119,10 @@ export function ChatWorkspace() {
                 }}
               />
             )}
+            <PaperProgressPanel
+              tasks={controller.paperTasks}
+              onResume={(task) => controller.resumePaperTask(task.candidate.resourceId)}
+            />
             <MessagePane
               messages={controller.messages}
               toolTimeline={controller.toolTimeline}

@@ -703,6 +703,71 @@ surface, refresh/reconnect replay, and user-facing ready-to-resume control using
 this read model and the existing continuation endpoint.  It must not move PDF,
 full-text, R2-key, ownership, or provider authority into the browser.
 
+### PAPER-FIX-03 — Durable Paper progress UI
+
+**Outcome:** an authenticated conversation shows a durable Paper task surface
+whose lifecycle is driven by the FIX-02 server read model, survives stream
+completion and browser refresh, and can safely re-enter the existing
+continuation contract when the resource is ready.  The card does not turn
+assistant prose or a successful `materialize_paper` invocation into a false
+success.
+
+- Derive a task candidate only from a successful `materialize_paper` tool-result
+  timeline entry with a server-shaped processing/ready result and opaque
+  `resource_id`; retain the original turn/tool correlation and no payload
+  content.  Prose-only or malformed/failed results create no task.
+- On mount, stream update, history rehydration, or refresh, fetch the known
+  resource through `GET /api/paper/resources/:resource_id/progress` with the
+  authenticated session.  Render only the server lifecycle
+  `requested|downloading|extracting|uploading|ready|failed|cancelled`, with
+  safe counts/error fields.  A successful materialize invocation remains
+  "processing accepted" until `resource.status = ready`.
+- Poll/reconnect active resources with bounded backoff and stop on terminal
+  status.  Discard stale session/component responses.  Hide absent/denied
+  resources for `404/410/401/403` without enumeration or server detail; show
+  only a generic retry state for transient progress failures and the
+  normalized server-safe message for a terminal failure.
+- Show the ready-only resume/read button only when the server advertises the
+  action.  Dispatch the existing authenticated
+  `POST /api/paper/continuations/:continuation_id` session-only contract,
+  consume its bounded SSE events, and suppress duplicate in-flight clicks.
+  The UI does not choose a resource/page/image/R2 key or create a result that
+  was not returned by the server.
+- No D1/R2/Processor/Redis/WAF/secret/runtime change is part of this card.
+  The frontend is a read-model projection; D1/R2/Processor remain the source
+  of truth and the additive FIX-02 routes remain the deployment prerequisite.
+
+**Positive tests:** processing tool success renders a non-ready task; all
+seven server lifecycle statuses are visible; the task is reconstructed from a
+history timeline after refresh; active progress polls and terminal progress
+stops polling; a ready snapshot exposes one resume action; continuation SSE
+chunks are consumed without fabrication; and duplicate resume clicks issue
+only one request.
+
+**Negative tests:** prose-only or malformed materialize output creates no task;
+missing/foreign resources render no card; unsafe server fields are not
+rendered; transient errors do not expose raw details; failed/cancelled states
+do not expose ready/resume; and stale or duplicate client actions cannot
+change another session's task surface.  Existing Edge ownership/continuation
+and frontend stream/API tests remain mandatory.
+
+**Local pass gate:** focused Paper task derivation, progress hook, card, SSE,
+and Playwright refresh/resume tests; frontend typecheck, lint, unit, and E2E;
+the mandatory `cd cloudflare-worker && npm run check && npm test`; then
+`git diff --check` and a changed-scope secret scan.  No browser claim,
+deployment, remote migration, Cloudflare/zhangbot/Processor/WAF/secret/Redis
+write, or Git push is authorized by this card.
+
+**Rollback:** revert the local review commit or remove the UI projection.  Do
+not delete Paper resources, continuation rows, R2 objects, leases, or chat
+history; the server read model and existing continuation contract remain
+unchanged.
+
+**Next exact card:** `PAPER-10` may resume only after its existing production
+preflight, real D1/R2/Processor/browser acceptance, and all negative cases are
+re-run under the release runbook.  This local UI card does not claim PAPER-10
+completion.
+
 ## 4. Completion checkpoint template
 
 Every card checkpoint must answer these fields explicitly:

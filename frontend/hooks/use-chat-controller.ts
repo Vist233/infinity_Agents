@@ -28,6 +28,8 @@ import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
 import { startChatStream, toFriendlyChatError, type ChatDoneEvent, type ChatEvent, type ChatStreamHandle } from "@/lib/ws/chat-stream";
 import { useLanguage } from "@/lib/i18n";
 import type { ChatTaskConfirmation, TaskDraft } from "@/lib/api/tasks";
+import { usePaperProgress } from "@/hooks/use-paper-progress";
+import type { PaperTaskCandidate } from "@/lib/paper-task";
 
 const isSocketOpen = (socket?: ChatStreamHandle | null) => {
   if (!socket) return false;
@@ -53,6 +55,7 @@ export function useChatController() {
   const sessionMessagesMapRef = useRef<Record<string, Message[]>>({});
   const sessionLoadPromiseRef = useRef<Map<string, Promise<Message[]>>>(new Map());
   const sessionsRef = useRef<SessionItem[]>([]);
+  const paperContinuationResponseStartedRef = useRef<Set<string>>(new Set());
   const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated">("checking");
   const [taskDraft, setTaskDraft] = useState<TaskDraft | null>(null);
   const [taskConfirmation, setTaskConfirmation] = useState<ChatTaskConfirmation | null>(null);
@@ -248,6 +251,73 @@ export function useChatController() {
       },
     });
   }, []);
+
+  const handlePaperContinuationStart = useCallback((candidate: PaperTaskCandidate) => {
+    paperContinuationResponseStartedRef.current.delete(candidate.continuationId ?? candidate.resourceId);
+  }, []);
+
+  const handlePaperContinuationEvent = useCallback((eventPayload: ChatEvent, candidate: PaperTaskCandidate) => {
+    const targetSessionId = sessionId;
+    if (!targetSessionId) return;
+    const continuationKey = candidate.continuationId ?? candidate.resourceId;
+    if (eventPayload.type === "chunk") {
+      if (!paperContinuationResponseStartedRef.current.has(continuationKey)) {
+        paperContinuationResponseStartedRef.current.add(continuationKey);
+        dispatch({
+          type: "update_session_messages",
+          sessionId: targetSessionId,
+          updater: (current) => [...current, { role: "assistant", content: eventPayload.content }],
+        });
+      } else {
+        appendAssistantContent(targetSessionId, eventPayload.content);
+      }
+      return;
+    }
+    if (eventPayload.type === "tool_call") {
+      dispatch({
+        type: "upsert_session_tool_timeline",
+        sessionId: targetSessionId,
+        entry: {
+          correlationId: eventPayload.correlation_id,
+          toolCallId: eventPayload.tool_call_id,
+          toolName: eventPayload.tool_name,
+          status: eventPayload.status,
+          summary: "",
+          ...(eventPayload.arguments_summary ? { argumentsSummary: eventPayload.arguments_summary } : {}),
+        },
+      });
+      return;
+    }
+    if (eventPayload.type === "tool_result") {
+      dispatch({
+        type: "update_session_tool_timeline",
+        sessionId: targetSessionId,
+        toolCallId: eventPayload.tool_call_id,
+        patch: { status: eventPayload.status, summary: eventPayload.summary },
+      });
+      return;
+    }
+    if (eventPayload.type === "error") {
+      const friendly = toFriendlyChatError(eventPayload.message || t("error.connection"), language);
+      appendAssistantContent(targetSessionId, `[Error] ${friendly}`);
+      paperContinuationResponseStartedRef.current.delete(continuationKey);
+      return;
+    }
+    if (eventPayload.type === "done") {
+      paperContinuationResponseStartedRef.current.delete(continuationKey);
+    }
+  }, [appendAssistantContent, language, sessionId, t]);
+
+  const {
+    visibleTasks: paperTasks,
+    resumeTask: resumePaperTask,
+  } = usePaperProgress({
+    apiBase,
+    sessionId,
+    toolTimeline,
+    onResumeStart: handlePaperContinuationStart,
+    onContinuationEvent: handlePaperContinuationEvent,
+  });
 
   const createSessionIfNeeded = useCallback(async () => {
     if (state.sessionId) return state.sessionId;
@@ -921,5 +991,7 @@ export function useChatController() {
     dispatch,
     setSessionRunState,
     refreshSessions,
+    paperTasks,
+    resumePaperTask,
   };
 }

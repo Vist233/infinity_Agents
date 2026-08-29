@@ -239,6 +239,36 @@ export function normalizeChatEvent(rawData: unknown): ChatEvent | null {
   }
 }
 
+/** Consume an already-authenticated Paper continuation SSE response. */
+export async function consumeChatEventStream(response: Response, onEvent: (event: ChatEvent) => void): Promise<void> {
+  if (!response.body) return;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const emitFrame = (frame: string) => {
+    const line = frame
+      .split(/\r?\n/)
+      .map((value) => value.trim())
+      .find((value) => value.startsWith("data:"));
+    if (!line) return;
+    const data = line.slice(5).trim();
+    if (!data) return;
+    const event = normalizeChatEvent(data);
+    if (event) onEvent(event);
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split(/\r?\n\r?\n/);
+    buffer = frames.pop() ?? "";
+    frames.forEach(emitFrame);
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) emitFrame(buffer);
+}
+
 /**
  * Start a chat stream over Server-Sent Events. Issues a same-origin
  * `POST /api/chat` with the session cookie (credentials: "include") and parses
@@ -289,28 +319,8 @@ export function startChatStream(options: StartChatStreamOptions): ChatStreamHand
       return;
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const frames = buffer.split("\n\n");
-        buffer = frames.pop() ?? "";
-        for (const frame of frames) {
-          const line = frame
-            .split("\n")
-            .map((l) => l.trim())
-            .find((l) => l.startsWith("data:"));
-          if (!line) continue;
-          const data = line.slice(5).trim();
-          if (!data) continue;
-          const event = normalizeChatEvent(data);
-          if (event) options.onEvent(event);
-        }
-      }
+      await consumeChatEventStream(response, options.onEvent);
     } catch {
       if (!controller.signal.aborted) {
         options.onSocketError?.();

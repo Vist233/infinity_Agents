@@ -1,0 +1,51 @@
+# PAPER-FIX-03 diff summary
+
+## Durable task derivation and progress runtime
+
+- `frontend/lib/paper-task.ts` derives a candidate only from a successful
+  `materialize_paper` timeline result with a server-shaped processing/ready
+  mode and bounded opaque `resource_id`.  It returns only resource,
+  continuation, turn, and tool correlation; prose, provider data, PDF/text/
+  image data, object keys, and arbitrary result fields are discarded.
+- `frontend/hooks/use-paper-progress.ts` reads the FIX-02 owner-scoped progress
+  endpoint, retains only the normalized server response, polls active statuses
+  with 1/2/4/8/15-second bounded backoff, stops on ready/failed/cancelled, and
+  hides 401/403/404/410 as denied/absent.  Session/component generations
+  fence stale progress and continuation SSE responses.  Ready actions are
+  deduplicated by session/resource and send only the existing session-bound
+  continuation request.
+- `frontend/lib/ws/chat-stream.ts` exposes the same bounded SSE event parser
+  for a continuation response and keeps the original chat stream contract.
+
+## User-visible task surface
+
+- `frontend/components/chat/PaperProgressPanel.tsx` renders the seven server
+  lifecycle states, a separate processing-accepted marker, safe counts, and
+  only the server-provided safe failure message.  It never converts a
+  successful materialize tool invocation into ready and renders no card for
+  absent/denied resources.
+- `frontend/hooks/use-chat-controller.ts` connects timeline rehydration and
+  live tool events to the progress hook, consumes continuation chunks as
+  server-returned assistant events, and fences old continuation events from a
+  switched session.
+- `frontend/components/chat/ChatWorkspace.tsx` mounts the task surface above
+  the existing message pane. `frontend/lib/i18n.tsx` adds Chinese/English
+  labels.
+
+## Regression coverage and contracts
+
+- `frontend/lib/paper-task.test.ts`,
+  `frontend/hooks/use-paper-progress.test.tsx`, and
+  `frontend/components/chat/PaperProgressPanel.test.tsx` cover positive and
+  negative derivation, all lifecycle states, refresh/retry behavior, terminal
+  polling stop, ownership-shaped denial, safe errors, resume idempotency, and
+  stale-session fencing.
+- `frontend/lib/ws/chat-stream.test.ts` covers continuation SSE parsing.
+- `frontend/e2e/chat.spec.ts` proves local authenticated-history rehydration,
+  processing-vs-ready display, ready continuation, and browser refresh.
+- `docs/CLOUDFLARE_PAPER_WORKSPACE_DESIGN.md` and
+  `docs/CLOUDFLARE_PAPER_WORKSPACE_EXECUTION_PLAN.md` define the UI as a
+  read-model projection and retain D1/R2/Processor authority.
+
+No migration, dependency, Processor, WAF, Secret, Redis, R2, or deployment
+artifact was changed.

@@ -1,4 +1,4 @@
-import { normalizeChatEvent, toFriendlyChatError } from "@/lib/ws/chat-stream";
+import { consumeChatEventStream, normalizeChatEvent, toFriendlyChatError } from "@/lib/ws/chat-stream";
 import { describe, expect, it } from "vitest";
 
 describe("chat stream event normalization", () => {
@@ -162,5 +162,21 @@ describe("friendly chat error", () => {
 
   it("returns original message for unknown errors", () => {
     expect(toFriendlyChatError("plain error")).toBe("plain error");
+  });
+});
+
+describe("continuation SSE consumption", () => {
+  it("parses the same bounded event contract used by the chat stream", async () => {
+    const events: string[] = [];
+    await consumeChatEventStream(
+      new Response([
+        `data: ${JSON.stringify({ type: "chunk", content: "page text" })}\n\n`,
+        `data: ${JSON.stringify({ type: "done" })}\n\n`,
+      ].join(""), { headers: { "content-type": "text/event-stream" } }),
+      (event) => {
+        if (event.type === "chunk") events.push(event.content);
+      },
+    );
+    expect(events).toEqual(["page text"]);
   });
 });

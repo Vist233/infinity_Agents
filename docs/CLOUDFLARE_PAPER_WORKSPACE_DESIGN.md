@@ -487,9 +487,32 @@ expiry, and the atomic execution lease; the browser cannot choose a resource,
 R2 key, page object, or provider payload.
 
 The frontend contract client normalizes this response and the existing
-`paper_processing` stream event into bounded typed data.  It does not render a
-task card in this card.  UI projection, refresh polling/reconnect behavior, and
-user-facing resume controls are the next `PAPER-FIX-03` card.
+`paper_processing` stream event into bounded typed data.  `PAPER-FIX-03`
+projects that contract as a durable task surface: it derives a candidate only
+from a successful `materialize_paper` tool-result timeline entry containing a
+server-shaped `mode` and opaque `resource_id`.  Assistant prose, including
+"开始下载/解析", never creates a task and a successful tool invocation is
+never rendered as `ready` without a subsequent progress snapshot.
+
+On initial receipt or history rehydration, the UI reads the known resource by
+the owner-scoped progress route.  While the server reports
+`requested|downloading|extracting|uploading`, it reconnects with bounded
+backoff (1, 2, 4, 8, then 15 seconds); `ready`, `failed`, and `cancelled` stop
+the timer.  A stale response from a previous session/component generation is
+discarded.  Network/invalid-snapshot failures display only a generic retry
+state, while a failed resource displays only the normalized server-provided
+safe error.  `401/403` and `404/410` are represented as denied/absent and
+render no resource card, preserving the non-enumerating boundary.
+
+Only a server-advertised ready snapshot can expose the one-click resume/read
+action.  The action sends the existing authenticated
+`POST /api/paper/continuations/:continuation_id` request with the owning
+session ID, consumes its bounded SSE event contract, and suppresses duplicate
+clicks while the same action is in flight.  The browser does not choose a
+resource, page, image, provider payload, R2 key, or lifecycle transition; the
+server and D1/R2/Processor contracts remain authoritative.  A component
+unmount, session switch, or refresh cannot make an old response update the new
+session's task surface.
 
 Image bytes are retrieved through an authorized same-origin route or a narrowly
 scoped, short-lived capability.  Do not Base64-embed large images into SSE or
@@ -536,6 +559,10 @@ explicit.
 - A deployment failure rolls back Worker code first.  Additive D1 schemas and
   immutable R2 objects stay compatible with the preceding code; do not manually
   rewrite a resource state to manufacture a pass.
+- The Paper task surface can be disabled or reverted independently of the
+  resource/continuation data.  Reverting it stops browser polling and resume
+  controls without deleting history, cancelling leases, removing R2 objects,
+  or changing D1 lifecycle state.
 
 ## 9. Definition of done
 

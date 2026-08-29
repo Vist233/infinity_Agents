@@ -177,6 +177,110 @@ test("shows a durable tool trace while running and after reload", async ({ page 
   await expect(page.getByText("paper/s1")).toHaveCount(0);
 });
 
+test("rehydrates a Paper task, separates processing from ready, and resumes from the ready card", async ({ page }) => {
+  const sessions = [{ session_id: "s1", title: "Paper progress", created_at: "", updated_at: "" }];
+  const history = {
+    messages: [{ role: "user", content: "download this paper" }, { role: "assistant", content: "开始下载并解析 PDF。" }],
+    events: [
+      {
+        session_id: "s1",
+        event_id: 10,
+        turn_id: "client:paper-1",
+        event_type: "tool_call",
+        tool_call_id: "materialize-call",
+        tool_name: "materialize_paper",
+        status: "processing",
+        summary: "",
+        arguments_summary: "{\"paper_ref\":\"arxiv:2401.00001\"}",
+      },
+      {
+        session_id: "s1",
+        event_id: 11,
+        turn_id: "client:paper-1",
+        event_type: "tool_result",
+        tool_call_id: "materialize-call",
+        tool_name: "materialize_paper",
+        status: "succeeded",
+        summary: JSON.stringify({ mode: "processing", resource_id: "resource-1", continuation_id: "continuation-1" }),
+      },
+    ],
+    legacy_text_only: false,
+  };
+  let resourceReady = false;
+  let resumeRequests = 0;
+
+  await page.route("**/api/sessions", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ status: 200, body: JSON.stringify(sessions), contentType: "application/json" });
+      return;
+    }
+    await route.continue();
+  });
+  await page.route("**/api/sessions/s1/messages", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify(history), contentType: "application/json" });
+  });
+  await page.route("**/api/paper/resources/resource-1/progress*", async (route) => {
+    const ready = resourceReady;
+    await route.fulfill({
+      status: 200,
+      body: JSON.stringify({
+        resource: {
+          resource_id: "resource-1",
+          status: ready ? "ready" : "extracting",
+          stage: ready ? "ready" : "extracting",
+          source_kind: "arxiv",
+          title: "A safe paper",
+          page_count: ready ? 4 : null,
+          image_count: ready ? 2 : null,
+          error: null,
+          created_at: 100,
+          updated_at: ready ? 120 : 110,
+          ready_at: ready ? 120 : null,
+        },
+        revision: ready ? "ready:120" : "extracting:110",
+        materialize: { invocation_status: "succeeded", invocation_event_id: "event-11", invoked_at: 100, resource_ready: ready },
+        correlation: {
+          continuations: [{ continuation_id: "continuation-1", original_turn_id: "client:paper-1", status: ready ? "ready" : "waiting", expires_at: 200, updated_at: ready ? 120 : 110, completed_at: null }],
+        },
+        events: [{ event_id: "event-11", stage: "materialize", outcome: "succeeded", error_code: null, created_at: 100 }],
+        resume: ready
+          ? { available: true, continuation_id: "continuation-1", method: "POST", path: "/api/paper/continuations/continuation-1", body: { session_id: "s1" }, reason_code: null }
+          : { available: false, continuation_id: null, method: "POST", path: null, body: null, reason_code: "PAPER_RESOURCE_NOT_READY" },
+      }),
+      contentType: "application/json",
+    });
+  });
+  await page.route("**/api/paper/continuations/continuation-1", async (route) => {
+    resumeRequests += 1;
+    expect(JSON.parse(route.request().postData() || "{}"), "resume body must remain session-scoped").toEqual({ session_id: "s1" });
+    await route.fulfill({
+      status: 200,
+      body: [
+        { type: "chunk", content: "全文已准备好。" },
+        { type: "done" },
+      ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+      contentType: "text/event-stream",
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Paper progress" }).click();
+  await expect(page.getByTestId("paper-task-resource-1")).toBeVisible();
+  await expect(page.getByText("提取中")).toBeVisible();
+  await expect(page.getByRole("button", { name: "继续读取" })).toHaveCount(0);
+
+  resourceReady = true;
+  await expect(page.getByText("已就绪")).toBeVisible({ timeout: 5_000 });
+  await page.getByRole("button", { name: "继续读取" }).click();
+  await expect(page.getByText("全文已准备好。", { exact: true })).toBeVisible();
+  expect(resumeRequests).toBe(1);
+
+  await page.reload();
+  await page.getByRole("button", { name: "Paper progress" }).click();
+  await expect(page.getByText("已就绪")).toBeVisible();
+  await expect(page.getByRole("button", { name: "继续读取" })).toBeVisible();
+});
+
 test("keeps task confirmation visible and cancellable after a tool call", async ({ page }) => {
   await page.route("**/api/sessions", async (route) => {
     if (route.request().method() === "GET") {
