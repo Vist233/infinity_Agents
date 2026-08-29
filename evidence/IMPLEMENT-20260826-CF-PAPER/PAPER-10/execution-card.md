@@ -410,3 +410,15 @@ acceptance. PAPER-10 is not complete.
   The next exact action requires a functioning authenticated browser session
   that can return the production DOM, then a fresh full preflight and a new
   authorized release attempt; no capability is left active from this attempt.
+
+## 2026-08-29 Kimi K2.6 mainland endpoint correction
+
+- The prior live Kimi K2.6 result was a real `401 Invalid Authentication`.
+  This subphase corrected only the provider endpoint contract after checking
+  the official mainland documentation: `https://api.moonshot.cn/v1`, model
+  `kimi-k2.6`, Bearer auth, `POST /chat/completions`, and base64 image input.
+- TDD coverage and all local Edge, Processor, frontend, E2E, diff, and secret
+  gates passed. Existing Processor lockfile/manifest changes were retained.
+- No remote write has occurred in this subphase. `deployment.txt` remains
+  absent and PAPER-10 remains incomplete pending deployment and a real
+  authenticated text probe.

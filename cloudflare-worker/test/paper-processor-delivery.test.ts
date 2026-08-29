@@ -208,9 +208,10 @@ describe("versioned dedicated Paper Processor delivery definition", () => {
     expect(definition.artifact?.artifact_hashes).toMatchObject({ service_unit_sha256: serviceHash });
     expect(wranglerConfig).toContain('"PAPER_PROCESSOR_ID": "paper-processor-zhangbot-v1"');
     expect(wranglerConfig).toContain('"PAPER_PROCESSOR_SOURCE_IP": "39.105.204.121"');
-    expect(requirements).toMatch(/^pypdf==[0-9]+\.[0-9]+\.[0-9]+$/m);
-    expect(requirements).toMatch(/^PyMuPDF==[0-9]+\.[0-9]+\.[0-9]+$/m);
-    expect(requirements).toMatch(/^typing_extensions==4\.13\.2$/m);
+    expect(requirements).toMatch(/^pypdf==[0-9]+\.[0-9]+\.[0-9]+ \\\n\s+--hash=sha256:[0-9a-f]{64}$/m);
+    expect(requirements).toMatch(/^PyMuPDF==[0-9]+\.[0-9]+\.[0-9]+ \\\n\s+--hash=sha256:[0-9a-f]{64}$/m);
+    expect(requirements).toMatch(/^typing_extensions==4\.13\.2 \\\n\s+--hash=sha256:[0-9a-f]{64}$/m);
+    expect(requirements).toContain("pip --require-hashes");
     expect(requirements).not.toMatch(/>=|<=|~=|\^/);
   });
 

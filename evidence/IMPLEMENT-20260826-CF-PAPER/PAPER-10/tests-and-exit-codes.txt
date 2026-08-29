@@ -852,3 +852,30 @@ recorded exactly; no failed assertion was skipped.
       Public `/health` returned HTTP `200`.
     - No D1 migration, R2 object, WAF, Edge secret, zhangbot Processor,
       Redis/Relay/Cloudflared, or live paper workflow operation occurred.
+
+67. Kimi K2.6 mainland endpoint correction and local gates
+    - Red TDD run: `cd cloudflare-worker && npm test -- --run
+      test/model-provider.test.ts` exited `1` because the checked-in
+      `wrangler.jsonc` still contained the international `.ai` endpoint.
+    - Corrected focused run: `npm test -- --run
+      test/model-provider.test.ts test/chat.test.ts test/paper-privacy.test.ts`
+      exited `0`; 3 files and 26 tests passed.
+    - `cd cloudflare-worker && npm run check` first exited `2` on test-only
+      typing assertions; after the test fixes it exited `0`. Full
+      `cd cloudflare-worker && npm test` then exited `0`; 24 files and 134
+      tests passed.
+    - `eval "$(pyenv init - zsh)"; pyenv shell Agent; PYTHONPATH=. python -m
+      pytest -q tests/test_paper_processor_runtime.py
+      tests/test_paper_processor_ingestion.py` exited `0`; 12 tests passed.
+    - Frontend `npm run typecheck`, `npm run lint`, and `npm run test:unit`
+      each exited `0`; 12 files and 50 unit tests passed. The first
+      `npm run test:e2e` exited `1` because sandbox binding to
+      `127.0.0.1:3000` returned `EPERM`; the permitted elevated retry exited
+      `0` with 13 tests passed.
+    - `git diff --check` exited `0`. Read-only Wrangler/HTTPS preflight first
+      hit sandbox DNS/log-directory restrictions; the permitted retry returned
+      `0` for account/deployment/secrets/D1/R2. The mistaken `/healthz` read
+      returned `404`; corrected `/health` returned HTTP `200`, curl exit `0`.
+    - No Cloudflare, D1, R2, WAF, Edge Secret, zhangbot, Processor,
+      Redis/Relay/Cloudflared, browser, or deployment write occurred in this
+      subphase.

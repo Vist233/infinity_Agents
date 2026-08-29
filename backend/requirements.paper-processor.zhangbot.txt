@@ -1,4 +1,9 @@
-# Reviewed against the zhangbot Python 3.10 runtime.
-pypdf==6.15.0
-PyMuPDF==1.26.6
-typing_extensions==4.13.2
+# Reviewed against the zhangbot Python 3.10 runtime.  Keep every artifact
+# content-addressed: the zhangbot release procedure installs with
+# `pip --require-hashes` and must fail closed on an altered package.
+pypdf==6.15.0 \
+    --hash=sha256:14e001d6504822cb1ca9c7ed9a69bccb320f59b320730f55af804361abe4d5ee
+PyMuPDF==1.26.6 \
+    --hash=sha256:7777d0b7124c2ebc94849536b6a1fb85d158df3b9d873935e63036559391534c
+typing_extensions==4.13.2 \
+    --hash=sha256:a439e7c04b49fec3e5d3e2beaa21755cadbbdc391694e28ccdd36ca4a1408f8c

@@ -74,7 +74,7 @@
     "artifact_hash_command": "sha256sum backend/paper_processor/__init__.py backend/paper_processor/client.py backend/paper_processor/ingest.py backend/paper_processor/runner.py | sha256sum",
     "artifact_hashes": {
       "processor_source_sha256": "510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e",
-      "dependency_lock_sha256": "51a30c24dc3af956d30e9891dbb3fb605c813b72f608f23507c7860c7a8c4775",
+      "dependency_lock_sha256": "e7b669892e0e5790179ee84dedd106d04ac40005ca49943059d2ee585f63ff97",
       "service_unit_sha256": "424a6846ef7b30d1eb505811da53620156e9186dae60ece38f3826e8338a2b2f"
     }
   },

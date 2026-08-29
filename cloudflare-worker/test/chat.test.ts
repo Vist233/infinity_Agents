@@ -156,6 +156,32 @@ afterEach(() => {
 });
 
 describe("handleChat", () => {
+  it("uses the mainland Kimi chat-completions contract", async () => {
+    const { env, db } = makeEnv({
+      MODEL_BASE_URL: "https://api.moonshot.cn/v1",
+      MODEL_ID: "kimi-k2.6",
+      MODEL_API_KEY: "kimi-test-key",
+    });
+    db.seedChatSession("kimi-session", "user-1");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://api.moonshot.cn/v1/chat/completions");
+      expect(init?.method).toBe("POST");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer kimi-test-key");
+      const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string; stream?: boolean };
+      expect(body).toMatchObject({ model: "kimi-k2.6", stream: true });
+      return sseResponse([
+        JSON.stringify({ choices: [{ delta: { content: "国内站" }, finish_reason: "stop" }] }),
+      ]);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const response = await handleChat(makeRequest("kimi-session", "hello"), env, USER);
+    expect(response.status).toBe(200);
+      const events = await readSse(response);
+    expect(events.filter((event) => event.type === "chunk").map((event) => event.content).join("")).toBe("国内站");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("runs the StepFun tool loop end-to-end and streams the final answer", async () => {
     const { env, db } = makeEnv();
     db.seedChatSession("s1", "user-1");

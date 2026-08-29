@@ -430,3 +430,18 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
   live cases were stopped before execution. WAF/Secret/token/Processor state
   was rolled back and Edge was restored to the prior version; only PAPER-10
   evidence is being amended.
+
+## 2026-08-29 Kimi K2.6 mainland endpoint correction
+
+- The Worker provider configuration changed `MODEL_BASE_URL` from the
+  international `https://api.moonshot.ai/v1` to the official mainland
+  `https://api.moonshot.cn/v1`; `MODEL_ID` remains `kimi-k2.6`.
+- Added regression assertions for the exact mainland text and image
+  `chat/completions` URL, POST method, Bearer auth, model ID, streaming text,
+  and base64 image message. Updated the existing delivery test to reflect the
+  retained hash-pinned Processor lockfile.
+- Existing uncommitted Processor manifest/lockfile changes were intentionally
+  retained; no unrelated source, migration, R2, WAF, Redis/Relay/Cloudflared,
+  or zhangbot state was changed.
+- Local gates passed as recorded in `tests-and-exit-codes.txt`. No remote write
+  has occurred yet; deployment and live acceptance remain outstanding.

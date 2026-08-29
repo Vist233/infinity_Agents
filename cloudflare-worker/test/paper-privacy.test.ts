@@ -94,14 +94,27 @@ describe("Paper image privacy and delivery", () => {
 
 describe("Paper image analysis egress policy", () => {
   it("records bounded provider egress and provenance only when enabled", async () => {
-    const { env, db } = makeEnv({ PAPER_IMAGE_ANALYSIS_EGRESS: "enabled" });
+    const { env, db } = makeEnv({
+      PAPER_IMAGE_ANALYSIS_EGRESS: "enabled",
+      MODEL_BASE_URL: "https://api.moonshot.cn/v1",
+      MODEL_ID: "kimi-k2.6",
+      MODEL_API_KEY: "kimi-test-key",
+    });
     const bucket = new MemoryBucket();
     env.RESOURCE_BUCKET = bucket as unknown as Env["RESOURCE_BUCKET"];
     db.seedChatSession("s1", "alice");
     const row = await readyImageResource(env, db, bucket, "resource-analysis", "s1", "alice");
-    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: unknown[] };
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://api.moonshot.cn/v1/chat/completions");
+      expect(init?.method).toBe("POST");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer kimi-test-key");
+      const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string; messages?: Array<{ content?: Array<{ type?: string; image_url?: { url?: string } }> }> };
+      expect(body.model).toBe("kimi-k2.6");
       expect(body.messages).toHaveLength(1);
+      expect(body.messages?.[0]?.content).toEqual([
+        { type: "text", text: "describe the trend" },
+        { type: "image_url", image_url: { url: expect.stringMatching(/^data:image\/png;base64,/) , detail: "high" } },
+      ]);
       return new Response(JSON.stringify({ choices: [{ message: { content: "A figure with a plotted trend." } }] }), { status: 200, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
 

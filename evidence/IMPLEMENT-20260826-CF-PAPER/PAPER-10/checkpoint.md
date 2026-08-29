@@ -802,3 +802,34 @@ Detailed evidence: `k26-provider-auth-result.md`.
 
 Next exact action: resolve the approved Kimi credential/account entitlement,
 then repeat the text gate before any paper or image operation.
+
+## 2026-08-29 Kimi K2.6 mainland endpoint correction — local gate
+
+- Status: `READY_FOR_KIMI_MAINLAND_ENDPOINT_DEPLOY`; PAPER-10 is not PASS.
+- Baseline was local `7d1c75cbd936ce51a5672997fb63368226c7e37b` on
+  `cloudflare-deploy`, with the existing Processor lockfile/manifest changes
+  preserved and reviewed.
+- Official mainland documentation confirms `https://api.moonshot.cn/v1`,
+  `kimi-k2.6`, Bearer authentication, `POST /v1/chat/completions`, and
+  base64 `image_url` input. The checked-in Worker configuration was corrected
+  from the international `.ai` endpoint to the mainland `.cn` endpoint.
+- Regression coverage now asserts the exact text request URL/method/auth/model
+  and the exact image request URL/auth/base64 message shape. The first red
+  configuration test failed against the old `.ai` value; all corrected tests
+  passed.
+- Local gates passed: Edge 24 files/134 tests; Processor pytest 12 tests;
+  frontend typecheck/lint/unit 50 tests; frontend E2E 13 tests after the
+  permitted elevated local-server retry; `git diff --check` exit `0`.
+- Fresh read-only production checks confirmed the target account, Worker,
+  existing D1 migrations, R2 bucket, 100% Kimi K2.6 candidate, secret names,
+  and `/health` HTTP `200` with Paper Processor still unconfigured. The first
+  mistaken `/healthz` probe returned `404`; no write followed it.
+- No credential value was read or recorded. No D1 migration, R2 object, WAF,
+  Edge Secret, zhangbot, Processor, Redis/Relay/Cloudflared, browser, or
+  deployment write occurred in this local phase.
+
+Next exact action: commit the local correction, deploy the corrected mainland
+endpoint through the already-authorized Edge path, and run one harmless
+authenticated text probe. If the real result remains `401 Invalid
+Authentication`, record the upstream Kimi credential/account-entitlement
+blocker and do not switch to StepFun.
