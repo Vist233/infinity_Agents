@@ -4,8 +4,10 @@
   overall Paper Workspace complete.
 - branch: `cloudflare-deploy`.
 - baseline/current commit: baseline is
-  `cf41ab96ee5734eb3039da12aeca1ab623bca404`; the review commit and final
-  evidence-amendment commit are recorded in the final handoff and Git history.
+  `cf41ab96ee5734eb3039da12aeca1ab623bca404`; implementation review commit is
+  `ad0dd13` (`feat: make paper intent continuation durable`). The final
+  evidence amendment is a follow-up local documentation commit recorded in the
+  final handoff and Git history.
 - one completed outcome: Paper intent now has an owner-scoped durable D1
   continuation correlation; processing cannot emit final completion; a ready
   resource can re-enter the same original request for a read/image action;
