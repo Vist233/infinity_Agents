@@ -1,0 +1,53 @@
+# PAPER-FIX-01 tests and exit codes
+
+All commands below were run in the repository named by the card. Exit codes
+are the process exit codes; no output contains credentials or provider keys.
+
+## TDD red phase
+
+- `cd cloudflare-worker && npm test -- --run test/paper-continuation.test.ts`
+  before implementation: exit `1`; the initial four tests failed because the old loop
+  emitted completion/no continuation. This was an expected red test, not
+  suppressed or removed.
+
+## Final focused and mandatory Edge gates
+
+- `cd cloudflare-worker && npm test -- --run test/paper-continuation.test.ts`:
+  exit `0`; 1 file, 7 tests passed. Covers processing-without-done,
+  prose-only failure, ready read continuation, cross-user/expired/completed
+  rejection, stale-lease reclaim/live duplicate rejection, and duplicate
+  materialization correlation.
+- `cd cloudflare-worker && npm run check && npm test`: exit `0`; TypeScript
+  check passed, 25 test files and 142 tests passed.
+- The affected combined Edge run
+  `cd cloudflare-worker && npm run check && npm test --run
+  test/paper-continuation.test.ts test/paper-processor.test.ts
+  test/chat.test.ts test/tools.test.ts test/d1-runtime-schema.test.ts`:
+  exit `0`; 5 files, 44 tests passed.
+
+## Processor and frontend gates
+
+- `zsh -lc 'eval "$(pyenv init - zsh)"; pyenv shell Agent; python -m
+  pytest tests/test_paper_processor_runtime.py
+  tests/test_paper_processor_ingestion.py'`: exit `0`; 12 tests passed.
+  The pyenv rehash warning was non-fatal; the required `pyenv shell Agent`
+  interpreter was used.
+- `cd frontend && npm run typecheck && npm run lint && npm run test:unit`:
+  exit `0`; typecheck and lint passed, 12 files and 50 unit tests passed.
+  Existing React `act(...)` notices were warnings only.
+- First `cd frontend && npm run test:e2e` in the restricted local sandbox:
+  exit `1`; the local test server was denied permission to bind
+  `127.0.0.1:3000` (`EPERM`) before assertions ran.
+- Retried the same existing E2E suite with the approved local-server
+  permission: `cd frontend && npm run test:e2e`: exit `0`; 13 tests passed.
+  The suite emitted non-fatal proxy diagnostics for an intentionally absent
+  local backend (`ECONNREFUSED localhost:8000`); no E2E assertion failed.
+
+## Review checks
+
+- `git diff --check`: exit `0` before evidence staging.
+- A changed-scope secret scan and staged diff check are recorded in
+  `secret-scan.txt` and will be rerun after staging the ignored migration.
+
+No deployment, browser, remote D1 migration, R2 write, Processor/zhangbot
+write, Redis/Relay/Cloudflared write, or Git push was performed.

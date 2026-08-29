@@ -579,6 +579,69 @@ routes if necessary, revoke processor credentials/capabilities, preserve D1/R2
 evidence, and open a new remediation card.  Never roll back by deleting or
 rewriting user history/resource metadata blindly.
 
+### PAPER-FIX-01 — Paper intent durable orchestration
+
+**Outcome:** a paper request has a durable correlation and an explicit
+processing/ready/failed lifecycle.  Model prose cannot close the chat turn while
+an asynchronous resource is pending, and a ready resource can safely re-enter
+the original request for page-text or image actions.
+
+- Add the additive D1 `paper_request_continuations` ledger keyed by
+  `session_id + turn_id + resource_id`, with bounded status, an absolute TTL,
+  an execution lease, active run ID, and safe error code.  It stores no PDF,
+  full text, R2 key, provider payload, or secret.  The checked-in migration is
+  `cloudflare-worker/migrations-infinity/0022_paper_request_continuations.sql`;
+  this local card does not apply a remote migration.
+- Pass the authenticated chat turn context into `materialize_paper`, persist
+  the continuation when a resource is created or reused, and return an opaque
+  `continuation_id` in the processing result.  Keep the existing D1/R2/
+  Processor resource and lease contract authoritative.
+- Add `POST /api/paper/continuations/:continuation_id` with a session-only
+  request body.  The Edge derives the resource and original turn, enforces
+  session/user/resource ownership, atomically claims a five-minute run lease,
+  rebuilds provider-valid history, and requires `read_paper` or
+  `analyze_paper_image` for the exact ready resource.  Duplicate, cross-user,
+  stale/expired, cancelled, and not-ready calls fail with stable codes; an
+  interrupted run can be reclaimed after its lease expires without duplicating
+  a download or parse.
+- Make `materialize_paper` processing and provider prose-only behavior explicit:
+  processing emits `paper_processing` without `done`; a detected paper intent
+  with no Paper tool call emits `PAPER_TOOL_CALL_REQUIRED` without a successful
+  assistant status.  The continuation keeps the client request idempotency row
+  processing until durable completion.
+- Synchronize continuation state from Processor finalization and resource
+  cancellation/failure/deletion.  Rebuild `system_status`, tool-call, and
+  tool-result events after refresh; no frontend task card is included in this
+  card.
+
+**Positive tests:** processing materialization persists one correlation and
+never emits final `done`; a ready continuation reads the same resource and
+persists the resumed tool call/result; an expired running lease can be reclaimed
+once; duplicate materialization delivery reuses the same row.
+
+**Negative tests:** prose-only paper intent; cross-user/unknown continuation;
+expired or completed continuation; a continuation tool call for another
+resource or a non-read/non-image operation; stale resource ownership; failed,
+cancelled, or deleted resource; and missing continuation persistence.  Existing
+Paper source, Processor, privacy, event-ledger, and task-confirmation tests must
+remain green.
+
+**Local pass gate:** focused continuation and schema tests, `npm run check`,
+the complete Edge `npm test`, affected Processor checks, and frontend
+typecheck/lint/unit/E2E checks pass.  `git diff --check` and a repository secret
+scan pass.  No deployment, browser claim, Cloudflare write, remote migration,
+zhangbot write, or Git push is part of this card.
+
+**Rollback:** revert the review commit if needed.  The `0022` migration remains
+additive and is not remotely applied by this card; a later release must apply it
+before enabling the route.  Preserve existing resource metadata and Processor
+leases; never manufacture completion by editing D1.
+
+**Next exact card:** `PAPER-FIX-02` starts by projecting the durable continuation
+and resource lifecycle into an authenticated frontend progress/task surface,
+including refresh/reconnect replay and ready-to-resume actions, without moving
+PDF/full-text data or ownership decisions into the browser.
+
 ## 4. Completion checkpoint template
 
 Every card checkpoint must answer these fields explicitly:

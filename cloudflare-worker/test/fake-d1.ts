@@ -10,6 +10,8 @@ import type {
   PaperCleanupJobRow,
   PaperResourceLinkRow,
   PaperResourceRow,
+  PaperRequestContinuationRow,
+  PaperRequestContinuationStatus,
 } from "../src/db";
 
 /**
@@ -179,6 +181,7 @@ export class FakeD1 {
   paperResources = new Map<string, PaperResourceRow>();
   paperProcessingAttempts = new Map<string, PaperProcessingAttemptRow>();
   paperResourceLinks = new Map<string, PaperResourceLinkRow>();
+  paperRequestContinuations = new Map<string, PaperRequestContinuationRow>();
   paperProcessorSessions = new Map<string, PaperProcessorSessionRow>();
   paperProcessorObjects = new Map<string, PaperProcessorObjectRow>();
   paperAuditEvents: PaperResourceAuditEventRow[] = [];
@@ -289,6 +292,28 @@ class FakeStatement {
 
   async first<T>(): Promise<T | null> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("FROM paper_request_continuations") && sql.includes("FROM paper_request_continuations c")) {
+      const [continuationId, sessionId, userId] = this.args as [string, string, string];
+      const row = this.db.paperRequestContinuations.get(continuationId);
+      const resource = row ? this.db.paperResources.get(row.resource_id) : undefined;
+      const session = row ? this.db.chatSessions.get(row.session_id) : undefined;
+      return row && resource && session
+        && row.session_id === sessionId && row.user_id === userId
+        && resource.session_id === row.session_id && resource.user_id === row.user_id
+        && session.user_id === row.user_id
+        ? ({ ...row, resource_status: resource.status } as T)
+        : null;
+    }
+    if (sql.includes("FROM paper_request_continuations") && sql.includes("WHERE continuation_id = ?1")) {
+      return (this.db.paperRequestContinuations.get(String(this.args[0])) as T) ?? null;
+    }
+    if (sql.includes("FROM paper_request_continuations") && sql.includes("WHERE session_id = ?1 AND turn_id = ?2 AND resource_id = ?3")) {
+      const [sessionId, turnId, resourceId] = this.args as [string, string, string];
+      const row = [...this.db.paperRequestContinuations.values()].find((candidate) =>
+        candidate.session_id === sessionId && candidate.turn_id === turnId && candidate.resource_id === resourceId,
+      );
+      return (row as T) ?? null;
+    }
     if (sql.includes("FROM paper_processor_sessions") && sql.includes("session_token_hash = ?1")) {
       const [tokenHash, now] = this.args as [string, number];
       const row = [...this.db.paperProcessorSessions.values()].find((session) =>
@@ -524,6 +549,19 @@ class FakeStatement {
 
   async all<T>(): Promise<{ results: T[] }> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("FROM paper_request_continuations c")) {
+      const [sessionId, userId, turnId] = this.args as [string, string, string];
+      const rows = [...this.db.paperRequestContinuations.values()]
+        .filter((row) => row.session_id === sessionId && row.user_id === userId && row.turn_id === turnId)
+        .filter((row) => {
+          const resource = this.db.paperResources.get(row.resource_id);
+          const session = this.db.chatSessions.get(row.session_id);
+          return Boolean(resource && session && resource.session_id === row.session_id && resource.user_id === row.user_id && session.user_id === row.user_id);
+        })
+        .sort((left, right) => left.created_at - right.created_at || left.continuation_id.localeCompare(right.continuation_id))
+        .map((row) => ({ ...row, resource_status: this.db.paperResources.get(row.resource_id)!.status }));
+      return { results: rows as unknown as T[] };
+    }
     if (sql.includes("FROM paper_cleanup_jobs")) {
       const [now] = this.args as [number, number];
       const rows = [...this.db.paperCleanupJobs.values()]
@@ -568,6 +606,144 @@ class FakeStatement {
 
   async run(): Promise<{ meta: { changes: number } }> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("INSERT INTO paper_request_continuations")) {
+      const [continuationId, sessionId, userId, turnId, clientRequestId, resourceId, status, expiresAt, createdAt] = this.args as [
+        string, string, string, string, string | null, string, PaperRequestContinuationStatus, number, number,
+      ];
+      const duplicate = [...this.db.paperRequestContinuations.values()].some((row) =>
+        row.session_id === sessionId && row.turn_id === turnId && row.resource_id === resourceId,
+      );
+      if (duplicate || this.db.paperRequestContinuations.has(continuationId)) return { meta: { changes: 0 } };
+      this.db.paperRequestContinuations.set(continuationId, {
+        continuation_id: continuationId,
+        session_id: sessionId,
+        user_id: userId,
+        turn_id: turnId,
+        client_request_id: clientRequestId,
+        resource_id: resourceId,
+        status,
+        active_turn_id: null,
+        lease_expires_at: null,
+        expires_at: expiresAt,
+        last_error_code: null,
+        created_at: createdAt,
+        updated_at: createdAt,
+        completed_at: null,
+      });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_request_continuations") && sql.includes("SET status = CASE")
+      && sql.includes("paper_resources.resource_id = paper_request_continuations.resource_id")) {
+      const [continuationId, sessionId, userId, now] = this.args as [string, string, string, number];
+      const row = this.db.paperRequestContinuations.get(continuationId);
+      const resource = row ? this.db.paperResources.get(row.resource_id) : undefined;
+      if (!row || !resource || row.session_id !== sessionId || row.user_id !== userId) return { meta: { changes: 0 } };
+      if (row.expires_at <= now && !["completed", "cancelled", "expired"].includes(row.status)) {
+        row.status = "expired";
+        row.active_turn_id = null;
+        row.lease_expires_at = null;
+      } else if (resource.status === "ready" && row.status === "waiting") {
+        row.status = "ready";
+      } else if (resource.status === "failed" && ["waiting", "ready", "running"].includes(row.status)) {
+        row.status = "failed";
+        row.active_turn_id = null;
+        row.lease_expires_at = null;
+        row.last_error_code = resource.error_code ?? "PAPER_RESOURCE_FAILED";
+      } else if (["cancelled", "deleted"].includes(resource.status) && ["waiting", "ready", "running"].includes(row.status)) {
+        row.status = "cancelled";
+        row.active_turn_id = null;
+        row.lease_expires_at = null;
+      }
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_request_continuations") && sql.includes("SET status = 'running'")) {
+      const [continuationId, sessionId, userId, runTurnId, leaseExpiresAt, now] = this.args as [string, string, string, string, number, number];
+      const row = this.db.paperRequestContinuations.get(continuationId);
+      const resource = row ? this.db.paperResources.get(row.resource_id) : undefined;
+      const session = row ? this.db.chatSessions.get(row.session_id) : undefined;
+      const canClaim = row && resource && session && row.session_id === sessionId && row.user_id === userId
+        && resource.session_id === sessionId && resource.user_id === userId && session.user_id === userId
+        && row.expires_at > now && resource.status === "ready"
+        && (row.status === "ready" || (row.status === "running" && row.lease_expires_at != null && row.lease_expires_at <= now));
+      if (!canClaim) return { meta: { changes: 0 } };
+      row.status = "running";
+      row.active_turn_id = runTurnId;
+      row.lease_expires_at = leaseExpiresAt;
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_request_continuations") && sql.includes("SET status = CASE WHEN expires_at")) {
+      const [continuationId, sessionId, userId, now, runTurnId, errorCode] = this.args as [string, string, string, number, string, string | null];
+      const row = this.db.paperRequestContinuations.get(continuationId);
+      const resource = row ? this.db.paperResources.get(row.resource_id) : undefined;
+      if (!row || !resource || row.session_id !== sessionId || row.user_id !== userId || row.status !== "running" || row.active_turn_id !== runTurnId) return { meta: { changes: 0 } };
+      row.status = row.expires_at <= now
+        ? "expired"
+        : resource.status === "ready"
+          ? "ready"
+          : resource.status === "failed"
+            ? "failed"
+            : "cancelled";
+      row.active_turn_id = null;
+      row.lease_expires_at = null;
+      row.last_error_code = resource.status === "failed" ? resource.error_code ?? "PAPER_RESOURCE_FAILED" : errorCode;
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_request_continuations") && sql.includes("SET status = 'completed'")) {
+      const [continuationId, sessionId, userId, now, runTurnId] = this.args as [string, string, string, number, string];
+      const row = this.db.paperRequestContinuations.get(continuationId);
+      const resource = row ? this.db.paperResources.get(row.resource_id) : undefined;
+      if (!row || !resource || row.session_id !== sessionId || row.user_id !== userId || row.status !== "running" || row.active_turn_id !== runTurnId || row.expires_at <= now || resource.status !== "ready") return { meta: { changes: 0 } };
+      row.status = "completed";
+      row.active_turn_id = null;
+      row.lease_expires_at = null;
+      row.completed_at = now;
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_request_continuations") && sql.includes("SET status = 'ready'")) {
+      const [resourceId, now] = this.args as [string, number];
+      let changes = 0;
+      for (const row of this.db.paperRequestContinuations.values()) {
+        if (row.resource_id === resourceId && row.status === "waiting") {
+          row.status = "ready";
+          row.updated_at = now;
+          changes += 1;
+        }
+      }
+      return { meta: { changes } };
+    }
+    if (sql.includes("UPDATE paper_request_continuations") && sql.includes("SET status = 'cancelled'")) {
+      const [resourceId, now] = this.args as [string, number];
+      let changes = 0;
+      for (const row of this.db.paperRequestContinuations.values()) {
+        if (row.resource_id === resourceId && ["waiting", "ready", "running"].includes(row.status)) {
+          row.status = "cancelled";
+          row.active_turn_id = null;
+          row.lease_expires_at = null;
+          row.updated_at = now;
+          changes += 1;
+        }
+      }
+      return { meta: { changes } };
+    }
+    if (sql.includes("UPDATE paper_request_continuations") && sql.includes("SET status = 'failed'")) {
+      const [resourceId, errorCode, now] = this.args as [string, string, number];
+      let changes = 0;
+      for (const row of this.db.paperRequestContinuations.values()) {
+        if (row.resource_id === resourceId && ["waiting", "ready", "running"].includes(row.status)) {
+          row.status = "failed";
+          row.active_turn_id = null;
+          row.lease_expires_at = null;
+          row.last_error_code = errorCode;
+          row.updated_at = now;
+          changes += 1;
+        }
+      }
+      return { meta: { changes } };
+    }
     if (sql.includes("INSERT OR IGNORE INTO paper_resource_audit_events")) {
       const [eventId, resourceId, attemptId, stage, outcome, errorCode, metadataJson, createdAt] = this.args as [string, string, string | null, PaperResourceAuditEventRow["stage"], PaperResourceAuditEventRow["outcome"], string | null, string, number];
       if (this.db.paperAuditEvents.some((event) => event.event_id === eventId)) return { meta: { changes: 0 } };
@@ -1173,6 +1349,16 @@ class FakeStatement {
       const row = this.db.chatTaskConfirmations.get(confirmationId);
       if (!row || row.user_id !== userId || row.status !== "pending") return { meta: { changes: 0 } };
       row.status = "expired";
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE chat_request_idempotency") && sql.includes("confirmation_id = NULL")) {
+      const [userId, clientRequestId, responseText, now] = this.args as [string, string, string, number];
+      const row = this.db.chatRequestIdempotency.get(`${userId}|${clientRequestId}`);
+      if (!row || row.status !== "processing") return { meta: { changes: 0 } };
+      row.status = "completed";
+      row.confirmation_id = null;
+      row.response_text = responseText;
+      row.updated_at = now;
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE chat_request_idempotency")) {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AuthedUser } from "../src/auth";
 import type { Env } from "../src/env";
-import { createPaperResource, linkPaperResource } from "../src/db";
+import { createPaperRequestContinuation, createPaperResource, linkPaperResource } from "../src/db";
 import { handlePaperProcessorApi } from "../src/paper-processor";
 import { isPaperProcessorNamespacePath, isPaperProcessorProtocolRoute } from "../src/paper-processor-access";
 import { Sha256 } from "../src/sha256";
@@ -92,6 +92,14 @@ describe("dedicated Paper Processor control protocol", () => {
     db.seedChatSession("s1", "alice");
     const resource = await createPaperResource(env, { resource_id: "resource-1", session_id: "s1", user_id: "alice", source_kind: "arxiv", source_ref: "2401.00001", canonical_ref: "2401.00001", title: "Paper" });
     await linkPaperResource(env, "s1", resource.resource_id, "alice", "read");
+    const continuation = await createPaperRequestContinuation(env, {
+      continuationId: "continuation-1",
+      sessionId: "s1",
+      userId: "alice",
+      turnId: "turn-1",
+      resource,
+    });
+    expect(continuation.status).toBe("waiting");
 
     const session = await connect(env, "instance-1");
     const poll = await handlePaperProcessorApi(request("/api/paper-processor/poll", { method: "POST", headers: processorHeaders(session.processor_session_token), body: "{}" }), env);
@@ -126,6 +134,7 @@ describe("dedicated Paper Processor control protocol", () => {
     expect(finalize?.status).toBe(200);
     expect(await finalize!.json()).toMatchObject({ resource_id: "resource-1", status: "ready" });
     expect(db.paperResources.get("resource-1")?.status).toBe("ready");
+    expect(db.paperRequestContinuations.get("continuation-1")?.status).toBe("ready");
     expect(db.paperAuditEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({ resource_id: "resource-1", stage: "extraction", outcome: "started" }),
       expect.objectContaining({ resource_id: "resource-1", stage: "upload", outcome: "started" }),

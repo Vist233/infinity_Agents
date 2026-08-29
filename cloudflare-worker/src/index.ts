@@ -8,7 +8,7 @@ import {
   updateSessionTitle,
   removeSession,
 } from "./sessions";
-import { handleCancelChatTaskConfirmation, handleChat } from "./chat";
+import { handleCancelChatTaskConfirmation, handleChat, handlePaperContinuation } from "./chat";
 import { currentDailyUsage } from "./quota";
 import { handleImageJudge } from "./image-judge";
 import { handleTaskApi } from "./tasks";
@@ -139,6 +139,12 @@ export default {
 
       if (method === "GET" && pathname === "/api/settings") {
         return withCookies(await handleUserSettings(request, env, user), setCookies);
+      }
+
+      const paperContinuationMatch = pathname.match(/^\/api\/paper\/continuations\/([^/]+)$/);
+      if (paperContinuationMatch) {
+        if (method !== "POST") return withCookies(errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED"), setCookies);
+        return withCookies(await handlePaperContinuation(request, env, user), setCookies);
       }
 
       const paperResourceResponse = await handlePaperResourceApi(request, env, user);

@@ -4,6 +4,7 @@ import {
   cacheGet,
   cacheSet,
   createPaperResource,
+  createPaperRequestContinuation,
   findOwnedPaperResourceBySource,
   getOwnedPaperResource,
   isPaperAuthorized,
@@ -354,22 +355,32 @@ function pubmedAbstractOnlyResult(paperRef: string): string {
   });
 }
 
-function processingResult(resource: PaperResourceRow, reused = false): string {
+function processingResult(resource: PaperResourceRow, reused = false, continuationId?: string | null): string {
+  const ready = resource.status === "ready";
   return JSON.stringify({
-    mode: "processing",
+    mode: ready ? "ready" : "processing",
     resource_id: resource.resource_id,
     status: resource.status,
     source: resource.source_kind,
     ...(reused ? { reused: true } : {}),
+    ...(continuationId ? { continuation_id: continuationId } : {}),
     ...(resource.error_code ? { error_code: resource.error_code } : {}),
     message: resource.status === "failed"
       ? "Paper processing failed; do not retry the same request in a loop."
-      : "Paper processing is durable; report progress and continue after it becomes ready."
+      : ready
+        ? "Paper is ready; use read_paper or analyze_paper_image for this same resource."
+        : "Paper processing is durable; report progress and continue after it becomes ready."
   });
 }
 
 /** Create or reuse the session-owned durable resource for a surfaced paper. */
-export async function materializePaper(env: Env, sessionId: string, userId: string, paperRef: string): Promise<string> {
+export async function materializePaper(
+  env: Env,
+  sessionId: string,
+  userId: string,
+  paperRef: string,
+  context?: { turnId?: string; clientRequestId?: string | null },
+): Promise<string> {
   const cleanRef = paperRef.trim();
   if (!cleanRef) return JSON.stringify({ error: "paper_ref_required" });
   if (!(await isPaperAuthorized(env, sessionId, cleanRef))) {
@@ -388,7 +399,21 @@ export async function materializePaper(env: Env, sessionId: string, userId: stri
   });
   if (existing) {
     await recordPaperAuditEvent(env, { resource_id: existing.resource_id, attempt_id: null, stage: "materialize", outcome: "succeeded", error_code: null, metadata_json: JSON.stringify({ reused: true }), created_at: Math.floor(Date.now() / 1000) });
-    return processingResult(existing, true);
+    try {
+      const continuation = context?.turnId
+        ? await createPaperRequestContinuation(env, {
+            continuationId: crypto.randomUUID(),
+            sessionId,
+            userId,
+            turnId: context.turnId,
+            clientRequestId: context.clientRequestId ?? null,
+            resource: existing,
+          })
+        : null;
+      return processingResult(existing, true, continuation?.continuation_id);
+    } catch {
+      return JSON.stringify({ error: "paper_continuation_persistence_failed", resource_id: existing.resource_id });
+    }
   }
 
   try {
@@ -405,7 +430,21 @@ export async function materializePaper(env: Env, sessionId: string, userId: stri
       return JSON.stringify({ error: "paper_resource_link_failed" });
     }
     await recordPaperAuditEvent(env, { resource_id: resource.resource_id, attempt_id: null, stage: "materialize", outcome: "succeeded", error_code: null, metadata_json: "{}", created_at: Math.floor(Date.now() / 1000) });
-    return processingResult(resource);
+    try {
+      const continuation = context?.turnId
+        ? await createPaperRequestContinuation(env, {
+            continuationId: crypto.randomUUID(),
+            sessionId,
+            userId,
+            turnId: context.turnId,
+            clientRequestId: context.clientRequestId ?? null,
+            resource,
+          })
+        : null;
+      return processingResult(resource, false, continuation?.continuation_id);
+    } catch {
+      return JSON.stringify({ error: "paper_continuation_persistence_failed", resource_id: resource.resource_id });
+    }
   } catch {
     return JSON.stringify({ error: "paper_materialization_failed" });
   }
@@ -807,7 +846,8 @@ export async function runTool(
   sessionId: string,
   userId: string,
   name: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  context?: { turnId?: string; clientRequestId?: string | null },
 ): Promise<string> {
   if (name === "request_task_creation") {
     return JSON.stringify({
@@ -819,7 +859,7 @@ export async function runTool(
     return searchPaper(env, sessionId, String(args.query ?? ""), Number(args.num_results ?? 10));
   }
   if (name === "materialize_paper") {
-    return materializePaper(env, sessionId, userId, String(args.paper_ref ?? args.ref ?? ""));
+    return materializePaper(env, sessionId, userId, String(args.paper_ref ?? args.ref ?? ""), context);
   }
   if (name === "read_paper") {
     return readPaper(env, sessionId, userId, {

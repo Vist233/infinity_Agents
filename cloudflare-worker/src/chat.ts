@@ -1,7 +1,7 @@
 import { MAX_CONTEXT_MESSAGES, modelProvider, type Env } from "./env";
 import type { AuthedUser } from "./auth";
 import { errorJson, nowSeconds } from "./http";
-import type { ChatEventRow, ChatEventInput } from "./db";
+import type { ChatEventRow, ChatEventInput, OwnedPaperRequestContinuation } from "./db";
 import {
   bindChatTaskConfirmation,
   claimChatTaskConfirmation,
@@ -15,12 +15,19 @@ import {
   getChatTaskConfirmation,
   getChatTaskConfirmationForUser,
   getOwnedTask,
+  getOwnedPaperRequestContinuation,
   insertChatEvent,
   listChatEvents,
+  listOwnedPaperRequestContinuationsForTurn,
   MAX_INLINE_TOOL_RESULT_BYTES,
+  PAPER_CONTINUATION_LEASE_SECONDS,
   releaseChatRequestIdempotency,
+  releasePaperRequestContinuation,
   reopenChatTaskConfirmation,
   reserveChatRequestIdempotency,
+  claimPaperRequestContinuation,
+  completePaperRequestContinuation,
+  syncPaperRequestContinuation,
   touchChatSession,
 } from "./db";
 import { checkRateLimit, consumeDailyQuota, decrementDailyUsageSafe } from "./quota";
@@ -60,14 +67,29 @@ interface TaskConfirmationArgs {
 }
 
 interface ChatLoopResult {
-  status: "completed" | "confirmation_required";
+  status: "completed" | "confirmation_required" | "paper_processing" | "failed";
   assistantText: string;
   confirmationId?: string;
+  paperContinuationId?: string;
+  paperResourceId?: string;
+  errorCode?: string;
 }
 
 interface StreamLifecycle {
   onResult?: (result: ChatLoopResult) => Promise<void>;
   onError?: () => Promise<void>;
+}
+
+interface PaperContinuationContext {
+  continuationId: string;
+  resourceId: string;
+}
+
+interface StreamOptions {
+  forceTaskConfirmation?: boolean;
+  paperIntent?: boolean;
+  paperContinuation?: PaperContinuationContext;
+  clientRequestId?: string | null;
 }
 
 function normalizeToolArguments(argumentsJson: string): string {
@@ -231,14 +253,19 @@ async function persistToolResultEvent(
   });
 }
 
-async function persistTerminalError(env: Env, sessionId: string, turnId: string): Promise<void> {
+async function persistTerminalError(
+  env: Env,
+  sessionId: string,
+  turnId: string,
+  content = "Chat turn failed",
+): Promise<void> {
   try {
     await insertChatEvent(env, {
       session_id: sessionId,
       turn_id: turnId,
       event_type: "error",
       role: "system",
-      content: "Chat turn failed",
+      content,
       status: "failed",
       created_at: nowSeconds(),
     });
@@ -327,6 +354,11 @@ export function rebuildModelMessages(events: ChatEventRow[]): ChatMessage[] {
         messages.push({ role: "assistant", content: event.content });
       }
     }
+    for (const event of group) {
+      if (event.event_type === "system_status" && event.role === "system" && event.content != null) {
+        messages.push({ role: "system", content: event.content });
+      }
+    }
     if (messages.length > 0) renderedGroups.push(messages);
   }
 
@@ -385,6 +417,103 @@ function replayCompletedChat(responseText: string): Response {
   return sseResponse(events);
 }
 
+const PAPER_TOOL_NAMES = new Set(["search_paper", "materialize_paper", "read_paper", "analyze_paper_image"]);
+
+/** Detect a paper/full-text intent without trusting the provider's prose. */
+export function isPaperIntent(content: string): boolean {
+  return /(?:论文|文献|paper|pdf|全文|pubmed|arxiv|doi|下载.{0,24}(?:解析|阅读)|解析.{0,24}pdf)/i.test(content);
+}
+
+interface PaperToolPayload {
+  mode?: string;
+  status?: string;
+  resource_id?: string;
+  continuation_id?: string;
+  error?: string;
+}
+
+function parsePaperToolPayload(result: string): PaperToolPayload | null {
+  try {
+    const value = JSON.parse(result) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    return {
+      ...(typeof record.mode === "string" ? { mode: record.mode } : {}),
+      ...(typeof record.status === "string" ? { status: record.status } : {}),
+      ...(typeof record.resource_id === "string" ? { resource_id: record.resource_id } : {}),
+      ...(typeof record.continuation_id === "string" ? { continuation_id: record.continuation_id } : {}),
+      ...(typeof record.error === "string" ? { error: record.error } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function paperContinuationEvent(row: OwnedPaperRequestContinuation): Record<string, unknown> {
+  const status = row.resource_status === "ready" && ["ready", "running"].includes(row.status)
+    ? "ready"
+    : row.status === "failed" || row.resource_status === "failed"
+      ? "failed"
+      : row.status === "cancelled" || ["cancelled", "deleted"].includes(row.resource_status)
+        ? "cancelled"
+        : "processing";
+  return {
+    type: "paper_processing",
+    correlation_id: truncateUtf8(row.turn_id, 255),
+    continuation_id: row.continuation_id,
+    resource_id: row.resource_id,
+    status,
+    message: status === "ready"
+      ? "Paper is ready; continue the original request to read text or analyze an image."
+      : status === "failed"
+        ? "Paper processing failed; inspect the resource status before retrying."
+        : status === "cancelled"
+          ? "Paper processing was cancelled."
+          : "Paper processing is still in progress; this request remains resumable.",
+  };
+}
+
+async function replayPaperContinuations(
+  env: Env,
+  sessionId: string,
+  userId: string,
+  turnId: string,
+): Promise<Response | null> {
+  const rows = await listOwnedPaperRequestContinuationsForTurn(env, sessionId, userId, turnId);
+  if (rows.length === 0) return null;
+  const events: Array<Record<string, unknown>> = [];
+  for (const row of rows) {
+    const current = await syncPaperRequestContinuation(env, {
+      continuationId: row.continuation_id,
+      sessionId,
+      userId,
+      now: nowSeconds(),
+    });
+    if (current) events.push(paperContinuationEvent(current));
+  }
+  return sseResponse(events);
+}
+
+function paperContinuationErrorResponse(row: OwnedPaperRequestContinuation | null, now: number): Response {
+  if (!row) return errorJson("Paper continuation not found", 404, "PAPER_CONTINUATION_NOT_FOUND");
+  if (row.expires_at <= now || row.status === "expired") {
+    return errorJson("Paper continuation expired", 410, "PAPER_CONTINUATION_EXPIRED");
+  }
+  if (row.status === "completed") {
+    return errorJson("Paper continuation has already completed", 409, "PAPER_CONTINUATION_COMPLETED");
+  }
+  if (row.status === "failed" || row.resource_status === "failed") {
+    return errorJson("Paper resource processing failed", 409, "PAPER_RESOURCE_FAILED");
+  }
+  if (row.status === "cancelled" || row.resource_status === "cancelled" || row.resource_status === "deleted") {
+    return errorJson("Paper continuation was cancelled", 409, "PAPER_CONTINUATION_CANCELLED");
+  }
+  if (row.status === "waiting" || row.resource_status !== "ready") {
+    return errorJson("Paper resource is not ready", 409, "PAPER_CONTINUATION_NOT_READY");
+  }
+  return errorJson("Paper continuation is already running", 409, "PAPER_CONTINUATION_IN_PROGRESS");
+}
+
 export async function handleChat(request: Request, env: Env, user: AuthedUser): Promise<Response> {
   let body: ChatRequestBody;
   try {
@@ -407,6 +536,7 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
   const lastUser = [...incoming].reverse().find((m) => m.role === "user");
   const userContent = (lastUser?.content ?? "").trim();
   if (!userContent) return errorJson("A user message is required", 400, "EMPTY_MESSAGE");
+  const paperIntent = isPaperIntent(userContent);
 
   const clientRequestId = String(body.client_request_id ?? "").trim();
   if (clientRequestId.length > 255) {
@@ -427,6 +557,8 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
         return errorJson("client_request_id was already used for another session", 409, "CLIENT_REQUEST_CONFLICT");
       }
       if (previous.status === "processing") {
+        const replay = await replayPaperContinuations(env, sessionId, user.userId, `client:${clientRequestId}`);
+        if (replay) return replay;
         return errorJson("The same chat request is already processing", 409, "CHAT_REQUEST_IN_PROGRESS");
       }
       if (previous.status === "completed") {
@@ -492,10 +624,19 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
     turnId,
     modelMessages,
     true,
-    shouldRequestTaskConfirmation(userContent),
+    {
+      forceTaskConfirmation: shouldRequestTaskConfirmation(userContent),
+      paperIntent,
+      clientRequestId: clientRequestId || null,
+    },
     clientRequestId
       ? {
           onResult: async (result) => {
+            if (result.status === "failed") {
+              await releaseChatRequestIdempotency(env, user.userId, clientRequestId);
+              return;
+            }
+            if (result.status === "paper_processing") return;
             await completeChatRequestIdempotency(
               env,
               user.userId,
@@ -512,6 +653,124 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
         }
       : undefined,
   );
+}
+
+/**
+ * Resume the original paper request after its D1/R2 resource becomes ready.
+ * The client submits only the session and opaque continuation ID; resource
+ * ownership, readiness, lease fencing, and the next Paper action are derived
+ * and checked on the server.
+ */
+export async function handlePaperContinuation(request: Request, env: Env, user: AuthedUser): Promise<Response> {
+  if (request.method !== "POST") return errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED");
+  const match = new URL(request.url).pathname.match(/^\/api\/paper\/continuations\/([^/]+)$/);
+  if (!match) return errorJson("Paper continuation not found", 404, "PAPER_CONTINUATION_NOT_FOUND");
+  let continuationId: string;
+  try {
+    continuationId = decodeURIComponent(match[1]).trim();
+  } catch {
+    return errorJson("Paper continuation not found", 404, "PAPER_CONTINUATION_NOT_FOUND");
+  }
+  if (!continuationId || continuationId.length > 255) {
+    return errorJson("Paper continuation not found", 404, "PAPER_CONTINUATION_NOT_FOUND");
+  }
+
+  let body: { session_id?: string };
+  try {
+    body = await request.json() as { session_id?: string };
+  } catch {
+    return errorJson("Body must be JSON", 400, "BAD_JSON");
+  }
+  const sessionId = String(body?.session_id ?? "").trim();
+  if (!sessionId || sessionId.length > 255) return errorJson("session_id is required", 400, "MISSING_SESSION");
+
+  const now = nowSeconds();
+  let row = await getOwnedPaperRequestContinuation(env, continuationId, sessionId, user.userId);
+  row = row
+    ? await syncPaperRequestContinuation(env, { continuationId, sessionId, userId: user.userId, now })
+    : null;
+  if (!row) return paperContinuationErrorResponse(null, now);
+
+  const canClaim = row.expires_at > now && row.resource_status === "ready"
+    && (row.status === "ready" || (row.status === "running" && row.lease_expires_at != null && row.lease_expires_at <= now));
+  if (!canClaim) return paperContinuationErrorResponse(row, now);
+
+  const runTurnId = `paper-continuation:${crypto.randomUUID()}`;
+  const claimed = await claimPaperRequestContinuation(env, {
+    continuationId,
+    sessionId,
+    userId: user.userId,
+    runTurnId,
+    now,
+    leaseExpiresAt: now + PAPER_CONTINUATION_LEASE_SECONDS,
+  });
+  if (!claimed) {
+    const current = await syncPaperRequestContinuation(env, { continuationId, sessionId, userId: user.userId, now: nowSeconds() });
+    return paperContinuationErrorResponse(current, nowSeconds());
+  }
+
+  try {
+    await insertChatEvent(env, {
+      session_id: sessionId,
+      turn_id: runTurnId,
+      event_type: "system_status",
+      role: "system",
+      content: truncateUtf8(
+        `Paper resource ${claimed.resource_id} is ready. continue the original paper request by using read_paper or analyze_paper_image for this same resource. Do not claim completion from prose alone.`,
+        2_048,
+      ),
+      status: "paper_continuation",
+      created_at: nowSeconds(),
+    });
+  } catch {
+    await releasePaperRequestContinuation(env, {
+      continuationId,
+      sessionId,
+      userId: user.userId,
+      runTurnId,
+      errorCode: "PAPER_CONTINUATION_PERSISTENCE_FAILED",
+    });
+    return errorJson("Paper continuation could not be persisted", 503, "PAPER_CONTINUATION_PERSISTENCE_FAILED");
+  }
+
+  const modelMessages = rebuildModelMessages(await listChatEvents(env, sessionId));
+  return streamModelLoop(env, user, sessionId, runTurnId, modelMessages, false, {
+    paperIntent: true,
+    paperContinuation: { continuationId, resourceId: claimed.resource_id },
+  }, {
+    onResult: async (result) => {
+      if (result.status === "completed") {
+        const completed = await completePaperRequestContinuation(env, {
+          continuationId,
+          sessionId,
+          userId: user.userId,
+          runTurnId,
+          responseText: result.assistantText,
+          now: nowSeconds(),
+        });
+        if (!completed) throw new Error("Paper continuation could not be completed");
+        return;
+      }
+      await releasePaperRequestContinuation(env, {
+        continuationId,
+        sessionId,
+        userId: user.userId,
+        runTurnId,
+        errorCode: result.errorCode ?? "PAPER_CONTINUATION_NOT_COMPLETED",
+        now: nowSeconds(),
+      });
+    },
+    onError: async () => {
+      await releasePaperRequestContinuation(env, {
+        continuationId,
+        sessionId,
+        userId: user.userId,
+        runTurnId,
+        errorCode: "PAPER_CONTINUATION_MODEL_FAILED",
+        now: nowSeconds(),
+      });
+    },
+  });
 }
 
 export async function handleCancelChatTaskConfirmation(request: Request, env: Env, user: AuthedUser): Promise<Response> {
@@ -636,7 +895,7 @@ async function handleTaskConfirmation(
 
   const modelMessages = rebuildModelMessages(await listChatEvents(env, sessionId));
 
-  return streamModelLoop(env, user, sessionId, resumeTurnId, modelMessages, false, false, {
+  return streamModelLoop(env, user, sessionId, resumeTurnId, modelMessages, false, {}, {
     onResult: async (result) => {
       if (result.status === "completed") {
         const completed = await completeChatTaskConfirmation(env, confirmationId, taskId, nowSeconds());
@@ -660,7 +919,7 @@ function streamModelLoop(
   turnId: string,
   modelMessages: ChatMessage[],
   refundQuotaOnError: boolean,
-  forceTaskConfirmation = false,
+  options: StreamOptions = {},
   lifecycle?: StreamLifecycle,
 ): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -688,24 +947,53 @@ function streamModelLoop(
           modelMessages,
           emit,
           emitStatus,
-          forceTaskConfirmation,
+          options,
         );
-        if (result.assistantText.trim() || result.status === "completed") {
+        if (result.assistantText.trim() || ["completed", "paper_processing", "failed"].includes(result.status)) {
           await insertChatEvent(env, {
             session_id: sessionId,
             turn_id: turnId,
             event_type: "assistant_message",
             role: "assistant",
             content: result.assistantText || null,
-            status: "completed",
+            status: result.status === "paper_processing" ? "processing" : result.status === "failed" ? "failed" : "completed",
             created_at: nowSeconds(),
           });
           await touchChatSession(env, sessionId);
         }
+        if (result.status === "failed") {
+          await persistTerminalError(
+            env,
+            sessionId,
+            turnId,
+            result.errorCode ?? "Paper request failed",
+          );
+        }
         if (lifecycle?.onResult) {
           await lifecycle.onResult(result);
         }
-        if (result.status === "completed") emit({ type: "done" });
+        if (result.status === "completed") {
+          emit({ type: "done" });
+        } else if (result.status === "paper_processing") {
+          emit({
+            type: "paper_processing",
+            correlation_id: truncateUtf8(turnId, 255),
+            continuation_id: result.paperContinuationId ?? null,
+            resource_id: result.paperResourceId ?? null,
+            status: "processing",
+            message: "Paper processing is durable and this request remains resumable; it is not complete.",
+          });
+        } else if (result.status === "failed") {
+          emit({
+            type: "error",
+            code: result.errorCode ?? "PAPER_REQUEST_FAILED",
+            message: result.errorCode === "PAPER_TOOL_CALL_REQUIRED"
+              ? "The paper request did not produce a required Paper tool call."
+              : result.errorCode === "PAPER_CONTINUATION_TOOL_REQUIRED"
+                ? "The ready paper request did not produce the required read or image action."
+                : "The paper request could not be completed.",
+          });
+        }
       } catch (error) {
         await persistTerminalError(env, sessionId, turnId);
         if (lifecycle?.onError) {
@@ -745,9 +1033,16 @@ async function runToolLoop(
   messages: ChatMessage[],
   emit: (event: Record<string, unknown>) => void,
   emitStatus: (phase: string, extra?: Record<string, unknown>) => void,
-  forceTaskConfirmation = false,
+  options: StreamOptions = {},
 ): Promise<ChatLoopResult> {
   let finalText = "";
+  let pendingPaper: { continuationId: string; resourceId: string } | null = null;
+  let sawPaperToolCall = false;
+  let paperToolFailed = false;
+  let continuationReadSucceeded = false;
+  const forceTaskConfirmation = options.forceTaskConfirmation === true;
+  const paperIntent = options.paperIntent === true;
+  const paperContinuation = options.paperContinuation;
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
     const { content, toolCalls, finishReason } = await streamCompletion(
@@ -782,6 +1077,13 @@ async function runToolLoop(
       );
     }
 
+    if (paperContinuation && !forceTaskConfirmation && iteration === 0 && toolCalls.length === 0) {
+      return { status: "failed", assistantText: content, errorCode: "PAPER_CONTINUATION_TOOL_REQUIRED" };
+    }
+    if (paperIntent && !forceTaskConfirmation && iteration === 0 && toolCalls.length === 0) {
+      return { status: "failed", assistantText: content, errorCode: "PAPER_TOOL_CALL_REQUIRED" };
+    }
+
     if (toolCalls.length > 0) {
       // Record every assistant tool call before executing any of them. This
       // preserves provider ordering even when streamed chunks arrive out of order.
@@ -797,19 +1099,48 @@ async function runToolLoop(
         } catch {
           args = {};
         }
+        const isPaperTool = PAPER_TOOL_NAMES.has(call.function.name);
+        if (isPaperTool) sawPaperToolCall = true;
         if (call.function.name === "request_task_creation") {
           return await pauseForTaskConfirmation(env, sessionId, userId, call.id, args, content, emit);
         }
 
         let result: string;
-        try {
-          result = await runTool(env, sessionId, userId, call.function.name, args);
+        const continuationResourceId = typeof args.resource_id === "string" ? args.resource_id.trim() : "";
+        const continuationScoped = !paperContinuation || (
+          (call.function.name === "read_paper" || call.function.name === "analyze_paper_image")
+          && continuationResourceId === paperContinuation.resourceId
+        );
+        if (!continuationScoped) {
+          result = JSON.stringify({ error: "paper_continuation_scope_forbidden" });
+          paperToolFailed = true;
+        } else try {
+          result = await runTool(env, sessionId, userId, call.function.name, args, {
+            turnId,
+            clientRequestId: options.clientRequestId ?? null,
+          });
         } catch (error) {
           const failedResult = JSON.stringify({ error: "tool_execution_failed" });
           await persistToolResultEvent(env, sessionId, turnId, call.id, failedResult);
           emitToolResultEvent(emit, turnId, call, failedResult);
           messages.push({ role: "tool", tool_call_id: call.id, content: failedResult });
           throw error;
+        }
+        const paperPayload = isPaperTool ? parsePaperToolPayload(result) : null;
+        if (isPaperTool && (paperPayload?.error
+          || paperPayload?.status === "failed"
+          || paperPayload?.status === "cancelled"
+          || paperPayload?.status === "deleted")) paperToolFailed = true;
+        if (call.function.name === "materialize_paper" && paperPayload?.mode === "processing"
+          && !paperToolFailed && paperPayload.resource_id && paperPayload.continuation_id) {
+          pendingPaper = {
+            resourceId: paperPayload.resource_id,
+            continuationId: paperPayload.continuation_id,
+          };
+        }
+        if (paperContinuation && (call.function.name === "read_paper" || call.function.name === "analyze_paper_image")
+          && continuationScoped && !paperPayload?.error && paperPayload?.mode !== "processing") {
+          continuationReadSucceeded = true;
         }
         await persistToolResultEvent(env, sessionId, turnId, call.id, result);
         emitToolResultEvent(emit, turnId, call, result);
@@ -825,6 +1156,22 @@ async function runToolLoop(
     }
   }
 
+  if (paperContinuation) {
+    if (paperToolFailed) return { status: "failed", assistantText: finalText, errorCode: "PAPER_CONTINUATION_TOOL_FAILED" };
+    if (!continuationReadSucceeded) return { status: "failed", assistantText: finalText, errorCode: "PAPER_CONTINUATION_TOOL_REQUIRED" };
+  }
+  if (paperToolFailed) return { status: "failed", assistantText: finalText, errorCode: "PAPER_TOOL_EXECUTION_FAILED" };
+  if (pendingPaper) {
+    return {
+      status: "paper_processing",
+      assistantText: finalText,
+      paperContinuationId: pendingPaper.continuationId,
+      paperResourceId: pendingPaper.resourceId,
+    };
+  }
+  if (paperIntent && !sawPaperToolCall) {
+    return { status: "failed", assistantText: finalText, errorCode: "PAPER_TOOL_CALL_REQUIRED" };
+  }
   return { status: "completed", assistantText: finalText };
 }
 

@@ -37,6 +37,10 @@ const paperPrivacyMigration = readFileSync(
   join(process.cwd(), "migrations-infinity", "0021_paper_privacy_cleanup.sql"),
   "utf8",
 );
+const paperContinuationsMigration = readFileSync(
+  join(process.cwd(), "migrations-infinity", "0022_paper_request_continuations.sql"),
+  "utf8",
+);
 
 describe("canonical D1 Worker runtime schema", () => {
   it("uses the single public pool and D1-only data plane", () => {
@@ -111,5 +115,16 @@ describe("canonical D1 Worker runtime schema", () => {
     expect(paperPrivacyMigration).toContain("CREATE TABLE IF NOT EXISTS paper_cleanup_jobs");
     expect(paperPrivacyMigration).toContain("metadata_json");
     expect(paperPrivacyMigration).toContain("status IN ('pending', 'running', 'completed', 'failed')");
+  });
+
+  it("defines a bounded, owner-scoped, idempotent paper continuation ledger", () => {
+    expect(paperContinuationsMigration).toContain("CREATE TABLE IF NOT EXISTS paper_request_continuations");
+    expect(paperContinuationsMigration).toContain("UNIQUE (session_id, turn_id, resource_id)");
+    expect(paperContinuationsMigration).toContain("client_request_id TEXT");
+    expect(paperContinuationsMigration).toContain("status IN ('waiting', 'ready', 'running', 'completed', 'failed', 'cancelled', 'expired')");
+    expect(paperContinuationsMigration).toContain("FOREIGN KEY (session_id)");
+    expect(paperContinuationsMigration).toContain("FOREIGN KEY (resource_id)");
+    expect(paperContinuationsMigration).not.toMatch(/\b(BLOB|pdf_object_key|text_manifest_key|image_manifest_key|r2_object_key|provider_payload)\b/i);
+    expect(paperContinuationsMigration).not.toContain("DROP TABLE");
   });
 });

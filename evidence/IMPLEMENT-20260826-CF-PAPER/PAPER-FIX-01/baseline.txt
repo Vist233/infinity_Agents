@@ -1,0 +1,20 @@
+PAPER-FIX-01 baseline record
+
+Observed at: 2026-08-30 (Asia/Shanghai)
+Branch: cloudflare-deploy
+HEAD: cf41ab96ee5734eb3039da12aeca1ab623bca404
+HEAD subject: evidence: record PAPER-10 paper request root cause
+Local tracking ref observed: becde2db27aa7ef7e31bfb2ddbe4a0f4ce7be8cf
+Worktree at start: clean
+
+Prior audit reference:
+evidence/IMPLEMENT-20260826-CF-PAPER/PAPER-10/root-cause-audit-20260830.md
+
+The prior audit established that the real request created and completed a
+Paper resource, but the chat loop ended after provider prose and no durable
+continuation existed. This card starts from that clean audit commit and does
+not discard or overwrite unrelated user work.
+
+External-write boundary for this card: no Cloudflare, D1, R2, WAF, Secret,
+Redis, Relay, Cloudflared, Processor/zhangbot, browser, or GitHub write is
+authorized or performed. No remote migration is applied.

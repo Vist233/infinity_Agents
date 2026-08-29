@@ -135,6 +135,32 @@ export interface PaperResourceLinkRow {
   created_at: number;
 }
 
+export type PaperRequestContinuationStatus = "waiting" | "ready" | "running" | "completed" | "failed" | "cancelled" | "expired";
+
+export interface PaperRequestContinuationRow {
+  continuation_id: string;
+  session_id: string;
+  user_id: string;
+  turn_id: string;
+  client_request_id: string | null;
+  resource_id: string;
+  status: PaperRequestContinuationStatus;
+  active_turn_id: string | null;
+  lease_expires_at: number | null;
+  expires_at: number;
+  last_error_code: string | null;
+  created_at: number;
+  updated_at: number;
+  completed_at: number | null;
+}
+
+export interface OwnedPaperRequestContinuation extends PaperRequestContinuationRow {
+  resource_status: PaperResourceStatus;
+}
+
+export const PAPER_CONTINUATION_TTL_SECONDS = 24 * 60 * 60;
+export const PAPER_CONTINUATION_LEASE_SECONDS = 5 * 60;
+
 export interface PaperProcessorSessionRow {
   processor_session_id: string;
   processor_id: string;
@@ -705,6 +731,229 @@ export async function findOwnedPaperResourceBySource(
   ).bind(input.sessionId, input.userId, input.sourceKind, input.sourceRef).first<PaperResourceRow>();
 }
 
+function initialPaperContinuationStatus(status: PaperResourceStatus): PaperRequestContinuationStatus {
+  if (status === "ready") return "ready";
+  if (status === "failed") return "failed";
+  if (status === "cancelled" || status === "deleted") return "cancelled";
+  return "waiting";
+}
+
+export async function createPaperRequestContinuation(
+  env: Env,
+  input: {
+    continuationId: string;
+    sessionId: string;
+    userId: string;
+    turnId: string;
+    clientRequestId?: string | null;
+    resource: Pick<PaperResourceRow, "resource_id" | "status">;
+    now?: number;
+  },
+): Promise<PaperRequestContinuationRow> {
+  if (!input.continuationId || !input.sessionId || !input.userId || !input.resource.resource_id
+    || !input.turnId || input.turnId.length > 255
+    || (input.clientRequestId != null && (input.clientRequestId.length < 1 || input.clientRequestId.length > 255))) {
+    throw new Error("Invalid paper continuation identity");
+  }
+  const ownedResource = await getOwnedPaperResource(env, input.resource.resource_id, input.sessionId, input.userId);
+  if (!ownedResource) throw new Error("Paper continuation resource is not owned");
+  const createdAt = input.now ?? nowSeconds();
+  const expiresAt = createdAt + PAPER_CONTINUATION_TTL_SECONDS;
+  await env.DB.prepare(
+    `INSERT INTO paper_request_continuations
+       (continuation_id, session_id, user_id, turn_id, client_request_id, resource_id,
+        status, active_turn_id, lease_expires_at, expires_at, last_error_code,
+        created_at, updated_at, completed_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, ?8, NULL, ?9, ?9, NULL)
+     ON CONFLICT(session_id, turn_id, resource_id) DO NOTHING`,
+  ).bind(
+    input.continuationId,
+    input.sessionId,
+    input.userId,
+    input.turnId,
+    input.clientRequestId ?? null,
+    input.resource.resource_id,
+    initialPaperContinuationStatus(ownedResource.status),
+    expiresAt,
+    createdAt,
+  ).run();
+  const inserted = await env.DB.prepare(
+    `SELECT continuation_id, session_id, user_id, turn_id, client_request_id,
+            resource_id, status, active_turn_id, lease_expires_at, expires_at,
+            last_error_code, created_at, updated_at, completed_at
+       FROM paper_request_continuations
+      WHERE continuation_id = ?1`,
+  ).bind(input.continuationId).first<PaperRequestContinuationRow>();
+  if (inserted) return inserted;
+  const existing = await env.DB.prepare(
+    `SELECT continuation_id, session_id, user_id, turn_id, client_request_id,
+            resource_id, status, active_turn_id, lease_expires_at, expires_at,
+            last_error_code, created_at, updated_at, completed_at
+       FROM paper_request_continuations
+      WHERE session_id = ?1 AND turn_id = ?2 AND resource_id = ?3`,
+  ).bind(input.sessionId, input.turnId, input.resource.resource_id).first<PaperRequestContinuationRow>();
+  if (!existing) throw new Error("Paper continuation could not be persisted");
+  return existing;
+}
+
+export async function getOwnedPaperRequestContinuation(
+  env: Env,
+  continuationId: string,
+  sessionId: string,
+  userId: string,
+): Promise<OwnedPaperRequestContinuation | null> {
+  return env.DB.prepare(
+    `SELECT c.continuation_id, c.session_id, c.user_id, c.turn_id,
+            c.client_request_id, c.resource_id, c.status, c.active_turn_id,
+            c.lease_expires_at, c.expires_at, c.last_error_code, c.created_at,
+            c.updated_at, c.completed_at, r.status AS resource_status
+       FROM paper_request_continuations c
+       JOIN paper_resources r ON r.resource_id = c.resource_id
+       JOIN chat_sessions s ON s.id = c.session_id
+      WHERE c.continuation_id = ?1 AND c.session_id = ?2 AND c.user_id = ?3
+        AND r.session_id = c.session_id AND r.user_id = c.user_id
+        AND s.user_id = c.user_id
+      LIMIT 1`,
+  ).bind(continuationId, sessionId, userId).first<OwnedPaperRequestContinuation>();
+}
+
+export async function listOwnedPaperRequestContinuationsForTurn(
+  env: Env,
+  sessionId: string,
+  userId: string,
+  turnId: string,
+): Promise<OwnedPaperRequestContinuation[]> {
+  const result = await env.DB.prepare(
+    `SELECT c.continuation_id, c.session_id, c.user_id, c.turn_id,
+            c.client_request_id, c.resource_id, c.status, c.active_turn_id,
+            c.lease_expires_at, c.expires_at, c.last_error_code, c.created_at,
+            c.updated_at, c.completed_at, r.status AS resource_status
+       FROM paper_request_continuations c
+       JOIN paper_resources r ON r.resource_id = c.resource_id
+       JOIN chat_sessions s ON s.id = c.session_id
+      WHERE c.session_id = ?1 AND c.user_id = ?2 AND c.turn_id = ?3
+        AND r.session_id = c.session_id AND r.user_id = c.user_id
+        AND s.user_id = c.user_id
+      ORDER BY c.created_at ASC, c.continuation_id ASC`,
+  ).bind(sessionId, userId, turnId).all<OwnedPaperRequestContinuation>();
+  return result.results ?? [];
+}
+
+/** Synchronize a durable continuation with the resource lifecycle before serving it. */
+export async function syncPaperRequestContinuation(
+  env: Env,
+  input: { continuationId: string; sessionId: string; userId: string; now?: number },
+): Promise<OwnedPaperRequestContinuation | null> {
+  const now = input.now ?? nowSeconds();
+  await env.DB.prepare(
+    `UPDATE paper_request_continuations
+        SET status = CASE
+          WHEN expires_at <= ?4 AND status NOT IN ('completed', 'cancelled', 'expired') THEN 'expired'
+          WHEN (SELECT status FROM paper_resources WHERE resource_id = paper_request_continuations.resource_id) = 'ready' AND status = 'waiting' THEN 'ready'
+          WHEN (SELECT status FROM paper_resources WHERE resource_id = paper_request_continuations.resource_id) = 'failed' AND status IN ('waiting', 'ready', 'running') THEN 'failed'
+          WHEN (SELECT status FROM paper_resources WHERE resource_id = paper_request_continuations.resource_id) IN ('cancelled', 'deleted') AND status IN ('waiting', 'ready', 'running') THEN 'cancelled'
+          ELSE status END,
+            last_error_code = CASE
+          WHEN (SELECT status FROM paper_resources WHERE resource_id = paper_request_continuations.resource_id) = 'failed' AND status IN ('waiting', 'ready', 'running') THEN COALESCE((SELECT error_code FROM paper_resources WHERE resource_id = paper_request_continuations.resource_id), 'PAPER_RESOURCE_FAILED')
+          ELSE last_error_code END,
+            active_turn_id = CASE
+          WHEN expires_at <= ?4 OR (SELECT status FROM paper_resources WHERE resource_id = paper_request_continuations.resource_id) IN ('failed', 'cancelled', 'deleted') THEN NULL
+          ELSE active_turn_id END,
+            lease_expires_at = CASE
+          WHEN expires_at <= ?4 OR (SELECT status FROM paper_resources WHERE resource_id = paper_request_continuations.resource_id) IN ('failed', 'cancelled', 'deleted') THEN NULL
+          ELSE lease_expires_at END,
+            updated_at = ?4
+      WHERE paper_request_continuations.continuation_id = ?1
+        AND paper_request_continuations.session_id = ?2
+        AND paper_request_continuations.user_id = ?3
+        AND EXISTS (SELECT 1 FROM paper_resources WHERE paper_resources.resource_id = paper_request_continuations.resource_id)`,
+  ).bind(input.continuationId, input.sessionId, input.userId, now).run();
+  return getOwnedPaperRequestContinuation(env, input.continuationId, input.sessionId, input.userId);
+}
+
+export async function claimPaperRequestContinuation(
+  env: Env,
+  input: { continuationId: string; sessionId: string; userId: string; runTurnId: string; now?: number; leaseExpiresAt?: number },
+): Promise<OwnedPaperRequestContinuation | null> {
+  const now = input.now ?? nowSeconds();
+  const leaseExpiresAt = input.leaseExpiresAt ?? now + PAPER_CONTINUATION_LEASE_SECONDS;
+  if (!input.runTurnId || input.runTurnId.length > 255 || leaseExpiresAt <= now) return null;
+  const result = await env.DB.prepare(
+    `UPDATE paper_request_continuations
+        SET status = 'running', active_turn_id = ?4,
+            lease_expires_at = ?5, updated_at = ?6
+      WHERE continuation_id = ?1 AND session_id = ?2 AND user_id = ?3
+        AND expires_at > ?6
+        AND EXISTS (
+          SELECT 1 FROM paper_resources r
+           WHERE r.resource_id = paper_request_continuations.resource_id
+             AND r.session_id = ?2 AND r.user_id = ?3 AND r.status = 'ready'
+        )
+        AND (status = 'ready' OR (status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?6))`,
+  ).bind(input.continuationId, input.sessionId, input.userId, input.runTurnId, leaseExpiresAt, now).run();
+  if ((result.meta?.changes ?? 0) !== 1) return null;
+  return getOwnedPaperRequestContinuation(env, input.continuationId, input.sessionId, input.userId);
+}
+
+export async function releasePaperRequestContinuation(
+  env: Env,
+  input: { continuationId: string; sessionId: string; userId: string; runTurnId: string; errorCode?: string | null; now?: number },
+): Promise<boolean> {
+  const now = input.now ?? nowSeconds();
+  const errorCode = input.errorCode ?? null;
+  if (errorCode != null && !/^[A-Z0-9_]{1,64}$/.test(errorCode)) return false;
+  const result = await env.DB.prepare(
+    `UPDATE paper_request_continuations
+        SET status = CASE
+              WHEN expires_at <= ?4 THEN 'expired'
+              WHEN (SELECT status FROM paper_resources WHERE resource_id = paper_request_continuations.resource_id) = 'ready' THEN 'ready'
+              WHEN (SELECT status FROM paper_resources WHERE resource_id = paper_request_continuations.resource_id) = 'failed' THEN 'failed'
+              ELSE 'cancelled' END,
+            active_turn_id = NULL, lease_expires_at = NULL,
+            last_error_code = CASE
+              WHEN (SELECT status FROM paper_resources WHERE resource_id = paper_request_continuations.resource_id) = 'failed'
+                THEN COALESCE((SELECT error_code FROM paper_resources WHERE resource_id = paper_request_continuations.resource_id), 'PAPER_RESOURCE_FAILED')
+              ELSE ?6 END,
+            updated_at = ?4
+      WHERE continuation_id = ?1 AND session_id = ?2 AND user_id = ?3
+        AND status = 'running' AND active_turn_id = ?5`,
+  ).bind(input.continuationId, input.sessionId, input.userId, now, input.runTurnId, errorCode).run();
+  return (result.meta?.changes ?? 0) === 1;
+}
+
+export async function completePaperRequestContinuation(
+  env: Env,
+  input: { continuationId: string; sessionId: string; userId: string; runTurnId: string; responseText: string; now?: number },
+): Promise<boolean> {
+  const current = await getOwnedPaperRequestContinuation(env, input.continuationId, input.sessionId, input.userId);
+  if (!current || current.status !== "running" || current.active_turn_id !== input.runTurnId) return false;
+  const now = input.now ?? nowSeconds();
+  const responseText = input.responseText.slice(0, 32_768);
+  const statements = [env.DB.prepare(
+    `UPDATE paper_request_continuations
+        SET status = 'completed', active_turn_id = NULL, lease_expires_at = NULL,
+            completed_at = ?4, updated_at = ?4
+      WHERE continuation_id = ?1 AND session_id = ?2 AND user_id = ?3
+        AND status = 'running' AND active_turn_id = ?5
+        AND expires_at > ?4
+        AND EXISTS (
+          SELECT 1 FROM paper_resources r
+           WHERE r.resource_id = paper_request_continuations.resource_id
+             AND r.status = 'ready'
+        )`,
+  ).bind(input.continuationId, input.sessionId, input.userId, now, input.runTurnId)];
+  if (current.client_request_id) {
+    statements.push(env.DB.prepare(
+      `UPDATE chat_request_idempotency
+          SET status = 'completed', confirmation_id = NULL,
+              response_text = ?3, updated_at = ?4
+        WHERE user_id = ?1 AND client_request_id = ?2 AND status = 'processing'`,
+    ).bind(input.userId, current.client_request_id, responseText, now));
+  }
+  const results = await env.DB.batch(statements);
+  return Number((results[0] as { meta?: { changes?: number } } | undefined)?.meta?.changes ?? 0) === 1;
+}
+
 export async function recordUserPaperUpload(
   env: Env,
   input: { resourceId: string; sessionId: string; userId: string; sizeBytes: number; sha256: string; now?: number },
@@ -812,6 +1061,12 @@ export async function cancelPaperResource(
       `UPDATE paper_processing_attempts SET status = 'cancelled', finished_at = ?2
        WHERE resource_id = ?1 AND status IN ('claimed', 'downloading', 'extracting', 'uploading')`,
     ).bind(input.resourceId, now),
+    env.DB.prepare(
+      `UPDATE paper_request_continuations
+          SET status = 'cancelled', active_turn_id = NULL,
+              lease_expires_at = NULL, updated_at = ?2
+        WHERE resource_id = ?1 AND status IN ('waiting', 'ready', 'running')`,
+    ).bind(input.resourceId, now),
   ]);
   return Number((results[0] as { meta?: { changes?: number } } | undefined)?.meta?.changes ?? 0) === 1;
 }
@@ -830,6 +1085,12 @@ export async function deletePaperResource(
     env.DB.prepare(
       `UPDATE paper_processing_attempts SET status = 'cancelled', finished_at = ?2
        WHERE resource_id = ?1 AND status IN ('claimed', 'downloading', 'extracting', 'uploading')`,
+    ).bind(input.resourceId, now),
+    env.DB.prepare(
+      `UPDATE paper_request_continuations
+          SET status = 'cancelled', active_turn_id = NULL,
+              lease_expires_at = NULL, updated_at = ?2
+        WHERE resource_id = ?1 AND status IN ('waiting', 'ready', 'running')`,
     ).bind(input.resourceId, now),
     env.DB.prepare(
       `INSERT INTO paper_cleanup_jobs
@@ -1206,6 +1467,11 @@ export async function finalizePaperProcessorAttempt(
         WHERE attempt_id = ?1 AND resource_id = ?2 AND processor_id = ?3
           AND lease_token_hash = ?4 AND fencing_epoch = ?5 AND status = 'uploading'`,
     ).bind(input.attemptId, input.resourceId, input.processorId, input.leaseTokenHash, input.fencingEpoch, input.now),
+    env.DB.prepare(
+      `UPDATE paper_request_continuations
+          SET status = 'ready', updated_at = ?2
+        WHERE resource_id = ?1 AND status = 'waiting'`,
+    ).bind(input.resourceId, input.now),
   ]);
   return Number((results[0] as { meta?: { changes?: number } } | undefined)?.meta?.changes ?? 0) === 1
     && Number((results[1] as { meta?: { changes?: number } } | undefined)?.meta?.changes ?? 0) === 1;
@@ -1232,6 +1498,12 @@ export async function cancelPaperProcessorAttempt(
           AND status IN ('claimed', 'downloading', 'extracting', 'uploading')
           AND lease_expires_at > ?6`,
     ).bind(input.attemptId, input.resourceId, input.processorId, input.leaseTokenHash, input.fencingEpoch, input.now),
+    env.DB.prepare(
+      `UPDATE paper_request_continuations
+          SET status = 'cancelled', active_turn_id = NULL,
+              lease_expires_at = NULL, updated_at = ?2
+        WHERE resource_id = ?1 AND status IN ('waiting', 'ready', 'running')`,
+    ).bind(input.resourceId, input.now),
   ]);
   return Number((results[0] as { meta?: { changes?: number } } | undefined)?.meta?.changes ?? 0) === 1
     && Number((results[1] as { meta?: { changes?: number } } | undefined)?.meta?.changes ?? 0) === 1;
@@ -1261,6 +1533,12 @@ export async function failPaperProcessorAttempt(
           AND status IN ('claimed', 'downloading', 'extracting', 'uploading')
           AND lease_expires_at > ?8`,
     ).bind(input.attemptId, input.resourceId, input.processorId, input.leaseTokenHash, input.fencingEpoch, input.errorCode, input.errorMessageSafe, input.now),
+    env.DB.prepare(
+      `UPDATE paper_request_continuations
+          SET status = 'failed', active_turn_id = NULL,
+              lease_expires_at = NULL, last_error_code = ?2, updated_at = ?3
+        WHERE resource_id = ?1 AND status IN ('waiting', 'ready', 'running')`,
+    ).bind(input.resourceId, input.errorCode, input.now),
   ]);
   return Number((results[0] as { meta?: { changes?: number } } | undefined)?.meta?.changes ?? 0) === 1
     && Number((results[1] as { meta?: { changes?: number } } | undefined)?.meta?.changes ?? 0) === 1;

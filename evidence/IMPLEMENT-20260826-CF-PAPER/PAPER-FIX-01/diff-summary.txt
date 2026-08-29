@@ -1,0 +1,50 @@
+# PAPER-FIX-01 diff summary
+
+## Durable data model
+
+- Added the additive local migration
+  `cloudflare-worker/migrations-infinity/0022_paper_request_continuations.sql`.
+- The D1 ledger correlates `session_id`, `user_id`, `turn_id`, and
+  `resource_id`, with a unique `(session_id, turn_id, resource_id)` key,
+  waiting/ready/running/completed/failed/cancelled/expired state, 24-hour
+  absolute expiry, five-minute execution lease, active run ID, and bounded
+  error code. It contains no PDF, full text, R2 key, provider payload, or
+  secret.
+- Repository functions create, read, synchronize, atomically claim, release,
+  and complete the correlation under ownership and resource-state checks.
+  Processor finalization and resource cancellation/failure/deletion update
+  the continuation state in the same D1 contract.
+
+## Edge orchestration
+
+- `materialize_paper` now receives the authenticated turn/client context,
+  creates or reuses one continuation per turn/resource, and returns an opaque
+  continuation ID alongside processing/ready state.
+- Paper intent with a provider prose-only response fails with stable
+  `PAPER_TOOL_CALL_REQUIRED`; it never emits `done` or a successful assistant
+  state. Processing materialization emits `paper_processing` and stores a
+  processing assistant event, not final completion.
+- Added authenticated `POST /api/paper/continuations/:continuation_id`.
+  The request body contains only `session_id`; the server derives the resource
+  and original turn, validates ownership/readiness/expiry/lease, rebuilds the
+  durable event history, and permits only same-resource `read_paper` or
+  `analyze_paper_image` before completion.
+- Continuation failure releases a retryable ready lease; completion requires
+  the active run ID and a still-ready resource. Duplicate, cross-user,
+  expired, not-ready, cancelled, failed, and completed paths have stable
+  rejection behavior.
+
+## Tests and documents
+
+- Extended fake-D1 and schema tests, Paper Processor lifecycle coverage, and
+  the focused positive/negative continuation suite.
+- Updated the design and execution plan with the data model, endpoint,
+  provider contract, lifecycle, safety boundary, rollback, local-only gate,
+  and exact next card `PAPER-FIX-02`.
+- No frontend implementation was added; frontend checks only protect the
+  existing contract as required by this card.
+
+## External state
+
+No external system was modified. The migration is local and must be applied
+in a later explicitly approved release before enabling the route in production.

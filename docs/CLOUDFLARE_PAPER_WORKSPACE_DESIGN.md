@@ -365,6 +365,45 @@ When a resource is not ready, `read_paper` returns a structured processing state
 instead of falling back to an abstract or pretending the full text was read.
 The Agent reports that distinction to the user.
 
+### 6.1 Durable paper-intent continuation
+
+The chat turn and the asynchronous resource lifecycle are separate durable
+facts.  When `materialize_paper` is called from a chat turn, the Edge creates a
+row in the additive `paper_request_continuations` ledger and returns its opaque
+`continuation_id` together with the `resource_id` and processing state.  The
+unique key `(session_id, turn_id, resource_id)` makes repeated tool delivery
+idempotent.  The ledger contains only bounded identifiers, status, timestamps,
+an optional client request ID, and a safe error code; it never contains PDF or
+full-text bytes, R2 keys, provider payloads, or credentials.
+
+The continuation state is `waiting -> ready -> running -> completed`, with
+explicit `failed`, `cancelled`, and `expired` terminal/retry states.  Processor
+finalization moves a waiting row to `ready`; resource failure, cancellation, or
+deletion propagates to the continuation.  A five-minute execution lease and a
+24-hour absolute continuation expiry are claimed atomically in D1.  A stale
+running lease may be reclaimed only by the same authenticated owner while the
+resource is still ready.  Completion requires the active run ID and a still
+ready resource, so duplicate or late completions cannot close another run.
+
+`POST /api/paper/continuations/:continuation_id` accepts only the owning
+`session_id`.  The Edge derives the resource and original turn from D1, checks
+session/user/resource ownership, and rebuilds provider messages from the
+canonical event ledger.  It records a system-status event, then requires the
+provider to call `read_paper` or `analyze_paper_image` for that exact resource
+before a continuation can complete.  The provider cannot supply an R2 key,
+path, or replacement resource.  Cross-user or unknown IDs return the same
+not-found boundary; expired, completed, not-ready, cancelled, and in-progress
+requests return stable conflict codes.  A model or tool failure releases the
+run lease back to `ready` for a controlled retry, while preserving the failed
+tool/error events.
+
+The initial provider contract is equally strict: a paper/PDF/full-text intent
+with no Paper tool call returns `PAPER_TOOL_CALL_REQUIRED`, emits no `done`
+event, and creates no resource.  A materialization result with `processing`
+emits `paper_processing` and a processing assistant event, never a final
+completion.  Frontend task/progress projection is intentionally a later card;
+the durable ledger and event contract are the source of truth.
+
 Image bytes are retrieved through an authorized same-origin route or a narrowly
 scoped, short-lived capability.  Do not Base64-embed large images into SSE or
 model context.  The image-analysis tool sends only the selected authorized image
