@@ -885,3 +885,38 @@ authorized minimal Edge shared-secret/zhangbot token handoff and single
 Processor release. On any failure, delete the new WAF rule and entrypoint
 first, then revoke only the newly created capability material and remove the
 new release/service.
+
+## 2026-08-29 immutable preflight recheck passed
+
+- Status: `READY_FOR_SECRET_AND_PROCESSOR_RELEASE`; PAPER-10 is not PASS.
+- Local `cloudflare-deploy` HEAD is
+  `794f8b10d0c86c50a0575cc4fe2869aaa0aa537b` and the worktree is clean. A
+  read-only `ls-remote` returned actual remote ref
+  `e551a5994cd228f19a2ae816c4529e4b04cf41a1`; no new GitHub push is included
+  in this continuation. The current evidence commit contains no production
+  source change.
+- The source, dependency-lock, and service-unit hashes match the delivery
+  manifest; no `._*` release input is present. The target account, Worker,
+  D1, and R2 identities match the checked-in contract. D1 reported no pending
+  migrations and a zero-write schema read with all required Paper tables and
+  indexes. R2 remains `15` objects / `41.9 MB`; `/health` is HTTP `200` with
+  D1/R2 configured and Processor unconfigured.
+- The exact active WAF rule read back successfully: entrypoint
+  `65e15547ea3144feb70791fc155d1df0`, rule
+  `5695e7eb000c4f49b77a616cff1411ae`, fixed source IP/host/four method-path
+  pairs, `skip` only `bic`, enabled, and logged.
+- zhangbot still has the exact `python3.10-venv` package, passing disposable
+  venv/ensurepip/pip checks, fixed egress `39.105.204.121`, HTTP-200 access to
+  the allowed arXiv/NCBI/PMC sources, no Processor release/service/token or
+  process, no Docker, and no Processor listener. Existing cloudflared, Redis,
+  and Redis Relay services are active and unchanged.
+- The verified mainland Kimi text gate is recorded as exact visible
+  `KIMI_MAINLAND_TEXT_PROBE_OK` against Worker version
+  `79755db3-c12d-4737-b601-aa99f11e3f93`; StepFun remains unused.
+
+Next exact action: perform the already authorized minimal Edge shared-secret
+write and one-time zhangbot token handoff, then install and verify the
+commit-named single Processor release. If any later step fails, remove the
+new WAF rule/entrypoint first, then revoke only newly created capability
+material and remove the new release/service; preserve D1/R2 metadata and
+existing Redis/Relay/Cloudflared services.

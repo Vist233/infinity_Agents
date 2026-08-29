@@ -235,3 +235,25 @@ or persisted in this local phase.
 - WAF/Secret/token/release/service state is absent after rollback. D1/R2 and
   existing Redis/Relay/Cloudflared remain preserved/active; no live paper
   data was created by this attempt.
+
+## 2026-08-29 Kimi text-gate / WAF-active release baseline
+
+- The clean local baseline for this continuation is
+  `794f8b10d0c86c50a0575cc4fe2869aaa0aa537b` on `cloudflare-deploy`. The
+  actual read-only remote ref is `e551a5994cd228f19a2ae816c4529e4b04cf41a1`;
+  no GitHub write is in this subphase. The local evidence commit contains no
+  production source change.
+- Kimi mainland text acceptance is recorded separately as exact visible
+  `KIMI_MAINLAND_TEXT_PROBE_OK` against Worker version
+  `79755db3-c12d-4737-b601-aa99f11e3f93`. The exact current WAF rule is active
+  and read back under entrypoint
+  `65e15547ea3144feb70791fc155d1df0` / rule
+  `5695e7eb000c4f49b77a616cff1411ae`.
+- The fresh read-only preflight verified artifact hashes, target account/
+  Worker/D1/R2, no pending migrations, unchanged R2 metadata, zhangbot
+  venv/ensurepip/pip, fixed egress/source checks, no stale Processor state,
+  and unchanged existing Redis/Relay/Cloudflared services. D1 migrations
+  `0017`–`0021` remain applied and are not to be rerun.
+- External state at this baseline is exactly the corrected Edge deployment and
+  the newly active exact WAF rule. Edge shared secret, zhangbot token/release/
+  service, R2 object, and Paper live acceptance remain pending.

@@ -456,3 +456,21 @@ acceptance. PAPER-10 is not complete.
   preflight followed by the authorized secret/token handoff and single
   Processor release; capability-first rollback starts with this rule if that
   step fails.
+
+## 2026-08-29 fresh immutable preflight passed
+
+- The clean local HEAD is `794f8b10d0c86c50a0575cc4fe2869aaa0aa537b` on
+  `cloudflare-deploy`; actual read-only remote ref is
+  `e551a5994cd228f19a2ae816c4529e4b04cf41a1`. No new GitHub push was made in
+  this continuation. All three delivery artifact hashes match the checked-in
+  manifest and no AppleDouble file is present.
+- Read-only Cloudflare identity, deployment, D1 migration/schema, R2, health,
+  and secret-name checks passed. D1 migrations were not rerun. The exact
+  current WAF rule/readback passed with entrypoint
+  `65e15547ea3144feb70791fc155d1df0` and rule
+  `5695e7eb000c4f49b77a616cff1411ae`; no Processor shared secret exists yet.
+- zhangbot package/venv/ensurepip/pip, existing-service, no-stale-Processor,
+  fixed-egress, allowlisted-source, and no-Processor-listener checks passed.
+  Existing Redis/Relay/Cloudflared services remain active; Docker is absent.
+- The next step is the authorized secure Edge shared-secret and zhangbot token
+  handoff followed by the single release install. PAPER-10 remains incomplete.

@@ -977,3 +977,48 @@ status=BLOCKED_GITHUB_BACKUP
   absence and Processor inactive, and Edge 100% rollback to
   `d287b02d-a94c-4caa-b473-70f2368f4999`. D1/R2 were preserved and existing
   Redis/Relay/Cloudflared remained active. `deployment.txt` was not created.
+
+## 2026-08-29 fresh immutable preflight after Kimi text gate and active WAF
+
+- Local branch/worktree check exited `0`: branch `cloudflare-deploy`, HEAD
+  `794f8b10d0c86c50a0575cc4fe2869aaa0aa537b`, clean worktree. The actual
+  read-only `git ls-remote --heads origin cloudflare-deploy` exited `0` and
+  returned `e551a5994cd228f19a2ae816c4529e4b04cf41a1`; the current evidence
+  commit is intentionally not pushed in this subphase because no new GitHub
+  push authorization was given.
+- Local artifact checks exited `0`. The source aggregate is
+  `510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e`, the
+  zhangbot dependency-lock hash is
+  `e7b669892e0e5790179ee84dedd106d04ac40005ca49943059d2ee585f63ff97`, and
+  the service-unit hash is
+  `424a6846ef7b30d1eb505811da53620156e9186dae60ece38f3826e8338a2b2f`;
+  all three match `delivery.v1.json`. No `._*` file was found.
+- Read-only Cloudflare checks exited `0`: account
+  `3cfba3bb2ec69798aa4881b05d80810f`, Worker `infinity-agents-edge`, D1
+  `infinity-agents-db` (`9ee9ec94-cb42-40b5-8372-681c7b57c105`), and R2
+  `infinity-agents-resources` were the configured targets. D1 reported
+  `No migrations to apply!`; the schema query returned all required Paper
+  tables/indexes with `changes=0`, `changed_db=false`, and `rows_written=0`.
+  R2 bucket info remained APAC, 15 objects, 41.9 MB, with no object read or
+  write. `/health` returned HTTP `200` with D1/R2 configured and Paper
+  Processor unconfigured.
+- Worker deployment readback exited `0`: corrected Kimi version
+  `79755db3-c12d-4737-b601-aa99f11e3f93` remains at 100% under deployment
+  `a98fd1bd-ff46-4768-8cd8-af23dcc53fca`. Secret-name read exited `0` and
+  showed no `PAPER_PROCESSOR_SHARED_SECRET`; no secret value was read.
+- Secure WAF readback used the mode-`0600` token only through stdin. Curl and
+  semantic validation each exited `0`; the active entrypoint is
+  `65e15547ea3144feb70791fc155d1df0`, rule
+  `5695e7eb000c4f49b77a616cff1411ae`, with the exact fixed IP/host/four
+  method-path expression, `skip` `products=["bic"]`, enabled state, and
+  logging enabled.
+- zhangbot read-only checks exited `0` for SSH, venv help, temporary venv,
+  ensurepip, pip, dpkg query, listener inspection, and source checks. The host
+  is Ubuntu 22.04/x86_64 with Python 3.10.12 and
+  `python3.10-venv` `3.10.12-1~22.04.17` installed. Three independent egress
+  checks returned `39.105.204.121`; arXiv, NCBI, and PMC returned HTTP `200`.
+  Existing cloudflared, Redis, and Redis Relay user services are active;
+  Processor env/current/unit paths and user units are absent, no Processor
+  process remains, Docker is absent, and no Processor listener exists.
+- This preflight is ready for the authorized next write. It does not claim
+  Processor readiness or any Paper live acceptance.

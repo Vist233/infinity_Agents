@@ -917,3 +917,35 @@ recorded exactly; no failed assertion was skipped.
     - The changed-scope no-secret detector over the updated Paper-10 evidence
       files, excluding this detector record, returned raw no-match exit `1`;
       normalized secret-gate exit `0`.
+
+71. Fresh immutable preflight after the Kimi text gate and WAF write
+    - Local branch/worktree/hash/AppleDouble checks exited `0`. Read-only
+      `git ls-remote --heads origin cloudflare-deploy` exited `0` and returned
+      `e551a5994cd228f19a2ae816c4529e4b04cf41a1`; no push was run. The local
+      evidence HEAD is `794f8b10d0c86c50a0575cc4fe2869aaa0aa537b`.
+    - `npx wrangler whoami`, deployment inventory, secret-name list, D1
+      migration list, D1 schema query, R2 bucket list/info, and public health
+      reads exited `0`. D1 reported no migrations to apply; schema metadata
+      showed all required tables/indexes with zero writes; R2 info was 15
+      objects / 41.9 MB; health was HTTP `200` with Processor unconfigured.
+    - WAF token mode metadata read exited `0`; secure current-rule curl exited
+      `0` and semantic exactness validation exited `0`. Readback was HTTP
+      `200`, entrypoint `65e15547ea3144feb70791fc155d1df0`, rule
+      `5695e7eb000c4f49b77a616cff1411ae`, exact fixed expression, `skip` only
+      `bic`, enabled, and logged.
+    - Corrected zhangbot SSH read-only checks exited `0` for package, venv,
+      ensurepip, pip, service/listener/state inspection, and source checks.
+      Three egress providers returned `39.105.204.121`; the fourth candidate
+      timed out with curl exit `28` and was not used as a pass, while the
+      independent three-provider agreement passed. The first remote process
+      probe used unavailable `rg` and returned `127`; a grep-based clean scan
+      returned no Processor match. No service was stopped or changed.
+    - No D1 migration, R2 object, Edge shared secret, Processor token/release/
+      service, Redis/Relay/Cloudflared, or Edge code write occurred during
+      this preflight. The next authorized write is the secret/token handoff.
+
+72. Preflight evidence consistency gate
+    - `git diff --check` exited `0`.
+    - The changed-scope no-secret detector over the updated PAPER-10 evidence,
+      excluding `secret-scan.txt` itself, returned raw no-match exit `1` and
+      normalized secret-gate exit `0`.
