@@ -56,3 +56,16 @@ Branch: `cloudflare-deploy`
 - The active-rule section above is historical for that attempt. No WAF rule is
   active after this rollback; a later retry must create a new exact rule and
   read it back before any capability handoff.
+
+## 2026-08-29 post-rollback WAF precondition
+
+- Secure read-only token verification returned HTTP `200` with active status;
+  target-zone Rulesets read returned HTTP `200` with the four pre-existing
+  non-custom rulesets; and the fixed custom entrypoint read returned HTTP
+  `404`/API error `10003`.
+- No WAF rule is active at this baseline. The next authorized WAF write must
+  create a fresh zone-level custom rule matching only source
+  `39.105.204.121`, host `infinity.zhangyvjing.com`, POST `connect`/`poll`/
+  `control`, and PUT `object`, with action `skip` and `products=["bic"]`, then
+  read back exact expression, method/path scope, enabled/logged state, and
+  product list before any secret/token handoff.

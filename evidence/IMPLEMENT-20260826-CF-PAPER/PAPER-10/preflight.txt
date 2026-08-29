@@ -1050,3 +1050,92 @@ was in the delivery wrapper, not a provider or runtime result. A new attempt
 must repeat the immutable read-only preflight, recreate/read back the exact
 WAF rule, and use a quote-safe EOF-tolerant one-line handoff before any
 Processor installation.
+
+## 2026-08-29 fresh immutable preflight after Kimi mainland text PASS
+
+### Local baseline and artifact identity
+
+- Read-only branch/worktree check passed: branch `cloudflare-deploy`, clean
+  HEAD `1fc350e7a80c5e330492e235641dea477eb88bee`. The actual no-proxy
+  read-only `git ls-remote --heads origin cloudflare-deploy` returned exit `0`
+  with ref `e551a5994cd228f19a2ae816c4529e4b04cf41a1`; no GitHub write was
+  performed. The local tracking ref is older and is not treated as the remote
+  truth.
+- The fixed-endpoint source aggregate, dependency lock, and systemd unit
+  hashes were recomputed and each matched `backend/paper_processor/
+  delivery.v1.json`. The tracked AppleDouble scan had no match. No source,
+  migration, or dependency change was made in this preflight.
+
+### Cloudflare and Kimi read-only state
+
+- `npx wrangler whoami` exited `0` for account
+  `3cfba3bb2ec69798aa4881b05d80810f`. The checked-in target remains Worker
+  `infinity-agents-edge` at `infinity.zhangyvjing.com`, zone
+  `a6954af7cee9fcecb610d087bdce3e01`, D1 `infinity-agents-db`
+  (`9ee9ec94-cb42-40b5-8372-681c7b57c105`), and R2
+  `infinity-agents-resources`.
+- Read-only deployment/version inspection exited `0`. The corrected Worker
+  version `79755db3-c12d-4737-b601-aa99f11e3f93` and its later secret-triggered
+  100% version were both inspectable; version metadata retained
+  `MODEL_BASE_URL=https://api.moonshot.cn/v1` and `MODEL_ID=kimi-k2.6`.
+  Only the `MODEL_API_KEY` name was visible; no provider credential value was
+  read. The exact authenticated browser text result remains the separate
+  visible `KIMI_MAINLAND_TEXT_PROBE_OK` PASS record.
+- Secret-name listing exited `0`; `PAPER_PROCESSOR_SHARED_SECRET` was absent.
+  D1 migration listing exited `0` with `No migrations to apply!`; the
+  read-only schema query exited `0` with all Paper tables present and D1
+  metadata `changes=0`, `changed_db=false`, `rows_written=0`. No migration was
+  rerun. R2 bucket list/info each exited `0`, remained APAC with 15 objects
+  and 41.9 MB. Public `/health` curl exited `0`, HTTP `200`, and reported D1/
+  R2 configured with `paper_processor=unconfigured`.
+
+### WAF capability precondition
+
+- The owner-provided WAF token file was present, owned by the current user,
+  and read-only metadata reported mode `0600`; its content was never printed,
+  hashed, copied, persisted, or placed in a command argument. Secure token
+  verification exited `0`, HTTP `200`, status active. Target Rulesets read
+  exited `0`, HTTP `200`, and returned four pre-existing non-custom rulesets.
+- The fixed custom entrypoint read exited `0`, HTTP `404`, API error `10003`
+  (not found), confirming the prior exact rule/entrypoint rollback is complete.
+  No WAF rule is active at this baseline; the four non-custom rulesets were
+  not edited.
+
+### zhangbot read-only runtime state
+
+- SSH read-only checks exited `0` for Ubuntu `22.04`/x86_64, Python `3.10.12`,
+  installed/candidate `python3.10-venv` `3.10.12-1~22.04.17`,
+  `python3 -m venv --help`, disposable venv creation, ensurepip, pip, and
+  disposable-probe cleanup. Existing `infinity-redis.service`,
+  `infinity-redis-relay.service`, and `infinity-cloudflared.service` were
+  active/enabled with the read-back main PIDs; no existing service was changed.
+- The Paper Processor unit was `not-found`/inactive, the token env and unit
+  paths were absent, the `current` symlink was absent, and an anchored process
+  scan found no Python `backend.paper_processor.runner`. Docker and Compose
+  were absent. The listener inventory contained only SSH, loopback relay,
+  loopback Redis, DNS, and cloudflared-related ports; no Processor listener.
+- The first egress script was discarded because its final `tr` masked curl
+  failures. The corrected no-proxy probe returned the fixed IPv4
+  `39.105.204.121` from `https://icanhazip.com`, `https://ipinfo.io/ip`,
+  `https://checkip.amazonaws.com`, and `https://ipv4.icanhazip.com`. The
+  additional `api.ipify.org`, `ifconfig.me`, and `ip.seeip.org` probes failed
+  or timed out (curl exits `7`, `28`, and `28`) and were not used as passes.
+  `https://export.arxiv.org` and `https://pmc.ncbi.nlm.nih.gov` source checks
+  returned HTTP `200` with curl exit `0`.
+- Read-only inspection found one inert stale directory at
+  `releases/455ae849c572aa285cc752a10e21fd69f031b18d`; no current symlink,
+  unit, or runner process used it. As reversible cleanup, it was moved to
+  `/home/zhangyvjing/.local/share/infinity-paper-processor/quarantine/
+  455ae849c572aa285cc752a10e21fd69f031b18d`, then chmod/read back as mode
+  `700`. The formal `releases/` root read back empty. This old release will
+  not be reused.
+
+### Decision and boundary
+
+This fresh read-only preflight passes after the explicit stale-release
+isolation. The next external write is a new exact fixed-endpoint WAF rule and
+immediate semantic readback; then, only if that readback is exact, the
+authorized Edge shared-secret write and corrected EOF-tolerant zhangbot token
+handoff may proceed. D1 migrations `0017`–`0021` are already applied and must
+not be rerun. No Processor release/service, R2 object, Edge shared secret, or
+Edge code deployment exists in this retry.

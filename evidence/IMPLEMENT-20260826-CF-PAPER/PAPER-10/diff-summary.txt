@@ -487,3 +487,25 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
 - No product source, migration, R2 object, existing service, or Kimi provider
   configuration changed. The next retry changes only the wrapper's EOF
   handling and repeats the preflight before recreating capabilities.
+
+## 2026-08-29 fresh immutable preflight after Kimi mainland text PASS
+
+- Recorded a new read-only baseline from local HEAD
+  `1fc350e7a80c5e330492e235641dea477eb88bee`. The manifest/source/lock/unit
+  hashes match, and the tracked tree has no `._*` entries. The actual remote
+  branch ref is `e551a5994cd228f19a2ae816c4529e4b04cf41a1`; no GitHub write was
+  performed.
+- The real authenticated Kimi mainland text result remains exact
+  `KIMI_MAINLAND_TEXT_PROBE_OK` on Worker version
+  `79755db3-c12d-4737-b601-aa99f11e3f93`; current read-only version metadata
+  retains `https://api.moonshot.cn/v1` and `kimi-k2.6`. This does not assert
+  Paper image, Processor, or full live acceptance.
+- Cloudflare read-only target/D1/R2/health/WAF capability checks passed. D1
+  was not rerun, R2 stayed at 15 objects/41.9 MB, the Paper secret name and
+  custom WAF entrypoint are absent after rollback, and the four existing
+  non-custom rulesets were not edited.
+- zhangbot read-only runtime and four-provider fixed-egress checks passed.
+  An inert stale old release was isolated by an exact reversible move into a
+  0700 quarantine; no service or running process used it. The next permitted
+  external write is a fresh exact WAF rule/readback, followed by the corrected
+  secret/token handoff.

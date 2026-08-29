@@ -489,3 +489,29 @@ acceptance. PAPER-10 is not complete.
 - PAPER-10 remains incomplete. The next attempt must repeat immutable
   preflight and use a quote-safe EOF-tolerant stdin handoff before releasing
   the Processor.
+
+## 2026-08-29 fresh preflight and stale-release isolation
+
+- Baseline `1fc350e7a80c5e330492e235641dea477eb88bee` is clean on
+  `cloudflare-deploy`; the actual read-only remote branch is
+  `e551a5994cd228f19a2ae816c4529e4b04cf41a1`. Artifact hashes match the
+  delivery manifest and no AppleDouble file is tracked. The exact mainland
+  Kimi text gate remains a real visible PASS, while Paper acceptance remains
+  pending.
+- Read-only Cloudflare account, deployment/version, secret-name, D1, R2,
+  health, and WAF capability checks passed. The current secret-triggered
+  100% Worker version retains the reviewed mainland Kimi base/model; no Paper
+  shared secret or WAF custom entrypoint exists after rollback; D1 migrations
+  were not rerun.
+- Read-only zhangbot checks passed for the installed Python runtime and
+  disposable venv/ensurepip, existing-service PIDs, listener inventory,
+  no actual Processor runner, no Processor token/unit/current symlink, fixed
+  source egress, and allowlisted sources. The only stale artifact found was
+  an inert old release; after the no-runner/no-unit/no-current checks it was
+  moved to a 0700 quarantine and the formal release root was verified empty.
+- Allowed scope for the next step is only: create/read back the exact four
+  path BIC-only WAF rule, then write the new Edge shared secret and the paired
+  zhangbot 0600 token via secure stdin. If any later step fails, delete the
+  new WAF rule/entrypoint first, revoke new capability material, and remove
+  only the new release/service; preserve D1/R2 metadata and existing
+  Redis/Relay/Cloudflared.

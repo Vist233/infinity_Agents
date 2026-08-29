@@ -968,3 +968,55 @@ recorded exactly; no failed assertion was skipped.
     - The changed-scope no-secret detector over the updated PAPER-10 evidence,
       excluding `secret-scan.txt` itself, returned raw no-match exit `1` and
       normalized secret-gate exit `0`.
+
+75. Fresh immutable preflight after rollback and Kimi mainland text PASS
+    - Local branch/status/hash and tracked AppleDouble scan exited `0`; local
+      HEAD was `1fc350e7a80c5e330492e235641dea477eb88bee` and read-only
+      `git ls-remote --heads origin cloudflare-deploy` exited `0`, returning
+      `e551a5994cd228f19a2ae816c4529e4b04cf41a1`. No push was run.
+    - Source aggregate, dependency lock, and service-unit hash checks exited
+      `0` and matched the checked-in delivery manifest. The exact authenticated
+      mainland Kimi browser result remains the recorded visible
+      `KIMI_MAINLAND_TEXT_PROBE_OK` against Worker version
+      `79755db3-c12d-4737-b601-aa99f11e3f93`; read-only current-version
+      inspection confirmed the `.cn` base URL and `kimi-k2.6` model.
+    - Read-only `npx wrangler whoami`, deployment/version inspection,
+      secret-name list, D1 migration list, D1 schema query, R2 list/info,
+      and public health exited `0`; health curl was HTTP `200`. D1 reported
+      `No migrations to apply!`, schema metadata reported `changes=0`,
+      `changed_db=false`, and `rows_written=0`; R2 remained `15 objects / 41.9
+      MB`; Paper shared-secret name was absent.
+    - Secure WAF token metadata exited `0` with mode `0600`; token verify was
+      HTTP `200`/active, Rulesets read was HTTP `200` with four non-custom
+      rulesets, and post-rollback custom-entrypoint read was HTTP `404`/10003.
+      No WAF rule was active during this preflight.
+    - Read-only zhangbot SSH exited `0` for OS/package/runtime checks,
+      venv help/creation/ensurepip/pip, existing Redis/Relay/Cloudflared
+      active checks, listener inventory, and source checks. The first egress
+      probe script was not used as a pass because its final `tr` masked curl
+      failures; the corrected probe returned `39.105.204.121` from
+      `icanhazip`, `ipinfo`, `checkip.amazonaws.com`, and
+      `ipv4.icanhazip.com`. `api.ipify.org` failed with curl `7`,
+      `ifconfig.me` timed out with `28`, and `ip.seeip.org` timed out with
+      `28`; these were recorded as non-passes. The anchored Processor scan
+      exited `1` (no runner), and the release-children find exited `0` after
+      the stale release was isolated.
+    - The inert old release was moved to the exact 0700 quarantine path with
+      SSH move exit `0`, chmod/readback exit `0`, and formal release-root
+      empty check `1` (empty=true). No existing service, token, current
+      symlink, D1/R2 object, or Edge deployment was changed.
+
+76. Fresh preflight consistency gate
+    - The new preflight evidence contains only public model/path facts, safe
+      target IDs, artifact hashes, rule capability/status, exit codes, and
+      absence/readiness facts. No credential value, authorization header,
+      cookie, paper bytes, image bytes, R2 key, or full provider payload was
+      emitted.
+
+77. Fresh preflight working-tree evidence gate
+    - `git diff --check` exited `0`.
+    - The scoped secret-value detector over all updated PAPER-10 evidence,
+      excluding `secret-scan.txt` itself, returned raw no-match exit `1`; the
+      normalized secret gate exited `0`. The detector allows documented secret
+      names but rejects credential values, bearer values, private keys,
+      credential-bearing URLs, and secret assignments.

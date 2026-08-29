@@ -70,3 +70,24 @@ was changed.
   back absent, deleted the Edge Secret, removed zhangbot staging, and removed
   the local temporary secret. This is a stopped attempt, not a deployment
   success; D1/R2 and existing Redis/Relay/Cloudflared were preserved.
+
+## 2026-08-29 fresh preflight and stale-release isolation
+
+- The current retry began from clean local HEAD
+  `1fc350e7a80c5e330492e235641dea477eb88bee`. The real authenticated mainland
+  Kimi text gate remains a precise PASS against Worker version
+  `79755db3-c12d-4737-b601-aa99f11e3f93`; no provider secret value was read or
+  recorded. The current secret-triggered 100% version was read back with the
+  mainland `.cn` endpoint and `kimi-k2.6` model.
+- Read-only Cloudflare/D1/R2/WAF checks passed with D1 migrations untouched,
+  R2 unchanged at 15 objects/41.9 MB, no Paper shared secret, and no custom
+  WAF entrypoint after rollback. Read-only zhangbot Python, service, listener,
+  no-runner, fixed-egress, and source checks passed.
+- An inert old release directory that was outside the active service path was
+  moved, not deleted, to the exact 0700 quarantine path recorded in
+  `baseline.txt`. The formal release root was read back empty. This was
+  preparatory cleanup only; no Processor release, service, R2 object, D1 row,
+  Edge secret, or Edge deployment was created in this retry.
+- PAPER-10 remains incomplete. The next write is the fresh exact WAF rule and
+  immediate readback; `deployment.txt` must not be interpreted as a PASS
+  deployment record.

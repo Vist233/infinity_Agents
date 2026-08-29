@@ -937,3 +937,27 @@ existing Redis/Relay/Cloudflared services.
 - No credential value is recorded. The next exact action is a fresh immutable
   preflight followed by recreation/readback of the exact WAF rule and a
   corrected EOF-tolerant one-line token handoff. Do not rerun D1 migrations.
+
+## 2026-08-29 fresh immutable preflight after mainland Kimi text PASS
+
+- Status: `READY_FOR_EXACT_WAF_RECREATE`; PAPER-10 is not PASS.
+- The exact authenticated text probe is a real PASS: prompt
+  `请只回复：KIMI_MAINLAND_TEXT_PROBE_OK` produced exactly
+  `KIMI_MAINLAND_TEXT_PROBE_OK` against corrected Worker version
+  `79755db3-c12d-4737-b601-aa99f11e3f93`; the current 100% secret-triggered
+  version was read back with the mainland `.cn` base URL and `kimi-k2.6`.
+  No Kimi or WAF credential value is recorded, and StepFun was not selected.
+- Fresh read-only preflight passed for local artifact identity, target account/
+  Worker/D1/R2, no pending D1 migration, zero-write D1 schema, stable R2
+  metadata, public health, active 0600 WAF token capability, and the expected
+  post-rollback empty WAF entrypoint. The exact shared-secret name is absent.
+- Fresh zhangbot checks passed for the approved Python runtime, venv/ensurepip,
+  existing Redis/Relay/Cloudflared health, no Processor token/unit/current/
+  runner/listener, four successful fixed-egress providers, and allowed-source
+  connectivity. An inert old release directory was moved to a 0700 quarantine
+  after read-only verification; it is not part of the release and will not be
+  reused. This is the only additional host change in this preflight.
+- The actual remote Git ref remains `e551a5994cd228f19a2ae816c4529e4b04cf41a1`,
+  older than the local evidence HEAD; no GitHub push is authorized in this
+  continuation. Before any next capability write, recreate a fresh exact WAF
+  entrypoint/rule and immediately read it back. Do not rerun D1 migrations.

@@ -269,3 +269,42 @@ or persisted in this local phase.
   object was created.
 - This failure is retained as a wrapper diagnosis. It does not change the
   reviewed delivery contract or require a migration/data rollback.
+
+## 2026-08-29 fresh immutable preflight after Kimi mainland text PASS
+
+- The clean local baseline for this retry is `1fc350e7a80c5e330492e235641dea477eb88bee`
+  on `cloudflare-deploy`. The actual read-only remote ref is
+  `e551a5994cd228f19a2ae816c4529e4b04cf41a1`; no GitHub write was performed.
+  The fixed-endpoint source, dependency-lock, and service-unit hashes all
+  match `backend/paper_processor/delivery.v1.json`, and no tracked `._*`
+  path exists.
+- The corrected mainland Kimi result remains the exact authenticated visible
+  `KIMI_MAINLAND_TEXT_PROBE_OK` result against Worker version
+  `79755db3-c12d-4737-b601-aa99f11e3f93`. Read-only version inspection also
+  confirmed the current secret-triggered 100% version retains
+  `MODEL_BASE_URL=https://api.moonshot.cn/v1` and `MODEL_ID=kimi-k2.6`;
+  only the secret name was inspected.
+- Cloudflare read-only checks matched account `3cfba3bb2ec69798aa4881b05d80810f`,
+  zone `a6954af7cee9fcecb610d087bdce3e01`, Worker `infinity-agents-edge`, D1
+  `infinity-agents-db` (`9ee9ec94-cb42-40b5-8372-681c7b57c105`), and R2
+  `infinity-agents-resources`. D1 reported no migrations to apply and the
+  schema query reported zero writes; R2 remained 15 objects/41.9 MB; health
+  was HTTP 200 with `paper_processor=unconfigured`; the Paper shared-secret
+  name was absent.
+- The scoped WAF token metadata was mode `0600`; token verification was
+  active, target Rulesets read was HTTP 200 with four non-custom rulesets,
+  and the custom entrypoint read was the expected HTTP 404/not-found after
+  the prior rollback. No WAF rule is active at this baseline.
+- zhangbot read-only checks passed for Ubuntu 22.04/x86_64, Python 3.10.12,
+  installed/candidate `python3.10-venv` `3.10.12-1~22.04.17`, venv help,
+  disposable venv creation, ensurepip, and pip. Redis, Redis Relay, and
+  Cloudflared remained active; the Processor unit, token env, current symlink,
+  actual runner process, and public Processor listener were absent; Docker was
+  absent. Four successful independent egress checks returned
+  `39.105.204.121`; two additional endpoints timed out/failed and were not
+  used as passes. arXiv and PMC source checks returned HTTP 200.
+- An inert stale directory from a prior failed delivery was found under the
+  release root. After confirming no current symlink, unit, or runner process,
+  it was moved—not deleted—to the exact 0700 quarantine path
+  `/home/zhangyvjing/.local/share/infinity-paper-processor/quarantine/455ae849c572aa285cc752a10e21fd69f031b18d`;
+  the formal `releases/` root was read back empty. It will not be reused.
