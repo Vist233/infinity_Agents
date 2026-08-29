@@ -18,6 +18,11 @@ export interface Env {
   // Vars
   STEPFUN_BASE_URL: string;
   STEPFUN_MODEL: string;
+  // Optional replacement for the legacy StepFun provider contract.  Keeping
+  // the legacy fields lets an already-deployed version remain a safe rollback
+  // target while a replacement provider is rolled out atomically with code.
+  MODEL_BASE_URL?: string;
+  MODEL_ID?: string;
   APP_BASE_URL: string;
   ZHANG_AUTH_BASE_URL: string;
   ZHANG_AUTH_JWKS_URL: string;
@@ -48,6 +53,7 @@ export interface Env {
   AUTH_SESSION_ENCRYPTION_KEY: string;
   // Secrets
   STEPFUN_API_KEY: string;
+  MODEL_API_KEY?: string;
   ZHANG_AUTH_CLIENT_SECRET: string;
   IMAGE_JUDGE_ZHANG_AUTH_CLIENT_SECRET?: string;
   IMAGE_JUDGE_TOKEN_SIGNING_SECRET?: string;
@@ -62,6 +68,24 @@ export interface Env {
   PAPER_PROCESSOR_SHARED_SECRET?: string;
   // Explicit opt-in for the bounded Paper image-analysis provider egress.
   PAPER_IMAGE_ANALYSIS_EGRESS?: string;
+}
+
+export function modelProvider(env: Env): { baseUrl: string; model: string; apiKey: string } {
+  const replacementBaseUrl = env.MODEL_BASE_URL?.trim();
+  const replacementModel = env.MODEL_ID?.trim();
+  const replacementApiKey = env.MODEL_API_KEY?.trim();
+  if (replacementBaseUrl && replacementModel && replacementApiKey) {
+    return {
+      baseUrl: replacementBaseUrl.replace(/\/$/, ""),
+      model: replacementModel,
+      apiKey: replacementApiKey,
+    };
+  }
+  return {
+    baseUrl: env.STEPFUN_BASE_URL.replace(/\/$/, ""),
+    model: env.STEPFUN_MODEL,
+    apiKey: env.STEPFUN_API_KEY,
+  };
 }
 
 export const SESSION_COOKIE = "ia_session";

@@ -1,5 +1,4 @@
-import type { Env } from "./env";
-import { PAPER_CACHE_TTL_SECONDS } from "./env";
+import { PAPER_CACHE_TTL_SECONDS, modelProvider, type Env } from "./env";
 import {
   authorizePapers,
   cacheGet,
@@ -655,7 +654,8 @@ export async function analyzePaperImage(
   }
   if (!imageBytes) return JSON.stringify({ error: "paper_image_not_found" });
   const analysisRequestId = crypto.randomUUID();
-  const auditMetadata = JSON.stringify({ detail, image_id: imageId, size_bytes: imageBytes.byteLength, provider_model: env.STEPFUN_MODEL.slice(0, 128) });
+  const provider = modelProvider(env);
+  const auditMetadata = JSON.stringify({ detail, image_id: imageId, size_bytes: imageBytes.byteLength, provider_model: provider.model.slice(0, 128) });
   await recordPaperAuditEvent(env, { event_id: `paper-image-start:${analysisRequestId}`, resource_id: resourceId, attempt_id: null, stage: "image_analysis", outcome: "started", error_code: null, metadata_json: auditMetadata, created_at: Math.floor(Date.now() / 1000) });
   const encoded: string[] = [];
   // 0x7ffe is divisible by three, so concatenating chunk encodings preserves
@@ -669,11 +669,11 @@ export async function analyzePaperImage(
   const contentType = image.content_type && ["image/png", "image/jpeg", "image/jp2"].includes(image.content_type) ? image.content_type : "image/png";
   let text: string | null = null;
   try {
-    const response = await fetch(`${env.STEPFUN_BASE_URL.replace(/\/$/, "")}/chat/completions`, {
+    const response = await fetch(`${provider.baseUrl}/chat/completions`, {
       method: "POST",
-      headers: { authorization: `Bearer ${env.STEPFUN_API_KEY}`, "content-type": "application/json", accept: "application/json" },
+      headers: { authorization: `Bearer ${provider.apiKey}`, "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({
-        model: env.STEPFUN_MODEL,
+        model: provider.model,
         messages: [{ role: "user", content: [{ type: "text", text: cleanPrompt }, { type: "image_url", image_url: { url: `data:${contentType};base64,${encoded.join("")}`, detail } }] }],
         max_tokens: 800,
       }),

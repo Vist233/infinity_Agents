@@ -1,5 +1,4 @@
-import type { Env } from "./env";
-import { MAX_CONTEXT_MESSAGES } from "./env";
+import { MAX_CONTEXT_MESSAGES, modelProvider, type Env } from "./env";
 import type { AuthedUser } from "./auth";
 import { errorJson, nowSeconds } from "./http";
 import type { ChatEventRow, ChatEventInput } from "./db";
@@ -855,17 +854,18 @@ async function streamCompletion(
   emitStatus: (phase: string, extra?: Record<string, unknown>) => void,
   forceTaskConfirmation = false,
 ): Promise<{ content: string; toolCalls: ToolCall[]; finishReason: string }> {
+  const provider = modelProvider(env);
   const requestCompletion = (withToolChoice: boolean) => fetch(
-    `${env.STEPFUN_BASE_URL.replace(/\/$/, "")}/chat/completions`,
+    `${provider.baseUrl}/chat/completions`,
     {
       method: "POST",
       headers: {
-        authorization: `Bearer ${env.STEPFUN_API_KEY}`,
+        authorization: `Bearer ${provider.apiKey}`,
         "content-type": "application/json",
         accept: "text/event-stream"
       },
       body: JSON.stringify({
-        model: env.STEPFUN_MODEL,
+        model: provider.model,
         messages,
         tools: TOOL_DEFINITIONS,
         ...(withToolChoice
