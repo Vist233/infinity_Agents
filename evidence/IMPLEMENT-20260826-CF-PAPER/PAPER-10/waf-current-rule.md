@@ -125,3 +125,14 @@ Branch: `cloudflare-deploy`
   staging were removed.
 - No WAF rule is active now. A future retry must create a fresh rule only after
   packaging and validating an archive named for the exact current HEAD.
+
+## 2026-08-29 post-rollback fresh capability preflight
+
+- The mode-`0600` WAF token remains available and was used only through a
+  secure stdin header channel. Token content was not printed, hashed, copied,
+  or recorded. Rulesets read returned HTTP `200`; the fixed custom entrypoint
+  returned HTTP `404`/error `10003` and no custom rule is active.
+- The current exact source/wheel archives and all read-only Cloudflare and
+  zhangbot preflight checks passed. No WAF write has occurred in this new
+  attempt. The next permitted operation is one fresh exact four-pair
+  BIC-only rule create followed immediately by value-free semantic readback.

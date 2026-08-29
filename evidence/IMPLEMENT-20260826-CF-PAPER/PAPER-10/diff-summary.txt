@@ -549,3 +549,15 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
   existing service changed.
 - Next attempt: package current HEAD, rerun preflight, then recreate exact WAF
   and capability material.
+
+## 2026-08-29 current-HEAD package and preflight closure
+
+- Local HEAD `63cb12c2…` was packaged into commit-named source/wheel archives;
+  manifest/source/lock/unit identity and no-AppleDouble checks passed. No
+  source code or migration diff was introduced by packaging.
+- The full read-only preflight passed for Cloudflare targets, active mainland
+  Kimi configuration, D1/R2 state, absent WAF/Processor capability material,
+  zhangbot runtime, existing service preservation, fixed egress, and source
+  allowlist. The remote ref remains read-only `e551a599…`; no push occurred.
+- The next change is limited to recreating and reading back the exact
+  fixed-endpoint BIC-only WAF rule. PAPER-10 remains incomplete.

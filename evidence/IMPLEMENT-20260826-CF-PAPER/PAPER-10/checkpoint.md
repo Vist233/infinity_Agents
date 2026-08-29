@@ -533,6 +533,31 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
   HEAD, then repeat the immutable read-only preflight, recreate the exact WAF
   rule/readback, and only then redo secret/token handoff. Do not rerun D1.
 
+## 2026-08-29 current-HEAD artifact and fresh preflight
+
+- Status: `READY_FOR_WAF_CAPABILITY_RECREATE`; PAPER-10 is not PASS.
+- Clean branch is `cloudflare-deploy`, HEAD is
+  `63cb12c2cdf3f3704e2a76e7f33f7ce367ac248d`; read-only remote ref is
+  `e551a5994cd228f19a2ae816c4529e4b04cf41a1`. No GitHub write was performed.
+- A new archive pair was built for the exact HEAD. Source/lock/unit hashes
+  match the delivery manifest, required archive members and pinned wheel
+  hashes pass, and both archives have no `._*` entries. The archive SHA-256
+  values are recorded in `preflight.txt`; no credential is in the package.
+- Cloudflare read-only checks pass for the authorized account and exact
+  Worker/D1/R2 targets. Current 100% version `5b7c9f4b…` retains mainland
+  Kimi `.cn`/`kimi-k2.6` and fixed Processor bindings. D1 reports no pending
+  migrations and zero-write schema metadata; R2 remains 15 objects/41.9 MB;
+  Paper Processor secret and WAF entrypoint are absent; health is 200 with
+  Processor unconfigured.
+- zhangbot read-only checks pass for the exact `python3.10-venv` package,
+  venv/ensurepip/pip, fixed egress `39.105.204.121`, allowlisted sources,
+  existing Redis/Relay/Cloudflared preservation, no Processor unit/process/
+  listener, and the quarantined inert release not being reused.
+- The fresh preflight authorizes only the next exact WAF rule creation and
+  semantic readback. D1 `0017`–`0021` must not be rerun. On any failure,
+  delete the just-created WAF rule/entrypoint before revoking later material;
+  preserve D1/R2 and existing services.
+
 ## 2026-08-29 corrected release smoke-check stop and rollback
 
 - status: `BLOCKED_PROCESSOR_RELEASE_SMOKE_CHECK` for this retry; PAPER-10 is

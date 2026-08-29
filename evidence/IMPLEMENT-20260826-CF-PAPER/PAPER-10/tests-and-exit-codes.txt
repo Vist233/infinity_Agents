@@ -1117,3 +1117,38 @@ recorded exactly; no failed assertion was skipped.
     - `git diff --check` exited `0`. No secret value, token, authorization
       header, provider credential, cookie, paper/image bytes, or raw payload
       was emitted.
+
+88. Current-HEAD archive rebuild and immutable preflight
+    - Repository check exited `0`: branch `cloudflare-deploy`, clean HEAD
+      `63cb12c2…`. Read-only no-proxy `git ls-remote --heads origin
+      cloudflare-deploy` exited `0` with remote `e551a599…`; no GitHub write.
+    - Source and wheel archive creation exited `0`. Source/wheel tar listing
+      each exited `0`; no-AppleDouble scans each returned expected rg exit
+      `1`; required source/unit/lock and wheel member checks exited `0`.
+      Manifest source/lock/unit comparisons exited `0`; all three wheel
+      lock-hash comparisons exited `0`.
+    - `npx wrangler --version` exited `0` (`4.120.0`); `whoami` exited `0`;
+      deployment status exited `0` with current version
+      `5b7c9f4b…` at 100%; version binding read exited `0` and showed the
+      mainland Kimi endpoint/model and fixed Processor bindings without a
+      credential value. Secret-name list exited `0` with no
+      `PAPER_PROCESSOR_SHARED_SECRET`.
+    - D1 migration listing exited `0` with `No migrations to apply!`; the
+      read-only schema query exited `0` with all required tables/indexes and
+      `changes=0`, `changed_db=false`, `rows_written=0`. R2 list/info each
+      exited `0` with 15 objects / 41.9 MB. Health curl exited `0`/HTTP `200`
+      with Processor unconfigured.
+    - Secure WAF Rulesets read exited `0`/HTTP `200`; custom entrypoint read
+      exited `0`/HTTP `404`. WAF token metadata reported mode `0600` and no
+      value was emitted.
+    - SSH preflight exited `0`: package dpkg/candidate both exact
+      `3.10.12-1~22.04.17`; venv help/create/ensurepip/pip/cleanup all exited
+      `0`; Redis/Relay/Cloudflared active/enabled; Processor unit/token/current
+      /release/runner absent; no Processor listener; fixed egress and arXiv/
+      PMC checks exited `0` with expected HTTP results.
+
+89. Current-HEAD preflight evidence working-tree gate
+    - `git diff --check` exited `0`.
+    - The scoped secret-value detector over all updated PAPER-10 evidence,
+      excluding `secret-scan.txt`, returned raw no-match exit `1`; normalized
+      secret gate exited `0`.

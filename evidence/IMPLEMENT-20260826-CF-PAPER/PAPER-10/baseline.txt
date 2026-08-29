@@ -362,3 +362,22 @@ or persisted in this local phase.
   Cloudflared services were preserved. The next retry must package the exact
   current HEAD and repeat the immutable preflight before recreating WAF and
   capability material.
+
+## 2026-08-29 current-HEAD artifact rebuild and read-only preflight
+
+- Evidence rollback commit `63cb12c2cdf3f3704e2a76e7f33f7ce367ac248d` is a
+  clean `cloudflare-deploy` HEAD. Its exact source archive and offline wheel
+  archive were rebuilt; manifest hashes, lock hashes, required members, and
+  no-`._*` checks passed. No transfer or external write occurred.
+- Read-only Cloudflare checks identify account
+  `3cfba3bb2ec69798aa4881b05d80810f`, Worker `infinity-agents-edge`, D1
+  `9ee9ec94-cb42-40b5-8372-681c7b57c105`, R2
+  `infinity-agents-resources`, and current 100% deployment version
+  `5b7c9f4b…` with mainland Kimi configuration. D1 is fully migrated with
+  zero-write schema metadata, R2 is unchanged at 15 objects/41.9 MB, the
+  Paper secret is absent, WAF entrypoint is absent, and health is 200 with
+  Processor unconfigured.
+- Read-only zhangbot checks confirm the exact installed `python3.10-venv`
+  package, working venv/ensurepip/pip, preserved existing services/listeners,
+  fixed egress/source access, and no active Paper Processor state. This is a
+  ready-to-write preflight only; D1 migrations remain untouched.

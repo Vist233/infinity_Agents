@@ -1190,3 +1190,77 @@ Edge code deployment exists in this retry.
   secret and zhangbot token. The next step is immutable current-HEAD archive
   transfer and release installation; capability-first rollback remains WAF
   rule/entrypoint, then secret/token, then only the new release/service.
+
+## 2026-08-29 rebuilt current-HEAD artifact and fresh immutable preflight
+
+### Local baseline and release artifact
+
+- The repository check exited `0`: branch `cloudflare-deploy`, clean HEAD
+  `63cb12c2cdf3f3704e2a76e7f33f7ce367ac248d`. Read-only
+  `git ls-remote --heads origin cloudflare-deploy` exited `0` and returned
+  `e551a5994cd228f19a2ae816c4529e4b04cf41a1`; no GitHub write was performed.
+- The source aggregate hash, dependency-lock hash, and service-unit hash each
+  matched `backend/paper_processor/delivery.v1.json`, with comparison exit
+  `0`. The tracked AppleDouble scan returned no match (rg exit `1`).
+- New archives were built from the exact current HEAD in a mode-`700`
+  temporary directory. Source and wheel tar listing exited `0`; both
+  AppleDouble scans returned no match (rg exit `1`); required source/unit/lock
+  and pinned-wheel member checks exited `0`. The source archive SHA-256 is
+  `07eaf474c3bec4381ee8b57c06c8481638d2a2e8a212b27266a5b6e24a3838ed` and the
+  wheel archive SHA-256 is
+  `6482af2cef2fc3e4f09b14b3408059d1db0cd72e14b29edf29e35067bf36a4fc`.
+  The three wheel hashes match the lock file. No `._*` member or credential
+  was included.
+
+### Cloudflare/Kimi read-only state
+
+- `npx wrangler whoami` exited `0` for account
+  `3cfba3bb2ec69798aa4881b05d80810f`. The target remains Worker
+  `infinity-agents-edge` on `infinity.zhangyvjing.com`, zone
+  `a6954af7cee9fcecb610d087bdce3e01`, D1 `infinity-agents-db`
+  (`9ee9ec94-cb42-40b5-8372-681c7b57c105`), and R2
+  `infinity-agents-resources`.
+- Production status exited `0`: version `5b7c9f4b-742b-4c30-94ca-123ec62b1df9`
+  is at `100%` (deployment status/current version #155). Read-only version
+  bindings retain `MODEL_BASE_URL=https://api.moonshot.cn/v1`,
+  `MODEL_ID=kimi-k2.6`, `PAPER_PROCESSOR_ID=paper-processor-zhangbot-v1`,
+  and source IP `39.105.204.121`; only the `MODEL_API_KEY` binding name was
+  visible. The previously recorded authenticated result is the exact
+  `KIMI_MAINLAND_TEXT_PROBE_OK` pass; no credential was read.
+- Secret-name listing exited `0` and `PAPER_PROCESSOR_SHARED_SECRET` was
+  absent. D1 migration listing exited `0` with `No migrations to apply!`;
+  migrations `0017`–`0021` were not rerun. The read-only `sqlite_master`
+  query exited `0`, returned all required Paper tables/indexes, and reported
+  `changes=0`, `changed_db=false`, `rows_written=0`. R2 list/info exited `0`
+  and remained APAC with 15 objects / 41.9 MB. Public `/health` curl exited
+  `0`, HTTP `200`, with D1/R2 configured and `paper_processor=unconfigured`.
+
+### WAF capability and zhangbot read-only state
+
+- The WAF token file metadata check reported mode `0600`; its content was
+  never printed, hashed, copied, persisted, or passed as a command argument.
+  Secure Rulesets read exited `0`, HTTP `200`; the fixed custom entrypoint
+  read exited `0`, HTTP `404`/error `10003`. No custom WAF rule is active and
+  existing non-custom rulesets were not edited.
+- SSH read-only checks exited `0`: Ubuntu `22.04`/x86_64, Python `3.10.12`,
+  installed and candidate `python3.10-venv` `3.10.12-1~22.04.17`, `venv`
+  help, disposable venv creation, ensurepip, pip, and cleanup. Existing
+  `infinity-redis`, `infinity-redis-relay`, and `infinity-cloudflared` were
+  active/enabled. The Paper unit was not-found/inactive; token env, unit,
+  current symlink, release root, and anchored runner process were absent.
+  Docker and Compose were absent. Listeners remained SSH, loopback relay,
+  loopback Redis, DNS, and cloudflared-related ports only.
+- The corrected no-proxy egress check returned `39.105.204.121`; fixed
+  `export.arxiv.org` and `pmc.ncbi.nlm.nih.gov` checks returned HTTP `200`
+  with curl exit `0`. The previously isolated inert release remains in the
+  reversible quarantine directory and is not reused.
+
+### Preflight decision
+
+All current-HEAD artifact, account/target, Kimi, D1/R2, WAF capability,
+zhangbot runtime, service-preservation, fixed-egress, and source checks pass.
+The next authorized write is a fresh exact four-pair BIC-only WAF rule and
+immediate semantic readback. D1 migrations remain applied and must not be
+rerun. If that rule readback is exact, continue with the shared secret/token
+handoff and release installation; on failure revoke the newly created rule
+first and preserve D1/R2 and the existing host services.

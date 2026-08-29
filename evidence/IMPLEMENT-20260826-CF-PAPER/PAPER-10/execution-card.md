@@ -532,6 +532,23 @@ acceptance. PAPER-10 is not complete.
   deleting this rule/entrypoint first and preserving D1/R2 and existing host
   services.
 
+## 2026-08-29 rebuilt current-HEAD preflight
+
+- Baseline is clean `cloudflare-deploy` HEAD
+  `63cb12c2cdf3f3704e2a76e7f33f7ce367ac248d`; the actual read-only remote is
+  `e551a5994cd228f19a2ae816c4529e4b04cf41a1`. No GitHub write was made.
+- The current-HEAD source/wheel archives passed member, no-AppleDouble,
+  lock-hash, and manifest identity checks. Archive hashes are recorded in
+  `preflight.txt` and the release was not transferred.
+- Read-only Cloudflare checks pass for the exact account/Worker/D1/R2 target,
+  active 100% mainland Kimi version, no pending D1 migrations, zero-write
+  schema metadata, unchanged R2 count/size, absent Paper secret, absent WAF
+  entrypoint, and Processor-unconfigured health. Read-only zhangbot checks
+  pass for the exact venv package, existing-service preservation, no stale
+  Processor state, fixed egress, and allowlisted source connectivity.
+- This card is now ready for one fresh exact BIC-only WAF create/readback. No
+  D1 migration is to be rerun; any failure must use WAF-first rollback.
+
 ## 2026-08-29 capability handoff passed
 
 - The first local secret-generation check stopped at the expected precondition

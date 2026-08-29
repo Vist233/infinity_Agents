@@ -128,3 +128,19 @@ was changed.
   release/service, R2 object, D1 migration, or Edge code deployment has
   followed. This remains a pre-install capability record, not a deployment or
   PAPER-10 PASS.
+
+## 2026-08-29 current-HEAD artifact and preflight record
+
+- No deployment or external write occurred in this subphase. The clean
+  current HEAD `63cb12c2…` was packaged and validated locally, including the
+  source/wheel archive hashes, pinned dependencies, required members, and
+  no-AppleDouble checks.
+- Read-only preflight confirmed the current 100% Worker remains on mainland
+  Kimi (`https://api.moonshot.cn/v1`, `kimi-k2.6`), D1 `0017`–`0021` are
+  applied and were not rerun, R2 remains 15 objects/41.9 MB, and health is
+  200 with the Paper Processor unconfigured. The WAF entrypoint and Paper
+  shared secret are absent.
+- zhangbot read-only checks confirmed the exact `python3.10-venv` package,
+  working venv/ensurepip/pip, unchanged existing services/listeners, and no
+  Processor unit/release/process/token. This record authorizes only the next
+  exact WAF create/readback, not a PAPER-10 completion claim.
