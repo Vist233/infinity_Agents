@@ -1,0 +1,12 @@
+# PAPER-10 release postflight diff summary
+
+- Production source release was already performed before this card under the
+  prior authorization; this card did not deploy or mutate production.
+- This card adds only the evidence files in this directory and one additive
+  dated section to the existing PAPER-10 checkpoint.
+- No Edge/Processor/frontend source, migration, lockfile, deployment
+  configuration, WAF rule, secret, token, or remote resource was changed.
+- The historical `PAPER-10/deployment.txt` and prior evidence were preserved
+  unchanged.
+- The browser acceptance checklist is intentionally a checklist only; no
+  authenticated browser session was claimed or used.

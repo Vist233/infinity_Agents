@@ -1,0 +1,38 @@
+# PAPER-10 release postflight checks — 2026-08-30
+
+All commands below were run without printing secret values. The Cloudflare
+WAF read used a protected stdin channel; only the redacted response was
+recorded.
+
+## Read-only production metadata
+
+- `git status --short --branch`, HEAD/history, and local evidence inventory: exit `0`; branch `cloudflare-deploy`, clean baseline.
+- `wrangler deployments status --name infinity-agents-edge --json`: exit `0`; deployment `336c4e81-77af-42ad-8e41-997f50074560`, version `e410583e-0fd6-4426-a853-f6332cd2ec18` at `100%`.
+- `wrangler deployments list --name infinity-agents-edge --json`: exit `0`; the history contains the `1%/99%` canary followed by the `100%` promotion.
+- `wrangler versions view e410583e-0fd6-4426-a853-f6332cd2ec18 --name infinity-agents-edge --json`: exit `0`; version `188`, 46 bindings, mainland Kimi base/model, fixed Processor ID/IP.
+- `wrangler versions view 1891abf4-9fcf-4f5a-bc8c-7e059ef285e7 --name infinity-agents-edge --json`: exit `0`; preceding version `187`, 46 bindings.
+- `wrangler versions secret list --name infinity-agents-edge`: exit `0`; `PAPER_PROCESSOR_SHARED_SECRET` present by name; values not read.
+- `wrangler d1 migrations list infinity-agents-db --remote`: exit `0`; `No migrations to apply!`.
+- Read-only D1 schema query for Paper tables: exit `0`; `paper_request_continuations` and the existing Paper tables present; `changes=0`, `rows_written=0`.
+- `wrangler d1 info infinity-agents-db --json`: exit `0`; UUID matches the configured target, 43 tables, 901120 bytes.
+- `wrangler r2 bucket info infinity-agents-resources`: exit `0`; APAC, 47 objects, 43.9 MB.
+- `wrangler r2 bucket list`: exit `0`; configured bucket present.
+- `curl -fsS https://infinity.zhangyvjing.com/health` with safe field projection: exit `0`; `status=ok`, all three readiness fields configured.
+- Fixed WAF custom entrypoint read: exit `0`; one enabled/logged `skip` rule, `products=["bic"]`, exact four fixed Processor routes and source IP/host.
+- zhangbot read-only service/hash/listener probe: exit `0`; Processor active/enabled, env mode 600, venv present, expected source/lock/unit hashes, no public Processor listener, Redis/Relay/Cloudflared active.
+- First exploratory candidate safe-variable jq projection: exit `5` due to a local projection-shape error; no state change. Corrected projection: exit `0`, and all required safe variables were read back.
+
+## Local gates
+
+- `cd cloudflare-worker && npm run check && npm test`: exit `0`; 26 test files, 148 tests passed.
+- `python -m pytest -q tests/test_paper_processor_ingestion.py tests/test_paper_processor_runtime.py tests/test_paper_agent_runner.py` under `pyenv shell Agent`: exit `0`; 13 passed.
+- `cd frontend && npm run lint`: exit `0`.
+- `cd frontend && npm run test:unit`: exit `0`; 16 test files, 75 tests passed.
+- `cd frontend && npm run build`: exit `0`.
+- `cd frontend && npm run typecheck`: exit `0`.
+- `cd frontend && npm run test:e2e`: exit `0`; 14 local Playwright tests passed. This is a local fixture gate, not production browser acceptance.
+
+## This card's side effects
+
+No Cloudflare, D1, R2, WAF, secret, zhangbot, Redis/Relay/Cloudflared, or
+browser state was modified by this card. No GitHub push was performed.

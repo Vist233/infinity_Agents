@@ -1042,6 +1042,32 @@ existing Redis/Relay/Cloudflared services.
   preserve D1/R2 metadata and existing Redis/Relay/Cloudflared. Do not rerun
   D1 migrations.
 
+## 2026-08-30 production release readback (browser acceptance pending)
+
+- Status: `BLOCKED_BROWSER_ACCEPTANCE`; PAPER-10 is not PASS.
+- The already-authorized release was reported and read back as D1 migration
+  `0022` applied, Worker version
+  `e410583e-0fd6-4426-a853-f6332cd2ec18` at `100%`, candidate/stable binding
+  counts `46/46` with no loss, Processor secret present by name, and a `1%`
+  canary followed by `100%` promotion. The active deployment is
+  `336c4e81-77af-42ad-8e41-997f50074560`.
+- Read-only D1 state reports no pending migrations and the
+  `paper_request_continuations` table; R2 is `infinity-agents-resources` in
+  APAC with 47 objects; the exact fixed-endpoint WAF rule is enabled/logged
+  with `skip` and BIC only; zhangbot's single Processor is active/enabled; and
+  `/health` reports D1, R2, and Paper Processor configured.
+- Local gates all passed: Edge 26 files/148 tests, Processor 13 tests,
+  frontend unit 16 files/75 tests, lint, build, typecheck, and 14 local E2E
+  tests. Full commands and exit codes are recorded in the postflight evidence
+  directory.
+- This card made no Cloudflare, D1, R2, WAF, secret, zhangbot,
+  Redis/Relay/Cloudflared, browser, or GitHub write. The read-only GitHub ref
+  remains `154f9e16ddeffcccc2398dbbdf545497ed065bec`; no push was performed.
+- The exact remaining action is the real authenticated browser checklist in
+  `PAPER-10-RELEASE-POSTFLIGHT-20260830/browser-acceptance-checklist.md`.
+  Do not mark PAPER-10 PASS until the positive paper flow and the non-owner
+  negative flow both produce real redacted evidence.
+
 ## 2026-08-30 real-paper root-cause audit (diagnostic only)
 
 - Status: `ROOT_CAUSE_AUDIT_COMPLETE`; PAPER-10 overall remains not PASS.
