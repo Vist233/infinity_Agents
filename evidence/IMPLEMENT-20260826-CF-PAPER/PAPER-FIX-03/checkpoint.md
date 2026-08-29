@@ -1,10 +1,11 @@
 # CHECKPOINT IMPLEMENT-20260826-CF-PAPER / PAPER-FIX-03
 
-- status: `IN_REVIEW`; the implementation and evidence are ready for the
-  required local review commit.  This card does not mark PAPER-10 or the
+- status: `COMPLETE` for PAPER-FIX-03 only; this does not mark PAPER-10 or the
   overall Paper Workspace complete.
 - baseline/current commit: baseline `cc00064e058bd87236f0f4929d3ee4cb7cbd8e59`;
-  local implementation commit is recorded after the commit is created.
+  local implementation review commit `06529ff` (`feat: add durable Paper
+  progress UI`) contains the code and complete evidence.  This file is the
+  local checkpoint amendment after that commit.
 - one completed outcome: an authenticated frontend Paper task surface now
   rebuilds from the durable tool timeline, reads owner-scoped progress, shows
   processing/ready/failed/cancelled truthfully, survives refresh, and invokes
@@ -29,8 +30,10 @@
   were not run.
 - D1/R2/Redis/external systems modified: none.  No deployment, migration,
   WAF, Secret, Processor/zhangbot, browser-session, or Git push operation ran.
-- secret scan result: pending final changed-scope scan and staged diff check;
-  no secret value was read or emitted.
+- secret scan result: changed-scope raw scan exit `1` with no matches,
+  normalized `PASS`; staged scan also exit `1` with no matches,
+  normalized `PASS`; working and staged `git diff --check` exit `0`.  No
+  secret value was read or emitted.
 - rollback commit/operation: revert the local review commit or disable this
   frontend projection.  Preserve all D1/R2/Processor resources, continuation
   leases, and chat history.
