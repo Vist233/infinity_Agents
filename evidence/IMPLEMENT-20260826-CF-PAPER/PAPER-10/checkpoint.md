@@ -961,3 +961,41 @@ existing Redis/Relay/Cloudflared services.
   older than the local evidence HEAD; no GitHub push is authorized in this
   continuation. Before any next capability write, recreate a fresh exact WAF
   entrypoint/rule and immediately read it back. Do not rerun D1 migrations.
+
+## 2026-08-29 exact WAF rule recreated and read back
+
+- Status: `READY_FOR_PROCESSOR_CAPABILITY_HANDOFF`; PAPER-10 is not PASS.
+- One initial non-secret rule create was rejected HTTP `400`/API error `20127`
+  and an immediate readback confirmed no partial entrypoint. The corrected
+  inline-set request then succeeded. Entrypoint
+  `6a212d8fb2444135a6b2511e7d8ad8d0` and rule
+  `a7f6a28a87624da28d595a11eeb5d92b` read back exactly as one enabled/logged
+  zone custom rule in `http_request_firewall_custom`, action `skip`, with
+  `products=["bic"]` and only the fixed zhangbot host/IP and four
+  method/path pairs. No wildcard or wider exception is present.
+- This is the only active Paper-release external change. The next authorized
+  action is the Edge `PAPER_PROCESSOR_SHARED_SECRET` write and corrected
+  EOF-tolerant one-time zhangbot `PAPER_PROCESSOR_TOKEN` handoff. If that or a
+  later step fails, delete this fresh rule and empty entrypoint first, then
+  revoke newly created capabilities and remove only the new release/service;
+  preserve D1/R2 metadata and existing Redis/Relay/Cloudflared. Do not rerun
+  D1 migrations.
+
+## 2026-08-29 exact WAF rule recreated and read back
+
+- Status: `READY_FOR_PROCESSOR_CAPABILITY_HANDOFF`; PAPER-10 is not PASS.
+- One initial non-secret rule create was rejected HTTP `400`/API error `20127`
+  and an immediate readback confirmed no partial entrypoint. The corrected
+  inline-set request then succeeded. Entrypoint
+  `6a212d8fb2444135a6b2511e7d8ad8d0` and rule
+  `a7f6a28a87624da28d595a11eeb5d92b` read back exactly as one enabled/logged
+  zone custom rule in `http_request_firewall_custom`, action `skip`, with
+  `products=["bic"]` and only the fixed zhangbot host/IP and four
+  method/path pairs. No wildcard or wider exception is present.
+- This is the only active Paper-release external change. The next authorized
+  action is the Edge `PAPER_PROCESSOR_SHARED_SECRET` write and corrected
+  EOF-tolerant one-time zhangbot `PAPER_PROCESSOR_TOKEN` handoff. If that or a
+  later step fails, delete this fresh rule and empty entrypoint first, then
+  revoke newly created capabilities and remove only the new release/service;
+  preserve D1/R2 metadata and existing Redis/Relay/Cloudflared. Do not rerun
+  D1 migrations.

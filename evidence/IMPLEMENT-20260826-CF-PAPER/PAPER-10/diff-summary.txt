@@ -509,3 +509,17 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
   0700 quarantine; no service or running process used it. The next permitted
   external write is a fresh exact WAF rule/readback, followed by the corrected
   secret/token handoff.
+
+## 2026-08-29 exact WAF rule retry
+
+- The first create request was rejected by Cloudflare's expression validator
+  (HTTP `400`, error `20127`) and immediate readback confirmed no partial
+  entrypoint. A corrected non-secret inline-set representation was submitted.
+- The second create/readback passed: entrypoint
+  `6a212d8fb2444135a6b2511e7d8ad8d0`, rule
+  `a7f6a28a87624da28d595a11eeb5d92b`, enabled/logged, `skip` with only
+  `products=["bic"]`, exact zhangbot source/host and fixed paths. No existing
+  rule or security product was changed.
+- This is a capability-only external update. No Edge secret/token, Processor
+  release/service, R2 object, D1 migration, or Kimi provider configuration was
+  changed after the WAF readback.

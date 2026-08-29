@@ -1139,3 +1139,19 @@ authorized Edge shared-secret write and corrected EOF-tolerant zhangbot token
 handoff may proceed. D1 migrations `0017`–`0021` are already applied and must
 not be rerun. No Processor release/service, R2 object, Edge shared secret, or
 Edge code deployment exists in this retry.
+
+## 2026-08-29 exact WAF creation after preflight
+
+- The first create payload received HTTP `400`/error `20127`; a separate
+  read-only entrypoint check immediately returned HTTP `404`/error `10003`.
+  No partial WAF state existed. A corrected inline-set expression was then
+  created without changing the fixed source, host, methods, or paths.
+- The corrected create returned HTTP `200` and produced entrypoint
+  `6a212d8fb2444135a6b2511e7d8ad8d0` / rule
+  `a7f6a28a87624da28d595a11eeb5d92b`. Immediate readback returned HTTP `200`;
+  the independent validator passed exact kind/phase/rule count/ID,
+  `skip`/BIC-only action, enabled/logged state, no wildcard, and the exact
+  four fixed method/path pairs.
+- Current external state is the new WAF rule only. The next authorized write
+  is the Edge shared secret and paired zhangbot token; failure requires
+  capability-first WAF deletion/readback before revoking the new capability.

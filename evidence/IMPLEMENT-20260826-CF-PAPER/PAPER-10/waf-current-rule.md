@@ -69,3 +69,31 @@ Branch: `cloudflare-deploy`
   `control`, and PUT `object`, with action `skip` and `products=["bic"]`, then
   read back exact expression, method/path scope, enabled/logged state, and
   product list before any secret/token handoff.
+
+## 2026-08-29 retry exact WAF rule and readback
+
+- The first create request in this retry was rejected before creating an
+  entrypoint: HTTP `400`, API error `20127` (invalid expression). The
+  immediate post-attempt entrypoint read remained HTTP `404`/error `10003`.
+  No partial rule or entrypoint was present. The retry changed only the
+  non-secret expression formatting to the documented inline-set form with
+  spaces inside the set; it did not widen the source, host, method, or path
+  contract.
+- The corrected additive zone-level create returned HTTP `200`/curl exit `0`.
+  New entrypoint ID: `6a212d8fb2444135a6b2511e7d8ad8d0`; new rule ID:
+  `a7f6a28a87624da28d595a11eeb5d92b`.
+- Immediate readback returned HTTP `200`/curl exit `0`. The independent
+  value-free semantic validator returned `PASS`: `success=true`, kind `zone`,
+  phase `http_request_firewall_custom`, exactly one enabled/logged rule,
+  action `skip`, action parameters exactly `products=["bic"]`, no wildcard,
+  and the exact expression:
+
+  ```text
+  (ip.src eq 39.105.204.121 and http.host eq "infinity.zhangyvjing.com" and ((http.request.method eq "POST" and http.request.uri.path in { "/api/paper-processor/connect" "/api/paper-processor/poll" "/api/paper-processor/control" }) or (http.request.method eq "PUT" and http.request.uri.path eq "/api/paper-processor/object")))
+  ```
+
+- This rule is now the only active Paper-release WAF change. It does not
+  except non-zhangbot IPs, non-Processor paths, other methods, dynamic paths,
+  or other security products. The next permitted operation is the Edge
+  shared-secret write and corrected one-time zhangbot token handoff; D1
+  migrations remain untouched.

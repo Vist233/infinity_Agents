@@ -91,3 +91,16 @@ was changed.
 - PAPER-10 remains incomplete. The next write is the fresh exact WAF rule and
   immediate readback; `deployment.txt` must not be interpreted as a PASS
   deployment record.
+
+## 2026-08-29 exact WAF rule retry
+
+- The first non-secret WAF payload was rejected HTTP `400`/error `20127`; the
+  immediate entrypoint read remained `404`, with no partial state. The corrected
+  request then created and read back entrypoint
+  `6a212d8fb2444135a6b2511e7d8ad8d0` and rule
+  `a7f6a28a87624da28d595a11eeb5d92b`.
+- Readback validation passed for one enabled/logged zone custom rule, action
+  `skip`, only BIC, exact fixed host/source/four method/path pairs, and no
+  wildcard. This is not a full deployment or PAPER-10 PASS: no Edge shared
+  secret, Processor token/release/service, R2 object, or full live acceptance
+  has followed. The next action is the paired secret/token handoff.

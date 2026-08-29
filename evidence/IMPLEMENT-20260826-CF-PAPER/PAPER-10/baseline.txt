@@ -308,3 +308,18 @@ or persisted in this local phase.
   it was moved—not deleted—to the exact 0700 quarantine path
   `/home/zhangyvjing/.local/share/infinity-paper-processor/quarantine/455ae849c572aa285cc752a10e21fd69f031b18d`;
   the formal `releases/` root was read back empty. It will not be reused.
+
+## 2026-08-29 exact WAF rule recreated after fresh preflight
+
+- The first non-secret WAF create payload was rejected HTTP `400`/API error
+  `20127`; immediate readback remained HTTP `404` and no partial state existed.
+  A corrected inline-set expression was then submitted only after rechecking
+  the entrypoint precondition.
+- The exact rule now reads back as entrypoint
+  `6a212d8fb2444135a6b2511e7d8ad8d0` / rule
+  `a7f6a28a87624da28d595a11eeb5d92b`, enabled and logged, action `skip`,
+  products `bic` only, with the four fixed method/path pairs and source/host
+  scope recorded in `waf-current-rule.md`. No other WAF rule was changed.
+- External state is now limited to that exact WAF rule; Edge shared secret,
+  Processor token/release/service, R2 object, and live Paper acceptance remain
+  pending. The next write is the paired secret/token handoff.

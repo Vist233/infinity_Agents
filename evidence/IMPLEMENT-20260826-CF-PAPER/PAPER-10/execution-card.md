@@ -515,3 +515,35 @@ acceptance. PAPER-10 is not complete.
   new WAF rule/entrypoint first, revoke new capability material, and remove
   only the new release/service; preserve D1/R2 metadata and existing
   Redis/Relay/Cloudflared.
+
+## 2026-08-29 exact WAF retry passed
+
+- After the fresh immutable preflight, the first exact WAF create attempt was
+  rejected HTTP `400`/error `20127`; its immediate entrypoint read was still
+  `404`, so no partial rule was assumed. A corrected documented inline-set
+  expression was used in a second additive request.
+- The corrected rule/readback passed with entrypoint
+  `6a212d8fb2444135a6b2511e7d8ad8d0` and rule
+  `a7f6a28a87624da28d595a11eeb5d92b`: one enabled/logged zone rule, action
+  `skip`, action parameters exactly BIC, and exact source/host/four fixed
+  method/path pairs. No existing ruleset or product was edited.
+- The WAF rule is the only active Paper-release change. The next allowed
+  operation is the corrected secure secret/token handoff; failure requires
+  deleting this rule/entrypoint first and preserving D1/R2 and existing host
+  services.
+
+## 2026-08-29 exact WAF retry passed
+
+- After the fresh immutable preflight, the first exact WAF create attempt was
+  rejected HTTP `400`/error `20127`; its immediate entrypoint read was still
+  `404`, so no partial rule was assumed. A corrected documented inline-set
+  expression was used in a second additive request.
+- The corrected rule/readback passed with entrypoint
+  `6a212d8fb2444135a6b2511e7d8ad8d0` and rule
+  `a7f6a28a87624da28d595a11eeb5d92b`: one enabled/logged zone rule, action
+  `skip`, action parameters exactly BIC, and exact source/host/four fixed
+  method/path pairs. No existing ruleset or product was edited.
+- The WAF rule is the only active Paper-release change. The next allowed
+  operation is the corrected secure secret/token handoff; failure requires
+  deleting this rule/entrypoint first and preserving D1/R2 and existing host
+  services.
