@@ -676,3 +676,17 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
 - next exact action: restore responsive control of this same existing Chrome
   tab, then repeat a fresh read-only PAPER-10 preflight. Do not create or
   reset another session, reuse rolled-back state, or claim PASS.
+
+## 2026-08-29 repeated Chrome control attempts
+
+- status remains `BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE`; PAPER-10 is
+  not PASS.
+- the exact existing tab remained visible in the connected Chrome extension
+  and `tabs.list()` returned ID `876490032`. Direct handle acquisition timed
+  out; `tabs.selected()` returned the same ID, but visible-DOM extraction and
+  a read-only screenshot both timed out.
+- no page mutation, credential transmission, or production operation was
+  performed. No additional external system was touched.
+- detailed results are in `browser-recheck.txt`; the existing rollback state
+  is unchanged. Next exact action is to restore a responsive control/read
+  path for this same tab, then start a fresh read-only PAPER-10 preflight.

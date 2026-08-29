@@ -30,3 +30,16 @@ Next exact action: restore a responsive control handle for this same existing
 Chrome tab, then repeat PAPER-10 from a fresh read-only preflight. Do not
 create or reset another tab/session and do not reuse rolled-back capability
 state as acceptance evidence.
+
+## Repeated read-only attempts (2026-08-29T03:41:44Z)
+
+- A fresh Chrome connection again listed the exact target tab, and
+  `chrome.tabs.list()` returned it with ID `876490032`.
+- `chrome.tabs.get("876490032")` timed out. A separate
+  `chrome.tabs.selected()` call did return a handle for ID `876490032`, but
+  both `dom_cua.get_visible_dom()` and a read-only screenshot timed out.
+- No DOM, screenshot, or additional page content was obtained. No navigation,
+  reload, click, typing, credential entry, upload, download, or mutation was
+  performed.
+
+Updated status: BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE
