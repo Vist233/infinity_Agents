@@ -716,3 +716,15 @@ WAF/secret/token before that preflight; do not rerun D1 migrations.
 - detailed results are in `browser-recheck.txt`; existing rollback state is
   unchanged. Next exact action is to restore the DOM control path for this
   same tab, then start a fresh read-only PAPER-10 preflight.
+
+## 2026-08-29 fresh-tab ownership blocker
+
+- status: `BLOCKED_BROWSER_TAB_OWNED_BY_SOURCE_SESSION`; PAPER-10 is not PASS.
+- the exact new tab `876490061` was found with the requested URL/title, but
+  both immediate and delayed claims were refused because the tab remains
+  owned by source session `01a03d69-25c4-7ff0-94e7-9b3af0a8e627`.
+- no alternate tab/session was created or reused, and no page, credential, or
+  production system was modified. No fresh preflight or live acceptance ran.
+- detailed evidence is in `browser-recheck.txt`. Next exact action is for the
+  source session to release this same tab; then claim it and read the DOM
+  before beginning a fresh PAPER-10 preflight.

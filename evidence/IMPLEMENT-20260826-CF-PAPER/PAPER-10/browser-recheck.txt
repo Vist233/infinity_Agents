@@ -57,6 +57,20 @@ Updated status: BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE
 
 Current status remains: BLOCKED_AUTHENTICATED_BROWSER_DOM_UNAVAILABLE
 
+## Fresh-tab ownership retry (2026-08-29T04:04:58Z)
+
+- The new user tab was found from the current `openTabs()` result with the
+  exact requested metadata: ID `876490061`, URL
+  `https://infinity.zhangyvjing.com/`, title `Infinity Agents`.
+- Claiming that exact current object was refused because it is still part of
+  browser session `01a03d69-25c4-7ff0-94e7-9b3af0a8e627`.
+- A second claim after a short wait produced the same ownership result. The
+  tab was not replaced, reset, navigated, or accessed through an alternate
+  session, and no page content or credential was inspected.
+
+Current status: BLOCKED_BROWSER_TAB_OWNED_BY_SOURCE_SESSION
+External writes: none.
+
 ## Latest current-tab retry (2026-08-29T03:56:00Z)
 
 - A fresh Chrome connection selected the same existing Infinity Agents tab,
