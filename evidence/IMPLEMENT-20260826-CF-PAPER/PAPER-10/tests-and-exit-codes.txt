@@ -1522,3 +1522,27 @@ recorded exactly; no failed assertion was skipped.
        deployment occurred.
      - Next retry changes only stdin newline normalization and keeps the
        one-line/one-key/mode-`600` checks.
+
+119. Processor health subphase — Cloudflare secret capability stop
+     - `git status --short --branch`: exit `0`; branch was
+       `cloudflare-deploy` and the preflight worktree was clean.
+     - zhangbot SSH read-only OS/service/venv/listener check: exit `0`.
+       `python3.10-venv` was installed at `3.10.12-1~22.04.17`; venv,
+       ensurepip, and pip passed; Processor state was absent and existing
+       services were active.
+     - Edge health from zhangbot: curl exit `0`, HTTP `200`,
+       `paper_processor=unconfigured`.
+     - Current-HEAD archive construction and SHA/member/AppleDouble checks:
+       exit `0`; all three locked wheel SHA checks matched.
+     - Edge `npm run check`: exit `0`; Edge `npm test`: exit `0`, 24 files /
+       134 tests; Processor focused pytest: exit `0`, 12 passed.
+     - Frontend typecheck/lint/unit: exits `0`; frontend E2E initial sandbox
+       bind attempt: exit `1` (`EPERM` on `127.0.0.1:3000`); restricted local
+       retry: exit `0`, 13 passed.
+     - Read-only Worker-secrets capability probe: HTTP `403`, API error
+       `10000`, command exit `0` after response classification. No secret
+       value was printed or recorded. Wrangler migration read was not
+       authenticated in this shell (exit `1` before request); no migration
+       write was run.
+     - No Clash or external write occurred. Stop status is
+       `BLOCKED_CLOUDFLARE_WORKER_SECRET_CAPABILITY`.

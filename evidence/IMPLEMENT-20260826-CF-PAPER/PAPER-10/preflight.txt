@@ -1762,3 +1762,41 @@ D1 migrations `0017`–`0021` remain applied and must not be rerun.
   active/enabled with only their prior SSH/DNS/Redis/Relay/Cloudflared
   listeners. The authenticated tab blocker prevented browser DOM/live
   acceptance; PAPER-10 remains blocked and no migration is to be rerun.
+
+## 2026-08-29 Processor health subphase — fresh read-only stop
+
+- Baseline was clean `cloudflare-deploy` HEAD
+  `aa2306fe291fa31da73dd2d55223112cafafc580`. The local source aggregate,
+  dependency lock, and service-unit hashes matched `delivery.v1.json`.
+- The fresh current-HEAD source and Linux wheel archives passed required
+  members, zero `._*` checks, and all locked wheel hashes. Archive SHA-256
+  values and paths are recorded in
+  `processor-health-subphase-20260829.md`; no archive was transferred.
+- SSH read-only zhangbot checks exited `0`: Ubuntu 22.04, exact installed
+  `python3.10-venv 3.10.12-1~22.04.17`, venv/ensurepip/pip available, no
+  Processor unit/token/release/current/process, and existing
+  Redis/Relay/Cloudflared services and listeners unchanged. Edge health from
+  zhangbot returned HTTP `200` with `paper_processor=unconfigured`.
+- Existing evidence records D1 `0017`–`0021` as applied; the current shell's
+  Wrangler migration read exited `1` before a request because no
+  `CLOUDFLARE_API_TOKEN` was available and Wrangler could not write its log
+  outside the sandbox. No migration write was attempted.
+- The value-free read-only Worker-secrets probe using the existing WAF-scoped
+  capability returned HTTP `403` / API error `10000` (`Authentication error`).
+  It is not authorized for `PAPER_PROCESSOR_SHARED_SECRET`; no secret value
+  was read or exposed.
+- Local gates passed: Edge check exit `0`, Edge tests exit `0` (24 files / 134
+  tests), Processor pytest exit `0` (12 passed), frontend typecheck/lint/unit
+  exits `0`, and frontend E2E exit `0` after the restricted local bind retry
+  (13 passed). The initial sandbox E2E bind exit `1` was an environment-only
+  failure.
+
+### Stop decision
+
+Status: `BLOCKED_CLOUDFLARE_WORKER_SECRET_CAPABILITY`. No Clash or any
+Cloudflare, D1, R2, WAF, Secret, Edge deployment, zhangbot release/token/
+service, Redis, Relay, or Cloudflared write occurred. The reviewed release was
+not installed because the Edge shared secret cannot be paired safely. Do not
+rerun D1 migrations. Required next action is a secure non-chat handoff of a
+narrowly scoped Cloudflare Worker-secret credential, followed by a fresh
+read-only preflight.

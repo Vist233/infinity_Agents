@@ -686,3 +686,19 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
 - WAF, Edge Paper secret, zhangbot Processor release/service/token, and the
   just-deployed Edge version were rolled back. No D1/R2 metadata or existing
   host service changed. This is an evidence/checkpoint-only stop.
+
+## 2026-08-29 Processor health subphase
+
+- No product source or configuration diff was made. The current HEAD source
+  aggregate, dependency lock, and service-unit hashes match the checked-in
+  delivery definition.
+- A fresh current-HEAD release archive and locked Linux wheelhouse were built
+  in `/private/tmp`, excluding all macOS `._*` entries. They were not
+  transferred because the required Edge Worker secret capability was not
+  available.
+- The local gates passed; the only initial failure was the sandbox's inability
+  to bind the frontend E2E test server, and the same test passed under
+  restricted local elevation.
+- This is a capability precondition stop, not an installation failure. No
+  Clash, Cloudflare, D1, R2, WAF, Secret, Edge deployment, zhangbot release or
+  service, Redis, Relay, or Cloudflared write occurred.

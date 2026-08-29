@@ -1042,6 +1042,30 @@ existing Redis/Relay/Cloudflared services.
   preserve D1/R2 metadata and existing Redis/Relay/Cloudflared. Do not rerun
   D1 migrations.
 
+## 2026-08-29 zhangbot Processor-only retry — Cloudflare secret capability blocker
+
+- Status: `BLOCKED_CLOUDFLARE_WORKER_SECRET_CAPABILITY`; PAPER-10 is not PASS.
+- A fresh read-only zhangbot check passed for Ubuntu 22.04, installed
+  `python3.10-venv 3.10.12-1~22.04.17`, temporary venv/ensurepip/pip, absent
+  Processor state, and preservation of the active Redis/Relay/Cloudflared
+  services and listeners. Edge `/health` was reachable and returned HTTP 200
+  with `paper_processor=unconfigured`.
+- A current-HEAD, AppleDouble-free source archive and locked Linux wheelhouse
+  were rebuilt and verified. Local Edge/Processor/frontend gates passed,
+  including 13/13 frontend E2E after the recorded sandbox-only bind failure.
+- The current execution environment has no Cloudflare API credential for the
+  Worker secret surface. A value-free read-only request using the existing
+  WAF-scoped capability returned HTTP `403`, API error `10000`.
+- No Clash, Cloudflare, D1, R2, WAF, Secret, Edge deployment, zhangbot
+  release/token/service, Redis, Relay, or Cloudflared write occurred. D1
+  migrations `0017`–`0021` were not rerun and Kimi traffic was not changed.
+- The reviewed release was deliberately not installed because without the
+  matching Edge shared secret a started Processor cannot pass `connect`.
+  Required next action is a secure non-chat handoff of a narrowly scoped
+  Cloudflare credential capable of the exact Worker secret operation; do not
+  reveal a credential value in chat. Evidence details are in
+  `processor-health-subphase-20260829.md`.
+
 ## 2026-08-29 browser-control blocker and completed rollback
 
 - Status: `BLOCKED_BROWSER_CONTROL`; PAPER-10 is not PASS. The current
