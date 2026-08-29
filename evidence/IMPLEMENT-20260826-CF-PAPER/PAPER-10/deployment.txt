@@ -43,3 +43,20 @@ This subphase changed only the authorized Edge Worker deployment. D1
 migrations were not rerun; no D1 row, R2 object, WAF rule, Edge shared secret,
 zhangbot token/release/service, Redis/Relay/Cloudflared state, or GitHub ref
 was changed.
+
+## 2026-08-29 text gate and WAF capability update
+
+- Coordinator-provided real authenticated text-gate result against the
+  corrected Worker version `79755db3-c12d-4737-b601-aa99f11e3f93`: exact
+  prompt `请只回复：KIMI_MAINLAND_TEXT_PROBE_OK`; exact visible result
+  `KIMI_MAINLAND_TEXT_PROBE_OK`.
+- The prior international `.ai` 401 is superseded for this provider gate.
+  Kimi K2.6 remains at 100%; StepFun was not used.
+- The scoped WAF capability preflight then created and read back the exact
+  fixed-endpoint BIC-only rule: entrypoint
+  `65e15547ea3144feb70791fc155d1df0`, rule
+  `5695e7eb000c4f49b77a616cff1411ae`, action `skip`, products `bic`, enabled
+  and logged. The expression is recorded in `waf-current-rule.md`.
+- This is not a PAPER-10 completion record. No Edge shared secret, zhangbot
+  Processor token/release/service, R2 object, or D1 migration write has
+  followed yet; D1 migrations remain applied and are not to be rerun.

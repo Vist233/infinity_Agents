@@ -433,3 +433,26 @@ acceptance. PAPER-10 is not complete.
   data was inspected or modified.
 - `deployment.txt` records the external Edge deployment. PAPER-10 is not PASS;
   no Processor/WAF/Secret/R2 operation was started in this stop.
+
+## 2026-08-29 mainland text gate and WAF capability passed
+
+- The coordinator's authenticated browser record confirms the exact text
+  prompt `请只回复：KIMI_MAINLAND_TEXT_PROBE_OK` returned the exact visible
+  result `KIMI_MAINLAND_TEXT_PROBE_OK` against Worker version
+  `79755db3-c12d-4737-b601-aa99f11e3f93`. This is a real text-provider gate
+  pass and supersedes the prior international-endpoint 401; no Kimi secret or
+  browser credential is recorded, and StepFun remains unused.
+- The scoped WAF read-only capability preflight passed. The additive zone
+  custom rule was created and immediately read back exactly as the fixed
+  four-path BIC-only contract: entrypoint
+  `65e15547ea3144feb70791fc155d1df0`, rule
+  `5695e7eb000c4f49b77a616cff1411ae`, action `skip`, products `bic`, enabled,
+  and logged. No pre-existing rule was changed.
+- External state now active: this WAF rule only. D1 migrations remain applied
+  and were not rerun. Edge shared secret, zhangbot token/release/service, R2
+  object, Redis/Relay/Cloudflared, and the remaining Paper deployment have
+  not yet been written in this attempt.
+- PAPER-10 remains incomplete. The next controlled step is a fresh immutable
+  preflight followed by the authorized secret/token handoff and single
+  Processor release; capability-first rollback starts with this rule if that
+  step fails.

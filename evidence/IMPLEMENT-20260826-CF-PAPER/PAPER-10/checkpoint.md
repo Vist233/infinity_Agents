@@ -859,3 +859,29 @@ harmless text probe against Worker version `79755db3-c12d-4737-b601-aa99f11e3f93
 If that real result is still `401 Invalid Authentication`, record the upstream
 Kimi credential/account-entitlement blocker and then resume only the
 non-model PAPER-10 work.
+
+## 2026-08-29 Kimi mainland text gate and exact WAF rule
+
+- Status: `READY_FOR_PAPER_PROCESSOR_RELEASE`; PAPER-10 is not PASS.
+- The coordinator's real authenticated browser record reports that the exact
+  prompt `请只回复：KIMI_MAINLAND_TEXT_PROBE_OK`, sent to corrected Worker
+  version `79755db3-c12d-4737-b601-aa99f11e3f93`, produced the exact visible
+  result `KIMI_MAINLAND_TEXT_PROBE_OK`.
+- This supersedes the earlier international `.ai` endpoint `401 Invalid
+  Authentication` record. Kimi K2.6 remains at 100% on the mainland `.cn`
+  configuration; StepFun was not used.
+- The scoped WAF capability preflight passed. The newly created exact
+  fixed-endpoint BIC-only rule is entrypoint
+  `65e15547ea3144feb70791fc155d1df0`, rule
+  `5695e7eb000c4f49b77a616cff1411ae`; immediate readback validated the exact
+  source IP, host, four method/path pairs, `skip`, `products=["bic"]`,
+  enabled state, and logging.
+- No credential value is present in evidence. No D1 migration was rerun, and
+  no Edge shared secret, Processor token/release/service, R2 object, Redis,
+  Relay, or Cloudflared write has occurred yet in this release attempt.
+
+Next exact action: repeat the immutable read-only preflight, then perform the
+authorized minimal Edge shared-secret/zhangbot token handoff and single
+Processor release. On any failure, delete the new WAF rule and entrypoint
+first, then revoke only the newly created capability material and remove the
+new release/service.

@@ -456,3 +456,15 @@ the rollback; the worktree is clean and `deployment.txt` is absent.
   Paper data was transmitted, and no prior `.ai` 401 was attributed to `.cn`.
 - No D1, R2, WAF, Edge Secret, zhangbot, Redis/Relay/Cloudflared, or GitHub
   change occurred in this subphase. PAPER-10 remains blocked.
+
+## 2026-08-29 Kimi text gate and exact WAF rule
+
+- Added redacted evidence for the real authenticated mainland Kimi text gate:
+  exact prompt and exact visible `KIMI_MAINLAND_TEXT_PROBE_OK` result against
+  Worker version `79755db3-c12d-4737-b601-aa99f11e3f93`.
+- Added redacted evidence for the current zone WAF write/readback. The rule
+  matches only `39.105.204.121`, host `infinity.zhangyvjing.com`, and the four
+  fixed Processor method/path pairs; it skips only `bic` and keeps logging.
+- No product source or migration changed in this evidence update. The WAF
+  entrypoint/rule is the only current external Paper-release change; secret,
+  token, Processor, R2, Redis/Relay/Cloudflared changes remain pending.

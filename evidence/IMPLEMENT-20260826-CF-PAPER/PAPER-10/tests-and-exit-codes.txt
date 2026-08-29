@@ -893,3 +893,27 @@ recorded exactly; no failed assertion was skipped.
       obtained.
     - No D1 migration, R2 object, WAF rule, Edge Secret, zhangbot Processor,
       Redis/Relay/Cloudflared, browser data, or GitHub write occurred.
+
+69. Kimi mainland text gate and current WAF rule
+    - Coordinator-provided authenticated browser acceptance record: the exact
+      prompt `请只回复：KIMI_MAINLAND_TEXT_PROBE_OK` returned the exact visible
+      result `KIMI_MAINLAND_TEXT_PROBE_OK` against Worker version
+      `79755db3-c12d-4737-b601-aa99f11e3f93`. This is a real acceptance record,
+      not a shell test; no credential value or browser secret was recorded.
+    - Secure WAF capability preflight: token metadata mode check exit `0`;
+      authenticated Rulesets read HTTP `200`, exit `0`; custom entrypoint
+      absence read HTTP `404`/API error `10003`, exit `0`.
+    - Exact additive zone ruleset creation: HTTP `200`, exit `0`; entrypoint
+      `65e15547ea3144feb70791fc155d1df0`, rule
+      `5695e7eb000c4f49b77a616cff1411ae`.
+    - Immediate exact readback: HTTP `200`, exit `0`; readback validation
+      `PASS`; one enabled/logged rule, action `skip`, products `bic`, and the
+      fixed source/host/four method-path expression matched the target.
+    - No D1 migration was rerun and no Edge secret, Processor token/release/
+      service, R2 object, Redis/Relay/Cloudflared write occurred yet.
+
+70. Evidence consistency gate for the current update
+    - `git diff --check` exited `0`.
+    - The changed-scope no-secret detector over the updated Paper-10 evidence
+      files, excluding this detector record, returned raw no-match exit `1`;
+      normalized secret-gate exit `0`.
