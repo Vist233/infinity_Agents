@@ -1,0 +1,9 @@
+PAPER-FIX-05 baseline and observed production fact
+
+- Checked at card start: branch `cloudflare-deploy`; worktree clean.
+- Baseline HEAD: `de4e95eb09cbb70d92715ae255a71fa43901e50e`.
+- Prior local card: `PAPER-FIX-04` (`de4e95e`), whose refresh/rehydration behavior remains in scope and was not reverted.
+- Production reproduction supplied for this card: an authenticated Paper request repeatedly invoked `search_paper` (six succeeded timeline entries), emitted no assistant text, never invoked `materialize_paper`, and therefore created no Paper resource/Processor progress task. Browser console error/warn was empty.
+- Root-cause boundary: `runToolLoop` treated any Paper tool call as sufficient after `MAX_TOOL_ITERATIONS`; this card addresses only that orchestration path.
+- No production, Cloudflare, D1/R2, Processor/zhangbot, WAF/Secret/Redis, browser-session, or GitHub write was performed.
+- No credentials, tokens, cookies, provider payload secrets, or environment-file values were read or recorded.

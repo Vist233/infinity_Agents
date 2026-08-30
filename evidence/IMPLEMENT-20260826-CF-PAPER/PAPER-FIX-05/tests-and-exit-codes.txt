@@ -1,0 +1,28 @@
+# PAPER-FIX-05 tests and exit codes
+
+All commands ran from the repository unless a working directory is stated. No production or browser session was used.
+
+## Test-first evidence
+
+- `cd cloudflare-worker && npm test -- --run test/chat.test.ts` before implementation: exit `1`; 2 new repeated-search tests failed as expected because the old loop emitted `done` without `materialize_paper`; 17 existing tests passed.
+
+## Focused and mandatory Edge checks
+
+- `cd cloudflare-worker && npm test -- --run test/chat.test.ts`: exit `0`; 19/19.
+- `cd cloudflare-worker && npm test -- --run test/chat.test.ts test/paper-continuation.test.ts`: exit `0`; 26/26.
+- `cd cloudflare-worker && npm run check && npm test`: first post-change attempt exit `2` at TypeScript narrowing (`pendingPaper` helper); no test phase ran. The local type assertion was corrected.
+- `cd cloudflare-worker && npm run check && npm test`: rerun exit `0`; `npm run check` exit `0`; 26 files / 151 tests passed.
+
+## Affected Processor and frontend checks
+
+- `zsh -lc 'eval "$(pyenv init - zsh)" && pyenv shell Agent && pytest -q tests/test_paper_processor_runtime.py tests/test_paper_processor_ingestion.py'`: exit `0`; 12 passed. The pyenv shim rehash warning was non-fatal; Processor source was not changed.
+- `cd frontend && npm run typecheck`: exit `0`.
+- `cd frontend && npm run lint`: exit `0`.
+- `cd frontend && npm run test:unit`: exit `0`; 16 files / 78 tests passed. Existing React `act(...)` warnings were non-fatal and unrelated.
+- `cd frontend && npm run test:e2e`: exit `0`; 15/15 passed. The local web server printed existing `/api/tasks` proxy `ECONNREFUSED` warnings, but no E2E failed.
+
+## Final integrity checks
+
+- `git diff --check`: exit `0` before evidence staging.
+- Changed-scope raw secret scan over changed source/tests/docs: exit `1` with no matches; normalized result `PASS`.
+- No remote command, deployment, migration, browser claim, or external write ran.

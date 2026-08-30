@@ -565,6 +565,38 @@ scoped, short-lived capability.  Do not Base64-embed large images into SSE or
 model context.  The image-analysis tool sends only the selected authorized image
 and records provider egress in the resource/tool event audit trail.
 
+### 6.4 Paper-intent orchestration and materialization guard
+
+The chat loop distinguishes paper discovery from a request that asks to download,
+parse, or read PDF/full-text content.  A search-only request may finish after a
+successful `search_paper` call and an explanatory answer.  A full-text request
+cannot finish merely because any Paper tool ran: its terminal condition is a
+successful `materialize_paper` result with a server-issued `resource_id` and
+`continuation_id`, or an explicit safe failure.
+
+The provider is instructed to call `materialize_paper` after it receives eligible
+search results, but the instruction is not the safety boundary.  If the provider
+repeats `search_paper` until the bounded tool-loop limit, the Edge may perform one
+controlled recovery call using the first canonical, explicitly
+`availability.kind = materializable` reference from a successful search result in
+the same turn.  The candidate is limited to the existing canonical arXiv and
+eligible `pubmed:PMC...` forms; a numeric PubMed PMID, prose, malformed JSON,
+arbitrary URL, or a ref not surfaced by the current session is never passed to
+`materialize_paper`.  The normal materialization function still rechecks session,
+user, and paper authorization and persists the synthetic call/result in the same
+durable event ledger.
+
+The recovery call is at most once per chat turn and uses the existing
+`client_request_id`/resource idempotency and continuation contract.  A processing
+result returns `paper_processing` without `done`; a ready result remains a
+materialization success and must still be read through the existing resource
+contract.  If no eligible candidate exists, or materialization returns an error or
+malformed success shape, the loop emits a safe `PAPER_MATERIALIZE_REQUIRED` or
+`PAPER_MATERIALIZE_FAILED` error and never writes a successful assistant terminal
+state.  Search failures remain tool failures.  This prevents an empty provider
+response after repeated search calls from becoming a false completion while
+preserving ordinary search behavior.
+
 ## 7. Security, privacy, and reliability gates
 
 Before a PDF resource feature reaches production, all of the following are true:

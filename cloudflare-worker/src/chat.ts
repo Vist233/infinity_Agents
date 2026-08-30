@@ -88,6 +88,7 @@ interface PaperContinuationContext {
 interface StreamOptions {
   forceTaskConfirmation?: boolean;
   paperIntent?: boolean;
+  paperMaterializationIntent?: boolean;
   paperContinuation?: PaperContinuationContext;
   clientRequestId?: string | null;
 }
@@ -424,6 +425,11 @@ export function isPaperIntent(content: string): boolean {
   return /(?:论文|文献|paper|pdf|全文|pubmed|arxiv|doi|下载.{0,24}(?:解析|阅读)|解析.{0,24}pdf)/i.test(content);
 }
 
+/** Full-text requests require a durable resource, not just a search result. */
+export function isPaperMaterializationIntent(content: string): boolean {
+  return isPaperIntent(content) && /(?:下载|解析|全文|pdf|download|parse|full[- ]?text|materiali[sz]|extract)/i.test(content);
+}
+
 interface PaperToolPayload {
   mode?: string;
   status?: string;
@@ -447,6 +453,46 @@ function parsePaperToolPayload(result: string): PaperToolPayload | null {
   } catch {
     return null;
   }
+}
+
+const CANONICAL_ARXIV_REF = /^arxiv:(?:\d{4}\.\d{4,5}|[a-z-]+\/\d{7})(?:v\d+)?$/i;
+const CANONICAL_PUBMED_PMC_REF = /^pubmed:PMC\d+$/i;
+
+function safePaperOpaqueId(value: unknown): value is string {
+  return typeof value === "string" && /^\S{1,255}$/.test(value);
+}
+
+function normalizeMaterializablePaperRef(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const clean = value.trim();
+  if (CANONICAL_ARXIV_REF.test(clean)) return clean;
+  if (CANONICAL_PUBMED_PMC_REF.test(clean)) {
+    const [, identifier] = clean.split(":", 2);
+    return `pubmed:${identifier.toUpperCase()}`;
+  }
+  return null;
+}
+
+/** Select only a canonical, explicitly materializable ref from search output. */
+function firstMaterializableSearchRef(result: string): string | null {
+  try {
+    const value = JSON.parse(result) as unknown;
+    if (!Array.isArray(value)) return null;
+    for (const item of value) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const record = item as Record<string, unknown>;
+      const availability = record.availability;
+      if (!availability || typeof availability !== "object" || Array.isArray(availability)
+        || (availability as Record<string, unknown>).kind !== "materializable") continue;
+      const paperRef = normalizeMaterializablePaperRef(record.paper_ref ?? record.ref);
+      const ref = normalizeMaterializablePaperRef(record.ref);
+      if (record.ref != null && !ref) continue;
+      if (paperRef && (!ref || ref === paperRef)) return paperRef;
+    }
+  } catch {
+    // A malformed or prose-only tool result is never a materialization input.
+  }
+  return null;
 }
 
 function paperContinuationEvent(row: OwnedPaperRequestContinuation): Record<string, unknown> {
@@ -537,6 +583,7 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
   const userContent = (lastUser?.content ?? "").trim();
   if (!userContent) return errorJson("A user message is required", 400, "EMPTY_MESSAGE");
   const paperIntent = isPaperIntent(userContent);
+  const paperMaterializationIntent = isPaperMaterializationIntent(userContent);
 
   const clientRequestId = String(body.client_request_id ?? "").trim();
   if (clientRequestId.length > 255) {
@@ -627,6 +674,7 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
     {
       forceTaskConfirmation: shouldRequestTaskConfirmation(userContent),
       paperIntent,
+      paperMaterializationIntent,
       clientRequestId: clientRequestId || null,
     },
     clientRequestId
@@ -989,9 +1037,13 @@ function streamModelLoop(
             code: result.errorCode ?? "PAPER_REQUEST_FAILED",
             message: result.errorCode === "PAPER_TOOL_CALL_REQUIRED"
               ? "The paper request did not produce a required Paper tool call."
+              : result.errorCode === "PAPER_MATERIALIZE_REQUIRED"
+                ? "The paper request found no eligible paper that could be materialized, so no PDF resource was created."
+                : result.errorCode === "PAPER_MATERIALIZE_FAILED"
+                  ? "The paper request could not create a durable PDF resource."
               : result.errorCode === "PAPER_CONTINUATION_TOOL_REQUIRED"
-                ? "The ready paper request did not produce the required read or image action."
-                : "The paper request could not be completed.",
+                  ? "The ready paper request did not produce the required read or image action."
+                  : "The paper request could not be completed.",
           });
         }
       } catch (error) {
@@ -1039,10 +1091,88 @@ async function runToolLoop(
   let pendingPaper: { continuationId: string; resourceId: string } | null = null;
   let sawPaperToolCall = false;
   let paperToolFailed = false;
+  let materializeAttempted = false;
+  let materializeSucceeded = false;
+  let materializeFailure = false;
   let continuationReadSucceeded = false;
   const forceTaskConfirmation = options.forceTaskConfirmation === true;
   const paperIntent = options.paperIntent === true;
+  const paperMaterializationIntent = options.paperMaterializationIntent === true;
   const paperContinuation = options.paperContinuation;
+  const materializableSearchRefs = new Set<string>();
+
+  const recordPaperToolOutcome = (toolName: string, result: string, continuationScoped: boolean): void => {
+    const paperPayload = PAPER_TOOL_NAMES.has(toolName) ? parsePaperToolPayload(result) : null;
+    if (toolName === "search_paper" && !paperPayload?.error) {
+      const paperRef = firstMaterializableSearchRef(result);
+      if (paperRef) materializableSearchRefs.add(paperRef);
+    }
+    if (toolName === "materialize_paper") {
+      const validMaterialization = !paperPayload?.error
+        && (paperPayload?.mode === "processing" || paperPayload?.mode === "ready")
+        && safePaperOpaqueId(paperPayload.resource_id)
+        && safePaperOpaqueId(paperPayload.continuation_id);
+      if (validMaterialization) {
+        materializeSucceeded = true;
+        if (paperPayload.mode === "processing") {
+          pendingPaper = {
+            resourceId: paperPayload.resource_id as string,
+            continuationId: paperPayload.continuation_id as string,
+          };
+        }
+      } else {
+        materializeFailure = true;
+        paperToolFailed = true;
+      }
+    }
+    if (PAPER_TOOL_NAMES.has(toolName) && (paperPayload?.error
+      || paperPayload?.status === "failed"
+      || paperPayload?.status === "cancelled"
+      || paperPayload?.status === "deleted")) {
+      paperToolFailed = true;
+      if (toolName === "materialize_paper") materializeFailure = true;
+    }
+    if (paperContinuation && (toolName === "read_paper" || toolName === "analyze_paper_image")
+      && continuationScoped && !paperPayload?.error && paperPayload?.mode !== "processing") {
+      continuationReadSucceeded = true;
+    }
+  };
+
+  const synthesizeMaterializeFromSearch = async (): Promise<void> => {
+    if (materializeAttempted) return;
+    const paperRef = materializableSearchRefs.values().next().value as string | undefined;
+    if (!paperRef) return;
+
+    const call: ToolCall = {
+      id: crypto.randomUUID(),
+      type: "function",
+      function: { name: "materialize_paper", arguments: JSON.stringify({ paper_ref: paperRef }) },
+    };
+    materializeAttempted = true;
+    await persistToolCallEvents(env, sessionId, turnId, "", [call]);
+    messages.push({ role: "assistant", content: null, tool_calls: [call] });
+    emitToolCallEvent(emit, turnId, call, "pending");
+    emitToolCallEvent(emit, turnId, call, "processing");
+    emitStatus("tool_running", { tool_name: call.function.name });
+
+    let result: string;
+    try {
+      result = await runTool(env, sessionId, userId, call.function.name, { paper_ref: paperRef }, {
+        turnId,
+        clientRequestId: options.clientRequestId ?? null,
+      });
+    } catch (error) {
+      const failedResult = JSON.stringify({ error: "tool_execution_failed" });
+      await persistToolResultEvent(env, sessionId, turnId, call.id, failedResult);
+      emitToolResultEvent(emit, turnId, call, failedResult);
+      messages.push({ role: "tool", tool_call_id: call.id, content: failedResult });
+      throw error;
+    }
+    recordPaperToolOutcome(call.function.name, result, true);
+    await persistToolResultEvent(env, sessionId, turnId, call.id, result);
+    emitToolResultEvent(emit, turnId, call, result);
+    messages.push({ role: "tool", tool_call_id: call.id, content: result });
+  };
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
     const { content, toolCalls, finishReason } = await streamCompletion(
@@ -1101,6 +1231,7 @@ async function runToolLoop(
         }
         const isPaperTool = PAPER_TOOL_NAMES.has(call.function.name);
         if (isPaperTool) sawPaperToolCall = true;
+        if (call.function.name === "materialize_paper") materializeAttempted = true;
         if (call.function.name === "request_task_creation") {
           return await pauseForTaskConfirmation(env, sessionId, userId, call.id, args, content, emit);
         }
@@ -1126,22 +1257,7 @@ async function runToolLoop(
           messages.push({ role: "tool", tool_call_id: call.id, content: failedResult });
           throw error;
         }
-        const paperPayload = isPaperTool ? parsePaperToolPayload(result) : null;
-        if (isPaperTool && (paperPayload?.error
-          || paperPayload?.status === "failed"
-          || paperPayload?.status === "cancelled"
-          || paperPayload?.status === "deleted")) paperToolFailed = true;
-        if (call.function.name === "materialize_paper" && paperPayload?.mode === "processing"
-          && !paperToolFailed && paperPayload.resource_id && paperPayload.continuation_id) {
-          pendingPaper = {
-            resourceId: paperPayload.resource_id,
-            continuationId: paperPayload.continuation_id,
-          };
-        }
-        if (paperContinuation && (call.function.name === "read_paper" || call.function.name === "analyze_paper_image")
-          && continuationScoped && !paperPayload?.error && paperPayload?.mode !== "processing") {
-          continuationReadSucceeded = true;
-        }
+        recordPaperToolOutcome(call.function.name, result, continuationScoped);
         await persistToolResultEvent(env, sessionId, turnId, call.id, result);
         emitToolResultEvent(emit, turnId, call, result);
         messages.push({ role: "tool", tool_call_id: call.id, content: result });
@@ -1156,17 +1272,34 @@ async function runToolLoop(
     }
   }
 
+  if (paperMaterializationIntent && !materializeSucceeded && !materializeAttempted && !paperToolFailed) {
+    await synthesizeMaterializeFromSearch();
+  }
   if (paperContinuation) {
     if (paperToolFailed) return { status: "failed", assistantText: finalText, errorCode: "PAPER_CONTINUATION_TOOL_FAILED" };
     if (!continuationReadSucceeded) return { status: "failed", assistantText: finalText, errorCode: "PAPER_CONTINUATION_TOOL_REQUIRED" };
   }
-  if (paperToolFailed) return { status: "failed", assistantText: finalText, errorCode: "PAPER_TOOL_EXECUTION_FAILED" };
-  if (pendingPaper) {
+  if (paperToolFailed) {
+    return {
+      status: "failed",
+      assistantText: finalText,
+      errorCode: materializeFailure ? "PAPER_MATERIALIZE_FAILED" : "PAPER_TOOL_EXECUTION_FAILED",
+    };
+  }
+  if (paperMaterializationIntent && !materializeSucceeded) {
+    return {
+      status: "failed",
+      assistantText: finalText,
+      errorCode: materializeAttempted ? "PAPER_MATERIALIZE_FAILED" : "PAPER_MATERIALIZE_REQUIRED",
+    };
+  }
+  const resumablePaper = pendingPaper as { continuationId: string; resourceId: string } | null;
+  if (resumablePaper) {
     return {
       status: "paper_processing",
       assistantText: finalText,
-      paperContinuationId: pendingPaper.continuationId,
-      paperResourceId: pendingPaper.resourceId,
+      paperContinuationId: resumablePaper.continuationId,
+      paperResourceId: resumablePaper.resourceId,
     };
   }
   if (paperIntent && !sawPaperToolCall) {

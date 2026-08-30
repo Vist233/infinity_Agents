@@ -1,0 +1,18 @@
+# PAPER-FIX-05 diff summary
+
+## Root cause
+
+`cloudflare-worker/src/chat.ts` set `sawPaperToolCall` for every Paper tool. When the provider returned `search_paper` on every iteration, the loop exhausted `MAX_TOOL_ITERATIONS`, retained an empty final text, and returned `completed`. The guard therefore confused Paper discovery with successful PDF/full-text materialization. No `materialize_paper` call meant no D1 resource, continuation, Processor work, or progress projection.
+
+## Implementation
+
+- Added a separate full-text/materialization intent detector for download, parse, PDF, and full-text requests; ordinary search-only requests retain their existing completion behavior.
+- Added strict parsing of successful `search_paper` output. Recovery accepts only an explicit `availability.kind = materializable` result and canonical arXiv or `pubmed:PMC...` ref. Numeric PMID, abstract-only records, malformed/prose results, arbitrary URLs, and mismatched refs are rejected.
+- Tracked `materialize_paper` attempted/succeeded/failed independently from generic Paper-tool activity.
+- After the bounded model loop, a full-text request with no provider materialization may perform at most one synthetic `materialize_paper` call from the safe in-turn search candidate. The call/result is persisted and emitted through the existing tool/event path and carries the authenticated turn/client context.
+- Processing materialization returns `paper_processing` without `done`; no candidate returns `PAPER_MATERIALIZE_REQUIRED`; malformed/failed materialization returns `PAPER_MATERIALIZE_FAILED` or the existing safe tool failure. No successful terminal state is fabricated.
+- Updated the Analysis prompt and governing Design/Execution Plan with the contract, security boundary, and rollback.
+
+## Tests
+
+Added positive coverage for six repeated `search_paper` calls producing one persisted arXiv `materialize_paper` call and processing state, plus negative coverage for repeated search with only abstract-only PubMed output producing no resource and an explicit failure. Existing search-only, continuation, ownership, and source-contract tests remain green.

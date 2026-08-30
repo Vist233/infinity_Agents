@@ -248,6 +248,113 @@ describe("handleChat", () => {
     expect([...db.dailyUsage.values()][0]).toBe(1);
   });
 
+  it("synthesizes materialize_paper after a paper-intent provider repeats search_paper", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("paper-search-loop", "user-1");
+    let providerCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("stepfun.test")) {
+        providerCalls += 1;
+        return sseResponse([
+          JSON.stringify({
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: `search-${providerCalls}`,
+                  function: { name: "search_paper", arguments: '{"query":"attention"}' },
+                }],
+              },
+              finish_reason: "tool_calls",
+            }],
+          }),
+        ]);
+      }
+      if (url.includes("export.arxiv.org")) return textResponse(ARXIV_XML);
+      if (url.includes("esearch.fcgi")) return jsonResponse({ esearchresult: { idlist: [] } });
+      return textResponse("");
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const events = await readSse(await handleChat(
+      makeRequest("paper-search-loop", "搜索一篇开放获取论文，下载并解析 PDF", "paper-search-loop-request"),
+      env,
+      USER,
+    ));
+
+    expect(providerCalls).toBe(6);
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "done" }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "paper_processing",
+      status: "processing",
+      resource_id: expect.any(String),
+      continuation_id: expect.any(String),
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "tool_call",
+      tool_name: "materialize_paper",
+      status: "processing",
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "tool_result",
+      tool_name: "materialize_paper",
+      status: "succeeded",
+    }));
+    expect(db.paperResources.size).toBe(1);
+    expect(db.paperRequestContinuations.size).toBe(1);
+    expect(db.chatEvents.filter((event) => event.event_type === "tool_call").map((event) => event.tool_name))
+      .toEqual(["search_paper", "search_paper", "search_paper", "search_paper", "search_paper", "search_paper", "materialize_paper"]);
+  });
+
+  it("fails a paper-intent search loop when only an abstract-only PubMed candidate is available", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("paper-no-materialize", "user-1");
+    let providerCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("stepfun.test")) {
+        providerCalls += 1;
+        return sseResponse([
+          JSON.stringify({
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: `pubmed-search-${providerCalls}`,
+                  function: { name: "search_paper", arguments: '{"query":"attention"}' },
+                }],
+              },
+              finish_reason: "tool_calls",
+            }],
+          }),
+        ]);
+      }
+      if (url.includes("export.arxiv.org")) return textResponse("<feed></feed>");
+      if (url.includes("esearch.fcgi")) return jsonResponse({ esearchresult: { idlist: ["111"] } });
+      if (url.includes("esummary.fcgi")) return jsonResponse({ result: { "111": { title: "Abstract-only paper", authors: [], pubdate: "2024" } } });
+      return textResponse("");
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const events = await readSse(await handleChat(
+      makeRequest("paper-no-materialize", "搜索一篇论文，下载并解析 PDF", "paper-no-materialize-request"),
+      env,
+      USER,
+    ));
+
+    expect(providerCalls).toBe(6);
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "done" }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "error", code: "PAPER_MATERIALIZE_REQUIRED" }));
+    expect(db.paperResources.size).toBe(0);
+    expect(db.chatEvents.filter((event) => event.event_type === "tool_call" && event.tool_name === "materialize_paper"))
+      .toHaveLength(0);
+    expect(db.chatEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event_type: "assistant_message", status: "failed" }),
+      expect.objectContaining({ event_type: "error", status: "failed" }),
+    ]));
+  });
+
   it("rejects a session the user does not own", async () => {
     const { env, db } = makeEnv();
     db.seedChatSession("s1", "someone-else");

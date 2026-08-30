@@ -841,6 +841,74 @@ chat creation, processing progress, refresh/sidebar rehydration, ready resume,
 text/image reads, and ownership negatives.  This card does not claim PAPER-10
 production acceptance.
 
+### PAPER-FIX-05 — Paper intent materialization orchestration
+
+**Outcome:** a request that explicitly asks to download, parse, or read a
+paper's PDF/full text cannot finish as a successful chat turn after only
+`search_paper` calls.  The provider must produce a durable `materialize_paper`
+success, or the Edge emits a clear safe failure; a real resource and Processor
+task are never replaced by model planning prose.
+
+**Root-cause evidence:** the production request repeatedly returned
+`search_paper` tool calls.  `runToolLoop` set `sawPaperToolCall = true`, exhausted
+`MAX_TOOL_ITERATIONS`, and then returned `completed` with an empty final text.
+Because no `materialize_paper` call was made, no D1 `paper_resources`,
+`paper_processing_attempts`, continuation, or progress candidate existed.  The
+frontend rehydration fix was effective for the search timeline; this card does
+not change rehydration, Processor, Kimi, WAF, secrets, or production state.
+
+- Keep search-only requests compatible: a successful `search_paper` call may
+  finish when the user did not request PDF/full-text materialization.  For
+  explicit download/parse/PDF/full-text intent, track materialization separately
+  from the broader Paper-tool flag.
+- Instruct the provider that search is candidate discovery, not the terminal
+  action.  If the provider repeats `search_paper` through the bounded loop, the
+  Edge may perform one recovery `materialize_paper` call from a successful search
+  result in the same turn.  The selected ref must have explicit
+  `availability.kind = materializable` and match the existing canonical arXiv or
+  eligible `pubmed:PMC...` grammar.  Numeric PMID, arbitrary URL, prose,
+  malformed result, and non-search data are rejected as candidates.
+- Persist and emit the recovery call/result in the same durable order as a
+  provider call.  Invoke the existing `runTool`/`materializePaper` path so
+  session/user/paper authorization, resource ownership, continuation
+  correlation, and idempotency remain authoritative.  Permit at most one
+  recovery attempt per chat turn.
+- A valid processing materialization returns `paper_processing` without `done`;
+  a ready materialization is still only a materialization success and must use
+  the existing resource read contract.  No eligible candidate produces
+  `PAPER_MATERIALIZE_REQUIRED`; a malformed or failed materialization produces
+  `PAPER_MATERIALIZE_FAILED`.  Neither path writes a successful assistant
+  terminal state.
+
+**Focused positive tests:** a provider that repeats `search_paper` for a
+download/parse request causes one durable, persisted `materialize_paper` call
+from the returned arXiv candidate and emits processing without `done`; ordinary
+search-only behavior remains compatible.
+
+**Focused negative tests:** a repeated search with only abstract-only numeric
+PubMed results creates no resource and emits `PAPER_MATERIALIZE_REQUIRED`;
+provider prose without a required Paper call remains an explicit failure;
+malformed/failed materialization cannot become completion.  Existing ownership,
+continuation, event-ledger, source-contract, Processor, and frontend tests must
+remain green.
+
+**Local pass gate:** focused orchestration tests; `cd cloudflare-worker && npm
+run check && npm test`; affected Processor pytest and frontend typecheck/lint/
+unit/E2E checks; then `git diff --check` and a changed-scope secret scan.  No
+deployment, remote migration, Cloudflare/zhangbot/Processor/WAF/Secret/Redis
+write, browser claim, or Git push is part of this card.
+
+**Rollback:** revert the local review commit.  No schema, resource, lease, R2,
+Processor, or external provider configuration is changed by this card.  Preserve
+existing durable chat events and Paper resources; do not hand-edit D1 to create
+or remove a completion.
+
+**Next exact action:** prepare a versioned production release containing
+PAPER-FIX-05, then repeat the authenticated browser path and verify that the
+reported Transformer-attention request creates `paper_resource`/
+continuation/progress after search, followed by the existing Processor and
+readiness acceptance.  This card does not claim PAPER-10 completion.
+
 ## 4. Completion checkpoint template
 
 Every card checkpoint must answer these fields explicitly:
