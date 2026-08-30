@@ -8,6 +8,7 @@ credentials. This module deliberately has no service SDK dependencies.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -17,6 +18,7 @@ from urllib.parse import urlparse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -231,6 +233,47 @@ class PaperProcessorClient:
             "x-paper-object-sha256": digest,
         })
         return result
+
+    def upload_file(self, grant: ProcessorGrant, path: Path, content_type: str = "application/pdf") -> dict[str, Any]:
+        """Stream the admitted source PDF without materializing it in Python memory."""
+        if not self._session_token:
+            raise PaperProcessorProtocolError("Processor session is not connected")
+        size = path.stat().st_size
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            while chunk := source.read(64 * 1024):
+                digest.update(chunk)
+        envelope = json.dumps({
+            "operation": "upload", "attempt_id": grant.attempt_id,
+            "resource_id": grant.resource_id, "fencing_epoch": grant.fencing_epoch,
+            "kind": "source_pdf",
+        }, separators=(",", ":"))
+        connection = http.client.HTTPSConnection(_FIXED_EDGE_HOST, timeout=120)
+        try:
+            connection.putrequest("PUT", _ENDPOINT_PATHS["object"])
+            connection.putheader("accept", "application/json")
+            connection.putheader("content-type", content_type)
+            connection.putheader("content-length", str(size))
+            connection.putheader("x-paper-processor-session", self._session_token)
+            connection.putheader("x-paper-processor-lease-token", grant.lease_token)
+            connection.putheader("x-paper-processor-envelope", envelope)
+            connection.putheader("x-paper-object-sha256", digest.hexdigest())
+            connection.endheaders()
+            with path.open("rb") as source:
+                while chunk := source.read(64 * 1024):
+                    connection.send(chunk)
+            response = connection.getresponse()
+            decoded = response.read().decode("utf-8")
+            if response.status < 200 or response.status >= 300:
+                raise PaperProcessorProtocolError(f"Processor protocol HTTP {response.status}")
+            value = json.loads(decoded)
+            if not isinstance(value, dict):
+                raise PaperProcessorProtocolError("Processor protocol returned a non-object")
+            return value
+        except (OSError, http.client.HTTPException) as error:
+            raise PaperProcessorProtocolError("Processor protocol transport failed") from error
+        finally:
+            connection.close()
 
     def finalize(self, grant: ProcessorGrant, manifest: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", "control", {

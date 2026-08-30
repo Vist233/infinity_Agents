@@ -205,6 +205,9 @@ class FakeProcessorClient:
         self.uploads.append((kind, object_id, body))
         return {"status": "uploaded"}
 
+    def upload_file(self, grant: ProcessorGrant, path: Path) -> dict[str, Any]:
+        return self.upload(grant, "source_pdf", path.read_bytes(), "application/pdf")
+
     def stage(self, _grant: ProcessorGrant, stage: str) -> dict[str, Any]:
         self.stages.append(stage)
         return {"status": stage}
