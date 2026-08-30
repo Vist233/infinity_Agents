@@ -133,7 +133,7 @@ class ProcessorRuntimeLimits:
             "PAPER_PROCESSOR_MAX_RESIDENT_MEMORY_BYTES",
             defaults.max_resident_memory_bytes,
             64 * 1024 * 1024,
-            240 * 1024 * 1024,
+            768 * 1024 * 1024,
         )
         return cls(attempt, download, extraction, upload, heartbeat, memory)
 
@@ -587,20 +587,11 @@ def extract_pdf(
                             raise ProcessorError("IMAGE_BYTE_LIMIT", "embedded image exceeds the limit")
                         if extension not in {"png", "jpeg", "jpg", "jp2"}:
                             raise ProcessorError("IMAGE_FORMAT_UNSUPPORTED", "embedded image format is not supported")
-                        if extension != "png":
-                            pixmap = fitz.Pixmap(document, image[0])
-                            try:
-                                image_bytes = pixmap.tobytes("png")
-                            finally:
-                                pixmap = None
-                            extension = "png"
-                            if len(image_bytes) > limits.max_image_bytes:
-                                raise ProcessorError("IMAGE_BYTE_LIMIT", "normalized embedded image exceeds the limit")
                         total_image_bytes += len(image_bytes)
                         if total_image_bytes > limits.max_total_image_bytes:
                             raise ProcessorError("IMAGE_TOTAL_BYTE_LIMIT", "total embedded image bytes exceed the limit")
                         image_id = f"page-{page_index + 1:04d}-image-{image_index:04d}"
-                        image_path = output_dir / "images" / f"{image_id}.png"
+                        image_path = output_dir / "images" / f"{image_id}.{extension}"
                         image_path.parent.mkdir(parents=True, exist_ok=True)
                         image_path.write_bytes(image_bytes)
                         image_hash = hashlib.sha256(image_bytes).hexdigest()

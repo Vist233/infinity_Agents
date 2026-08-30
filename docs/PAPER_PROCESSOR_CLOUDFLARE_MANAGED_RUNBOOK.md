@@ -125,7 +125,7 @@ systemd unit. Validate the unit with `systemd-analyze --user verify` before
 starting it. The unit must retain `PrivateTmp=yes`, `NoNewPrivileges=yes`,
 `ProtectSystem=strict`, `ProtectHome=read-only`, `UMask=0077`,
 `LockPersonality=yes`, `RestrictSUIDSGID=yes`, `RestrictRealtime=yes`, the
-explicit address-family restriction, bounded `MemoryMax=256M`, `TasksMax=32`,
+explicit address-family restriction, bounded `MemoryMax=768M`, `TasksMax=32`,
 and `LimitNOFILE=256`. Its only write path is the controlled temporary work
 directory. On the owner-approved unprivileged `zhangbot` user manager,
 `PrivateDevices` and `ProtectKernelTunables`/`ProtectKernelModules`/
@@ -160,8 +160,8 @@ loop. The service unit supplies these non-secret runtime limits:
 | PDF extraction | 120 seconds | monotonic stage deadline, page/image checkpoints, and wall-clock alarm |
 | result upload/finalize | 90 seconds | monotonic stage deadline and per-request timeout |
 | lease heartbeat | every 30 seconds | background `renew` using the same fenced grant |
-| Processor RSS budget | 224 MiB | `/proc`/runtime RSS guard before and during extraction |
-| cgroup soft/hard cap | 224 MiB / 256 MiB | `MemoryHigh` / `MemoryMax` in systemd |
+| Processor RSS budget | 512 MiB | `/proc`/runtime RSS guard before and during extraction |
+| cgroup soft/hard cap | 512 MiB / 768 MiB | `MemoryHigh` / `MemoryMax` in systemd |
 
 The application checks the attempt and stage deadline before and after each
 network operation and at each PDF page/image boundary. A synchronous parser

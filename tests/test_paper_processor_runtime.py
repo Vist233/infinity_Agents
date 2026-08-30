@@ -65,6 +65,9 @@ def test_runtime_limits_are_non_secret_and_fail_closed_for_invalid_environment(m
     assert fallback.attempt_timeout_seconds == 240
     assert fallback.max_resident_memory_bytes == 192 * 1024 * 1024
 
+    monkeypatch.setenv("PAPER_PROCESSOR_MAX_RESIDENT_MEMORY_BYTES", str(512 * 1024 * 1024))
+    assert ProcessorRuntimeLimits.from_environment().max_resident_memory_bytes == 512 * 1024 * 1024
+
 
 def test_processing_deadline_reports_stage_timeout_before_attempt_timeout():
     now = [100.0]
