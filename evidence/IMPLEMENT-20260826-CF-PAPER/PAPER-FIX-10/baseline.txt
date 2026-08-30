@@ -1,0 +1,5 @@
+Baseline branch: cloudflare-deploy
+Baseline commit: 522a835 fix: bound paper download timeout retry
+
+No deployment, push, remote D1 operation, R2 write, Processor change, or
+browser action was performed by this local correction card.

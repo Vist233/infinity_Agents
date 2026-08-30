@@ -683,10 +683,12 @@ and moves that exact failed resource back to `requested`; it retains all prior
 attempts, so the next Processor claim receives the next fencing epoch.
 
 The transition requires same session and user ownership, the exact timeout
-code, no active attempt, and exactly one historical Processor attempt.  It
-never applies to parse/security/cancellation failures and never creates an
-unbounded browser-driven loop.  A second terminal attempt stays failed and is
-reported as such.
+code, no active attempt, and no previous bounded-retry audit fact.  Lease
+expiry history does not consume the retry: an OOM/restart recovery can leave a
+valid expired fenced attempt before the first true timeout.  It never applies
+to parse/security/cancellation failures and never creates an unbounded
+browser-driven loop.  A second terminal timeout stays failed and is reported
+as such.
 
 The Paper Workspace is complete only when a real authenticated browser can:
 

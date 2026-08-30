@@ -747,7 +747,9 @@ export async function findOwnedPaperResourceBySource(
  * Other terminal outcomes deliberately remain terminal: retrying malformed,
  * unsupported, cancelled, or deleted resources would hide a real failure or
  * bypass the explicit lifecycle contract.  Attempt history is retained for
- * forensic and fencing purposes; the next Processor claim derives epoch + 1.
+ * forensic and fencing purposes; it is intentionally not the retry budget,
+ * because expired fenced leases can precede the first terminal timeout.  The
+ * immutable retry audit fact is the single-retry authority.
  */
 export async function retryTimedOutOwnedPaperResource(
   env: Env,
@@ -767,7 +769,13 @@ export async function retryTimedOutOwnedPaperResource(
        WHERE active.resource_id = r.resource_id
          AND active.status IN ('claimed', 'downloading', 'extracting', 'uploading')
     )
-    AND (SELECT COUNT(1) FROM paper_processing_attempts prior WHERE prior.resource_id = r.resource_id) = 1`;
+    AND NOT EXISTS (
+      SELECT 1 FROM paper_resource_audit_events prior_retry
+       WHERE prior_retry.resource_id = r.resource_id
+         AND prior_retry.stage = 'materialize'
+         AND prior_retry.outcome = 'succeeded'
+         AND prior_retry.metadata_json = ?5
+    )`;
   const results = await env.DB.batch([
     env.DB.prepare(
       `INSERT OR IGNORE INTO paper_resource_audit_events
@@ -788,8 +796,7 @@ export async function retryTimedOutOwnedPaperResource(
             SELECT 1 FROM paper_processing_attempts active
              WHERE active.resource_id = paper_resources.resource_id
                AND active.status IN ('claimed', 'downloading', 'extracting', 'uploading')
-          )
-          AND (SELECT COUNT(1) FROM paper_processing_attempts prior WHERE prior.resource_id = paper_resources.resource_id) = 1`,
+          )`,
     ).bind(input.resourceId, input.sessionId, input.userId, eventId, now),
   ]);
   if ((results[1]?.meta?.changes ?? 0) !== 1) return null;

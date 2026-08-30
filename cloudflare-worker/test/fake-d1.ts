@@ -781,9 +781,10 @@ class FakeStatement {
       const session = resource ? this.db.chatSessions.get(resource.session_id) : undefined;
       const attempts = resource ? [...this.db.paperProcessingAttempts.values()].filter((attempt) => attempt.resource_id === resource.resource_id) : [];
       const hasActive = attempts.some((attempt) => ["claimed", "downloading", "extracting", "uploading"].includes(attempt.status));
+      const hasPriorRetry = this.db.paperAuditEvents.some((event) => event.resource_id === resourceId && event.stage === "materialize" && event.outcome === "succeeded" && event.metadata_json === metadataJson);
       const eligible = resource && session && resource.session_id === sessionId && resource.user_id === userId && session.user_id === userId
         && resource.status === "failed" && resource.error_code === "PAPER_PROCESSOR_DOWNLOAD_TIMEOUT"
-        && ["arxiv", "pubmed_pmc"].includes(resource.source_kind) && attempts.length === 1 && !hasActive;
+        && ["arxiv", "pubmed_pmc"].includes(resource.source_kind) && !hasPriorRetry && !hasActive;
       if (!eligible || this.db.paperAuditEvents.some((event) => event.event_id === eventId)) return { meta: { changes: 0 } };
       this.db.paperAuditEvents.push({ event_id: eventId, resource_id: resourceId, attempt_id: null, stage: "materialize", outcome: "succeeded", error_code: null, metadata_json: metadataJson, created_at: createdAt });
       return { meta: { changes: 1 } };
@@ -857,7 +858,7 @@ class FakeStatement {
       const audited = this.db.paperAuditEvents.some((event) => event.event_id === eventId);
       if (!resource || !session || !audited || resource.session_id !== sessionId || resource.user_id !== userId || session.user_id !== userId
         || resource.status !== "failed" || resource.error_code !== "PAPER_PROCESSOR_DOWNLOAD_TIMEOUT"
-        || !["arxiv", "pubmed_pmc"].includes(resource.source_kind) || attempts.length !== 1 || hasActive) return { meta: { changes: 0 } };
+        || !["arxiv", "pubmed_pmc"].includes(resource.source_kind) || hasActive) return { meta: { changes: 0 } };
       resource.status = "requested";
       resource.error_code = null;
       resource.error_message_safe = null;

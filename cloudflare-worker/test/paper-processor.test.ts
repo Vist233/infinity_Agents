@@ -221,11 +221,15 @@ describe("dedicated Paper Processor control protocol", () => {
     expect([...db.paperProcessingAttempts.values()].filter((attempt) => attempt.resource_id === firstGrant.resource_id)[0].status).toBe("claimed");
   });
 
-  it("issues the next fenced epoch after the one permitted download-timeout retry", async () => {
+  it("allows one download-timeout retry after expired history and issues the next fenced epoch", async () => {
     const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SOURCE_IP: "203.0.113.10", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
     db.seedChatSession("s1", "alice");
     const resource = await createPaperResource(env, { resource_id: "resource-timeout-retry", session_id: "s1", user_id: "alice", source_kind: "arxiv", source_ref: "retry-me", canonical_ref: "retry-me", title: "Retry" });
     await linkPaperResource(env, "s1", resource.resource_id, "alice", "read");
+    db.paperProcessingAttempts.set("attempt-expired-1", {
+      attempt_id: "attempt-expired-1", resource_id: resource.resource_id, processor_id: "processor-1", lease_token_hash: "c".repeat(64), fencing_epoch: 1,
+      status: "expired", started_at: 1, lease_expires_at: 2, finished_at: 2, error_code: "PAPER_PROCESSOR_LEASE_EXPIRED", error_message_safe: "safe",
+    });
     const session = await connect(env, "instance-timeout-retry");
     const firstPoll = await handlePaperProcessorApi(request("/api/paper-processor/poll", { method: "POST", headers: processorHeaders(session.processor_session_token), body: "{}" }), env);
     const first = await firstPoll!.json() as { attempt_id: string; resource_id: string; lease_token: string; fencing_epoch: number };
@@ -239,7 +243,8 @@ describe("dedicated Paper Processor control protocol", () => {
     expect(retried).toMatchObject({ resource_id: resource.resource_id, status: "requested" });
     const secondPoll = await handlePaperProcessorApi(request("/api/paper-processor/poll", { method: "POST", headers: processorHeaders(session.processor_session_token), body: "{}" }), env);
     const second = await secondPoll!.json() as { attempt_id: string; resource_id: string; fencing_epoch: number };
-    expect(second).toMatchObject({ resource_id: resource.resource_id, fencing_epoch: 2 });
+    expect(first.fencing_epoch).toBe(2);
+    expect(second).toMatchObject({ resource_id: resource.resource_id, fencing_epoch: 3 });
     expect(second.attempt_id).not.toBe(first.attempt_id);
     expect(db.paperProcessingAttempts.get(first.attempt_id)?.status).toBe("failed");
   });

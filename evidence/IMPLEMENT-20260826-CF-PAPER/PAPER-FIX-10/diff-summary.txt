@@ -1,0 +1,4 @@
+Replaced the retry budget's total-attempt gate with a deterministic prior retry
+audit-fact gate. This preserves all expired/failed attempt history while
+allowing the first real download-timeout retry and still rejecting every later
+retry. No schema migration is needed.

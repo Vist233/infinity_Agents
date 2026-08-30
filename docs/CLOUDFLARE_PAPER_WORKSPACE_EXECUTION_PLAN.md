@@ -1050,18 +1050,19 @@ malformed, unsupported, cancelled, deleted, and already-retried resources
 remain terminal.
 
 - `materialize_paper` first reuses the session/user/source resource as before.
-  Only when that resource is an arXiv or PMCID source with exactly one recorded
-  Processor attempt and the bounded download-timeout code may it return to
-  `requested`.
+  Only when that resource is an arXiv or PMCID source with the bounded
+  download-timeout code and no prior retry audit fact may it return to
+  `requested`. Expired fenced attempts do not consume this retry budget.
 - The retry audit event and the state transition are one D1 batch.  Historical
   attempts are immutable; the next Processor claim therefore obtains the next
   fencing epoch without deleting or overwriting prior failure evidence.
 - A user from another account, another session, a non-timeout error, an active
-  attempt, or a second terminal attempt cannot trigger the transition.
+  attempt, or a prior retry audit fact cannot trigger the transition.
 
 **Focused positive tests:** same-owner materialization clears only safe timeout
 metadata, records the retry audit fact, and a fresh Processor poll obtains
-fencing epoch 2.
+  the next fencing epoch, including epoch 3 when an expired attempt preceded
+  the first terminal timeout.
 
 **Focused negative tests:** another user cannot requeue the resource; malformed
 PDF remains failed; a second timeout does not requeue; and no duplicate active
