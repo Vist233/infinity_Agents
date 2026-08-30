@@ -1,0 +1,10 @@
+# PAPER-FIX-06 baseline and observed production fact
+
+- Card start branch: `cloudflare-deploy`.
+- Card start worktree: clean.
+- Baseline HEAD: `f755d99d6f9997b4035e886b36ca840ab19ba097` (`fix: enforce paper materialization orchestration`).
+- Reported production observation: the F5 release at `cdb28f23@100` returned `found no eligible paper...` after fresh arXiv search. The selector requires `availability.kind=materializable`, but the fresh search record lacked `availability`.
+- Root-cause boundary: the fresh `searchPaper` path deduped and cached/returned source records without applying the existing cache-record normalizer. The failure is a search-result metadata contract gap, not a Processor, WAF, provider, deployment, or browser-control failure.
+- Existing safety contract preserved: numeric PubMed results are not PMCID results and must remain abstract-only; only explicit `pubmed:PMC<PMCID>` is eligible for materialization.
+- No production, Cloudflare, D1/R2, Processor/zhangbot, WAF/Secret/Redis, browser-session, or GitHub write was performed for this card.
+- No credential, token, cookie, provider payload secret, or environment-file value was read or recorded.

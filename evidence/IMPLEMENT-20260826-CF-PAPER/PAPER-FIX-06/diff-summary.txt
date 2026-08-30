@@ -1,0 +1,24 @@
+# PAPER-FIX-06 diff summary
+
+## Root cause
+
+The fresh `searchPaper` branch used `dedupe(...).slice(...)` directly, then cached and returned those records. The cache-hit branch already normalized records, but the fresh branch did not. A fresh canonical arXiv record could therefore omit `availability`, and the strict PAPER-FIX-05 materialization selector correctly rejected it as not explicitly materializable.
+
+## Implementation
+
+- Renamed and exported the boundary helper as `normalizeSearchPaperRecord` to make the contract explicit and testable.
+- Applied that helper to both cached records and fresh deduplicated records before cache persistence and model response serialization.
+- For non-PubMed search records, an absent availability field receives only the materializable metadata default; an existing value is preserved.
+- For PubMed, any ref that is not an explicit `pubmed:PMC<PMCID>` receives the stable `PUBMED_PMC_NOT_RESOLVED` abstract-only result. The code never derives a PMCID from a numeric PMID.
+- Updated the authoritative Design and Execution Plan with the fresh/cache normalization boundary, the F5 root cause, test contract, and rollback/non-deployment scope.
+
+## Regression coverage
+
+- A sparse fresh-shaped canonical arXiv record becomes materializable.
+- A sparse numeric PubMed record remains abstract-only and is not rewritten as `pubmed:PMC111`.
+- A real fresh search response exposes materializable arXiv availability and abstract-only PubMed availability.
+- Existing no-resource PubMed materialization, ownership, continuation, and orchestration tests remain green.
+
+## Compatibility and rollback
+
+The response shape is made more complete for records that previously lacked availability; canonical refs, authorization, and materialization validation are unchanged. Cached legacy records continue to normalize on read. Reverting the local commit restores the previous behavior without changing D1/R2/Processor state or production configuration.

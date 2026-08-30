@@ -211,7 +211,14 @@ function dedupe(records: PaperRecord[]): PaperRecord[] {
   return out;
 }
 
-function normalizeCachedPaperRecord(record: PaperRecord): PaperRecord {
+/**
+ * Normalize records at the search boundary before they are cached or returned.
+ *
+ * Search results may come from a newly fetched source or from the legacy cache,
+ * so both paths must apply the same safety contract. A PubMed PMID is never
+ * upgraded to a PMCID; only an explicit canonical PMCID can be materialized.
+ */
+export function normalizeSearchPaperRecord(record: PaperRecord): PaperRecord {
   const paperRef = record.paper_ref ?? record.ref;
   if (record.source === "pubmed" && !/^pubmed:PMC\d+$/i.test(paperRef)) {
     return { ...record, paper_ref: paperRef, availability: { ...PUBMED_PMC_NOT_RESOLVED } };
@@ -238,14 +245,14 @@ export async function searchPaper(
   let records: PaperRecord[];
   const cached = await cacheGet(env, cacheKey);
   if (cached) {
-    records = (JSON.parse(cached) as PaperRecord[]).map(normalizeCachedPaperRecord);
+    records = (JSON.parse(cached) as PaperRecord[]).map(normalizeSearchPaperRecord);
   } else {
     const half = Math.ceil(n / 2);
     const [arxiv, pubmed] = await Promise.all([
       searchArxiv(q, n),
       searchPubmed(q, half)
     ]);
-    records = dedupe([...arxiv, ...pubmed]).slice(0, n);
+    records = dedupe([...arxiv, ...pubmed]).slice(0, n).map(normalizeSearchPaperRecord);
     await cacheSet(env, cacheKey, JSON.stringify(records), PAPER_CACHE_TTL_SECONDS);
   }
 

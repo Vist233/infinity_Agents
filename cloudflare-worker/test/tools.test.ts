@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { createPaperResource, linkPaperResource } from "../src/db";
-import { analyzePaperImage, materializePaper, readPaper, runTool, searchPaper } from "../src/tools";
+import {
+  analyzePaperImage,
+  materializePaper,
+  normalizeSearchPaperRecord,
+  readPaper,
+  runTool,
+  searchPaper,
+  type PaperRecord,
+} from "../src/tools";
 import { makeEnv } from "./fake-d1";
 
 const ARXIV_XML = `<?xml version="1.0"?>
@@ -68,6 +76,36 @@ describe("read_paper authorization gate", () => {
 });
 
 describe("search_paper + read_paper flow", () => {
+  it("normalizes sparse fresh records without making a PMID look like a PMCID", () => {
+    const arxiv = normalizeSearchPaperRecord({
+      source: "arxiv",
+      ref: "arxiv:2401.00001",
+      title: "Attention Is Somewhat All You Need",
+      authors: [],
+      url: "https://arxiv.org/abs/2401.00001",
+    } as unknown as PaperRecord);
+    expect(arxiv).toMatchObject({
+      paper_ref: "arxiv:2401.00001",
+      availability: { kind: "materializable" },
+    });
+
+    const pubmed = normalizeSearchPaperRecord({
+      source: "pubmed",
+      ref: "pubmed:111",
+      title: "A PubMed Paper",
+      authors: [],
+      url: "https://pubmed.ncbi.nlm.nih.gov/111/",
+    } as unknown as PaperRecord);
+    expect(pubmed).toMatchObject({
+      paper_ref: "pubmed:111",
+      availability: {
+        kind: "abstract_only",
+        reason_code: "PUBMED_PMC_NOT_RESOLVED",
+      },
+    });
+    expect(pubmed.paper_ref).not.toBe("pubmed:PMC111");
+  });
+
   it("surfaces papers, authorizes them, and then allows reading", async () => {
     const { env, db } = makeEnv();
     installFetchMock();
@@ -76,6 +114,12 @@ describe("search_paper + read_paper flow", () => {
     const refs = searchOut.map((r: { ref: string }) => r.ref);
     expect(refs).toContain("arxiv:2401.00001");
     expect(refs).toContain("pubmed:111");
+    expect(searchOut.find((r: { ref: string }) => r.ref === "arxiv:2401.00001")).toMatchObject({
+      availability: { kind: "materializable" },
+    });
+    expect(searchOut.find((r: { ref: string }) => r.ref === "pubmed:111")).toMatchObject({
+      availability: { kind: "abstract_only", reason_code: "PUBMED_PMC_NOT_RESOLVED" },
+    });
 
     // Both refs are now authorized for the session.
     expect(db.paperAuth.has("s1|arxiv:2401.00001")).toBe(true);

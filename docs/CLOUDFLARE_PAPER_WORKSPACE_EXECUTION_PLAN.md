@@ -909,6 +909,60 @@ reported Transformer-attention request creates `paper_resource`/
 continuation/progress after search, followed by the existing Processor and
 readiness acceptance.  This card does not claim PAPER-10 completion.
 
+### PAPER-FIX-06 — Fresh paper search availability normalization
+
+**Outcome:** a trusted canonical arXiv result from a fresh `search_paper`
+request is materializable even when an upstream/parser record omits its
+optional availability field.  The same normalization is applied to cached
+records, so the provider and the bounded materialization recovery path see
+one stable contract.  PubMed remains fail-closed: a numeric PMID or any
+record without an explicit eligible `pubmed:PMC<PMCID>` remains
+`abstract_only` and is never rewritten into a PMCID.
+
+**Root-cause evidence:** the F5 production request reached the materialization
+selector with fresh arXiv records lacking `availability`.  The selector
+correctly requires `availability.kind = materializable`, so it reported no
+eligible paper even though the canonical arXiv ref was trusted.  The
+missing-field path was not normalized before fresh results were cached and
+returned; this was not a Processor, WAF, provider, or browser failure.
+
+- `normalizeSearchPaperRecord` is the single search-boundary normalizer for
+  fresh and cached records.  It fills the materializable default only for
+  non-PubMed records and preserves an existing availability value.
+- For `source=pubmed`, the normalizer checks the canonical PMCID grammar and
+  otherwise emits the stable `PUBMED_PMC_NOT_RESOLVED` abstract-only result.
+  It never derives `pubmed:PMC...` from a numeric PMID.
+- The normalized list is the value both persisted in the search cache and
+  returned to the model.  Materialization still performs its independent
+  canonical-ref, session, user, and authorization checks.
+
+**Focused positive tests:** a sparse fresh-shaped canonical arXiv record is
+  normalized to `availability.kind=materializable`; a real fresh arXiv search
+  response exposes that field; and the resulting canonical ref remains
+  eligible for the existing materialization flow.
+
+**Focused negative tests:** a sparse numeric PubMed record is normalized to
+  `abstract_only` with `PUBMED_PMC_NOT_RESOLVED`, never to
+  `pubmed:PMC<PMID>`; the real fresh PubMed result retains that status; and
+  existing materialization tests confirm that it creates no resource.
+
+**Local pass gate:** focused tools/chat tests; `cd cloudflare-worker && npm
+run check && npm test`; affected Processor pytest and frontend typecheck,
+lint, unit, and E2E checks; then `git diff --check` and a changed-scope secret
+scan.  This card changes no schema or runtime configuration and authorizes no
+deployment, migration, Cloudflare/zhangbot/Processor/WAF/Secret/Redis write,
+browser claim, or Git push.
+
+**Rollback:** revert the local review commit.  Existing search cache entries
+remain valid legacy data and are normalized on read; no D1 resource, lease,
+continuation, R2 object, Processor state, or external configuration is
+modified by this card.
+
+**Next exact action:** prepare a versioned PAPER-10 release containing this
+search-boundary fix, then repeat the authenticated F5 path and verify that a
+fresh arXiv candidate creates the durable resource/continuation and proceeds
+through Processor readiness.  This card does not claim PAPER-10 completion.
+
 ## 4. Completion checkpoint template
 
 Every card checkpoint must answer these fields explicitly:

@@ -1,0 +1,27 @@
+# PAPER-FIX-06 tests and exit codes
+
+All commands ran against the local worktree. No production request, browser session, remote migration, or external write was used.
+
+## Test-first evidence
+
+- `cd cloudflare-worker && npm test -- --run test/tools.test.ts`: exit `1` before implementation; the new sparse-record regression failed with `normalizeSearchPaperRecord is not a function` while 8 existing tests passed. This is the expected red test for the new normalization boundary.
+
+## Focused and mandatory Edge checks
+
+- `cd cloudflare-worker && npm test -- --run test/tools.test.ts test/chat.test.ts`: exit `0`; 2 files / 28 tests passed. This covers sparse fresh arXiv normalization, PubMed PMID negative behavior, the real fresh search response, and existing orchestration behavior.
+- `cd cloudflare-worker && npm run check && npm test`: exit `0`; TypeScript check exit `0`; 26 files / 152 tests passed.
+
+## Affected Processor and frontend checks
+
+- `zsh -lc 'eval "$(pyenv init - zsh)" && pyenv shell Agent && pytest -q tests/test_paper_processor_runtime.py tests/test_paper_processor_ingestion.py'`: exit `0`; 12 passed. A non-fatal pyenv shim rehash warning was printed; no Processor source was changed.
+- `cd frontend && npm run typecheck`: exit `0`.
+- `cd frontend && npm run lint`: exit `0`.
+- `cd frontend && npm run test:unit`: exit `0`; 16 files / 78 tests passed. Existing non-fatal React `act(...)` warnings were printed.
+- `cd frontend && npm run test:e2e`: first local sandbox attempt exit `1` because the test web server could not listen on `127.0.0.1:3000` (`EPERM`); no test assertion ran.
+- `cd frontend && npm run test:e2e`: rerun with the approved restricted local server permission exit `0`; 15/15 passed. The test server printed expected local backend `/api/tasks` proxy `ECONNREFUSED` warnings; no E2E failed.
+
+## Integrity checks
+
+- `git diff --check`: exit `0` before evidence staging.
+- Changed-scope raw secret scan over the four implementation/test/document files: exit `1` with no private-key header, credential-bearing URL, long Bearer value, AWS access-key shape, or GitHub token match; normalized result `PASS`.
+- No required check remains failed after the E2E environment retry. The initial EPERM is retained as an environment fact, not suppressed.

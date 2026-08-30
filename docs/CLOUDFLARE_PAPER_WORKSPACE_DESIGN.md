@@ -310,6 +310,14 @@ The normal path uses immutable canonical references returned by `search_paper`:
   results remain abstract-only with their stable availability reason;
 - user upload -> a private, previously validated R2 upload object.
 
+Every `search_paper` result crosses one normalization boundary before it is
+returned to the model or written to the cache.  The boundary is applied to
+both fresh upstream records and legacy cached records: a canonical arXiv ref
+gets `availability.kind=materializable` when that field is absent, while a
+PubMed record without an explicit `pubmed:PMC<PMCID>` remains
+`abstract_only`.  This is a metadata default only; it never rewrites a PMID
+into a PMCID or permits an untrusted source/ref to reach materialization.
+
 Do not make arbitrary web URLs a default Agent tool argument.  If
 `approved_url` is later required, it needs a separate security card: HTTPS only,
 no credentials in URLs, DNS resolution and every redirect checked against
