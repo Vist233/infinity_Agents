@@ -9,10 +9,10 @@ EnvironmentFile=/home/zhangyvjing/.config/infinity-paper-processor/processor.env
 Environment=PAPER_PROCESSOR_EDGE_URL=https://infinity.zhangyvjing.com
 Environment=PAPER_PROCESSOR_ID=paper-processor-zhangbot-v1
 Environment=PAPER_PROCESSOR_WORK_ROOT=%h/.local/state/infinity-paper-processor/work
-Environment=PAPER_PROCESSOR_ATTEMPT_TIMEOUT_SECONDS=240
+Environment=PAPER_PROCESSOR_ATTEMPT_TIMEOUT_SECONDS=360
 Environment=PAPER_PROCESSOR_DOWNLOAD_TIMEOUT_SECONDS=90
 Environment=PAPER_PROCESSOR_EXTRACTION_TIMEOUT_SECONDS=120
-Environment=PAPER_PROCESSOR_UPLOAD_TIMEOUT_SECONDS=150
+Environment=PAPER_PROCESSOR_UPLOAD_TIMEOUT_SECONDS=240
 Environment=PAPER_PROCESSOR_HEARTBEAT_INTERVAL_SECONDS=30
 Environment=PAPER_PROCESSOR_MAX_RESIDENT_MEMORY_BYTES=536870912
 Environment=PYTHONPATH=%h/.local/share/infinity-paper-processor/current

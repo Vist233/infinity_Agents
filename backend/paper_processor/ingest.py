@@ -124,7 +124,7 @@ class ProcessorRuntimeLimits:
                 return default
             return value if minimum <= value <= maximum else default
 
-        attempt = read_float("PAPER_PROCESSOR_ATTEMPT_TIMEOUT_SECONDS", defaults.attempt_timeout_seconds, 240.0)
+        attempt = read_float("PAPER_PROCESSOR_ATTEMPT_TIMEOUT_SECONDS", defaults.attempt_timeout_seconds, 360.0)
         download = read_float("PAPER_PROCESSOR_DOWNLOAD_TIMEOUT_SECONDS", min(defaults.download_timeout_seconds, attempt), attempt)
         extraction = read_float("PAPER_PROCESSOR_EXTRACTION_TIMEOUT_SECONDS", min(defaults.extraction_timeout_seconds, attempt), attempt)
         upload = read_float("PAPER_PROCESSOR_UPLOAD_TIMEOUT_SECONDS", min(defaults.upload_timeout_seconds, attempt), attempt)
