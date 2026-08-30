@@ -1,0 +1,5 @@
+Baseline commit: 389c8fd06ec5151e4be018a91deaddcfb9d6cb80
+
+Production diagnosis: a real resource remained `downloading` with a `claimed`
+attempt whose lease had expired; the replacement Processor correctly returned
+`poll_empty` because the old attempt was never transitioned to `expired`.

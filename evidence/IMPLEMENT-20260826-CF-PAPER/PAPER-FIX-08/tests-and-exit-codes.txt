@@ -1,0 +1,4 @@
+# PAPER-FIX-08 tests and exit codes
+
+- `cd cloudflare-worker && npm test -- --run test/paper-processor.test.ts`: exit 0; 9 tests passed, including expired-lease reclamation, fencing, and live-lease non-reclamation.
+- `cd cloudflare-worker && npm run check && npm test`: exit 0; 26 files / 154 tests passed.

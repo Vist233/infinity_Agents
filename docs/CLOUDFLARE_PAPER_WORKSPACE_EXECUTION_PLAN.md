@@ -1031,6 +1031,16 @@ PAPER-10 production acceptance.
 
 ## 4. Completion checkpoint template
 
+### PAPER-FIX-08 — Expired Processor lease recovery
+
+- Reclaim an expired active Paper Processor lease before selecting work for a
+  new poll; mark the old attempt `expired`, requeue only its non-terminal
+  resource, and issue a new fenced epoch.
+- Verify an old grant cannot renew after recovery and a live grant cannot be
+  reclaimed or duplicated.
+- Required gate: Worker typecheck plus full Worker test suite.  Production
+  deployment and real browser retry remain root-coordinator actions.
+
 Every card checkpoint must answer these fields explicitly:
 
 ```markdown

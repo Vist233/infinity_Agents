@@ -174,6 +174,53 @@ describe("dedicated Paper Processor control protocol", () => {
     expect(await broad!.json()).toMatchObject({ error: { code: "PAPER_PROCESSOR_SOURCE_FORBIDDEN" } });
   });
 
+  it("reclaims an expired active attempt before claiming the next epoch and fences the old grant", async () => {
+    const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SOURCE_IP: "203.0.113.10", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
+    db.seedChatSession("s1", "alice");
+    const resource = await createPaperResource(env, { resource_id: "resource-recover", session_id: "s1", user_id: "alice", source_kind: "arxiv", source_ref: "recover-me", canonical_ref: "recover-me", title: "Recover" });
+    await linkPaperResource(env, "s1", resource.resource_id, "alice", "read");
+    const session = await connect(env, "instance-recover");
+
+    const firstPoll = await handlePaperProcessorApi(request("/api/paper-processor/poll", { method: "POST", headers: processorHeaders(session.processor_session_token), body: "{}" }), env);
+    const firstGrant = await firstPoll!.json() as { attempt_id: string; resource_id: string; lease_token: string; fencing_epoch: number };
+    const firstAttempt = db.paperProcessingAttempts.get(firstGrant.attempt_id)!;
+    firstAttempt.lease_expires_at = 1;
+
+    const reclaimedPoll = await handlePaperProcessorApi(request("/api/paper-processor/poll", { method: "POST", headers: processorHeaders(session.processor_session_token), body: "{}" }), env);
+    expect(reclaimedPoll?.status).toBe(200);
+    const secondGrant = await reclaimedPoll!.json() as { attempt_id: string; resource_id: string; lease_token: string; fencing_epoch: number };
+    expect(secondGrant).toMatchObject({ resource_id: resource.resource_id, fencing_epoch: 2, attempt_id: expect.any(String) });
+    expect(secondGrant.attempt_id).not.toBe(firstGrant.attempt_id);
+    expect(firstAttempt.status).toBe("expired");
+    expect(firstAttempt.error_code).toBe("PAPER_PROCESSOR_LEASE_EXPIRED");
+    expect(firstAttempt.finished_at).toEqual(expect.any(Number));
+    expect(db.paperResources.get(resource.resource_id)?.status).toBe("downloading");
+    expect([...db.paperProcessingAttempts.values()].filter((attempt) => ["claimed", "downloading", "extracting", "uploading"].includes(attempt.status)).map((attempt) => attempt.resource_id)).toEqual([resource.resource_id]);
+
+    const staleRenew = await handlePaperProcessorApi(controlRequest(session.processor_session_token, "renew", { attempt_id: firstGrant.attempt_id, resource_id: firstGrant.resource_id, fencing_epoch: firstGrant.fencing_epoch }, firstGrant.lease_token), env);
+    expect(staleRenew?.status).toBe(409);
+
+    const duplicatePoll = await handlePaperProcessorApi(request("/api/paper-processor/poll", { method: "POST", headers: processorHeaders(session.processor_session_token), body: "{}" }), env);
+    expect(await duplicatePoll!.json()).toEqual({ resource: null });
+    expect(firstAttempt.status).toBe("expired");
+  });
+
+  it("does not reclaim a live lease or create a duplicate active attempt", async () => {
+    const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SOURCE_IP: "203.0.113.10", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
+    db.seedChatSession("s1", "alice");
+    const resource = await createPaperResource(env, { resource_id: "resource-live", session_id: "s1", user_id: "alice", source_kind: "arxiv", source_ref: "live-me", canonical_ref: "live-me", title: "Live" });
+    await linkPaperResource(env, "s1", resource.resource_id, "alice", "read");
+    const session = await connect(env, "instance-live");
+
+    const firstPoll = await handlePaperProcessorApi(request("/api/paper-processor/poll", { method: "POST", headers: processorHeaders(session.processor_session_token), body: "{}" }), env);
+    const firstGrant = await firstPoll!.json() as { attempt_id: string; resource_id: string };
+    const duplicatePoll = await handlePaperProcessorApi(request("/api/paper-processor/poll", { method: "POST", headers: processorHeaders(session.processor_session_token), body: "{}" }), env);
+    expect(await duplicatePoll!.json()).toEqual({ resource: null });
+    expect(db.paperResources.get(resource.resource_id)?.status).toBe("downloading");
+    expect([...db.paperProcessingAttempts.values()].filter((attempt) => attempt.resource_id === firstGrant.resource_id)).toHaveLength(1);
+    expect([...db.paperProcessingAttempts.values()].filter((attempt) => attempt.resource_id === firstGrant.resource_id)[0].status).toBe("claimed");
+  });
+
   it("cancels an active attempt once and rejects the expired session after restart", async () => {
     const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SOURCE_IP: "203.0.113.10", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
     db.seedChatSession("s1", "alice");

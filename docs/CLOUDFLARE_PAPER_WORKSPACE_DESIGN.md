@@ -663,6 +663,15 @@ explicit.
 
 ## 9. Definition of done
 
+### 9.1 Processor lease recovery
+
+Before every server-selected Processor poll, the Worker atomically retires any
+expired active Processor attempt with the bounded
+`PAPER_PROCESSOR_LEASE_EXPIRED` code and returns its non-terminal resource to
+`requested`.  A new claim receives the next fencing epoch.  This recovery is
+driven solely by D1 lease time and never by a browser retry or manual database
+edit; a live lease is never reclaimed.
+
 The Paper Workspace is complete only when a real authenticated browser can:
 
 1. search an open paper;

@@ -1,0 +1,4 @@
+Changed Worker D1 recovery logic, its fake-D1 protocol model, Processor route
+regressions, and the Paper design/execution documentation.  The implementation
+does not add a migration or weaken ownership, fencing, or the single-active
+attempt index.

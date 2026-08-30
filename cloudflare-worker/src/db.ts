@@ -1327,12 +1327,50 @@ interface PaperClaimCandidate extends Pick<PaperResourceRow, "resource_id" | "so
   fencing_epoch: number;
 }
 
+/**
+ * A Processor can be killed after claiming a resource (for example by its
+ * cgroup memory limit).  Lease expiry is the authority in that case: retire
+ * the fenced attempt first, then make only its non-terminal resource
+ * claimable again.  This runs before every server-selected poll, so recovery
+ * never relies on a browser retry or manual D1 intervention.
+ */
+async function recoverExpiredPaperProcessingAttempts(env: Env, now: number): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE paper_processing_attempts
+          SET status = 'expired', finished_at = ?1,
+              error_code = 'PAPER_PROCESSOR_LEASE_EXPIRED',
+              error_message_safe = 'Paper Processor lease expired before completion'
+        WHERE status IN ('claimed', 'downloading', 'extracting', 'uploading')
+          AND lease_expires_at <= ?1`,
+    ).bind(now),
+    env.DB.prepare(
+      `UPDATE paper_resources
+          SET status = 'requested', updated_at = ?1
+        WHERE status IN ('downloading', 'extracting', 'uploading')
+          AND EXISTS (
+            SELECT 1 FROM paper_processing_attempts a
+             WHERE a.resource_id = paper_resources.resource_id
+               AND a.status = 'expired'
+               AND a.finished_at = ?1
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM paper_processing_attempts a
+             WHERE a.resource_id = paper_resources.resource_id
+               AND a.status IN ('claimed', 'downloading', 'extracting', 'uploading')
+               AND a.lease_expires_at > ?1
+          )`,
+    ).bind(now),
+  ]);
+}
+
 export async function claimPaperResource(
   env: Env,
   input: PaperProcessorClaimInput,
   leaseToken: string,
 ): Promise<PaperProcessorGrant | null> {
   if (!input.processorId || !input.attemptId || !/^[0-9a-f]{64}$/.test(input.leaseTokenHash)) return null;
+  await recoverExpiredPaperProcessingAttempts(env, input.now);
   const candidate = await env.DB.prepare(
     `SELECT r.resource_id, r.source_kind, r.source_ref, r.canonical_ref,
             COALESCE(MAX(a.fencing_epoch), 0) + 1 AS fencing_epoch

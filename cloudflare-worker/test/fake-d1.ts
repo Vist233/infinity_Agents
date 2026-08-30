@@ -863,6 +863,35 @@ class FakeStatement {
       }
       return { meta: { changes } };
     }
+    if (sql.includes("UPDATE paper_processing_attempts") && sql.includes("PAPER_PROCESSOR_LEASE_EXPIRED")) {
+      const [now] = this.args as [number];
+      let changes = 0;
+      for (const attempt of this.db.paperProcessingAttempts.values()) {
+        if (["claimed", "downloading", "extracting", "uploading"].includes(attempt.status) && attempt.lease_expires_at <= now) {
+          attempt.status = "expired";
+          attempt.finished_at = now;
+          attempt.error_code = "PAPER_PROCESSOR_LEASE_EXPIRED";
+          attempt.error_message_safe = "Paper Processor lease expired before completion";
+          changes += 1;
+        }
+      }
+      return { meta: { changes } };
+    }
+    if (sql.includes("UPDATE paper_resources") && sql.includes("status = 'requested'") && sql.includes("a.status = 'expired'")) {
+      const [now] = this.args as [number];
+      let changes = 0;
+      for (const resource of this.db.paperResources.values()) {
+        const attempts = [...this.db.paperProcessingAttempts.values()].filter((attempt) => attempt.resource_id === resource.resource_id);
+        const expiredThisRun = attempts.some((attempt) => attempt.status === "expired" && attempt.finished_at === now);
+        const live = attempts.some((attempt) => ["claimed", "downloading", "extracting", "uploading"].includes(attempt.status) && attempt.lease_expires_at > now);
+        if (["downloading", "extracting", "uploading"].includes(resource.status) && expiredThisRun && !live) {
+          resource.status = "requested";
+          resource.updated_at = now;
+          changes += 1;
+        }
+      }
+      return { meta: { changes } };
+    }
     if (sql.includes("INSERT INTO paper_processor_sessions")) {
       const [sessionId, processorId, instanceId, tokenHash, createdAt, lastSeenAt, expiresAt, revokedAt] = this.args as [string, string, string, string, number, number, number, number | null];
       this.db.paperProcessorSessions.set(sessionId, { processor_session_id: sessionId, processor_id: processorId, instance_id: instanceId, session_token_hash: tokenHash, created_at: createdAt, last_seen_at: lastSeenAt, expires_at: expiresAt, revoked_at: revokedAt });
