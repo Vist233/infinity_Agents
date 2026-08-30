@@ -26,6 +26,7 @@ const SESSION_TTL_SECONDS = 15 * 60;
 const LEASE_SECONDS = 5 * 60;
 const MAX_ID_BYTES = 255;
 const MAX_MANIFEST_BYTES = 256 * 1024;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_PDF_BYTES = 64 * 1024 * 1024;
 const MAX_UPLOAD_ENVELOPE_BYTES = 8 * 1024;
 const OBJECT_KINDS = new Set<PaperObjectKind>(["source_pdf", "text_pages", "text_manifest", "image", "image_manifest"]);
@@ -289,7 +290,10 @@ async function upload(request: Request, env: Env, context: SessionContext): Prom
   if (lease instanceof Response) return lease;
   const authorized = await authorizeAttempt(request, env, context, envelope);
   if (authorized instanceof Response) return authorized;
-  const bytes = await readBoundedBody(request, kind === "source_pdf" ? MAX_PDF_BYTES : MAX_MANIFEST_BYTES);
+  const bytes = await readBoundedBody(
+    request,
+    kind === "source_pdf" ? MAX_PDF_BYTES : kind === "image" ? MAX_IMAGE_BYTES : MAX_MANIFEST_BYTES,
+  );
   if (bytes instanceof Response) return bytes;
   const expectedHash = request.headers.get("x-paper-object-sha256")?.trim().toLowerCase() ?? "";
   if (!/^[0-9a-f]{64}$/.test(expectedHash)) return errorJson("Paper object checksum is required", 400, "PAPER_OBJECT_CHECKSUM_REQUIRED");
