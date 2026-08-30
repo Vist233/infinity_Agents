@@ -9,6 +9,7 @@ metadata without local paths or source URL credentials.
 from __future__ import annotations
 
 import hashlib
+import gc
 import ipaddress
 import json
 import logging
@@ -569,6 +570,12 @@ def extract_pdf(
             if deadline is not None:
                 _runtime_checkpoint(deadline, heartbeat, "extracting")
             _check_memory(limits, stage="extracting")
+
+        # pypdf can retain decoded page structures.  Release it before
+        # opening the second parser for image extraction on the 2C2G host.
+        del reader
+        gc.collect()
+        _check_memory(limits, stage="extracting")
 
         images: list[dict[str, Any]] = []
         total_image_bytes = 0
