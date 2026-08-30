@@ -9,7 +9,6 @@ metadata without local paths or source URL credentials.
 from __future__ import annotations
 
 import hashlib
-import gc
 import ipaddress
 import json
 import logging
@@ -39,7 +38,6 @@ except ImportError:  # pragma: no cover - only non-Unix runtimes
 
 
 import fitz
-from pypdf import PdfReader
 
 
 LOGGER = logging.getLogger("infinity.paper_processor")
@@ -541,48 +539,31 @@ def extract_pdf(
         if deadline is not None:
             _runtime_checkpoint(deadline, heartbeat, "extracting")
         _check_memory(limits, stage="extracting")
-        try:
-            reader = PdfReader(str(pdf_path), strict=True)
-            if reader.is_encrypted:
-                raise ProcessorError("ENCRYPTED_PDF_UNSUPPORTED", "encrypted PDFs are not admitted")
-            page_count = len(reader.pages)
-        except ProcessorError:
-            raise
-        except MemoryError as error:
-            raise ProcessorError("PAPER_PROCESSOR_MEMORY_LIMIT", "paper processing memory budget exceeded") from error
-        except Exception as error:
-            raise ProcessorError("MALFORMED_PDF", "PDF parser rejected the input") from error
-        if page_count > limits.max_pages:
-            raise ProcessorError("PAGE_COUNT_LIMIT", "PDF page count exceeds the limit")
-
-        pages: list[dict[str, Any]] = []
-        for page_number, page in enumerate(reader.pages, start=1):
-            if deadline is not None:
-                _runtime_checkpoint(deadline, heartbeat, "extracting")
-            _check_memory(limits, stage="extracting")
-            try:
-                text = page.extract_text() or ""
-            except MemoryError as error:
-                raise ProcessorError("PAPER_PROCESSOR_MEMORY_LIMIT", "paper processing memory budget exceeded") from error
-            except Exception as error:
-                raise ProcessorError("TEXT_EXTRACTION_FAILED", "PDF text extraction failed") from error
-            pages.append({"page": page_number, "text": text, "text_bytes": len(text.encode("utf-8")), "images": []})
-            if deadline is not None:
-                _runtime_checkpoint(deadline, heartbeat, "extracting")
-            _check_memory(limits, stage="extracting")
-
-        # pypdf can retain decoded page structures.  Release it before
-        # opening the second parser for image extraction on the 2C2G host.
-        del reader
-        gc.collect()
-        _check_memory(limits, stage="extracting")
-
         images: list[dict[str, Any]] = []
         total_image_bytes = 0
-        document = fitz.open(str(pdf_path))
         try:
-            if document.page_count != page_count:
-                raise ProcessorError("PDF_PAGE_COUNT_MISMATCH", "PDF parsers disagreed on page count")
+            document = fitz.open(str(pdf_path))
+        except Exception as error:
+            raise ProcessorError("MALFORMED_PDF", "PDF parser rejected the input") from error
+        try:
+            if document.is_encrypted:
+                raise ProcessorError("ENCRYPTED_PDF_UNSUPPORTED", "encrypted PDFs are not admitted")
+            page_count = document.page_count
+            if page_count > limits.max_pages:
+                raise ProcessorError("PAGE_COUNT_LIMIT", "PDF page count exceeds the limit")
+            pages: list[dict[str, Any]] = []
+            for page_index in range(page_count):
+                if deadline is not None:
+                    _runtime_checkpoint(deadline, heartbeat, "extracting")
+                _check_memory(limits, stage="extracting")
+                page = document.load_page(page_index)
+                try:
+                    text = page.get_text("text") or ""
+                except MemoryError as error:
+                    raise ProcessorError("PAPER_PROCESSOR_MEMORY_LIMIT", "paper processing memory budget exceeded") from error
+                except Exception as error:
+                    raise ProcessorError("TEXT_EXTRACTION_FAILED", "PDF text extraction failed") from error
+                pages.append({"page": page_index + 1, "text": text, "text_bytes": len(text.encode("utf-8")), "images": []})
             for page_index in range(document.page_count):
                 if deadline is not None:
                     _runtime_checkpoint(deadline, heartbeat, "extracting")
