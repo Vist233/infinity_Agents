@@ -812,12 +812,12 @@ def process_one(
     except ProcessorError as error:
         heartbeat.stop()
         _safe_fail(client, grant, error.code)
-        _safe_log("failed", grant, stage="terminal", error_code=error.code)
+        _safe_log("failed", grant, stage=stage, error_code=error.code)
         raise
     except MemoryError as error:
         heartbeat.stop()
         _safe_fail(client, grant, "PAPER_PROCESSOR_MEMORY_LIMIT")
-        _safe_log("failed", grant, stage="terminal", error_code="PAPER_PROCESSOR_MEMORY_LIMIT")
+        _safe_log("failed", grant, stage=stage, error_code="PAPER_PROCESSOR_MEMORY_LIMIT")
         raise ProcessorError("PAPER_PROCESSOR_MEMORY_LIMIT", "paper processing memory budget exceeded") from error
     except Exception as error:
         heartbeat.stop()
