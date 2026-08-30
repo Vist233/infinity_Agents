@@ -24,6 +24,20 @@ const timeline: ToolTimelineEntry[] = [{
   summary: JSON.stringify({ mode: "processing", resource_id: "resource-1", continuation_id: "continuation-1" }),
 }];
 
+const projectedPaperTasks = [{
+  resourceId: "resource-1",
+  continuationId: "continuation-1",
+  correlationId: "turn-1",
+  toolCallId: "call-1",
+  materializeStatus: "succeeded" as const,
+  readiness: "unknown" as const,
+}];
+
+const displaySafeTimeline: ToolTimelineEntry[] = [{
+  ...timeline[0],
+  summary: "Paper materialization accepted.",
+}];
+
 function progress(status: "extracting" | "ready" | "failed", resumeAvailable = false) {
   return {
     resource: {
@@ -98,6 +112,19 @@ describe("usePaperProgress", () => {
       await Promise.resolve();
     });
     expect(getProgressMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("loads a server-projected task when the timeline summary is display-safe prose", async () => {
+    getProgressMock.mockResolvedValue(progress("extracting"));
+    const { result } = renderHook(() => usePaperProgress({
+      apiBase: "https://app.test",
+      sessionId: "session-1",
+      toolTimeline: displaySafeTimeline,
+      paperTaskCandidates: projectedPaperTasks,
+    }));
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.visibleTasks[0]?.candidate).toEqual(projectedPaperTasks[0]);
+    expect(result.current.tasks[0].progress?.resource.status).toBe("extracting");
   });
 
   it("treats missing and non-owner resources as absent or denied without a visible card", async () => {

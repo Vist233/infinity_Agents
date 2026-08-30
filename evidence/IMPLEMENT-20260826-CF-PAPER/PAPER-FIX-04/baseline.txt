@@ -1,0 +1,16 @@
+# PAPER-FIX-04 baseline
+
+- branch at start: `cloudflare-deploy`
+- baseline commit: `6d0f6c823c443b299360b8fcfc659c07f8ae3eb4`
+- worktree at start: clean
+- governing documents read: `HANDOFF.md`,
+  `docs/CLOUDFLARE_PAPER_WORKSPACE_DESIGN.md`, and
+  `docs/CLOUDFLARE_PAPER_WORKSPACE_EXECUTION_PLAN.md`
+- prior evidence reviewed: PAPER-FIX-01, PAPER-FIX-02, PAPER-FIX-03, the
+  PAPER-10 root-cause audit, and the PAPER-10 release postflight.
+- user-provided production facts: a real authenticated request created a
+  Paper resource and showed materialization processing, but no task panel;
+  after refresh/sidebar selection the selected conversation did not rehydrate.
+  No browser or production write was performed by this card.
+- no credential, cookie, token, secret value, PDF, full text, image bytes, R2
+  key, provider payload, or external-system write was used for this card.

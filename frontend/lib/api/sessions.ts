@@ -1,9 +1,11 @@
 import type { Message, SessionItem } from "@/lib/chat-state";
+import type { PaperTaskCandidate } from "@/lib/paper-task";
 import { withCsrfHeader } from "@/lib/runtime-config";
 
 const MAX_TIMELINE_SUMMARY_CHARS = 2048;
 const MAX_TIMELINE_ARGUMENTS_CHARS = 1024;
 const MAX_TIMELINE_EVENTS = 100;
+const MAX_PAPER_TASKS = 100;
 
 export interface SessionHistoryEvent {
   session_id: string;
@@ -20,6 +22,7 @@ export interface SessionHistoryEvent {
 export interface SessionHistory {
   messages: Message[];
   timeline: SessionHistoryEvent[];
+  paperTasks: PaperTaskCandidate[];
   legacyTextOnly: boolean;
 }
 
@@ -131,15 +134,50 @@ function normalizeTimeline(value: unknown, sessionId: string): SessionHistoryEve
   return [...collapsed.values()];
 }
 
+function normalizePaperTasks(value: unknown): PaperTaskCandidate[] {
+  if (!Array.isArray(value)) return [];
+  const byResource = new Map<string, PaperTaskCandidate>();
+  for (const item of value.slice(0, MAX_PAPER_TASKS)
+    .filter((item) => item && typeof item === "object")
+    .map((item) => item as Record<string, unknown>)) {
+    const resourceId = typeof item.resource_id === "string" && /^\S{1,255}$/.test(item.resource_id)
+      ? item.resource_id
+      : null;
+    const continuationId = item.continuation_id == null
+      ? null
+      : typeof item.continuation_id === "string" && /^\S{1,255}$/.test(item.continuation_id)
+        ? item.continuation_id
+        : null;
+    const correlationId = typeof item.correlation_id === "string" && /^\S{1,255}$/.test(item.correlation_id)
+      ? item.correlation_id
+      : null;
+    const toolCallId = typeof item.tool_call_id === "string" && /^\S{1,255}$/.test(item.tool_call_id)
+      ? item.tool_call_id
+      : null;
+    if (!resourceId || !correlationId || !toolCallId
+      || item.materialize_status !== "succeeded" || item.readiness !== "unknown") continue;
+    byResource.set(resourceId, {
+      resourceId,
+      continuationId,
+      correlationId,
+      toolCallId,
+      materializeStatus: "succeeded",
+      readiness: "unknown",
+    });
+  }
+  return [...byResource.values()];
+}
+
 export async function listSessionHistory(apiBase: string, sessionId: string): Promise<SessionHistory> {
   const data = await requestJson<unknown>(`${apiBase}/api/sessions/${sessionId}/messages`);
   if (Array.isArray(data)) {
-    return { messages: normalizeMessages(data), timeline: [], legacyTextOnly: true };
+    return { messages: normalizeMessages(data), timeline: [], paperTasks: [], legacyTextOnly: true };
   }
   const record = data && typeof data === "object" ? data as Record<string, unknown> : {};
   return {
     messages: normalizeMessages(record.messages),
     timeline: normalizeTimeline(record.events, sessionId),
+    paperTasks: normalizePaperTasks(record.paper_tasks),
     legacyTextOnly: record.legacy_text_only === true,
   };
 }

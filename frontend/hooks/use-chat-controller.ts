@@ -11,6 +11,7 @@ import {
   INITIAL_CHAT_STATE,
   isDefaultSessionTitle,
   getToolTimelineForSession,
+  getPaperTasksForSession,
   type Message,
   type SessionItem,
   type SessionRunState,
@@ -63,6 +64,7 @@ export function useChatController() {
   const sessionId = state.sessionId;
   const messages = useMemo(() => getMessagesForSession(state, sessionId), [state, sessionId]);
   const toolTimeline = useMemo(() => getToolTimelineForSession(state, sessionId), [state, sessionId]);
+  const paperTaskCandidates = useMemo(() => getPaperTasksForSession(state, sessionId), [state, sessionId]);
   const legacyTextOnly = sessionId ? state.sessionLegacyHistoryMap[sessionId] === true : false;
   const currentRunState = useMemo(() => getRunStateForSession(state, sessionId), [state, sessionId]);
   const isLoading = currentRunState.running;
@@ -155,6 +157,11 @@ export function useChatController() {
           ...(event.arguments_summary ? { argumentsSummary: event.arguments_summary } : {}),
         })),
         legacyTextOnly: history.legacyTextOnly,
+      });
+      dispatch({
+        type: "set_session_paper_tasks",
+        sessionId: targetSessionId,
+        tasks: history.paperTasks,
       });
       let merged = mapped;
       dispatch({
@@ -315,6 +322,7 @@ export function useChatController() {
     apiBase,
     sessionId,
     toolTimeline,
+    paperTaskCandidates,
     onResumeStart: handlePaperContinuationStart,
     onContinuationEvent: handlePaperContinuationEvent,
   });
@@ -326,16 +334,21 @@ export function useChatController() {
       const createdSessionId = typeof data.session_id === "string" ? data.session_id : null;
       if (!createdSessionId) return null;
 
+      const createdSession: SessionItem = {
+        session_id: createdSessionId,
+        title: language === "zh" ? "新对话" : "New chat",
+        created_at: "",
+        updated_at: "",
+      };
+      sessionsRef.current = [
+        createdSession,
+        ...sessionsRef.current.filter((session) => session.session_id !== createdSessionId),
+      ];
       dispatch({ type: "set_session_id", sessionId: createdSessionId });
       dispatch({
         type: "upsert_session",
         toTop: true,
-        session: {
-          session_id: createdSessionId,
-          title: language === "zh" ? "新对话" : "New chat",
-          created_at: "",
-          updated_at: "",
-        },
+        session: createdSession,
       });
       dispatch({ type: "set_session_messages", sessionId: createdSessionId, messages: [] });
       dispatch({ type: "set_session_run_state", sessionId: createdSessionId, runState: DEFAULT_RUN_STATE });
@@ -352,24 +365,30 @@ export function useChatController() {
       const targetId = targetSessionId ?? state.sessionId;
       if (!targetId) return;
       const nextTitle = deriveSessionTitle(firstInput);
+      const current = sessionsRef.current.find((session) => session.session_id === targetId);
+      const sessionWithNextTitle: SessionItem = {
+        session_id: targetId,
+        title: nextTitle,
+        created_at: current?.created_at ?? "",
+        updated_at: current?.updated_at ?? "",
+      };
+      sessionsRef.current = [
+        ...sessionsRef.current.filter((session) => session.session_id !== targetId),
+        sessionWithNextTitle,
+      ];
       dispatch({
-        type: "set_sessions",
-        sessions: sessionsRef.current.map((session) =>
-          session.session_id === targetId ? { ...session, title: nextTitle } : session,
-        ),
+        type: "upsert_session",
+        session: sessionWithNextTitle,
       });
 
-      const current = sessionsRef.current.find((session) => session.session_id === targetId);
       const shouldSkip = current && !isDefaultSessionTitle(current.title);
       if (shouldSkip) return;
 
       try {
         await updateSessionTitle(apiBase, targetId, nextTitle);
         dispatch({
-          type: "set_sessions",
-          sessions: sessionsRef.current.map((session) =>
-            session.session_id === targetId ? { ...session, title: nextTitle } : session,
-          ),
+          type: "upsert_session",
+          session: sessionWithNextTitle,
         });
       } catch (error) {
         console.error("Failed to auto-rename session", error);
@@ -392,8 +411,14 @@ export function useChatController() {
       setSessionRunState(id, { unreadDone: false });
       dispatch({ type: "set_session_id", sessionId: id });
       dispatch({ type: "set_deleting_session", sessionId: null });
+      void ensureSessionMessagesLoaded(id).catch((error) => {
+        console.error("Failed to load selected session", error);
+        const message = error instanceof Error ? error.message : t("error.network");
+        setError(t("error.loadMessages", { message }));
+        toast.error(t("error.loadMessagesToast"));
+      });
     },
-    [setSessionRunState, state.editingSessionId],
+    [ensureSessionMessagesLoaded, setError, setSessionRunState, state.editingSessionId, t],
   );
 
   const handleEditSessionTitle = useCallback((session: SessionItem) => {
@@ -541,6 +566,9 @@ export function useChatController() {
 
       let accumulatedResponse = "";
       let completed = false;
+      let paperProcessingSeen = false;
+      let pendingPaperProcessing: Extract<ChatEvent, { type: "paper_processing" }> | null = null;
+      const liveToolTimeline = new Map<string, ToolTimelineEntry>();
       const isCurrentRequest = () => runningRequestBySessionRef.current.get(targetSessionId!) === clientRequestId;
       const finalize = (terminal: TerminalState, tokenInfo?: { prompt: number; response: number; total: number } | null) => {
         if (completed) return;
@@ -577,6 +605,48 @@ export function useChatController() {
           activeTools: [],
         }));
       };
+      const finalizeForPaperProcessing = () => {
+        if (completed) return;
+        completed = true;
+        if (isCurrentRequest()) runningRequestBySessionRef.current.delete(targetSessionId!);
+        wsByRequestRef.current.delete(clientRequestId);
+        setSessionRunState(targetSessionId!, (prev) => ({
+          ...prev,
+          running: false,
+          phase: null,
+          toolName: null,
+          unreadDone: false,
+          terminal: null,
+          requestId: null,
+          activeTools: [],
+        }));
+      };
+      const projectPaperProcessing = (eventPayload: Extract<ChatEvent, { type: "paper_processing" }>): boolean => {
+        if (!eventPayload.resource_id || !/^\S{1,255}$/.test(eventPayload.resource_id)) return false;
+        const matchingEntry = [...liveToolTimeline.values()].find((entry) =>
+          entry.correlationId === eventPayload.correlation_id
+          && entry.toolName === "materialize_paper"
+          && entry.status === "succeeded",
+        );
+        if (!matchingEntry) return false;
+        const continuationId = eventPayload.continuation_id == null
+          ? null
+          : /^\S{1,255}$/.test(eventPayload.continuation_id) ? eventPayload.continuation_id : null;
+        if (eventPayload.continuation_id != null && !continuationId) return false;
+        dispatch({
+          type: "upsert_session_paper_task",
+          sessionId: targetSessionId!,
+          task: {
+            resourceId: eventPayload.resource_id,
+            continuationId,
+            correlationId: matchingEntry.correlationId,
+            toolCallId: matchingEntry.toolCallId,
+            materializeStatus: "succeeded",
+            readiness: "unknown",
+          },
+        });
+        return true;
+      };
 
       const onEvent = (eventPayload: ChatEvent) => {
         if (!isCurrentRequest()) return;
@@ -605,6 +675,14 @@ export function useChatController() {
         if (eventPayload.type === "tool_call") {
           const toolName = eventPayload.tool_name;
           if (!toolName) return;
+          liveToolTimeline.set(eventPayload.tool_call_id, {
+            correlationId: eventPayload.correlation_id,
+            toolCallId: eventPayload.tool_call_id,
+            toolName,
+            status: eventPayload.status,
+            summary: "",
+            ...(eventPayload.arguments_summary ? { argumentsSummary: eventPayload.arguments_summary } : {}),
+          });
           dispatch({
             type: "upsert_session_tool_timeline",
             sessionId: targetSessionId!,
@@ -626,12 +704,31 @@ export function useChatController() {
           return;
         }
         if (eventPayload.type === "tool_result") {
+          const previous = liveToolTimeline.get(eventPayload.tool_call_id);
+          if (previous) {
+            liveToolTimeline.set(eventPayload.tool_call_id, {
+              ...previous,
+              status: eventPayload.status,
+              summary: eventPayload.summary,
+            });
+          }
           dispatch({
             type: "update_session_tool_timeline",
             sessionId: targetSessionId!,
             toolCallId: eventPayload.tool_call_id,
             patch: { status: eventPayload.status, summary: eventPayload.summary },
           });
+          if (pendingPaperProcessing) {
+            projectPaperProcessing(pendingPaperProcessing);
+            pendingPaperProcessing = null;
+          }
+          return;
+        }
+        if (eventPayload.type === "paper_processing") {
+          paperProcessingSeen = true;
+          pendingPaperProcessing = eventPayload;
+          projectPaperProcessing(eventPayload);
+          void refreshSessions();
           return;
         }
         if (eventPayload.type === "task_draft_created" || eventPayload.type === "task_draft_updated") {
@@ -687,7 +784,11 @@ export function useChatController() {
           },
           onClose: () => {
             if (!isCurrentRequest() || completed) return;
-            finalize("error");
+            if (paperProcessingSeen) {
+              finalizeForPaperProcessing();
+            } else {
+              finalize("error");
+            }
           },
         });
         wsByRequestRef.current.set(clientRequestId, stream);

@@ -514,6 +514,52 @@ server and D1/R2/Processor contracts remain authoritative.  A component
 unmount, session switch, or refresh cannot make an old response update the new
 session's task surface.
 
+### 6.3 Production chat rehydration and task projection
+
+The chat surface treats a Paper task as a projection of durable correlation,
+not as a phrase in an assistant message.  `GET /api/sessions/:session_id/messages`
+therefore returns an additive `paper_tasks` array alongside `messages` and the
+safe tool `events` timeline:
+
+```json
+{
+  "resource_id": "opaque-resource-id",
+  "continuation_id": "opaque-continuation-id",
+  "correlation_id": "opaque-chat-turn-id",
+  "tool_call_id": "opaque-tool-call-id",
+  "materialize_status": "succeeded",
+  "readiness": "unknown"
+}
+```
+
+The Edge constructs each candidate only when the canonical D1 event ledger has
+a successful `materialize_paper` result for the same turn and tool call, and
+the owner/session/resource-validated continuation ledger has the same resource
+(and, when present, continuation) identity.  Assistant prose, a bare resource
+ID, a malformed result, a failed tool result, or a cross-user/unlinked resource
+does not produce a candidate.  The projection exposes no source reference,
+provider payload, PDF/full-text data, R2 key, or secret, and legacy text-only
+history returns an empty array.
+
+During a live chat stream, the typed `paper_processing` event is correlated to
+the in-memory successful `materialize_paper` tool event before the frontend
+creates the same opaque candidate.  A display-safe materialize summary is
+therefore sufficient; the browser does not parse assistant prose or require a
+JSON payload in the rendered summary.  Stream close after `paper_processing`
+settles the chat run as resumable processing rather than as a final success or
+transport error.  The progress hook then obtains the authoritative lifecycle
+from the owner-scoped progress endpoint, so accepted materialization cannot be
+rendered as `ready`.
+
+Creating a new session updates the local session list by idempotent upsert and
+selects that session before sending the first turn.  Renaming the first turn
+also uses an upsert, so a stale session-list response cannot erase the newly
+created item.  Selecting a sidebar session explicitly starts the authenticated
+history load (with in-flight de-duplication), which restores messages, tool
+timeline, `paper_tasks`, and the progress read model after refresh.  All
+responses remain scoped to the selected session generation; a stale load cannot
+paint another session's messages or task card.
+
 Image bytes are retrieved through an authorized same-origin route or a narrowly
 scoped, short-lived capability.  Do not Base64-embed large images into SSE or
 model context.  The image-analysis tool sends only the selected authorized image

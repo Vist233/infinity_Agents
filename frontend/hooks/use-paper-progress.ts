@@ -13,6 +13,7 @@ import { derivePaperTaskCandidates, type PaperTaskCandidate } from "@/lib/paper-
 import type { ToolTimelineEntry } from "@/lib/chat-state";
 
 export const PAPER_PROGRESS_POLL_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000] as const;
+const EMPTY_PAPER_TASK_CANDIDATES: PaperTaskCandidate[] = [];
 
 export type PaperTaskPhase = "loading" | "progress" | "error" | "absent" | "denied";
 
@@ -30,6 +31,8 @@ export interface UsePaperProgressOptions {
   apiBase: string;
   sessionId: string | null;
   toolTimeline: ToolTimelineEntry[];
+  /** Server-projected identities recovered from canonical session history. */
+  paperTaskCandidates?: PaperTaskCandidate[];
   onResumeStart?: (candidate: PaperTaskCandidate) => void;
   onContinuationEvent?: (event: ChatEvent, candidate: PaperTaskCandidate) => void;
 }
@@ -63,10 +66,16 @@ export function usePaperProgress({
   apiBase,
   sessionId,
   toolTimeline,
+  paperTaskCandidates = EMPTY_PAPER_TASK_CANDIDATES,
   onResumeStart,
   onContinuationEvent,
 }: UsePaperProgressOptions): UsePaperProgressResult {
-  const candidates = useMemo(() => derivePaperTaskCandidates(toolTimeline), [toolTimeline]);
+  const candidates = useMemo(() => {
+    const byResource = new Map<string, PaperTaskCandidate>();
+    for (const candidate of paperTaskCandidates) byResource.set(candidate.resourceId, candidate);
+    for (const candidate of derivePaperTaskCandidates(toolTimeline)) byResource.set(candidate.resourceId, candidate);
+    return [...byResource.values()];
+  }, [paperTaskCandidates, toolTimeline]);
   const [tasksByResourceId, setTasksByResourceId] = useState<Record<string, PaperTaskRuntime>>({});
   const [refreshVersion, setRefreshVersion] = useState(0);
   const generationRef = useRef(0);

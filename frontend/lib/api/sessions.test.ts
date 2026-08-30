@@ -103,6 +103,39 @@ describe("sessions api", () => {
     expect(history.timeline[0]).not.toHaveProperty("object_key");
   });
 
+  it("normalizes only opaque, owner-scoped paper task projections", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        messages: [],
+        events: [],
+        paper_tasks: [
+          {
+            resource_id: "resource-1",
+            continuation_id: "continuation-1",
+            correlation_id: "turn-1",
+            tool_call_id: "call-1",
+            materialize_status: "succeeded",
+            readiness: "unknown",
+          },
+          { resource_id: "", continuation_id: "foreign", correlation_id: "turn-2", tool_call_id: "call-2" },
+          { resource_id: "resource-2", continuation_id: "foreign", correlation_id: "", tool_call_id: "call-3" },
+        ],
+        legacy_text_only: false,
+      }),
+    } as Response);
+
+    const history = await listSessionHistory("http://localhost:8008", "s1");
+    expect(history.paperTasks).toEqual([{
+      resourceId: "resource-1",
+      continuationId: "continuation-1",
+      correlationId: "turn-1",
+      toolCallId: "call-1",
+      materializeStatus: "succeeded",
+      readiness: "unknown",
+    }]);
+  });
+
   it("marks an old text-only array response as legacy", async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,

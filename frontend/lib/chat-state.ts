@@ -3,6 +3,10 @@ export interface Message {
   content: string;
 }
 
+import type { PaperTaskCandidate } from "@/lib/paper-task";
+
+const EMPTY_PAPER_TASKS: PaperTaskCandidate[] = [];
+
 export type ToolTimelineStatus = "pending" | "processing" | "succeeded" | "failed" | "unknown";
 
 export interface ToolTimelineEntry {
@@ -53,6 +57,7 @@ export interface ChatState {
   sessions: SessionItem[];
   sessionMessagesMap: Record<string, Message[]>;
   sessionToolTimelineMap: Record<string, ToolTimelineEntry[]>;
+  sessionPaperTaskMap: Record<string, PaperTaskCandidate[]>;
   sessionLegacyHistoryMap: Record<string, boolean>;
   sessionRunMap: Record<string, SessionRunState>;
   editingSessionId: string | null;
@@ -84,6 +89,7 @@ export const INITIAL_CHAT_STATE: ChatState = {
   sessions: [],
   sessionMessagesMap: {},
   sessionToolTimelineMap: {},
+  sessionPaperTaskMap: {},
   sessionLegacyHistoryMap: {},
   sessionRunMap: {},
   editingSessionId: null,
@@ -101,6 +107,8 @@ export type ChatAction =
   | { type: "set_session_tool_timeline"; sessionId: string; timeline: ToolTimelineEntry[]; legacyTextOnly: boolean }
   | { type: "upsert_session_tool_timeline"; sessionId: string; entry: ToolTimelineEntry }
   | { type: "update_session_tool_timeline"; sessionId: string; toolCallId: string; patch: Partial<ToolTimelineEntry> }
+  | { type: "set_session_paper_tasks"; sessionId: string; tasks: PaperTaskCandidate[] }
+  | { type: "upsert_session_paper_task"; sessionId: string; task: PaperTaskCandidate }
   | { type: "upsert_session"; session: SessionItem; toTop?: boolean }
   | { type: "remove_session"; sessionId: string }
   | { type: "set_session_run_state"; sessionId: string; runState: SessionRunState }
@@ -165,6 +173,24 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         },
       };
     }
+    case "set_session_paper_tasks":
+      return {
+        ...state,
+        sessionPaperTaskMap: { ...state.sessionPaperTaskMap, [action.sessionId]: action.tasks },
+      };
+    case "upsert_session_paper_task": {
+      const current = state.sessionPaperTaskMap[action.sessionId] || [];
+      return {
+        ...state,
+        sessionPaperTaskMap: {
+          ...state.sessionPaperTaskMap,
+          [action.sessionId]: [
+            ...current.filter((task) => task.resourceId !== action.task.resourceId),
+            action.task,
+          ],
+        },
+      };
+    }
     case "upsert_session": {
       const exists = state.sessions.some((s) => s.session_id === action.session.session_id);
       if (!exists) {
@@ -192,6 +218,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       delete nextRunMap[action.sessionId];
       const nextToolTimelineMap = { ...state.sessionToolTimelineMap };
       delete nextToolTimelineMap[action.sessionId];
+      const nextPaperTaskMap = { ...state.sessionPaperTaskMap };
+      delete nextPaperTaskMap[action.sessionId];
       const nextLegacyHistoryMap = { ...state.sessionLegacyHistoryMap };
       delete nextLegacyHistoryMap[action.sessionId];
       return {
@@ -200,6 +228,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         sessionMessagesMap: nextMessages,
         sessionRunMap: nextRunMap,
         sessionToolTimelineMap: nextToolTimelineMap,
+        sessionPaperTaskMap: nextPaperTaskMap,
         sessionLegacyHistoryMap: nextLegacyHistoryMap,
         sessionId: state.sessionId === action.sessionId ? null : state.sessionId,
       };
@@ -259,6 +288,9 @@ export const getRunStateForSession = (state: ChatState, sessionId: string | null
 
 export const getToolTimelineForSession = (state: ChatState, sessionId: string | null) =>
   sessionId ? (state.sessionToolTimelineMap[sessionId] || []) : [];
+
+export const getPaperTasksForSession = (state: ChatState, sessionId: string | null) =>
+  sessionId ? (state.sessionPaperTaskMap[sessionId] || EMPTY_PAPER_TASKS) : EMPTY_PAPER_TASKS;
 
 export const deriveSessionTitle = (rawInput: string) => {
   const normalized = rawInput.replace(/\s+/g, " ").trim();

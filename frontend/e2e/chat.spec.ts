@@ -177,6 +177,116 @@ test("shows a durable tool trace while running and after reload", async ({ page 
   await expect(page.getByText("paper/s1")).toHaveCount(0);
 });
 
+test("creates a Paper task from a new chat and rehydrates the selected session after refresh", async ({ page }) => {
+  let sessions: Array<{ session_id: string; title: string; created_at: string; updated_at: string }> = [];
+  const history = {
+    messages: [
+      { role: "user", content: "请下载并解析 Transformer attention 论文" },
+      { role: "assistant", content: "论文已提交处理，完成后可以继续读取。" },
+    ],
+    events: [
+      {
+        session_id: "new-paper-session",
+        event_id: 10,
+        turn_id: "client:new-paper-turn",
+        event_type: "tool_call",
+        tool_call_id: "materialize-call",
+        tool_name: "materialize_paper",
+        status: "processing",
+        summary: "",
+        arguments_summary: '{"paper_ref":"arxiv:1706.03762"}',
+      },
+      {
+        session_id: "new-paper-session",
+        event_id: 11,
+        turn_id: "client:new-paper-turn",
+        event_type: "tool_result",
+        tool_call_id: "materialize-call",
+        tool_name: "materialize_paper",
+        status: "succeeded",
+        summary: JSON.stringify({ mode: "processing", resource_id: "resource-new", continuation_id: "continuation-new" }),
+      },
+    ],
+    legacy_text_only: false,
+  };
+  const progress = {
+    resource: {
+      resource_id: "resource-new",
+      status: "extracting",
+      stage: "extracting",
+      source_kind: "arxiv",
+      title: "Attention Is All You Need",
+      page_count: null,
+      image_count: null,
+      error: null,
+      created_at: 100,
+      updated_at: 110,
+      ready_at: null,
+    },
+    revision: "extracting:110",
+    materialize: { invocation_status: "succeeded", invocation_event_id: "event-11", invoked_at: 100, resource_ready: false },
+    correlation: {
+      continuations: [{ continuation_id: "continuation-new", original_turn_id: "client:new-paper-turn", status: "waiting", expires_at: 200, updated_at: 110, completed_at: null }],
+    },
+    events: [{ event_id: "event-11", stage: "materialize", outcome: "succeeded", error_code: null, created_at: 100 }],
+    resume: { available: false, continuation_id: null, method: "POST", path: null, body: null, reason_code: "PAPER_RESOURCE_NOT_READY" },
+  };
+
+  await page.route("**/api/sessions", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ status: 200, body: JSON.stringify(sessions), contentType: "application/json" });
+      return;
+    }
+    if (route.request().method() === "POST") {
+      sessions = [{ session_id: "new-paper-session", title: "Transformer attention", created_at: "", updated_at: "" }];
+      await route.fulfill({ status: 201, body: JSON.stringify({ session_id: "new-paper-session" }), contentType: "application/json" });
+      return;
+    }
+    await route.continue();
+  });
+  await page.route("**/api/sessions/new-paper-session/messages", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify(history), contentType: "application/json" });
+  });
+  await page.route("**/api/sessions/new-paper-session/title", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify({ session_id: "new-paper-session", title: "Transformer attention" }), contentType: "application/json" });
+  });
+  await page.route("**/api/paper/resources/resource-new/progress*", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify(progress), contentType: "application/json" });
+  });
+  await page.route("**/api/chat", async (route) => {
+    const body = [
+      { type: "status", phase: "tool_running", correlation_id: "client:new-paper-turn", elapsed_ms: 1, attempt: 1, max_attempts: 1, tool_name: "search_paper" },
+      { type: "tool_call", correlation_id: "client:new-paper-turn", tool_call_id: "search-call", tool_name: "search_paper", status: "processing", arguments_summary: '{"query":"attention"}' },
+      { type: "tool_result", correlation_id: "client:new-paper-turn", tool_call_id: "search-call", tool_name: "search_paper", status: "succeeded", summary: '{"count":1}' },
+      { type: "tool_call", correlation_id: "client:new-paper-turn", tool_call_id: "materialize-call", tool_name: "materialize_paper", status: "processing", arguments_summary: '{"paper_ref":"arxiv:1706.03762"}' },
+      // The structured paper_processing event is the durable live projection;
+      // the tool result summary is deliberately display-safe rather than the
+      // JSON payload used by the older client-side parser.
+      { type: "tool_result", correlation_id: "client:new-paper-turn", tool_call_id: "materialize-call", tool_name: "materialize_paper", status: "succeeded", summary: "Paper materialization accepted." },
+      { type: "chunk", content: "论文已提交处理，完成后可以继续读取。" },
+      { type: "paper_processing", correlation_id: "client:new-paper-turn", continuation_id: "continuation-new", resource_id: "resource-new", status: "processing", message: "Paper processing is durable." },
+    ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+    await route.fulfill({ status: 200, body, contentType: "text/event-stream" });
+  });
+
+  await page.goto("/");
+  await page.locator("textarea").fill("请下载并解析 Transformer attention 论文");
+  await page.locator("textarea").press("Enter");
+  await expect(page.getByTestId("paper-task-resource-new")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByText("提取中")).toBeVisible();
+  await expect(page.getByTestId("paper-task-resource-new").getByText("已提交处理")).toBeVisible();
+  await expect(page.getByRole("button", { name: "继续读取" })).toHaveCount(0);
+
+  await page.reload();
+  await page.getByRole("button", { name: "Transformer attention" }).click();
+  await expect(page.getByText("请下载并解析 Transformer attention 论文")).toBeVisible();
+  await expect(page.getByText("论文已提交处理，完成后可以继续读取。", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("tool-trace-materialize-call")).toContainText("materialize_paper");
+  await expect(page.getByTestId("paper-task-resource-new")).toBeVisible();
+  await expect(page.getByText("提取中")).toBeVisible();
+  await expect(page.getByRole("button", { name: "继续读取" })).toHaveCount(0);
+});
+
 test("rehydrates a Paper task, separates processing from ready, and resumes from the ready card", async ({ page }) => {
   const sessions = [{ session_id: "s1", title: "Paper progress", created_at: "", updated_at: "" }];
   const history = {

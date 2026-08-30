@@ -7,6 +7,7 @@ import {
   getChatSession,
   listChatEvents,
   listChatSessions,
+  listOwnedPaperRequestContinuationsForTurn,
   listMessages,
   renameChatSession
 } from "./db";
@@ -16,6 +17,8 @@ const MAX_HISTORY_TEXT_CHARS = 32_000;
 const MAX_HISTORY_SUMMARY_CHARS = 2_048;
 const MAX_HISTORY_ARGUMENTS_CHARS = 1_024;
 const MAX_HISTORY_EVENTS = 100;
+const PAPER_MATERIALIZE_TOOL = "materialize_paper";
+const SAFE_OPAQUE_ID = /^\S{1,255}$/;
 
 function boundedText(value: string | null | undefined, maxChars: number): string {
   return (value ?? "").slice(0, maxChars);
@@ -47,6 +50,94 @@ function safeArgumentsSummary(argumentsJson: string | null): string | undefined 
 
 function safeResultSummary(summary: string | null): string {
   return boundedText(summary, MAX_HISTORY_SUMMARY_CHARS);
+}
+
+interface PaperTaskHistoryCandidate {
+  resource_id: string;
+  continuation_id: string;
+  correlation_id: string;
+  tool_call_id: string;
+  materialize_status: "succeeded";
+  readiness: "unknown";
+}
+
+function safeOpaqueId(value: unknown): string | null {
+  return typeof value === "string" && SAFE_OPAQUE_ID.test(value) ? value : null;
+}
+
+function parseMaterializeSummary(summary: string | null): Record<string, unknown> | null {
+  if (!summary) return null;
+  try {
+    const value: unknown = JSON.parse(summary);
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Projects task identities from canonical D1 events plus the owner-scoped
+ * continuation rows. The projection intentionally does not expose the tool
+ * payload, provider data, resource metadata, or object-storage keys.
+ */
+async function projectPaperTaskCandidates(
+  env: Env,
+  userId: string,
+  sessionId: string,
+  eventRows: ChatEventRow[],
+): Promise<PaperTaskHistoryCandidate[]> {
+  const toolCalls = new Map(
+    eventRows
+      .filter((row) => row.event_type === "tool_call" && row.tool_call_id)
+      .map((row) => [row.tool_call_id as string, row]),
+  );
+  const turnIds = [...new Set(
+    eventRows
+      .filter((row) => row.event_type === "tool_call" && row.tool_name === PAPER_MATERIALIZE_TOOL)
+      .map((row) => row.turn_id)
+      .filter((turnId) => SAFE_OPAQUE_ID.test(turnId)),
+  )];
+  const continuationsByTurn = new Map<string, Awaited<ReturnType<typeof listOwnedPaperRequestContinuationsForTurn>>>();
+  await Promise.all(turnIds.map(async (turnId) => {
+    const rows = await listOwnedPaperRequestContinuationsForTurn(env, sessionId, userId, turnId);
+    continuationsByTurn.set(turnId, rows);
+  }));
+
+  const byResource = new Map<string, PaperTaskHistoryCandidate>();
+  for (const resultRow of eventRows) {
+    if (resultRow.event_type !== "tool_result" || resultRow.status !== "succeeded" || !resultRow.tool_call_id) continue;
+    const callRow = toolCalls.get(resultRow.tool_call_id);
+    if (!callRow || callRow.tool_name !== PAPER_MATERIALIZE_TOOL || callRow.turn_id !== resultRow.turn_id) continue;
+    const payload = parseMaterializeSummary(resultRow.result_summary);
+    if (payload?.mode !== "processing" && payload?.mode !== "ready") continue;
+    const resourceId = safeOpaqueId(payload.resource_id);
+    const correlationId = safeOpaqueId(resultRow.turn_id);
+    const toolCallId = safeOpaqueId(resultRow.tool_call_id);
+    if (!resourceId || !correlationId || !toolCallId) continue;
+    const requestedContinuationId = payload.continuation_id == null
+      ? null
+      : safeOpaqueId(payload.continuation_id);
+    if (payload.continuation_id != null && !requestedContinuationId) continue;
+    const continuation = (continuationsByTurn.get(resultRow.turn_id) ?? []).find((row) =>
+      row.resource_id === resourceId
+      && (!requestedContinuationId || row.continuation_id === requestedContinuationId),
+    );
+    // A prose-only message or an uncorrelated result is never a task. The
+    // owner/session/resource join above is the durable authority for this map.
+    if (!continuation) continue;
+    byResource.delete(resourceId);
+    byResource.set(resourceId, {
+      resource_id: resourceId,
+      continuation_id: continuation.continuation_id,
+      correlation_id: correlationId,
+      tool_call_id: toolCallId,
+      materialize_status: "succeeded",
+      readiness: "unknown",
+    });
+  }
+  return [...byResource.values()];
 }
 
 function toHistoryMessages(rows: ChatEventRow[]): Array<{ role: "user" | "assistant"; content: string }> {
@@ -127,12 +218,15 @@ export async function getSessionMessages(env: Env, user: AuthedUser, sessionId: 
         .filter((row) => row.role === "user" || row.role === "assistant")
         .map((row) => ({ role: row.role, content: boundedText(row.content, MAX_HISTORY_TEXT_CHARS) })),
       events: [],
+      paper_tasks: [],
       legacy_text_only: true,
     });
   }
+  const paperTasks = await projectPaperTaskCandidates(env, user.userId, sessionId, eventRows);
   return json({
     messages: toHistoryMessages(eventRows),
     events: legacyTextOnly ? [] : toSafeHistoryEvents(eventRows),
+    paper_tasks: paperTasks,
     legacy_text_only: legacyTextOnly,
   });
 }

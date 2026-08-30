@@ -1,0 +1,51 @@
+# PAPER-FIX-04 tests and exit codes
+
+All commands below ran on `cloudflare-deploy`. Exit codes are recorded
+verbatim; the initial expected test-first failures and two local resource
+issues are retained rather than hidden.
+
+## Test-first and focused verification
+
+1. `cd frontend && npx vitest run lib/api/sessions.test.ts` — exit `1` before
+   implementation: the new `paperTasks` normalization assertion failed because
+   the field did not yet exist.
+2. `cd cloudflare-worker && npm test -- --run test/sessions.test.ts` — exit `1`
+   before implementation: the new fixture correctly exposed that a resource
+   link was required; the fixture was corrected to match the real materialize
+   path, without weakening the assertion.
+3. `cd cloudflare-worker && npm test -- --run test/sessions.test.ts` — exit `0`,
+   4 tests passed after implementation.
+4. `cd frontend && npx vitest run lib/api/sessions.test.ts lib/chat-state.test.ts`
+   — exit `0`, 16 tests passed.
+5. `cd frontend && npx playwright test e2e/chat.spec.ts -g "creates a Paper task from a new chat"`
+   — exit `1` before elevation: the local web server bind was denied with
+   `EPERM` on `127.0.0.1:3000`; no test assertion ran.
+6. The same focused Playwright command with the approved local-server
+   permission — exit `0`, 1 test passed.
+7. `cd frontend && npx vitest run hooks/use-paper-progress.test.tsx` — the
+   first post-change attempt exited `1` with Node OOM because the newly added
+   test passed fresh array literals on every render. The test input was made
+   referentially stable; the isolated rerun exited `0`, 6 tests passed.
+
+## Final mandatory and affected gates
+
+8. `cd cloudflare-worker && npm run check` — exit `0`.
+9. `cd cloudflare-worker && npm test` — exit `0`, 26 files / 149 tests passed.
+10. `cd frontend && npm run typecheck` — exit `0`.
+11. `cd frontend && npm run lint` — exit `0`.
+12. `cd frontend && npm run test:unit` — exit `0`, 16 files / 78 tests passed.
+    Existing React `act(...)` warnings in unrelated image-judge/task tests
+    remained warnings only; no test was removed or relaxed.
+13. `cd frontend && npm run test:e2e` with the approved local-server
+    permission — exit `0`, 15 tests passed, including new-chat/materialize,
+    refresh/sidebar rehydration, processing-vs-ready, and ready resume.
+14. `zsh -lc 'eval "$(pyenv init - zsh)" && pyenv shell Agent && pytest -q tests/test_paper_processor_runtime.py tests/test_paper_processor_ingestion.py'`
+    — exit `0`, 12 tests passed. `pyenv` emitted only its existing non-fatal
+    shim rehash permission warning; no Processor source was changed.
+15. `git diff --check` after the final source/document edits — exit `0`.
+16. Changed-scope secret scan and staged secret scan are recorded in
+    `secret-scan.txt`; both normalized gates passed with no secret values
+    read or emitted.
+
+No remote D1 migration, R2 write, Processor/zhangbot operation, WAF/Secret/
+Redis change, deployment, browser claim, or Git push was performed.

@@ -4,10 +4,12 @@ import {
   INITIAL_CHAT_STATE,
   deriveSessionTitle,
   getMessagesForSession,
+  getPaperTasksForSession,
   getToolTimelineForSession,
   isDefaultSessionTitle,
 } from "@/lib/chat-state";
 import { describe, expect, it } from "vitest";
+import type { PaperTaskCandidate } from "@/lib/paper-task";
 
 describe("chatReducer", () => {
   it("sets input text", () => {
@@ -85,6 +87,28 @@ describe("chatReducer", () => {
     });
     expect(getToolTimelineForSession(updated, "s1")[0]).toMatchObject({ status: "succeeded", summary: "ready" });
     expect(updated.sessionLegacyHistoryMap.s1).toBe(false);
+  });
+
+  it("keeps server-projected Paper task identities separate from chat prose", () => {
+    const task: PaperTaskCandidate = {
+      resourceId: "resource-1",
+      continuationId: "continuation-1",
+      correlationId: "turn-1",
+      toolCallId: "call-1",
+      materializeStatus: "succeeded",
+      readiness: "unknown",
+    };
+    const projected = chatReducer(INITIAL_CHAT_STATE, {
+      type: "set_session_paper_tasks",
+      sessionId: "s1",
+      tasks: [task],
+    });
+    const replaced = chatReducer(projected, {
+      type: "upsert_session_paper_task",
+      sessionId: "s1",
+      task: { ...task, continuationId: "continuation-2" },
+    });
+    expect(getPaperTasksForSession(replaced, "s1")).toEqual([{ ...task, continuationId: "continuation-2" }]);
   });
 });
 

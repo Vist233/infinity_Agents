@@ -768,6 +768,79 @@ preflight, real D1/R2/Processor/browser acceptance, and all negative cases are
 re-run under the release runbook.  This local UI card does not claim PAPER-10
 completion.
 
+### PAPER-FIX-04 — Production chat rehydration and task projection
+
+**Outcome:** a real Paper request always produces a durable, owner-scoped task
+candidate from the chat correlation ledger, and the selected conversation
+rehydrates its messages, tool timeline, and progress task after refresh.  A
+model sentence such as "开始下载并解析 PDF" is never treated as task state,
+and stream closure after asynchronous materialization is not reported as a
+completed or failed chat turn.
+
+**Root-cause evidence:** the production reproduction created a real resource,
+but the frontend ignored the typed `paper_processing` stream event.  Its live
+candidate path consequently depended on a JSON-shaped materialize summary and
+could show only assistant prose; when the stream closed without `done`, the
+generic `onClose` path finalized the request as an error.  The session history
+endpoint returned messages and safe tool events but no server-derived Paper
+task projection, so refresh had no independent task identity to rehydrate.
+The first-turn title update also rebuilt the sidebar from a potentially stale
+session-list ref, which could erase a just-created local session.  The resource
+was already durably created; this card does not change the model provider,
+Processor, WAF, or deployment.
+
+- `GET /api/sessions/:session_id/messages` now adds a bounded `paper_tasks`
+  projection.  The Edge matches a successful canonical `materialize_paper`
+  tool-call/result pair in the same turn to an owner/session/resource-validated
+  `paper_request_continuations` row.  The response contains only
+  `resource_id`, `continuation_id`, turn/tool correlation, and the fixed
+  `materialize_status: succeeded` / `readiness: unknown` markers.
+- The frontend stores that projection per session and merges it with live
+  timeline candidates.  It accepts a live `paper_processing` event only when
+  the event correlates to a successful materialize tool event, then polls the
+  existing authenticated progress read model.  A processing event settles as
+  resumable/non-terminal after stream close; it cannot become `ready` without
+  a server progress snapshot.  Invalid, missing, or denied resources remain
+  hidden by the existing read-model contract.
+- New-session creation and first-turn title projection use idempotent session
+  upserts.  Sidebar selection explicitly starts the de-duplicated owner-scoped
+  history load, including messages, tool timeline, task candidates, and the
+  existing progress hook.  No browser storage, provider authority, PDF/full
+  text/image data, R2 key, or secret is introduced.
+
+**Focused positive tests:** a live display-safe materialize result plus
+structured `paper_processing` event creates a non-ready task; a server
+`paper_tasks` projection hydrates the progress hook; a new chat creates and
+selects its session; refresh plus sidebar selection restores messages, tool
+timeline, and the task; a ready progress snapshot retains the existing resume
+action.  The existing processing-vs-ready, lifecycle, polling, and continuation
+tests remain in force.
+
+**Focused negative tests:** prose-only assistant output, malformed/failed or
+uncorrelated materialize results, missing continuation/resource, and
+cross-user/unlinked identity produce no task; invalid API projection fields are
+discarded; processing never renders ready; stale session loads cannot update a
+new selection; and duplicate resume/ownership protections remain unchanged.
+
+**Local pass gate:** focused Edge session-history/projection tests and frontend
+session/state/progress/E2E tests; `cd cloudflare-worker && npm run check && npm
+test`; frontend typecheck, lint, unit, and Playwright E2E; then
+`git diff --check` and a changed-scope secret scan. No deployment, remote
+migration, browser claim, Processor/zhangbot/WAF/Secret/Redis change, or Git
+push is part of this card.
+
+**Rollback:** revert the local review commit.  The `paper_tasks` response field
+is additive and read-only; preserve D1 chat events, resource metadata,
+continuations, R2 objects, leases, and existing continuation behavior.  A
+previous frontend can ignore the field, while the prior server history remains
+readable.
+
+**Next exact action:** prepare a versioned PAPER-10 release that includes this
+local code and re-run the authenticated production browser acceptance for new
+chat creation, processing progress, refresh/sidebar rehydration, ready resume,
+text/image reads, and ownership negatives.  This card does not claim PAPER-10
+production acceptance.
+
 ## 4. Completion checkpoint template
 
 Every card checkpoint must answer these fields explicitly:

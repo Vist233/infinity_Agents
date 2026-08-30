@@ -1,0 +1,44 @@
+# PAPER-FIX-04 diff summary
+
+## Root cause and server projection
+
+- `cloudflare-worker/src/sessions.ts` now adds an additive `paper_tasks`
+  projection to session history. It matches a successful canonical
+  `materialize_paper` tool-call/result pair in the same turn with an
+  owner/session/resource-validated `paper_request_continuations` row. It
+  exposes only opaque resource/continuation/turn/tool IDs and fixed status
+  markers; prose-only, malformed, failed, unlinked, or cross-user data creates
+  no candidate.
+- The production reproduction had a real resource, so the primary failure was
+  not model output, Processor health, or resource creation. The previous
+  frontend had no server-derived task identity in refreshed session history.
+
+## Live and refresh behavior
+
+- `frontend/hooks/use-chat-controller.ts` correlates the typed
+  `paper_processing` event to a successful live materialize tool event, stores
+  its opaque candidate, and settles stream close as resumable processing rather
+  than a final error. It also explicitly loads a selected sidebar session and
+  uses session upserts for creation/first-turn title updates so stale list
+  state cannot erase the new session.
+- `frontend/lib/api/sessions.ts`, `frontend/lib/chat-state.ts`, and
+  `frontend/hooks/use-paper-progress.ts` normalize, store, and consume the
+  owner-scoped server projection. The existing progress endpoint remains the
+  only source of lifecycle/readiness; processing never becomes ready from chat
+  prose or a tool-success marker.
+
+## Regression coverage and contracts
+
+- `cloudflare-worker/test/sessions.test.ts` covers durable correlation,
+  owner/resource validation, and prose-only exclusion.
+- `frontend/lib/api/sessions.test.ts`, `frontend/lib/chat-state.test.ts`, and
+  `frontend/hooks/use-paper-progress.test.tsx` cover safe normalization,
+  state replacement, and display-safe server projection.
+- `frontend/e2e/chat.spec.ts` covers new chat -> materialize -> processing card,
+  refresh -> sidebar selection -> message/timeline/task rehydration, and the
+  existing processing/ready/resume path.
+- Governing design and execution documents define the additive API and the
+  production release prerequisite.
+
+No migration, dependency, Processor, WAF, Secret, Redis, R2, or deployment
+artifact was changed.
