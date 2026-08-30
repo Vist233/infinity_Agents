@@ -13,6 +13,7 @@ import ipaddress
 import json
 import logging
 import math
+import mmap
 import os
 import re
 import signal
@@ -749,10 +750,13 @@ def process_one(
                 _runtime_checkpoint(deadline, heartbeat, "downloading")
                 _check_memory(limits, stage="downloading")
                 stage = "source_upload"
-                source_body = source_path.read_bytes()
-                _check_memory(limits, stage="downloading")
-                client.upload(grant, "source_pdf", source_body, "application/pdf")
-                del source_body
+                # Do not copy a potentially large PDF into the Python heap
+                # merely to preserve it in R2.  mmap is buffer-compatible for
+                # the fixed client upload path and keeps the 192 MiB runtime
+                # budget available for extraction.
+                with source_path.open("rb") as source_handle:
+                    with mmap.mmap(source_handle.fileno(), 0, access=mmap.ACCESS_READ) as source_body:
+                        client.upload(grant, "source_pdf", source_body, "application/pdf")
                 _runtime_checkpoint(deadline, heartbeat, "downloading")
                 stage = "extracting"
                 client.stage(grant, "extracting")
