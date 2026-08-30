@@ -158,7 +158,7 @@ loop. The service unit supplies these non-secret runtime limits:
 | whole attempt | 240 seconds | Unix wall-clock alarm plus cooperative checkpoints |
 | source download | 90 seconds | monotonic stage deadline and 30-second HTTP request timeout |
 | PDF extraction | 120 seconds | monotonic stage deadline, page/image checkpoints, and wall-clock alarm |
-| result upload/finalize | 90 seconds | monotonic stage deadline and per-request timeout |
+| result upload/finalize | 150 seconds | monotonic stage deadline and per-request timeout; the 240-second whole-attempt cap still applies |
 | lease heartbeat | every 30 seconds | background `renew` using the same fenced grant |
 | Processor RSS budget | 512 MiB | `/proc`/runtime RSS guard before and during extraction |
 | cgroup soft/hard cap | 512 MiB / 768 MiB | `MemoryHigh` / `MemoryMax` in systemd |
