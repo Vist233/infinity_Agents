@@ -23,6 +23,7 @@ import tempfile
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -753,19 +754,28 @@ def process_one(
                 client.upload(grant, "text_pages", text_pages_body, "application/json", "pages")
                 del text_pages_body
                 _runtime_checkpoint(deadline, heartbeat, "uploading")
-                for image in result.images:
-                    _runtime_checkpoint(deadline, heartbeat, "uploading")
+                def upload_image(image: dict[str, Any]) -> None:
                     image_body = Path(str(image["local_path"])).read_bytes()
-                    _check_memory(limits, stage="uploading")
-                    client.upload(
-                        grant,
-                        "image",
-                        image_body,
-                        str(image["content_type"]),
-                        str(image["image_id"]),
-                    )
-                    del image_body
-                    _runtime_checkpoint(deadline, heartbeat, "uploading")
+                    try:
+                        client.upload(
+                            grant,
+                            "image",
+                            image_body,
+                            str(image["content_type"]),
+                            str(image["image_id"]),
+                        )
+                    finally:
+                        del image_body
+
+                # Image objects are independent fenced writes. A small, fixed
+                # fan-out removes per-request network latency without allowing
+                # unbounded work or a large resident-memory spike.
+                with ThreadPoolExecutor(max_workers=min(3, max(1, len(result.images)))) as executor:
+                    uploads = [executor.submit(upload_image, image) for image in result.images]
+                    for upload in as_completed(uploads):
+                        _runtime_checkpoint(deadline, heartbeat, "uploading")
+                        upload.result()
+                        _check_memory(limits, stage="uploading")
                 _check_memory(limits, stage="uploading")
                 image_manifest_body = result.image_manifest_json()
                 _check_memory(limits, stage="uploading")

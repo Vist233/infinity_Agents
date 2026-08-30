@@ -174,6 +174,11 @@ existing fenced Edge `fail` operation, so D1 records a terminal failed
 attempt/resource rather than relying on process liveness; the normal retry
 flow can create a new attempt without reusing a stale lease.
 
+Independent image-object writes use a fixed fan-out of at most three requests.
+The attempt remains fenced, image bytes remain bounded by the existing per-image
+limit, and the application waits for every submitted upload before manifests
+and finalization are admitted.
+
 The runner emits only safe operational events (`grant`, `succeeded`,
 `failed`, `cancelled`, and `poll_empty`) with opaque resource/attempt IDs,
 stage, and bounded error codes. It never logs PDF bytes, extracted text,
