@@ -14,7 +14,7 @@ Environment=PAPER_PROCESSOR_DOWNLOAD_TIMEOUT_SECONDS=90
 Environment=PAPER_PROCESSOR_EXTRACTION_TIMEOUT_SECONDS=120
 Environment=PAPER_PROCESSOR_UPLOAD_TIMEOUT_SECONDS=150
 Environment=PAPER_PROCESSOR_HEARTBEAT_INTERVAL_SECONDS=30
-Environment=PAPER_PROCESSOR_MAX_RESIDENT_MEMORY_BYTES=234881024
+Environment=PAPER_PROCESSOR_MAX_RESIDENT_MEMORY_BYTES=536870912
 Environment=PYTHONPATH=%h/.local/share/infinity-paper-processor/current
 Environment=PYTHONUNBUFFERED=1
 ExecStart=%h/.local/share/infinity-paper-processor/current/.venv/bin/python -m backend.paper_processor.runner
