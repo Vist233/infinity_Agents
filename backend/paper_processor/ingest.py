@@ -716,6 +716,7 @@ def process_one(
     deadline = ProcessingDeadline(runtime_limits)
     heartbeat = LeaseHeartbeat(client, grant, interval_seconds=runtime_limits.heartbeat_interval_seconds)
     heartbeat.start()
+    stage = "downloading"
     _safe_log("grant", grant, stage="downloading")
     try:
         with _attempt_alarm(runtime_limits.attempt_timeout_seconds):
@@ -747,11 +748,13 @@ def process_one(
                 del downloaded
                 _runtime_checkpoint(deadline, heartbeat, "downloading")
                 _check_memory(limits, stage="downloading")
+                stage = "source_upload"
                 source_body = source_path.read_bytes()
                 _check_memory(limits, stage="downloading")
                 client.upload(grant, "source_pdf", source_body, "application/pdf")
                 del source_body
                 _runtime_checkpoint(deadline, heartbeat, "downloading")
+                stage = "extracting"
                 client.stage(grant, "extracting")
                 _safe_log("stage", grant, stage="extracting")
                 result = extract_pdf(
@@ -763,6 +766,7 @@ def process_one(
                     heartbeat=heartbeat,
                 )
                 _runtime_checkpoint(deadline, heartbeat, "extracting")
+                stage = "uploading"
                 client.stage(grant, "uploading")
                 _safe_log("stage", grant, stage="uploading")
                 deadline.start_stage("uploading")
@@ -804,6 +808,7 @@ def process_one(
                 del text_manifest_body
                 _runtime_checkpoint(deadline, heartbeat, "uploading")
                 _check_memory(limits, stage="uploading")
+                stage = "finalizing"
                 client.finalize(grant, result.manifest)
                 _safe_log("succeeded", grant, stage="ready")
                 return True
@@ -825,7 +830,7 @@ def process_one(
         # like user intent and can hide the operational error from a retry
         # decision.  The Edge validates the exact grant token and epoch.
         _safe_fail(client, grant, "PAPER_PROCESSOR_RUNTIME_ERROR")
-        _safe_log("failed", grant, stage="terminal", error_code="PAPER_PROCESSOR_RUNTIME_ERROR")
+        _safe_log("failed", grant, stage=stage, error_code="PAPER_PROCESSOR_RUNTIME_ERROR")
         raise ProcessorError("PAPER_PROCESSOR_RUNTIME_ERROR", "paper processor encountered an unexpected runtime error") from error
     finally:
         heartbeat.stop()
