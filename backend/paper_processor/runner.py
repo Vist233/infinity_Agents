@@ -43,7 +43,7 @@ def main() -> None:
         except Exception:
             # Details are intentionally omitted: the Edge receives only the
             # bounded failure code and the next poll remains the recovery path.
-            LOGGER.warning("paper_processor event=attempt_cancelled error_code=PAPER_PROCESSOR_RUNTIME_ERROR")
+            LOGGER.warning("paper_processor event=attempt_failed error_code=PAPER_PROCESSOR_RUNTIME_ERROR")
             try:
                 client.connect()
             except Exception:

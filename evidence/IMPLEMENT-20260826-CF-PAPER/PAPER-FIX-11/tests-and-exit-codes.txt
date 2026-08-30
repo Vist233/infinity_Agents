@@ -1,0 +1,6 @@
+# PAPER-FIX-11 tests and exit codes
+
+- `cd cloudflare-worker && npm test -- --run test/paper-processor.test.ts test/paper-continuation.test.ts test/tools.test.ts`: exit 0; 3 files / 27 tests passed.
+- `pyenv shell Agent; pytest -q tests/test_paper_processor_ingestion.py tests/test_paper_processor_runtime.py`: exit 0; 18 tests passed.
+- `cd cloudflare-worker && npm run check && npm test`: exit 0; typecheck passed and 26 files / 156 tests passed.
+- `git diff --check`: exit 0.

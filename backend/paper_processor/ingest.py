@@ -671,7 +671,7 @@ def _safe_fail(client: Any, grant: Any, error_code: str) -> None:
             fail(grant, error_code)
         else:
             client.cancel(grant)
-    except Exception:
+    except Exception as error:
         try:
             client.cancel(grant)
         except Exception:
@@ -817,11 +817,16 @@ def process_one(
         _safe_fail(client, grant, "PAPER_PROCESSOR_MEMORY_LIMIT")
         _safe_log("failed", grant, stage="terminal", error_code="PAPER_PROCESSOR_MEMORY_LIMIT")
         raise ProcessorError("PAPER_PROCESSOR_MEMORY_LIMIT", "paper processing memory budget exceeded") from error
-    except Exception:
+    except Exception as error:
         heartbeat.stop()
-        _safe_cancel(client, grant)
-        _safe_log("cancelled", grant, stage="terminal", error_code="PAPER_PROCESSOR_RUNTIME_ERROR")
-        raise
+        # A grant has already been leased.  An unexpected local/runtime error
+        # must close that exact fenced attempt as a terminal failure, never as
+        # cancellation: cancellation would make an infrastructure defect look
+        # like user intent and can hide the operational error from a retry
+        # decision.  The Edge validates the exact grant token and epoch.
+        _safe_fail(client, grant, "PAPER_PROCESSOR_RUNTIME_ERROR")
+        _safe_log("failed", grant, stage="terminal", error_code="PAPER_PROCESSOR_RUNTIME_ERROR")
+        raise ProcessorError("PAPER_PROCESSOR_RUNTIME_ERROR", "paper processor encountered an unexpected runtime error") from error
     finally:
         heartbeat.stop()
 

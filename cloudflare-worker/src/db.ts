@@ -865,6 +865,41 @@ export async function createPaperRequestContinuation(
       WHERE session_id = ?1 AND turn_id = ?2 AND resource_id = ?3`,
   ).bind(input.sessionId, input.turnId, input.resource.resource_id).first<PaperRequestContinuationRow>();
   if (!existing) throw new Error("Paper continuation could not be persisted");
+  // A retry can be requested from the original chat turn.  The schema keeps
+  // that turn/resource pair unique, so do not manufacture a second stale task
+  // card.  Instead, only an auditable one-time download retry may reactivate
+  // its exact failed continuation.  This makes the continuation live again
+  // before a new Processor claim while preserving the prior failed attempt and
+  // audit history.  No other terminal failure is ever reopened.
+  if (existing.status === "failed" && ownedResource.status === "requested") {
+    const reopened = await env.DB.prepare(
+      `UPDATE paper_request_continuations
+          SET status = 'waiting', active_turn_id = NULL, lease_expires_at = NULL,
+              last_error_code = NULL, updated_at = ?2
+        WHERE continuation_id = ?1 AND session_id = ?3 AND user_id = ?4
+          AND status = 'failed' AND last_error_code = 'PAPER_PROCESSOR_DOWNLOAD_TIMEOUT'
+          AND EXISTS (
+            SELECT 1 FROM paper_resources r
+             WHERE r.resource_id = paper_request_continuations.resource_id
+               AND r.status = 'requested' AND r.session_id = ?3 AND r.user_id = ?4
+          )
+          AND EXISTS (
+            SELECT 1 FROM paper_resource_audit_events retry
+             WHERE retry.resource_id = paper_request_continuations.resource_id
+               AND retry.stage = 'materialize' AND retry.outcome = 'succeeded'
+               AND retry.metadata_json = '{"retry":true,"reason_code":"PAPER_PROCESSOR_DOWNLOAD_TIMEOUT"}'
+          )`,
+    ).bind(existing.continuation_id, createdAt, input.sessionId, input.userId).run();
+    if ((reopened.meta?.changes ?? 0) === 1) {
+      const current = await env.DB.prepare(
+        `SELECT continuation_id, session_id, user_id, turn_id, client_request_id,
+                resource_id, status, active_turn_id, lease_expires_at, expires_at,
+                last_error_code, created_at, updated_at, completed_at
+           FROM paper_request_continuations WHERE continuation_id = ?1`,
+      ).bind(existing.continuation_id).first<PaperRequestContinuationRow>();
+      if (current) return current;
+    }
+  }
   return existing;
 }
 

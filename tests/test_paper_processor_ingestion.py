@@ -229,6 +229,11 @@ class FailingProcessorClient(FakeProcessorClient):
         return {"status": "failed", "error_code": error_code}
 
 
+class RuntimeErrorProcessorClient(FailingProcessorClient):
+    def input_metadata(self, _grant: ProcessorGrant) -> dict[str, str]:
+        raise RuntimeError("unclassified local runtime failure")
+
+
 def test_process_one_uploads_source_pages_images_manifests_and_cleans(tmp_path: Path) -> None:
     fixture = make_pdf(tmp_path / "upload.pdf", pages=2)
     client = FakeProcessorClient(fixture.read_bytes())
@@ -286,6 +291,18 @@ def test_process_one_turns_memory_pressure_into_terminal_failure(tmp_path: Path)
     assert client.cancelled is False
     assert client.finalized is False
     assert not (tmp_path / "processor-work").exists() or not any((tmp_path / "processor-work").iterdir())
+
+
+def test_process_one_turns_unclassified_runtime_error_into_fenced_failure(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="infinity.paper_processor")
+    client = RuntimeErrorProcessorClient(b"%PDF-1.7\nunused")
+    with pytest.raises(ProcessorError, match="PAPER_PROCESSOR_RUNTIME_ERROR"):
+        process_one(client, tmp_path / "processor-work")
+    assert client.failed == ["PAPER_PROCESSOR_RUNTIME_ERROR"]
+    assert client.cancelled is False
+    assert client.finalized is False
+    assert "PAPER_PROCESSOR_RUNTIME_ERROR" in "\n".join(caplog.messages)
+    assert "unclassified local runtime failure" not in "\n".join(caplog.messages)
 
 
 def test_lease_heartbeat_renews_and_surfaces_failure_without_payloads() -> None:

@@ -1,0 +1,5 @@
+Baseline branch: cloudflare-deploy
+Baseline commit: 203190e fix: preserve paper retry after expired leases
+
+No deployment, push, remote D1 operation, R2 write, Processor release, or
+browser action was performed by this local card.

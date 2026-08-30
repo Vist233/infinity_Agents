@@ -1,0 +1,5 @@
+Changed only the local continuation retry fence, fake-D1 test model, Processor
+runtime unexpected-exception terminal behavior, source delivery hash, focused
+tests, design/execution documentation, and this evidence. A post-grant runtime
+exception now reports PAPER_PROCESSOR_RUNTIME_ERROR through fail and never
+emits a Processor cancellation.

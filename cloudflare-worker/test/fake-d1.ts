@@ -663,6 +663,24 @@ class FakeStatement {
       });
       return { meta: { changes: 1 } };
     }
+    if (sql.includes("UPDATE paper_request_continuations") && sql.includes("SET status = 'waiting'")
+      && sql.includes("PAPER_PROCESSOR_DOWNLOAD_TIMEOUT")) {
+      const [continuationId, now, sessionId, userId] = this.args as [string, number, string, string];
+      const row = this.db.paperRequestContinuations.get(continuationId);
+      const resource = row ? this.db.paperResources.get(row.resource_id) : undefined;
+      const hasRetryAudit = row && this.db.paperAuditEvents.some((event) => event.resource_id === row.resource_id
+        && event.stage === "materialize" && event.outcome === "succeeded"
+        && event.metadata_json === '{"retry":true,"reason_code":"PAPER_PROCESSOR_DOWNLOAD_TIMEOUT"}');
+      if (!row || !resource || !hasRetryAudit || row.session_id !== sessionId || row.user_id !== userId
+        || row.status !== "failed" || row.last_error_code !== "PAPER_PROCESSOR_DOWNLOAD_TIMEOUT"
+        || resource.session_id !== sessionId || resource.user_id !== userId || resource.status !== "requested") return { meta: { changes: 0 } };
+      row.status = "waiting";
+      row.active_turn_id = null;
+      row.lease_expires_at = null;
+      row.last_error_code = null;
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
     if (sql.includes("UPDATE paper_request_continuations") && sql.includes("SET status = CASE")
       && sql.includes("paper_resources.resource_id = paper_request_continuations.resource_id")) {
       const [continuationId, sessionId, userId, now] = this.args as [string, string, string, number];

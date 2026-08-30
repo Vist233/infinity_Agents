@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { AuthedUser } from "../src/auth";
 import type { Env } from "../src/env";
-import { createPaperRequestContinuation, createPaperResource, linkPaperResource, retryTimedOutOwnedPaperResource } from "../src/db";
+import { createPaperRequestContinuation, createPaperResource, linkPaperResource } from "../src/db";
 import { handlePaperProcessorApi } from "../src/paper-processor";
 import { isPaperProcessorNamespacePath, isPaperProcessorProtocolRoute } from "../src/paper-processor-access";
 import { Sha256 } from "../src/sha256";
+import { materializePaper } from "../src/tools";
 import { makeEnv } from "./fake-d1";
 
 class MemoryBucket {
@@ -224,8 +225,12 @@ describe("dedicated Paper Processor control protocol", () => {
   it("allows one download-timeout retry after expired history and issues the next fenced epoch", async () => {
     const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SOURCE_IP: "203.0.113.10", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
     db.seedChatSession("s1", "alice");
-    const resource = await createPaperResource(env, { resource_id: "resource-timeout-retry", session_id: "s1", user_id: "alice", source_kind: "arxiv", source_ref: "retry-me", canonical_ref: "retry-me", title: "Retry" });
+    db.paperAuth.add("s1|arxiv:2401.00003");
+    const resource = await createPaperResource(env, { resource_id: "resource-timeout-retry", session_id: "s1", user_id: "alice", source_kind: "arxiv", source_ref: "2401.00003", canonical_ref: "2401.00003", title: "Retry" });
     await linkPaperResource(env, "s1", resource.resource_id, "alice", "read");
+    const originalContinuation = await createPaperRequestContinuation(env, {
+      continuationId: "continuation-timeout-retry", sessionId: "s1", userId: "alice", turnId: "client:timeout-retry", resource,
+    });
     db.paperProcessingAttempts.set("attempt-expired-1", {
       attempt_id: "attempt-expired-1", resource_id: resource.resource_id, processor_id: "processor-1", lease_token_hash: "c".repeat(64), fencing_epoch: 1,
       status: "expired", started_at: 1, lease_expires_at: 2, finished_at: 2, error_code: "PAPER_PROCESSOR_LEASE_EXPIRED", error_message_safe: "safe",
@@ -238,15 +243,25 @@ describe("dedicated Paper Processor control protocol", () => {
       error_code: "PAPER_PROCESSOR_DOWNLOAD_TIMEOUT", error_message: "download deadline exceeded",
     }, first.lease_token), env);
     expect(failed?.status).toBe(200);
+    expect(db.paperRequestContinuations.get(originalContinuation.continuation_id)).toMatchObject({ status: "failed", last_error_code: "PAPER_PROCESSOR_DOWNLOAD_TIMEOUT" });
 
-    const retried = await retryTimedOutOwnedPaperResource(env, { resourceId: resource.resource_id, sessionId: "s1", userId: "alice" });
-    expect(retried).toMatchObject({ resource_id: resource.resource_id, status: "requested" });
+    const retried = JSON.parse(await materializePaper(env, "s1", "alice", "arxiv:2401.00003", {
+      turnId: "client:timeout-retry", clientRequestId: "timeout-retry",
+    }));
+    expect(retried).toMatchObject({ resource_id: resource.resource_id, status: "requested", continuation_id: originalContinuation.continuation_id });
+    expect(db.paperRequestContinuations.get(originalContinuation.continuation_id)).toMatchObject({ status: "waiting", last_error_code: null });
     const secondPoll = await handlePaperProcessorApi(request("/api/paper-processor/poll", { method: "POST", headers: processorHeaders(session.processor_session_token), body: "{}" }), env);
     const second = await secondPoll!.json() as { attempt_id: string; resource_id: string; fencing_epoch: number };
     expect(first.fencing_epoch).toBe(2);
     expect(second).toMatchObject({ resource_id: resource.resource_id, fencing_epoch: 3 });
     expect(second.attempt_id).not.toBe(first.attempt_id);
     expect(db.paperProcessingAttempts.get(first.attempt_id)?.status).toBe("failed");
+    const staleCancel = await handlePaperProcessorApi(controlRequest(session.processor_session_token, "cancel", {
+      attempt_id: first.attempt_id, resource_id: first.resource_id, fencing_epoch: first.fencing_epoch,
+    }, first.lease_token), env);
+    expect(staleCancel?.status).toBe(409);
+    expect(db.paperResources.get(resource.resource_id)?.status).toBe("downloading");
+    expect(db.paperProcessingAttempts.get(second.attempt_id)?.status).toBe("claimed");
   });
 
   it("cancels an active attempt once and rejects the expired session after restart", async () => {

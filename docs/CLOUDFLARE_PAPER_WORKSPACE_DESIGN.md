@@ -690,6 +690,26 @@ to parse/security/cancellation failures and never creates an unbounded
 browser-driven loop.  A second terminal timeout stays failed and is reported
 as such.
 
+### 9.3 Continuation fencing across a retry
+
+The original chat turn and its Paper resource retain a unique continuation
+identity.  If that continuation failed solely because the resource reached the
+eligible download timeout, an audited retry from the same turn reactivates it
+to `waiting` after the resource is atomically requeued.  This avoids a second
+task card while ensuring the visible continuation is live for the new
+Processor epoch.  No other terminal continuation can be reopened.
+
+Processor cancellation remains fenced to the exact active attempt.  A failed
+or expired prior grant cannot change the resource or cancel the continuation
+belonging to the new epoch.
+
+After a Processor grant is issued, an otherwise uncategorized local exception
+is a processor failure, not a cancellation.  The runtime reports only the
+stable `PAPER_PROCESSOR_RUNTIME_ERROR` code through the exact leased `fail`
+operation.  This keeps cancellation semantically reserved for an explicit
+resource/user action and makes the failure available to the bounded retry
+policy without exposing exception details.
+
 The Paper Workspace is complete only when a real authenticated browser can:
 
 1. search an open paper;

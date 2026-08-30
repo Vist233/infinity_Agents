@@ -1076,6 +1076,34 @@ Cloudflare, Processor, browser, or Git-remote operation.
 **Rollback:** revert the local review commit.  Existing failed resources remain
 valid terminal records; no D1 rewrite is required for rollback.
 
+### PAPER-FIX-11 — Retry-safe continuation reactivation
+
+**Outcome:** when the once-per-resource download-timeout retry originates from
+the same original chat turn, its failed continuation is reactivated to
+`waiting` only after the audited retry has returned the owned resource to
+`requested`.  It is therefore the current live continuation rather than a
+stale failed task card.
+
+- The unique `(session_id, turn_id, resource_id)` continuation contract remains
+  intact; no duplicate card or parallel cancellation authority is introduced.
+- Reactivation requires same owner/session, the exact terminal timeout code,
+  `requested` resource status, and the deterministic retry audit fact.  Generic
+  failed/cancelled/parse continuations stay terminal.
+- A stale Processor grant is still fenced: an old failed grant's cancel call
+  cannot cancel the newer epoch or the reactivated continuation.
+
+**Focused gate:** expired epoch 1, failed epoch 2, audited retry/reopened
+continuation, epoch 3 claim, then an old epoch-2 cancel rejection while epoch
+3 remains active.
+
+- Once a Processor grant exists, every unclassified local runtime exception is
+  reported through the fenced `fail` operation as
+  `PAPER_PROCESSOR_RUNTIME_ERROR`.  It must never call the Processor `cancel`
+  operation; cancellation is reserved for an explicit user/resource lifecycle
+  action.  Runner logs use the same bounded failure outcome.
+- Required regression: force an exception after a grant and assert one bounded
+  `fail` call, no `cancel` call, no payload detail in logs, and no finalize.
+
 Every card checkpoint must answer these fields explicitly:
 
 ```markdown
