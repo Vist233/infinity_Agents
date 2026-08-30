@@ -148,6 +148,40 @@ on process failure with the configured delay; startup recovery removes stale
 temporary workspaces. Graceful shutdown stops polling, reports or cancels the
 current fenced attempt, and removes temporary files.
 
+### 3.1 Bounded attempt execution and memory pressure
+
+The Processor must not leave a claimed resource in an unobserved processing
+loop. The service unit supplies these non-secret runtime limits:
+
+| Limit | Value | Enforcement |
+|---|---:|---|
+| whole attempt | 240 seconds | Unix wall-clock alarm plus cooperative checkpoints |
+| source download | 90 seconds | monotonic stage deadline and 30-second HTTP request timeout |
+| PDF extraction | 120 seconds | monotonic stage deadline, page/image checkpoints, and wall-clock alarm |
+| result upload/finalize | 90 seconds | monotonic stage deadline and per-request timeout |
+| lease heartbeat | every 30 seconds | background `renew` using the same fenced grant |
+| Processor RSS budget | 192 MiB | `/proc`/runtime RSS guard before and during extraction |
+| cgroup soft/hard cap | 192 MiB / 256 MiB | `MemoryHigh` / `MemoryMax` in systemd |
+
+The application checks the attempt and stage deadline before and after each
+network operation and at each PDF page/image boundary. A synchronous parser
+that does not return is interrupted by the attempt alarm on the approved
+Linux runtime. A memory-budget breach or `MemoryError` is mapped to the safe
+`PAPER_PROCESSOR_MEMORY_LIMIT` code. A deadline breach is mapped to
+`PAPER_PROCESSOR_TIMEOUT` or its stage-specific code. A failed heartbeat is
+mapped to `PAPER_PROCESSOR_HEARTBEAT_FAILED`. Each of these paths calls the
+existing fenced Edge `fail` operation, so D1 records a terminal failed
+attempt/resource rather than relying on process liveness; the normal retry
+flow can create a new attempt without reusing a stale lease.
+
+The runner emits only safe operational events (`grant`, `succeeded`,
+`failed`, `cancelled`, and `poll_empty`) with opaque resource/attempt IDs,
+stage, and bounded error codes. It never logs PDF bytes, extracted text,
+headers, tokens, source URLs, local paths, or exception tracebacks. An
+unexpected transport/runtime error remains a safe cancellation path; if the
+Edge is unreachable, the normal lease/fencing recovery rules apply and the
+service reconnects rather than claiming success.
+
 ## 4. Ordered installation and release procedure
 
 Before each release, record the target account, Worker, D1 database, R2 bucket,
@@ -172,10 +206,15 @@ After the local tests, independent review, diff check, and secret scan pass:
    sanitized installation record, validate the unit, and start the single
    user service. Confirm that Redis, Relay, and Cloudflared unit state is
    unchanged.
-5. Deploy the Edge from the reviewed branch, verify the public readiness
+5. Read back the service's non-secret bounded limits, `MemoryHigh`/`MemoryMax`,
+   `Restart=on-failure`, `KillMode=control-group`, and the single active
+   instance before accepting a Paper grant. During a live attempt, verify a
+   safe stage event, at least one heartbeat before the lease window, and a
+   terminal success or safe failure; process liveness alone is not evidence.
+6. Deploy the Edge from the reviewed branch, verify the public readiness
    signal, then verify Processor connect and poll without exposing a public
    Processor route.
-6. Run the authenticated end-to-end cases: supported-source search and PDF
+7. Run the authenticated end-to-end cases: supported-source search and PDF
    materialization, D1/R2/Processor processing, page-scoped text, image
    retrieval and analysis, durable tool-call history and refresh recovery,
    provider egress, cross-user isolation, invalid identifiers, stale leases,

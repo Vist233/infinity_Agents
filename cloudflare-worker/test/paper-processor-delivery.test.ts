@@ -101,6 +101,12 @@ function assertDeliveryDefinition(value: DeliveryDefinition): void {
     "PAPER_PROCESSOR_SOURCE_IP",
     "PAPER_PROCESSOR_INSTANCE_ID",
     "PAPER_PROCESSOR_WORK_ROOT",
+    "PAPER_PROCESSOR_ATTEMPT_TIMEOUT_SECONDS",
+    "PAPER_PROCESSOR_DOWNLOAD_TIMEOUT_SECONDS",
+    "PAPER_PROCESSOR_EXTRACTION_TIMEOUT_SECONDS",
+    "PAPER_PROCESSOR_UPLOAD_TIMEOUT_SECONDS",
+    "PAPER_PROCESSOR_HEARTBEAT_INTERVAL_SECONDS",
+    "PAPER_PROCESSOR_MAX_RESIDENT_MEMORY_BYTES",
   ]));
   expect(value.secret_boundary).toMatchObject({
     processor_secret_names: ["PAPER_PROCESSOR_TOKEN"],
@@ -125,8 +131,17 @@ function assertDeliveryDefinition(value: DeliveryDefinition): void {
     readiness: expect.any(String),
     liveness: expect.any(String),
     restart: expect.any(String),
+    attempt_timeout_seconds: 240,
+    stage_timeout_seconds: { downloading: 90, extracting: 120, uploading: 90 },
+    heartbeat_interval_seconds: 30,
+    memory_high: "192M",
+    memory_budget_bytes: 201326592,
     memory_max: expect.any(String),
     tasks_max: expect.any(Number),
+    timeout_failure_code: "PAPER_PROCESSOR_TIMEOUT",
+    memory_failure_code: "PAPER_PROCESSOR_MEMORY_LIMIT",
+    heartbeat_failure_code: "PAPER_PROCESSOR_HEARTBEAT_FAILED",
+    single_attempt_behavior: expect.any(String),
     no_public_listener: true,
     user_systemd_constraint: expect.stringContaining("218/CAPABILITIES"),
   });
@@ -194,6 +209,14 @@ describe("versioned dedicated Paper Processor delivery definition", () => {
     expect(service).toContain("LockPersonality=yes");
     expect(service).toContain("RestrictSUIDSGID=yes");
     expect(service).toContain("RestrictRealtime=yes");
+    expect(service).toContain("KillMode=control-group");
+    expect(service).toContain("MemoryHigh=192M");
+    expect(service).toContain("PAPER_PROCESSOR_ATTEMPT_TIMEOUT_SECONDS=240");
+    expect(service).toContain("PAPER_PROCESSOR_DOWNLOAD_TIMEOUT_SECONDS=90");
+    expect(service).toContain("PAPER_PROCESSOR_EXTRACTION_TIMEOUT_SECONDS=120");
+    expect(service).toContain("PAPER_PROCESSOR_UPLOAD_TIMEOUT_SECONDS=90");
+    expect(service).toContain("PAPER_PROCESSOR_HEARTBEAT_INTERVAL_SECONDS=30");
+    expect(service).toContain("PAPER_PROCESSOR_MAX_RESIDENT_MEMORY_BYTES=201326592");
     expect(service).toContain("MemoryMax=256M");
     expect(service).toContain("TasksMax=32");
     expect(service).toContain("LimitNOFILE=256");

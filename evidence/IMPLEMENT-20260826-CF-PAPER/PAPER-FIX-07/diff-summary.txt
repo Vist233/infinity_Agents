@@ -1,0 +1,44 @@
+# PAPER-FIX-07 diff summary
+
+## Runtime changes
+
+- `backend/paper_processor/ingest.py`
+  - Adds non-secret attempt/stage runtime limits: 240s whole attempt, 90s
+    download, 120s extraction, 90s upload/finalize, 30s lease heartbeat, and
+    192 MiB resident-memory budget.
+  - Adds monotonic deadline checkpoints, a Unix wall-clock alarm for a stuck
+    synchronous parser, RSS checks, background fenced-lease renewal, bounded
+    terminal failure codes, and temporary-workspace cleanup.
+  - Calls the existing `fail` operation for timeout/memory/heartbeat failures;
+    unexpected runtime failures remain safe cancellation. Logs expose only
+    opaque resource/attempt IDs, stage, and safe error code.
+- `backend/paper_processor/runner.py`
+  - Loads the non-secret limits, configures visible safe INFO logging, emits
+    bounded lifecycle diagnostics, and reconnects after a terminal attempt
+    outcome without exposing exception details.
+- `backend/paper_processor/infinity-paper-processor.service`
+  - Declares the fixed non-secret limits, `MemoryHigh=192M`,
+    `MemoryMax=256M`, `KillMode=control-group`, and retains one user-systemd
+    `ExecStart` with the existing hardening.
+- `backend/paper_processor/delivery.v1.json`
+  - Records the limits, failure codes, service constraints, and synchronized
+    source/service/dependency hashes.
+
+## Tests and documentation
+
+- `tests/test_paper_processor_ingestion.py` covers successful processing,
+  timeout terminal failure, workspace cleanup, memory terminal failure,
+  heartbeat renewal/failure, and log redaction.
+- `tests/test_paper_processor_runtime.py` covers safe non-secret environment
+  parsing and invalid-value fallback.
+- `cloudflare-worker/test/paper-processor-delivery.test.ts` asserts the
+  delivery limits, service controls, and manifest contract.
+- The design, execution plan, and Processor runbook document the bounded
+  contract, operational evidence, and rollback procedure.
+
+## Artifact integrity
+
+- Processor source aggregate SHA-256: `e766103570d4d8e0a680982253f90b88df199d5f3d95fbbb90d0bcd3395e2908`
+- Service unit SHA-256: `366d5b6289157e6e162c1bbe36fc5b259521c423bddf0965b4dc583faf97734f`
+- Dependency lock SHA-256: `e7b669892e0e5790179ee84dedd106d04ac40005ca49943059d2ee585f63ff97`
+- Manifest read-back: all three hashes matched the locally recomputed values.

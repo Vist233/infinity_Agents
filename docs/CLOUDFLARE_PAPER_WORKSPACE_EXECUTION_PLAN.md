@@ -963,6 +963,72 @@ search-boundary fix, then repeat the authenticated F5 path and verify that a
 fresh arXiv candidate creates the durable resource/continuation and proceeds
 through Processor readiness.  This card does not claim PAPER-10 completion.
 
+### PAPER-FIX-07 — Bounded Processor attempts and memory-pressure recovery
+
+**Outcome:** a single trusted Processor grant cannot remain indefinitely in
+`processing` because the synchronous download/parser/upload path now has a
+bounded attempt deadline, stage deadlines, lease heartbeats, and an explicit
+resident-memory guard.  A deadline, failed heartbeat, or memory breach reports
+a safe terminal failure through the existing fenced Edge operation; a
+successful attempt still finalizes through the unchanged D1/R2 contract.
+
+**Root-cause evidence:** the production zhangbot service was alive while one
+resource remained `processing` for more than four minutes.  The old
+`process_one` path never called `renew`, had no total or stage timeout, and had
+no RSS guard; the runner could therefore remain active without a visible
+terminal result.  The host cgroup was near its `MemoryMax=256M` limit and the
+service log had no safe stage record for the grant.  The browser, provider,
+WAF, Redis/Relay, and Cloudflare configuration are not changed by this card.
+
+- `ProcessorRuntimeLimits` fixes the non-secret budgets at 240 seconds for an
+  attempt, 90 seconds for download, 120 seconds for extraction, 90 seconds
+  for upload/finalize, and 30 seconds between lease heartbeats.  The service
+  exposes the same values as checked-in environment settings.
+- `ProcessingDeadline` uses a monotonic clock and checkpoints before/after
+  network operations and at page/image boundaries.  The Unix runtime alarm
+  interrupts a parser that does not return; cooperative checkpoints remain the
+  fallback on unsupported runtimes.
+- `LeaseHeartbeat` renews the exact leased grant and surfaces a stable
+  `PAPER_PROCESSOR_HEARTBEAT_FAILED` code.  Timeout and memory paths use
+  `PAPER_PROCESSOR_TIMEOUT`, stage-specific timeout codes, or
+  `PAPER_PROCESSOR_MEMORY_LIMIT`, then call fenced Edge `fail` without
+  serializing exception details.
+- The runner logs only safe events with opaque resource/attempt IDs, stage, and
+  bounded error code.  `MemoryHigh=192M`, `MemoryMax=256M`,
+  `KillMode=control-group`, one user-systemd `ExecStart`, and `TasksMax=32`
+  make memory pressure and child-process cleanup observable and bounded.
+  Startup workspace cleanup and existing singleton/lease fencing remain in
+  force; no second service or public listener is introduced.
+
+**Focused positive tests:** a real fixture PDF still uploads source, pages,
+images, manifests, and finalizes successfully; runtime environment values are
+parsed from non-secret settings; a heartbeat renews a grant while work runs.
+
+**Focused negative tests:** zero-budget processing reports
+`PAPER_PROCESSOR_TIMEOUT` through `fail` and cleans the workspace; RSS pressure
+reports `PAPER_PROCESSOR_MEMORY_LIMIT` and never finalizes; a heartbeat failure
+reports `PAPER_PROCESSOR_HEARTBEAT_FAILED`; malformed/encrypted/over-limit
+inputs remain fail-closed; and safe logs contain no PDF bytes, payload text,
+local paths, tokens, or transport details.
+
+**Local pass gate:** focused and full Processor pytest; `cd cloudflare-worker
+&& npm run check && npm test`; affected frontend typecheck, lint, unit, and E2E
+checks; then `git diff --check` and a changed-scope secret scan. No production
+service, Cloudflare resource, D1 migration, R2 object, WAF rule, secret,
+Redis/Relay/Cloudflared unit, browser session, or Git remote is modified by
+this card.
+
+**Rollback:** revert the local review commit and restore the prior immutable
+Processor release through the existing release procedure if this code is later
+deployed. Preserve D1/R2 metadata and Redis/Relay/Cloudflared state; do not
+hand-edit a resource or attempt to manufacture a terminal result.
+
+**Next exact action:** the root release agent may deploy this reviewed
+Processor release after a fresh read-only zhangbot preflight, then verify a real
+grant emits safe stage/heartbeat evidence and reaches either ready or an
+explicit retryable failure before its lease expires. This card does not claim
+PAPER-10 production acceptance.
+
 ## 4. Completion checkpoint template
 
 Every card checkpoint must answer these fields explicitly:

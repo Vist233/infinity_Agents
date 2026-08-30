@@ -7,6 +7,7 @@ no mutable public web page or production credential is used.
 from __future__ import annotations
 
 import io
+import logging
 import shutil
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,8 @@ from backend.paper_processor.ingest import (
     AdmissionError,
     DownloadError,
     ExtractionLimits,
+    LeaseHeartbeat,
+    ProcessorRuntimeLimits,
     ProcessorError,
     admit_source,
     download_pdf,
@@ -156,6 +159,9 @@ def test_malformed_encrypted_page_and_image_limits_fail_closed(tmp_path: Path) -
     with pytest.raises(ProcessorError, match="IMAGE_COUNT_LIMIT"):
         extract_pdf(plain, tmp_path / "limited-out", limits=ExtractionLimits(max_images=0))
 
+    with pytest.raises(ProcessorError, match="PAPER_PROCESSOR_MEMORY_LIMIT"):
+        extract_pdf(plain, tmp_path / "memory-limited-out", limits=ExtractionLimits(max_resident_memory_bytes=1))
+
 
 def test_processor_workspace_cleans_on_success_failure_and_restart(tmp_path: Path) -> None:
     with processor_workspace(tmp_path) as workspace:
@@ -180,6 +186,7 @@ class FakeProcessorClient:
         self.stages: list[str] = []
         self.finalized = False
         self.cancelled = False
+        self.renewals = 0
 
     def poll(self) -> ProcessorGrant:
         return self.grant
@@ -189,6 +196,10 @@ class FakeProcessorClient:
 
     def input_source(self, _grant: ProcessorGrant, _maximum_bytes: int) -> bytes:
         return self.body
+
+    def renew(self, _grant: ProcessorGrant) -> dict[str, Any]:
+        self.renewals += 1
+        return {"status": "renewed"}
 
     def upload(self, _grant: ProcessorGrant, kind: str, body: bytes, _content_type: str, object_id: str | None = None) -> dict[str, Any]:
         self.uploads.append((kind, object_id, body))
@@ -205,6 +216,17 @@ class FakeProcessorClient:
     def cancel(self, _grant: ProcessorGrant) -> dict[str, Any]:
         self.cancelled = True
         return {"status": "cancelled"}
+
+
+
+class FailingProcessorClient(FakeProcessorClient):
+    def __init__(self, body: bytes):
+        super().__init__(body)
+        self.failed: list[str] = []
+
+    def fail(self, _grant: ProcessorGrant, error_code: str) -> dict[str, Any]:
+        self.failed.append(error_code)
+        return {"status": "failed", "error_code": error_code}
 
 
 def test_process_one_uploads_source_pages_images_manifests_and_cleans(tmp_path: Path) -> None:
@@ -225,3 +247,73 @@ def test_process_one_cancels_malformed_input_and_never_finalizes(tmp_path: Path)
         process_one(client, tmp_path / "processor-work")
     assert client.cancelled is True
     assert client.finalized is False
+
+
+def test_process_one_reports_timeout_as_terminal_failure_and_cleans(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="infinity.paper_processor")
+    client = FailingProcessorClient(b"%PDF-1.7\ntruncated")
+    runtime = ProcessorRuntimeLimits(
+        attempt_timeout_seconds=0,
+        download_timeout_seconds=0,
+        extraction_timeout_seconds=0,
+        upload_timeout_seconds=0,
+        heartbeat_interval_seconds=0,
+    )
+    with pytest.raises(ProcessorError, match="PAPER_PROCESSOR_TIMEOUT"):
+        process_one(client, tmp_path / "processor-work", runtime_limits=runtime)
+    assert client.failed == ["PAPER_PROCESSOR_TIMEOUT"]
+    assert client.cancelled is False
+    assert not (tmp_path / "processor-work").exists() or not any((tmp_path / "processor-work").iterdir())
+    log_text = "\n".join(caplog.messages)
+    assert "PAPER_PROCESSOR_TIMEOUT" in log_text
+    assert "truncated" not in log_text
+    assert "%PDF" not in log_text
+    assert "source.pdf" not in log_text
+    assert "https://" not in log_text
+    assert "lease_token" not in log_text
+    assert "PAPER_PROCESSOR_TOKEN" not in log_text
+
+
+def test_process_one_turns_memory_pressure_into_terminal_failure(tmp_path: Path) -> None:
+    client = FailingProcessorClient(b"%PDF-1.7\ntruncated")
+    with pytest.raises(ProcessorError, match="PAPER_PROCESSOR_MEMORY_LIMIT"):
+        process_one(
+            client,
+            tmp_path / "processor-work",
+            limits=ExtractionLimits(max_resident_memory_bytes=1),
+        )
+    assert client.failed == ["PAPER_PROCESSOR_MEMORY_LIMIT"]
+    assert client.cancelled is False
+    assert client.finalized is False
+    assert not (tmp_path / "processor-work").exists() or not any((tmp_path / "processor-work").iterdir())
+
+
+def test_lease_heartbeat_renews_and_surfaces_failure_without_payloads() -> None:
+    class HeartbeatClient:
+        def __init__(self, should_fail: bool = False):
+            self.renewals = 0
+            self.should_fail = should_fail
+
+        def renew(self, _grant: ProcessorGrant) -> dict[str, str]:
+            self.renewals += 1
+            if self.should_fail:
+                raise RuntimeError("transport detail must not escape")
+            return {"status": "renewed"}
+
+    grant = ProcessorGrant("resource-1", "attempt-1", "lease-1", 1, 9_999_999_999, "user_upload", "upload-1", None)
+    healthy_client = HeartbeatClient()
+    healthy = LeaseHeartbeat(healthy_client, grant, interval_seconds=0.01)
+    healthy.start()
+    import time
+    time.sleep(0.04)
+    healthy.stop()
+    assert healthy_client.renewals >= 1
+    healthy.raise_if_failed()
+
+    failing_client = HeartbeatClient(should_fail=True)
+    failing = LeaseHeartbeat(failing_client, grant, interval_seconds=0.01)
+    failing.start()
+    time.sleep(0.04)
+    failing.stop()
+    with pytest.raises(ProcessorError, match="PAPER_PROCESSOR_HEARTBEAT_FAILED"):
+        failing.raise_if_failed()

@@ -1,0 +1,31 @@
+# PAPER-FIX-07 tests and exit codes
+
+All commands ran against the local `cloudflare-deploy` worktree. No
+production service, browser session, Cloudflare resource, remote D1/R2, WAF,
+secret, Redis/Relay/Cloudflared unit, or Git remote was written.
+
+## Test-first evidence
+
+- `eval "$(pyenv init - zsh)" && pyenv shell Agent && pytest -q tests/test_paper_processor_ingestion.py`: exit `2` before implementation; collection failed because the new `LeaseHeartbeat` import did not yet exist. This is the expected red test. The command printed the non-fatal pyenv shim rehash warning.
+
+## Processor and mandatory Edge checks
+
+- `eval "$(pyenv init - zsh)" && pyenv shell Agent && pytest -q tests/test_paper_processor_ingestion.py tests/test_paper_processor_runtime.py`: exit `0`; 17 passed.
+- `eval "$(pyenv init - zsh)" && pyenv shell Agent && pytest -q tests/test_paper_processor*.py`: exit `0`; 17 passed. The command printed the non-fatal pyenv shim rehash warning.
+- `cd cloudflare-worker && npm run check && npm test`: exit `0`; TypeScript check exit `0`; 26 test files / 152 tests passed.
+
+## Frontend checks
+
+- `cd frontend && npm run typecheck`: exit `0`.
+- `cd frontend && npm run lint`: exit `0`.
+- `cd frontend && npm run test:unit`: exit `0`; 16 test files / 78 tests passed. Existing non-fatal React `act(...)` warnings were printed.
+- `cd frontend && npm run test:e2e`: first sandbox attempt exit `1` before test execution because the temporary web server could not listen on `127.0.0.1:3000` (`EPERM`).
+- `cd frontend && npm run test:e2e`: restricted local-server rerun exit `0`; 15/15 passed. The test server printed expected local backend `/api/tasks` proxy `ECONNREFUSED` warnings; no E2E assertion failed.
+
+## Integrity checks
+
+- `git diff --check`: exit `0` before evidence staging.
+- The delivery manifest hash recomputation matched source, service, and
+  dependency lock hashes exactly.
+- The final changed-scope secret scan and post-evidence `git diff --check` are
+  recorded in `secret-scan.txt` and the final checkpoint.

@@ -73,9 +73,9 @@
     "service_unit": "backend/paper_processor/infinity-paper-processor.service",
     "artifact_hash_command": "sha256sum backend/paper_processor/__init__.py backend/paper_processor/client.py backend/paper_processor/ingest.py backend/paper_processor/runner.py | sha256sum",
     "artifact_hashes": {
-      "processor_source_sha256": "510715c4a3e8605181219508d38bd8747b1fff28a7c676fb64d15fd1ed57d15e",
+      "processor_source_sha256": "e766103570d4d8e0a680982253f90b88df199d5f3d95fbbb90d0bcd3395e2908",
       "dependency_lock_sha256": "e7b669892e0e5790179ee84dedd106d04ac40005ca49943059d2ee585f63ff97",
-      "service_unit_sha256": "424a6846ef7b30d1eb505811da53620156e9186dae60ece38f3826e8338a2b2f"
+      "service_unit_sha256": "366d5b6289157e6e162c1bbe36fc5b259521c423bddf0965b4dc583faf97734f"
     }
   },
   "environment": {
@@ -84,7 +84,13 @@
       "PAPER_PROCESSOR_ID",
       "PAPER_PROCESSOR_SOURCE_IP",
       "PAPER_PROCESSOR_INSTANCE_ID",
-      "PAPER_PROCESSOR_WORK_ROOT"
+      "PAPER_PROCESSOR_WORK_ROOT",
+      "PAPER_PROCESSOR_ATTEMPT_TIMEOUT_SECONDS",
+      "PAPER_PROCESSOR_DOWNLOAD_TIMEOUT_SECONDS",
+      "PAPER_PROCESSOR_EXTRACTION_TIMEOUT_SECONDS",
+      "PAPER_PROCESSOR_UPLOAD_TIMEOUT_SECONDS",
+      "PAPER_PROCESSOR_HEARTBEAT_INTERVAL_SECONDS",
+      "PAPER_PROCESSOR_MAX_RESIDENT_MEMORY_BYTES"
     ],
     "fixed_non_secret_names": ["PYTHONPATH", "PYTHONUNBUFFERED"],
     "fixed_values": {
@@ -126,8 +132,21 @@
     "liveness": "systemd process liveness plus bounded poll progress; transport failure triggers reconnect",
     "restart": "systemd Restart=on-failure with bounded five-second delay and startup workspace recovery",
     "shutdown": "stop polling, finish or cancel the current fenced attempt, and remove the temporary work root",
+    "attempt_timeout_seconds": 240,
+    "stage_timeout_seconds": {
+      "downloading": 90,
+      "extracting": 120,
+      "uploading": 90
+    },
+    "heartbeat_interval_seconds": 30,
+    "memory_high": "192M",
+    "memory_budget_bytes": 201326592,
     "memory_max": "256M",
     "tasks_max": 32,
+    "timeout_failure_code": "PAPER_PROCESSOR_TIMEOUT",
+    "memory_failure_code": "PAPER_PROCESSOR_MEMORY_LIMIT",
+    "heartbeat_failure_code": "PAPER_PROCESSOR_HEARTBEAT_FAILED",
+    "single_attempt_behavior": "A bounded timeout, memory-pressure guard, or failed lease renewal reports a safe terminal failure through the fenced Edge path; it never remains an unobserved processing loop",
     "no_public_listener": true,
     "hardening": [
       "PrivateTmp=yes",

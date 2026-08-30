@@ -1,0 +1,17 @@
+# PAPER-FIX-07 baseline and scope evidence
+
+- Working directory: `/Users/zhangyvjing/Code/infinity_Agents`
+- Branch: `cloudflare-deploy`
+- Baseline commit: `81fe88f77f2c8e6e8a778786ac3cd23291757796`
+- `origin/cloudflare-deploy` at read-only preflight: `becde2db27aa7ef7e31bfb2ddbe4a0f4ce7be8cf`
+- Remote relationship: the local baseline was not an ancestor of the observed
+  remote ref; no fetch, merge, rebase, or push was performed for this card.
+- Worktree at card start: clean.
+- Governing context read before implementation: `HANDOFF.md`,
+  `docs/CLOUDFLARE_PAPER_WORKSPACE_DESIGN.md`,
+  `docs/CLOUDFLARE_PAPER_WORKSPACE_EXECUTION_PLAN.md`, and the existing
+  Paper Processor delivery/runbook and prior PAPER-FIX-06 evidence.
+- Production state: no SSH session, Cloudflare API/Wrangler write, D1/R2
+  operation, WAF/secret operation, browser action, or Git remote write was
+  performed by this card.
+- Existing Redis, Redis Relay, and Cloudflared services were not touched.

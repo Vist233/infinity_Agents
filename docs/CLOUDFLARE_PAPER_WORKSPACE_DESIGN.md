@@ -97,6 +97,17 @@ rules, singleton/lease assumptions, log-redaction rules, and rollback. The
 Dockerfile is retained only as historical/reference material and is not a
 deployable artifact for this runtime.
 
+The Processor runtime has a bounded execution contract: each grant has a
+240-second attempt deadline, 90-second download budget, 120-second extraction
+budget, 90-second upload/finalize budget, and a 30-second D1 lease heartbeat.
+The application enforces a 192 MiB resident-memory budget before and during
+PDF extraction, while systemd supplies `MemoryHigh=192M` and
+`MemoryMax=256M`. A deadline, memory breach, or failed heartbeat is reported
+through the existing fenced Edge failure operation using only a safe error
+code; it cannot remain an unobserved `processing` attempt. The runner emits
+only redacted stage/terminal events and never logs payloads, headers, tokens,
+source URLs, local paths, or exception tracebacks.
+
 The Edge ingress has a separate, defense-in-depth service-to-service contract.
 The zhangbot read-only egress preflight on 2026-08-28 agreed on public IPv4
 `39.105.204.121` across three providers. A zone-level Cloudflare custom rule

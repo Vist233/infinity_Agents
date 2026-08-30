@@ -11,6 +11,7 @@ from backend.paper_processor.client import (
     _validate_edge_url,
     from_environment,
 )
+from backend.paper_processor.ingest import ProcessorError, ProcessingDeadline, ProcessorRuntimeLimits
 
 
 def test_processor_edge_url_is_the_fixed_https_control_plane():
@@ -45,6 +46,43 @@ def test_processor_generates_a_unique_boot_and_process_scoped_instance_id(monkey
 
     assert first._instance_id != second._instance_id
     assert re.fullmatch(r"zhangbot-[a-z0-9-]+-[0-9]+-[0-9a-f]{16}", first._instance_id)
+
+
+def test_runtime_limits_are_non_secret_and_fail_closed_for_invalid_environment(monkeypatch):
+    monkeypatch.setenv("PAPER_PROCESSOR_ATTEMPT_TIMEOUT_SECONDS", "120")
+    monkeypatch.setenv("PAPER_PROCESSOR_DOWNLOAD_TIMEOUT_SECONDS", "30")
+    monkeypatch.setenv("PAPER_PROCESSOR_EXTRACTION_TIMEOUT_SECONDS", "60")
+    monkeypatch.setenv("PAPER_PROCESSOR_UPLOAD_TIMEOUT_SECONDS", "30")
+    monkeypatch.setenv("PAPER_PROCESSOR_HEARTBEAT_INTERVAL_SECONDS", "15")
+    monkeypatch.setenv("PAPER_PROCESSOR_MAX_RESIDENT_MEMORY_BYTES", "134217728")
+
+    limits = ProcessorRuntimeLimits.from_environment()
+    assert limits == ProcessorRuntimeLimits(120, 30, 60, 30, 15, 134217728)
+
+    monkeypatch.setenv("PAPER_PROCESSOR_ATTEMPT_TIMEOUT_SECONDS", "not-a-timeout")
+    monkeypatch.setenv("PAPER_PROCESSOR_MAX_RESIDENT_MEMORY_BYTES", "1")
+    fallback = ProcessorRuntimeLimits.from_environment()
+    assert fallback.attempt_timeout_seconds == 240
+    assert fallback.max_resident_memory_bytes == 192 * 1024 * 1024
+
+
+def test_processing_deadline_reports_stage_timeout_before_attempt_timeout():
+    now = [100.0]
+    deadline = ProcessingDeadline(
+        ProcessorRuntimeLimits(
+            attempt_timeout_seconds=10,
+            download_timeout_seconds=2,
+            extraction_timeout_seconds=5,
+            upload_timeout_seconds=5,
+            heartbeat_interval_seconds=1,
+        ),
+        clock=lambda: now[0],
+    )
+    deadline.start_stage("downloading")
+    deadline.check("downloading")
+    now[0] = 102.0
+    with pytest.raises(ProcessorError, match="PAPER_PROCESSOR_DOWNLOAD_TIMEOUT"):
+        deadline.check("downloading")
 
 
 class _FakeHTTPResponse:
