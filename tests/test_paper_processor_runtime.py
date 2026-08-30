@@ -109,7 +109,7 @@ def test_processor_client_uses_only_fixed_paths_and_envelopes(monkeypatch):
     requests = []
 
     def fake_urlopen(request, timeout=0):
-        assert timeout == 30
+        assert timeout == (120 if urlparse(request.full_url).path == "/api/paper-processor/object" else 30)
         requests.append(request)
         path = urlparse(request.full_url).path
         if path == "/api/paper-processor/connect":

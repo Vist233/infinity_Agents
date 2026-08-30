@@ -104,7 +104,12 @@ class PaperProcessorClient:
             headers.update(extra_headers)
         request = urllib.request.Request(self._url(endpoint), data=body, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            # JSON control calls remain tightly bounded.  A reviewed source
+            # PDF or image upload may legitimately take longer than thirty
+            # seconds on the zhangbot-to-Edge path; the attempt-level alarm
+            # and lease heartbeat remain the outer bound.
+            request_timeout = 120 if raw is not None else 30
+            with urllib.request.urlopen(request, timeout=request_timeout) as response:
                 decoded = response.read().decode("utf-8")
         except urllib.error.HTTPError as error:
             detail = error.read(1024).decode("utf-8", errors="replace")
