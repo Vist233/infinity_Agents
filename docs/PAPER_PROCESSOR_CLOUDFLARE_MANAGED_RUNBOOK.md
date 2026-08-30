@@ -160,8 +160,8 @@ loop. The service unit supplies these non-secret runtime limits:
 | PDF extraction | 120 seconds | monotonic stage deadline, page/image checkpoints, and wall-clock alarm |
 | result upload/finalize | 90 seconds | monotonic stage deadline and per-request timeout |
 | lease heartbeat | every 30 seconds | background `renew` using the same fenced grant |
-| Processor RSS budget | 192 MiB | `/proc`/runtime RSS guard before and during extraction |
-| cgroup soft/hard cap | 192 MiB / 256 MiB | `MemoryHigh` / `MemoryMax` in systemd |
+| Processor RSS budget | 224 MiB | `/proc`/runtime RSS guard before and during extraction |
+| cgroup soft/hard cap | 224 MiB / 256 MiB | `MemoryHigh` / `MemoryMax` in systemd |
 
 The application checks the attempt and stage deadline before and after each
 network operation and at each PDF page/image boundary. A synchronous parser
