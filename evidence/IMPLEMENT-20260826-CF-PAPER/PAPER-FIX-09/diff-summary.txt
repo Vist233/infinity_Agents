@@ -1,0 +1,4 @@
+Changed only local Worker retry orchestration, fake-D1 behavior for the new
+atomic batch, focused regression tests, and Paper Workspace design/execution
+documentation. No D1 migration is needed: the existing immutable attempt
+history supplies the strict one-retry count and next fencing epoch.

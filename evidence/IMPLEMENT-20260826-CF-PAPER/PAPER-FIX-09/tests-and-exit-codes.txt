@@ -1,0 +1,5 @@
+# PAPER-FIX-09 tests and exit codes
+
+- `cd cloudflare-worker && npm test -- --run test/tools.test.ts test/paper-processor.test.ts`: exit 0; 2 files / 20 tests passed.
+- `cd cloudflare-worker && npm run check && npm test`: exit 0; typecheck passed and 26 files / 156 tests passed.
+- `git diff --check`: exit 0.

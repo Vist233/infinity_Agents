@@ -1,0 +1,5 @@
+Baseline branch: cloudflare-deploy
+Baseline commit: f5b07bc fix: recover expired paper processor leases
+
+This card is local-only. No deployment, push, remote D1 operation, R2 write,
+Processor change, or browser action was performed.

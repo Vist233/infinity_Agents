@@ -1041,6 +1041,40 @@ PAPER-10 production acceptance.
 - Required gate: Worker typecheck plus full Worker test suite.  Production
   deployment and real browser retry remain root-coordinator actions.
 
+### PAPER-FIX-09 — One bounded retry for a source-download timeout
+
+**Outcome:** a resource that reached the explicit terminal
+`PAPER_PROCESSOR_DOWNLOAD_TIMEOUT` state can be requested once more by its
+owning user in the same session.  This is not a general failed-resource retry:
+malformed, unsupported, cancelled, deleted, and already-retried resources
+remain terminal.
+
+- `materialize_paper` first reuses the session/user/source resource as before.
+  Only when that resource is an arXiv or PMCID source with exactly one recorded
+  Processor attempt and the bounded download-timeout code may it return to
+  `requested`.
+- The retry audit event and the state transition are one D1 batch.  Historical
+  attempts are immutable; the next Processor claim therefore obtains the next
+  fencing epoch without deleting or overwriting prior failure evidence.
+- A user from another account, another session, a non-timeout error, an active
+  attempt, or a second terminal attempt cannot trigger the transition.
+
+**Focused positive tests:** same-owner materialization clears only safe timeout
+metadata, records the retry audit fact, and a fresh Processor poll obtains
+fencing epoch 2.
+
+**Focused negative tests:** another user cannot requeue the resource; malformed
+PDF remains failed; a second timeout does not requeue; and no duplicate active
+Processor attempt is created.
+
+**Local pass gate:** focused tools and Processor protocol tests, followed by
+`cd cloudflare-worker && npm run check && npm test`, `git diff --check`, and a
+changed-scope secret scan.  This card changes no schema and performs no D1/R2,
+Cloudflare, Processor, browser, or Git-remote operation.
+
+**Rollback:** revert the local review commit.  Existing failed resources remain
+valid terminal records; no D1 rewrite is required for rollback.
+
 Every card checkpoint must answer these fields explicitly:
 
 ```markdown

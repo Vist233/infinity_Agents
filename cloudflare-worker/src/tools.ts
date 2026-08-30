@@ -10,6 +10,7 @@ import {
   isPaperAuthorized,
   linkPaperResource,
   recordPaperAuditEvent,
+  retryTimedOutOwnedPaperResource,
   type PaperResourceRow,
   type PaperSourceKind,
 } from "./db";
@@ -405,6 +406,30 @@ export async function materializePaper(
     sourceRef: source.sourceRef,
   });
   if (existing) {
+    const retried = existing.status === "failed" && existing.error_code === "PAPER_PROCESSOR_DOWNLOAD_TIMEOUT"
+      ? await retryTimedOutOwnedPaperResource(env, {
+          resourceId: existing.resource_id,
+          sessionId,
+          userId,
+        })
+      : null;
+    if (retried) {
+      try {
+        const continuation = context?.turnId
+          ? await createPaperRequestContinuation(env, {
+              continuationId: crypto.randomUUID(),
+              sessionId,
+              userId,
+              turnId: context.turnId,
+              clientRequestId: context.clientRequestId ?? null,
+              resource: retried,
+            })
+          : null;
+        return processingResult(retried, true, continuation?.continuation_id);
+      } catch {
+        return JSON.stringify({ error: "paper_continuation_persistence_failed", resource_id: retried.resource_id });
+      }
+    }
     await recordPaperAuditEvent(env, { resource_id: existing.resource_id, attempt_id: null, stage: "materialize", outcome: "succeeded", error_code: null, metadata_json: JSON.stringify({ reused: true }), created_at: Math.floor(Date.now() / 1000) });
     try {
       const continuation = context?.turnId

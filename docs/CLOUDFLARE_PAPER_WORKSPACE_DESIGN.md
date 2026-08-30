@@ -672,6 +672,22 @@ expired active Processor attempt with the bounded
 driven solely by D1 lease time and never by a browser retry or manual database
 edit; a live lease is never reclaimed.
 
+### 9.2 Bounded terminal download retry
+
+An explicit `PAPER_PROCESSOR_DOWNLOAD_TIMEOUT` is operationally different from
+an invalid or unsafe source: it may reflect a transient upstream transfer
+failure after the Processor has already proved the source eligible.  The owner
+may request that same arXiv/PMCID resource once more through
+`materialize_paper`.  The Worker atomically records a bounded retry audit fact
+and moves that exact failed resource back to `requested`; it retains all prior
+attempts, so the next Processor claim receives the next fencing epoch.
+
+The transition requires same session and user ownership, the exact timeout
+code, no active attempt, and exactly one historical Processor attempt.  It
+never applies to parse/security/cancellation failures and never creates an
+unbounded browser-driven loop.  A second terminal attempt stays failed and is
+reported as such.
+
 The Paper Workspace is complete only when a real authenticated browser can:
 
 1. search an open paper;

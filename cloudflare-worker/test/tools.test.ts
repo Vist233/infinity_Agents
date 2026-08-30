@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
-import { createPaperResource, linkPaperResource } from "../src/db";
+import { createPaperResource, linkPaperResource, retryTimedOutOwnedPaperResource } from "../src/db";
 import {
   analyzePaperImage,
   materializePaper,
@@ -213,6 +213,46 @@ describe("resource-aware Paper Workspace tools", () => {
 
     const unauthorized = JSON.parse(await materializePaper(env, "other-session", "bob", "arxiv:2401.00001"));
     expect(unauthorized.error).toBe("paper_not_authorized_for_session");
+  });
+
+  it("requeues one owner-scoped download timeout exactly once and preserves terminal failures otherwise", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("s1", "alice");
+    db.paperAuth.add("s1|arxiv:2401.00001");
+
+    const first = JSON.parse(await materializePaper(env, "s1", "alice", "arxiv:2401.00001")) as { resource_id: string };
+    const row = db.paperResources.get(first.resource_id)!;
+    row.status = "failed";
+    row.error_code = "PAPER_PROCESSOR_DOWNLOAD_TIMEOUT";
+    row.error_message_safe = "PDF download exceeded its bounded deadline";
+    db.paperProcessingAttempts.set("attempt-timeout-1", {
+      attempt_id: "attempt-timeout-1", resource_id: row.resource_id, processor_id: "processor-1", lease_token_hash: "a".repeat(64), fencing_epoch: 1,
+      status: "failed", started_at: 1, lease_expires_at: 2, finished_at: 2, error_code: "PAPER_PROCESSOR_DOWNLOAD_TIMEOUT", error_message_safe: "safe",
+    });
+
+    const retried = JSON.parse(await materializePaper(env, "s1", "alice", "arxiv:2401.00001"));
+    expect(retried).toMatchObject({ mode: "processing", status: "requested", resource_id: row.resource_id, reused: true });
+    expect(row).toMatchObject({ status: "requested", error_code: null, error_message_safe: null });
+    expect(db.paperAuditEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ resource_id: row.resource_id, stage: "materialize", outcome: "succeeded", metadata_json: expect.stringContaining("\"retry\":true") }),
+    ]));
+
+    row.status = "failed";
+    row.error_code = "PAPER_PROCESSOR_DOWNLOAD_TIMEOUT";
+    db.paperProcessingAttempts.set("attempt-timeout-2", {
+      attempt_id: "attempt-timeout-2", resource_id: row.resource_id, processor_id: "processor-1", lease_token_hash: "b".repeat(64), fencing_epoch: 2,
+      status: "failed", started_at: 3, lease_expires_at: 4, finished_at: 4, error_code: "PAPER_PROCESSOR_DOWNLOAD_TIMEOUT", error_message_safe: "safe",
+    });
+    const exhausted = JSON.parse(await materializePaper(env, "s1", "alice", "arxiv:2401.00001"));
+    expect(exhausted).toMatchObject({ mode: "processing", status: "failed", error_code: "PAPER_PROCESSOR_DOWNLOAD_TIMEOUT" });
+
+    const foreign = await retryTimedOutOwnedPaperResource(env, { resourceId: row.resource_id, sessionId: "s1", userId: "bob" });
+    expect(foreign).toBeNull();
+    expect(row.status).toBe("failed");
+
+    row.error_code = "MALFORMED_PDF";
+    const nonRetryable = JSON.parse(await materializePaper(env, "s1", "alice", "arxiv:2401.00001"));
+    expect(nonRetryable).toMatchObject({ mode: "processing", status: "failed", error_code: "MALFORMED_PDF" });
   });
 
   it("reads text, literal search, outline, and images only from a ready manifest", async () => {

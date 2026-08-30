@@ -739,6 +739,63 @@ export async function findOwnedPaperResourceBySource(
   ).bind(input.sessionId, input.userId, input.sourceKind, input.sourceRef).first<PaperResourceRow>();
 }
 
+/**
+ * A terminal source-download timeout may be retried exactly once by its owner.
+ * The retry audit insertion and state transition share one D1 transaction, so
+ * an audit event never advertises a retry that was not made claimable.
+ *
+ * Other terminal outcomes deliberately remain terminal: retrying malformed,
+ * unsupported, cancelled, or deleted resources would hide a real failure or
+ * bypass the explicit lifecycle contract.  Attempt history is retained for
+ * forensic and fencing purposes; the next Processor claim derives epoch + 1.
+ */
+export async function retryTimedOutOwnedPaperResource(
+  env: Env,
+  input: { resourceId: string; sessionId: string; userId: string; now?: number },
+): Promise<PaperResourceRow | null> {
+  if (!input.resourceId || !input.sessionId || !input.userId) return null;
+  const now = input.now ?? nowSeconds();
+  const eventId = crypto.randomUUID();
+  const retryMetadata = JSON.stringify({ retry: true, reason_code: "PAPER_PROCESSOR_DOWNLOAD_TIMEOUT" });
+  const retryEligible = `
+    r.resource_id = ?2 AND r.session_id = ?3 AND r.user_id = ?4
+    AND r.status = 'failed' AND r.error_code = 'PAPER_PROCESSOR_DOWNLOAD_TIMEOUT'
+    AND r.source_kind IN ('arxiv', 'pubmed_pmc')
+    AND EXISTS (SELECT 1 FROM chat_sessions s WHERE s.id = r.session_id AND s.user_id = ?4)
+    AND NOT EXISTS (
+      SELECT 1 FROM paper_processing_attempts active
+       WHERE active.resource_id = r.resource_id
+         AND active.status IN ('claimed', 'downloading', 'extracting', 'uploading')
+    )
+    AND (SELECT COUNT(1) FROM paper_processing_attempts prior WHERE prior.resource_id = r.resource_id) = 1`;
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO paper_resource_audit_events
+         (event_id, resource_id, attempt_id, stage, outcome, error_code, metadata_json, created_at)
+       SELECT ?1, r.resource_id, NULL, 'materialize', 'succeeded', NULL, ?5, ?6
+         FROM paper_resources r
+        WHERE ${retryEligible}`,
+    ).bind(eventId, input.resourceId, input.sessionId, input.userId, retryMetadata, now),
+    env.DB.prepare(
+      `UPDATE paper_resources
+          SET status = 'requested', error_code = NULL, error_message_safe = NULL, updated_at = ?5
+        WHERE resource_id = ?1 AND session_id = ?2 AND user_id = ?3
+          AND EXISTS (SELECT 1 FROM paper_resource_audit_events WHERE event_id = ?4)
+          AND status = 'failed' AND error_code = 'PAPER_PROCESSOR_DOWNLOAD_TIMEOUT'
+          AND source_kind IN ('arxiv', 'pubmed_pmc')
+          AND EXISTS (SELECT 1 FROM chat_sessions s WHERE s.id = paper_resources.session_id AND s.user_id = ?3)
+          AND NOT EXISTS (
+            SELECT 1 FROM paper_processing_attempts active
+             WHERE active.resource_id = paper_resources.resource_id
+               AND active.status IN ('claimed', 'downloading', 'extracting', 'uploading')
+          )
+          AND (SELECT COUNT(1) FROM paper_processing_attempts prior WHERE prior.resource_id = paper_resources.resource_id) = 1`,
+    ).bind(input.resourceId, input.sessionId, input.userId, eventId, now),
+  ]);
+  if ((results[1]?.meta?.changes ?? 0) !== 1) return null;
+  return getOwnedPaperResource(env, input.resourceId, input.sessionId, input.userId);
+}
+
 function initialPaperContinuationStatus(status: PaperResourceStatus): PaperRequestContinuationStatus {
   if (status === "ready") return "ready";
   if (status === "failed") return "failed";
