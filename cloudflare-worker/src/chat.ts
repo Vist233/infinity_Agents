@@ -419,6 +419,8 @@ function replayCompletedChat(responseText: string): Response {
 }
 
 const PAPER_TOOL_NAMES = new Set(["search_paper", "materialize_paper", "read_paper", "analyze_paper_image"]);
+const MODEL_RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+const MAX_MODEL_ATTEMPTS = 3;
 
 /** Detect a paper/full-text intent without trusting the provider's prose. */
 export function isPaperIntent(content: string): boolean {
@@ -1036,7 +1038,7 @@ function streamModelLoop(
             type: "error",
             code: result.errorCode ?? "PAPER_REQUEST_FAILED",
             message: result.errorCode === "PAPER_TOOL_CALL_REQUIRED"
-              ? "The paper request did not produce a required Paper tool call."
+              ? "No readable paper resource is available for this request yet. Papers must first be searched in this session; a full-text request then creates a durable PDF resource before text or images can be read."
               : result.errorCode === "PAPER_MATERIALIZE_REQUIRED"
                 ? "The paper request found no eligible paper that could be materialized, so no PDF resource was created."
                 : result.errorCode === "PAPER_MATERIALIZE_FAILED"
@@ -1356,20 +1358,43 @@ async function streamCompletion(
     },
   );
 
+  const requestWithRetry = async (withToolChoice: boolean): Promise<Response> => {
+    let latest: Response | null = null;
+    for (let attempt = 0; attempt < MAX_MODEL_ATTEMPTS; attempt += 1) {
+      const response = await requestCompletion(withToolChoice);
+      latest = response;
+      if (response.ok || !MODEL_RETRYABLE_STATUSES.has(response.status) || attempt === MAX_MODEL_ATTEMPTS - 1) {
+        return response;
+      }
+      // Drain a retryable error body before retrying so its connection can be
+      // reclaimed. The delay is bounded: chat remains responsive and a real
+      // provider outage is still surfaced rather than hidden indefinitely.
+      await response.text().catch(() => "");
+      const retryAfterSeconds = Number(response.headers.get("retry-after"));
+      const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+        ? Math.min(Math.round(retryAfterSeconds * 1000), 2_000)
+        : 250 * (attempt + 1);
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+    // The loop always returns; this guard keeps TypeScript's control flow
+    // explicit without manufacturing a successful model response.
+    return latest as Response;
+  };
+
   let upstream: Response;
   try {
-    upstream = await requestCompletion(forceTaskConfirmation);
+    upstream = await requestWithRetry(forceTaskConfirmation);
   } catch (error) {
     if (!forceTaskConfirmation) throw error;
     // Some OpenAI-compatible providers reject tool_choice even though they
     // accept tools. Retry without the optional hint; runToolLoop still
     // synthesizes the safe confirmation card if the model asks questions.
-    upstream = await requestCompletion(false);
+    upstream = await requestWithRetry(false);
   }
 
   if ((!upstream.ok || !upstream.body) && forceTaskConfirmation) {
     await upstream.text().catch(() => "");
-    upstream = await requestCompletion(false);
+    upstream = await requestWithRetry(false);
   }
 
   if (!upstream.ok || !upstream.body) {

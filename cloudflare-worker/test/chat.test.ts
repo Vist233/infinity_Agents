@@ -25,6 +25,15 @@ function textResponse(body: string): Response {
   } as unknown as Response;
 }
 
+function errorResponse(status: number, body: string, retryAfter?: string): Response {
+  return {
+    ok: false,
+    status,
+    headers: new Headers(retryAfter ? { "retry-after": retryAfter } : undefined),
+    text: async () => body,
+  } as unknown as Response;
+}
+
 function jsonResponse(body: object): Response {
   return {
     ok: true,
@@ -377,6 +386,40 @@ describe("handleChat", () => {
     expect(second.status).toBe(429);
     // The over-limit request never reaches StepFun.
     expect(stepfunCalls()).toBe(callsAfterFirst);
+  });
+
+  it("retries a transient overloaded model response before executing the paper tool loop", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("retry-model", "user-1");
+    let providerCalls = 0;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("stepfun.test")) {
+        providerCalls += 1;
+        if (providerCalls === 1) return errorResponse(429, '{"error":"overloaded"}');
+        if (providerCalls > 2) {
+          return sseResponse([
+            JSON.stringify({ choices: [{ delta: { content: "Found a paper after retry." }, finish_reason: "stop" }] }),
+          ]);
+        }
+        return sseResponse([
+          JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "search-after-retry", function: { name: "search_paper", arguments: '{"query":"attention"}' } }] }, finish_reason: "tool_calls" }] }),
+        ]);
+      }
+      if (url.includes("export.arxiv.org")) return textResponse(ARXIV_XML);
+      if (url.includes("esearch.fcgi")) return jsonResponse({ esearchresult: { idlist: [] } });
+      return textResponse("");
+    }) as unknown as typeof fetch;
+
+    const events = await readSse(await handleChat(
+      makeRequest("retry-model", "搜索 attention 论文", "retry-model-request"),
+      env,
+      USER,
+    ));
+
+    expect(providerCalls).toBeGreaterThanOrEqual(2);
+    expect(events).toContainEqual(expect.objectContaining({ type: "tool_result", tool_name: "search_paper", status: "succeeded" }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "done" }));
   });
 
   it("pauses task creation for an inline confirmation and resumes with the queued task result", async () => {
