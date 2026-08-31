@@ -432,6 +432,20 @@ export function isPaperMaterializationIntent(content: string): boolean {
   return isPaperIntent(content) && /(?:下载|解析|全文|pdf|download|parse|full[- ]?text|materiali[sz]|extract)/i.test(content);
 }
 
+/**
+ * A deictic request such as "read the already parsed paper" names no new
+ * paper and may legitimately have no resource in this session. Let the model
+ * explain that state instead of turning a truthful no-resource answer into a
+ * synthetic tool-call failure. Explicit papers and download/full-text intents
+ * retain the strict Paper tool contract.
+ */
+export function isExistingPaperReferenceIntent(content: string): boolean {
+  return isPaperIntent(content)
+    && /(?:已(?:解析|下载|物化)|already[- ]?(?:parsed|downloaded|materialized)|当前会话.{0,20}(?:论文|资源)|this session.{0,40}(?:paper|resource))/i.test(content)
+    && /(?:读取|查看|列出|read|view|list|第一页|图片|image)/i.test(content)
+    && !/(?:重新|再次|重新下载|download).{0,24}(?:pdf|论文|paper)|解析.{0,24}(?:pdf|全文|full[- ]?text)/i.test(content);
+}
+
 interface PaperToolPayload {
   mode?: string;
   status?: string;
@@ -586,6 +600,7 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
   if (!userContent) return errorJson("A user message is required", 400, "EMPTY_MESSAGE");
   const paperIntent = isPaperIntent(userContent);
   const paperMaterializationIntent = isPaperMaterializationIntent(userContent);
+  const existingPaperReferenceIntent = isExistingPaperReferenceIntent(userContent);
 
   const clientRequestId = String(body.client_request_id ?? "").trim();
   if (clientRequestId.length > 255) {
@@ -675,8 +690,8 @@ export async function handleChat(request: Request, env: Env, user: AuthedUser): 
     true,
     {
       forceTaskConfirmation: shouldRequestTaskConfirmation(userContent),
-      paperIntent,
-      paperMaterializationIntent,
+      paperIntent: paperIntent && !existingPaperReferenceIntent,
+      paperMaterializationIntent: paperMaterializationIntent && !existingPaperReferenceIntent,
       clientRequestId: clientRequestId || null,
     },
     clientRequestId

@@ -388,6 +388,26 @@ describe("handleChat", () => {
     expect(stepfunCalls()).toBe(callsAfterFirst);
   });
 
+  it("allows a truthful no-resource explanation for an already-parsed-paper reference", async () => {
+    const { env, db } = makeEnv();
+    db.seedChatSession("no-paper-resource", "user-1");
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (!String(input).includes("stepfun.test")) return textResponse("");
+      return sseResponse([
+        JSON.stringify({ choices: [{ delta: { content: "当前会话中尚未有已解析的论文资源，请先提供论文标识或关键词。" }, finish_reason: "stop" }] }),
+      ]);
+    }) as unknown as typeof fetch;
+
+    const events = await readSse(await handleChat(
+      makeRequest("no-paper-resource", "读取已解析论文的第一页文本，并列出一张图片。", "no-paper-resource-request"),
+      env,
+      USER,
+    ));
+
+    expect(events).toContainEqual(expect.objectContaining({ type: "done" }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "error" }));
+  });
+
   it("retries a transient overloaded model response before executing the paper tool loop", async () => {
     const { env, db } = makeEnv();
     db.seedChatSession("retry-model", "user-1");
