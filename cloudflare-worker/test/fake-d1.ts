@@ -57,6 +57,10 @@ export interface ChatTaskConfirmationRow {
 
 export interface TaskRow {
   task_id: string;
+  task_spec_id?: string;
+  dataset_snapshot_id?: string;
+  project_id?: string;
+  method_source_id?: string | null;
   title: string;
   status: string;
   created_by: string;
@@ -70,6 +74,101 @@ export interface TaskRow {
   cancel_requested_at?: number | null;
   updated_at?: number;
   finished_at?: number | null;
+}
+
+export interface PaperCapabilityRow {
+  paper_id: string;
+  analysis_id: string;
+  capability_key: string;
+  requirement: "required" | "optional";
+  created_at: number;
+}
+
+export interface ProjectRow {
+  project_id: string;
+  user_id: string;
+  name: string;
+  created_at: number;
+}
+
+export interface TaskResourceRow {
+  resource_id: string;
+  project_id: string;
+  user_id: string;
+  kind: "method" | "dataset";
+  logical_name: string;
+  object_key: string;
+  content_type: string;
+  file_size_bytes: number;
+  file_hash_sha256: string;
+  created_at: number;
+}
+
+export interface MethodSourceRow {
+  method_source_id: string;
+  project_id: string;
+  user_id: string;
+  original_filename: string;
+  resource_id: string;
+  created_at: number;
+}
+
+export interface TaskSpecRow {
+  task_spec_id: string;
+  project_id: string;
+  user_id: string;
+  title: string;
+  analysis_type: string;
+  research_question: string;
+  goal: string;
+  prompt_template_version: string;
+  revision: number;
+  status: "draft" | "active" | "cancelled";
+  created_at: number;
+  updated_at: number;
+  frozen_at: number | null;
+}
+
+export interface DatasetSnapshotRow {
+  dataset_snapshot_id: string;
+  task_spec_id: string;
+  project_id: string;
+  user_id: string;
+  original_filename: string;
+  resource_id: string;
+  file_hash_sha256: string;
+  file_size_bytes: number;
+  validation_passed: number;
+  created_at: number;
+}
+
+export interface TaskIdempotencyRow {
+  user_id: string;
+  idempotency_key: string;
+  task_id: string;
+  request_hash: string;
+  created_at: number;
+}
+
+export interface TaskEventRow {
+  task_event_id: string;
+  task_id: string;
+  event_type: string;
+  event_data: string;
+  created_at: number;
+}
+
+export interface OutboxEventRow {
+  event_id: string;
+  idempotency_key: string;
+  aggregate_type: string;
+  aggregate_id: string;
+  event_type: string;
+  payload_json: string;
+  status: "pending" | "publishing" | "published" | "failed";
+  attempts: number;
+  next_attempt_at: number;
+  created_at: number;
 }
 
 export interface PersistentWorkerRow {
@@ -193,11 +292,28 @@ export class FakeD1 {
   paperAuditEvents: PaperResourceAuditEventRow[] = [];
   paperCleanupJobs = new Map<string, PaperCleanupJobRow>();
   paperCatalog = new Map<string, PaperCatalogRow>();
+  paperCapabilities = new Map<string, PaperCapabilityRow>();
   dataCollections = new Map<string, DataCollectionRow>();
   researchMatches = new Map<string, ResearchMatchRow>();
+  literatureWatchState = new Map<string, {
+    source: string;
+    query: string;
+    last_cursor: string | null;
+    last_checked_at: number | null;
+    created_at: number;
+    updated_at: number;
+  }>();
   discoveryProcessorSessions = new Map<string, DiscoveryProcessorSessionRow>();
   chatTaskConfirmations = new Map<string, ChatTaskConfirmationRow>();
   chatRequestIdempotency = new Map<string, ChatRequestIdempotencyRow>();
+  projects = new Map<string, ProjectRow>();
+  taskResources = new Map<string, TaskResourceRow>();
+  methodSources = new Map<string, MethodSourceRow>();
+  taskSpecs = new Map<string, TaskSpecRow>();
+  datasetSnapshots = new Map<string, DatasetSnapshotRow>();
+  taskIdempotency = new Map<string, TaskIdempotencyRow>();
+  taskEvents = new Map<string, TaskEventRow>();
+  outboxEvents = new Map<string, OutboxEventRow>();
   tasks = new Map<string, TaskRow>();
   workerRegistrations = new Map<string, PersistentWorkerRow>();
   workers = new Map<string, CanonicalWorkerRow>();
@@ -302,10 +418,65 @@ class FakeStatement {
 
   async first<T>(): Promise<T | null> {
     const sql = this.sql.replace(/\s+/g, " ");
-    if (sql.includes("FROM paper_catalog") && sql.includes("paper_id = ?1")) {
+    if (sql.includes("INSERT INTO projects") && sql.includes("RETURNING project_id")) {
+      const [projectId, userId, name, createdAt] = this.args as [string, string, string, number];
+      const existing = [...this.db.projects.values()].find((row) => row.user_id === userId);
+      if (existing) {
+        existing.name = name;
+        return existing as T;
+      }
+      const row = { project_id: projectId, user_id: userId, name, created_at: createdAt };
+      this.db.projects.set(projectId, row);
+      return row as T;
+    }
+    if (sql.includes("FROM task_idempotency") && sql.includes("idempotency_key = ?2")) {
+      const [userId, idempotencyKey] = this.args as [string, string];
+      return (this.db.taskIdempotency.get(`${userId}|${idempotencyKey}`) as T) ?? null;
+    }
+    if (sql.includes("FROM projects") && sql.includes("project_id = ?1") && sql.includes("user_id = ?2")) {
+      const [projectId, userId] = this.args as [string, string];
+      const row = this.db.projects.get(projectId);
+      return row && row.user_id === userId ? ({ ok: 1 } as T) : null;
+    }
+    if (sql.includes("FROM projects") && sql.includes("user_id = ?2")) {
+      const [, userId] = this.args as [string, string];
+      const row = [...this.db.projects.values()].find((candidate) => candidate.user_id === userId);
+      return (row as T) ?? null;
+    }
+    if (sql.includes("FROM task_specs") && sql.includes("task_spec_id = ?1")) {
+      const [specId, projectId, userId] = this.args as [string, string, string];
+      const row = this.db.taskSpecs.get(specId);
+      return row && row.project_id === projectId && row.user_id === userId
+        && (!sql.includes("status = 'active'") || row.status === "active") ? row as T : null;
+    }
+    if (sql.includes("FROM dataset_snapshots") && sql.includes("dataset_snapshot_id = ?1")) {
+      const [snapshotId, specId, projectId, userId] = this.args as [string, string, string, string];
+      const row = this.db.datasetSnapshots.get(snapshotId);
+      return row && row.task_spec_id === specId && row.project_id === projectId && row.user_id === userId
+        && (!sql.includes("validation_passed = 1") || row.validation_passed === 1) ? row as T : null;
+    }
+    if (sql.includes("FROM method_sources") && sql.includes("method_source_id = ?1")) {
+      const [methodId, projectId, userId] = this.args as [string, string, string];
+      const row = this.db.methodSources.get(methodId);
+      return row && row.project_id === projectId && row.user_id === userId ? row as T : null;
+    }
+    if (sql.includes("FROM paper_catalog") && sql.includes("paper_id = ?1") && sql.includes("status <> 'deleted'")) {
       const [paperId, userId] = this.args as [string, string];
       const row = this.db.paperCatalog.get(paperId);
       return row && row.status !== "deleted" && (row.owner_user_id === userId || row.visibility === "public") ? row as T : null;
+    }
+    if (sql.includes("FROM paper_catalog") && sql.includes("WHERE paper_id = ?1")) {
+      return (this.db.paperCatalog.get(String(this.args[0])) as T) ?? null;
+    }
+    if (sql.includes("FROM paper_catalog p") && sql.includes("r.source_kind = ?1") && sql.includes("r.source_ref = ?2")) {
+      const [sourceKind, sourceRef] = this.args as [PaperResourceRow["source_kind"], string];
+      const row = [...this.db.paperCatalog.values()]
+        .filter((candidate) => candidate.visibility === "public" && candidate.status !== "deleted")
+        .find((candidate) => {
+          const resource = this.db.paperResources.get(candidate.source_resource_id);
+          return resource?.source_kind === sourceKind && resource.source_ref === sourceRef;
+        });
+      return (row as T) ?? null;
     }
     if (sql.includes("FROM paper_catalog p") && sql.includes("source_sha256 = ?2")) {
       const [userId, sha256] = this.args as [string, string];
@@ -321,6 +492,9 @@ class FakeStatement {
       const row = this.db.dataCollections.get(collectionId);
       return row && row.owner_user_id === userId && row.status !== "deleted" ? row as T : null;
     }
+    if (sql.includes("FROM data_collections") && sql.includes("WHERE collection_id = ?1")) {
+      return (this.db.dataCollections.get(String(this.args[0])) as T) ?? null;
+    }
     if (sql.includes("FROM data_collections") && sql.includes("source_sha256 = ?2")) {
       const [userId, sha256] = this.args as [string, string];
       const row = [...this.db.dataCollections.values()]
@@ -329,8 +503,59 @@ class FakeStatement {
       return row as T ?? null;
     }
     if (sql.includes("FROM research_matches") && sql.includes("m.match_id = ?1")) {
-      const [matchId] = this.args as [string];
-      return (this.db.researchMatches.get(matchId) as T) ?? null;
+      const [matchId, userId] = this.args as [string, string?];
+      const match = this.db.researchMatches.get(matchId);
+      if (!match) return null;
+      if (sql.includes("c.owner_user_id = ?2")) {
+        const paper = this.db.paperCatalog.get(match.paper_id);
+        const collection = this.db.dataCollections.get(match.collection_id);
+        return collection != null && paper != null
+          && collection.owner_user_id === userId
+          && collection.status !== "deleted"
+          && paper.status !== "deleted"
+          && (paper.owner_user_id === userId || paper.visibility === "public")
+          ? match as T
+          : null;
+      }
+      return match as T;
+    }
+    if (sql.includes("FROM research_matches") && sql.includes("WHERE match_id = ?1")) {
+      return (this.db.researchMatches.get(String(this.args[0])) as T) ?? null;
+    }
+    if (sql.includes("FROM paper_catalog p") && sql.includes("JOIN paper_resources r") && sql.includes("status = 'requested'")) {
+      const [now] = this.args as [number];
+      const candidates = [...this.db.paperCatalog.values()]
+        .filter((paper) => paper.status === "requested" && paper.spam_status === "pending")
+        .map((paper) => ({ paper, resource: this.db.paperResources.get(paper.source_resource_id) }))
+        .filter(({ paper, resource }) => resource?.status === "ready"
+          && (paper.discovery_lease_expires_at == null || paper.discovery_lease_expires_at <= now))
+        .sort((left, right) => left.paper.created_at - right.paper.created_at || left.paper.paper_id.localeCompare(right.paper.paper_id))[0];
+      return candidates ? ({ ...candidates.paper, resource_id: candidates.resource!.resource_id } as T) : null;
+    }
+    if (sql.includes("FROM data_collections") && sql.includes("status = 'uploaded'") && sql.includes("ORDER BY created_at ASC")) {
+      const row = [...this.db.dataCollections.values()]
+        .filter((candidate) => candidate.status === "uploaded")
+        .sort((left, right) => left.created_at - right.created_at || left.collection_id.localeCompare(right.collection_id))[0];
+      return (row as T) ?? null;
+    }
+    if (sql.includes("FROM research_matches") && sql.includes("status = 'candidate'") && sql.includes("hard_gate = 'pending'")) {
+      const row = [...this.db.researchMatches.values()]
+        .filter((candidate) => candidate.status === "candidate" && candidate.hard_gate === "pending")
+        .sort((left, right) => left.created_at - right.created_at || left.match_id.localeCompare(right.match_id))[0];
+      return (row as T) ?? null;
+    }
+    if (sql.includes("FROM literature_watch_state") && sql.includes("source = ?1") && sql.includes("query = ?2")) {
+      const [source, query] = this.args as [string, string];
+      return (this.db.literatureWatchState.get(`${source}|${query}`) as T) ?? null;
+    }
+    if (sql.includes("COUNT(*) AS count") && sql.includes("FROM paper_catalog p")) {
+      const [ownerUserId, startAt, endAt] = this.args as [string, number, number];
+      const count = [...this.db.paperCatalog.values()].filter((paper) => {
+        const resource = this.db.paperResources.get(paper.source_resource_id);
+        return paper.visibility === "public" && paper.owner_user_id == null && paper.status !== "deleted"
+          && resource?.user_id === ownerUserId && paper.created_at >= startAt && paper.created_at < endAt;
+      }).length;
+      return { count } as T;
     }
     if (sql.includes("FROM discovery_processor_sessions") && sql.includes("session_token_hash = ?1")) {
       const [tokenHash, now] = this.args as [string, number];
@@ -512,6 +737,11 @@ class FakeStatement {
       const row = this.db.tasks.get(taskId);
       return row && row.created_by === userId ? (row as T) : null;
     }
+    if (sql.includes("FROM tasks WHERE chat_confirmation_id = ?1")) {
+      const [confirmationId, userId] = this.args as [string, string];
+      const row = [...this.db.tasks.values()].find((task) => task.chat_confirmation_id === confirmationId && task.created_by === userId);
+      return (row as T) ?? null;
+    }
     if (sql.includes("SELECT attempt_id FROM worker_attempts") && sql.includes("worker_id = ?1")) {
       const [workerId, now] = this.args as [string, number];
       const row = [...this.db.workerAttempts.values()].find((attempt) => attempt.worker_id === workerId && ["claimed", "running"].includes(attempt.status) && attempt.lease_expires_at > now);
@@ -594,6 +824,35 @@ class FakeStatement {
 
   async all<T>(): Promise<{ results: T[] }> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("FROM tasks WHERE created_by = ?1")) {
+      const [userId, limit] = this.args as [string, number];
+      const rows = [...this.db.tasks.values()]
+        .filter((task) => task.created_by === userId)
+        .sort((left, right) => (right.created_at ?? 0) - (left.created_at ?? 0))
+        .slice(0, Number(limit));
+      return { results: rows as T[] };
+    }
+    if (sql.includes("FROM task_events WHERE task_id = ?1")) {
+      const [taskId] = this.args as [string];
+      const rows = [...this.db.taskEvents.values()]
+        .filter((event) => event.task_id === taskId)
+        .sort((left, right) => left.created_at - right.created_at);
+      return { results: rows as T[] };
+    }
+    if (sql.includes("FROM data_collections") && sql.includes("status = 'ready'") && sql.includes("ORDER BY created_at ASC")) {
+      const rows = [...this.db.dataCollections.values()]
+        .filter((row) => row.status === "ready")
+        .sort((left, right) => left.created_at - right.created_at || left.collection_id.localeCompare(right.collection_id))
+        .slice(0, 512);
+      return { results: rows as T[] };
+    }
+    if (sql.includes("FROM paper_catalog") && sql.includes("status = 'profiled'") && sql.includes("ORDER BY created_at ASC")) {
+      const rows = [...this.db.paperCatalog.values()]
+        .filter((row) => row.status === "profiled")
+        .sort((left, right) => left.created_at - right.created_at || left.paper_id.localeCompare(right.paper_id))
+        .slice(0, 512);
+      return { results: rows as T[] };
+    }
     if (sql.includes("FROM paper_catalog") && sql.includes("ORDER BY updated_at DESC")) {
       const [userId, limit] = this.args as [string, number];
       const rows = [...this.db.paperCatalog.values()]
@@ -710,6 +969,222 @@ class FakeStatement {
 
   async run(): Promise<{ meta: { changes: number } }> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("UPDATE paper_catalog SET status = 'processing'")) {
+      const [paperId, now, owner, expiresAt, tokenHash] = this.args as [string, number, string, number, string | null];
+      const row = this.db.paperCatalog.get(paperId);
+      if (!row || row.status !== "requested" || (row.discovery_lease_expires_at != null && row.discovery_lease_expires_at > now)) return { meta: { changes: 0 } };
+      row.status = "processing";
+      row.updated_at = now;
+      row.discovery_lease_owner = owner;
+      row.discovery_lease_expires_at = expiresAt;
+      row.discovery_lease_token_hash = tokenHash;
+      row.discovery_fencing_epoch = (row.discovery_fencing_epoch ?? 0) + 1;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE data_collections SET status = 'inspecting'")) {
+      const [collectionId, now, owner, expiresAt, tokenHash] = this.args as [string, number, string, number, string | null];
+      const row = this.db.dataCollections.get(collectionId);
+      if (!row || row.status !== "uploaded" || (row.discovery_lease_expires_at != null && row.discovery_lease_expires_at > now)) return { meta: { changes: 0 } };
+      row.status = "inspecting";
+      row.updated_at = now;
+      row.discovery_lease_owner = owner;
+      row.discovery_lease_expires_at = expiresAt;
+      row.discovery_lease_token_hash = tokenHash;
+      row.discovery_fencing_epoch = (row.discovery_fencing_epoch ?? 0) + 1;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE research_matches SET status = 'evaluating'")) {
+      const [matchId, now, owner, expiresAt, tokenHash] = this.args as [string, number, string, number, string | null];
+      const row = this.db.researchMatches.get(matchId);
+      if (!row || row.status !== "candidate" || row.hard_gate !== "pending" || (row.discovery_lease_expires_at != null && row.discovery_lease_expires_at > now)) return { meta: { changes: 0 } };
+      row.status = "evaluating";
+      row.updated_at = now;
+      row.discovery_lease_owner = owner;
+      row.discovery_lease_expires_at = expiresAt;
+      row.discovery_lease_token_hash = tokenHash;
+      row.discovery_fencing_epoch = (row.discovery_fencing_epoch ?? 0) + 1;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_catalog SET status = 'profiled'")) {
+      const [paperId, spamStatus, profileVersion, profileJson, profileSha256, overviewKey, title, authorsJson, year, venue, now, owner, fencingEpoch, tokenHash] = this.args as [string, PaperCatalogRow["spam_status"], string, string, string, string, string, string, number | null, string | null, number, string | null, number | null, string | null];
+      const row = this.db.paperCatalog.get(paperId);
+      const leaseOkay = owner == null || (row?.discovery_lease_owner === owner && row.discovery_fencing_epoch === fencingEpoch && row.discovery_lease_token_hash === tokenHash && (row.discovery_lease_expires_at ?? 0) > now);
+      if (!row || row.status !== "processing" || !leaseOkay) return { meta: { changes: 0 } };
+      Object.assign(row, { status: "profiled", spam_status: spamStatus, profile_version: profileVersion, profile_json: profileJson, profile_sha256: profileSha256, overview_object_key: overviewKey, title, authors_json: authorsJson, year, venue, updated_at: now, discovery_lease_owner: null, discovery_lease_expires_at: null, discovery_lease_token_hash: null });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_catalog SET status = 'failed'")) {
+      const [paperId, spamStatus, now, owner, fencingEpoch, tokenHash] = this.args as [string, PaperCatalogRow["spam_status"], number, string | null, number | null, string | null];
+      const row = this.db.paperCatalog.get(paperId);
+      const leaseOkay = owner == null || (row?.discovery_lease_owner === owner && row.discovery_fencing_epoch === fencingEpoch && row.discovery_lease_token_hash === tokenHash && (row.discovery_lease_expires_at ?? 0) > now);
+      if (!row || !["requested", "processing"].includes(row.status) || !leaseOkay) return { meta: { changes: 0 } };
+      row.status = "failed";
+      row.spam_status = spamStatus;
+      row.updated_at = now;
+      row.discovery_lease_owner = null;
+      row.discovery_lease_expires_at = null;
+      row.discovery_lease_token_hash = null;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE data_collections SET status = 'ready'")) {
+      const [collectionId, profileVersion, profileJson, profileSha256, now, owner, fencingEpoch, tokenHash] = this.args as [string, string, string, string, number, string | null, number | null, string | null];
+      const row = this.db.dataCollections.get(collectionId);
+      const leaseOkay = owner == null || (row?.discovery_lease_owner === owner && row.discovery_fencing_epoch === fencingEpoch && row.discovery_lease_token_hash === tokenHash && (row.discovery_lease_expires_at ?? 0) > now);
+      if (!row || row.status !== "inspecting" || !leaseOkay) return { meta: { changes: 0 } };
+      Object.assign(row, { status: "ready", profile_version: profileVersion, profile_json: profileJson, profile_sha256: profileSha256, error_code: null, error_message_safe: null, updated_at: now, discovery_lease_owner: null, discovery_lease_expires_at: null, discovery_lease_token_hash: null });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE data_collections SET status = 'failed'")) {
+      const [collectionId, errorCode, message, now, owner, fencingEpoch, tokenHash] = this.args as [string, string, string, number, string | null, number | null, string | null];
+      const row = this.db.dataCollections.get(collectionId);
+      const leaseOkay = owner == null || (row?.discovery_lease_owner === owner && row.discovery_fencing_epoch === fencingEpoch && row.discovery_lease_token_hash === tokenHash && (row.discovery_lease_expires_at ?? 0) > now);
+      if (!row || !["uploaded", "inspecting"].includes(row.status) || !leaseOkay) return { meta: { changes: 0 } };
+      Object.assign(row, { status: "failed", error_code: errorCode, error_message_safe: message.slice(0, 1024), updated_at: now, discovery_lease_owner: null, discovery_lease_expires_at: null, discovery_lease_token_hash: null });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE research_matches SET status = ?2, hard_gate = ?3")) {
+      const [matchId, status, hardGate, coverage, confidence, scientificFit, evaluatorVersion, evaluationJson, now, owner, fencingEpoch, tokenHash] = this.args as [string, ResearchMatchRow["status"], ResearchMatchRow["hard_gate"], number, number, number, string, string, number, string | null, number | null, string | null];
+      const row = this.db.researchMatches.get(matchId);
+      const leaseOkay = owner == null || (row?.discovery_lease_owner === owner && row.discovery_fencing_epoch === fencingEpoch && row.discovery_lease_token_hash === tokenHash && (row.discovery_lease_expires_at ?? 0) > now);
+      if (!row || !["evaluating", "candidate"].includes(row.status) || !leaseOkay) return { meta: { changes: 0 } };
+      Object.assign(row, { status, hard_gate: hardGate, coverage_ratio: coverage, execution_confidence: confidence, scientific_fit: scientificFit, evaluator_version: evaluatorVersion, evaluation_json: evaluationJson, updated_at: now, discovery_lease_owner: null, discovery_lease_expires_at: null, discovery_lease_token_hash: null });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE research_matches SET created_task_id = ?2")) {
+      const [matchId, taskId, now] = this.args as [string, string, number];
+      const row = this.db.researchMatches.get(matchId);
+      if (!row || row.created_task_id != null || row.hard_gate !== "pass") return { meta: { changes: 0 } };
+      row.created_task_id = taskId;
+      row.status = "task_created";
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE discovery_processor_sessions SET last_seen_at")) {
+      const [sessionId, now, expiresAt] = this.args as [string, number, number];
+      const row = this.db.discoveryProcessorSessions.get(sessionId);
+      if (!row || row.revoked_at != null || row.expires_at <= now) return { meta: { changes: 0 } };
+      row.last_seen_at = now;
+      row.expires_at = expiresAt;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE") && sql.includes("SET discovery_lease_expires_at =") && sql.includes("discovery_lease_owner =")) {
+      const [expiresAt, now, id, owner, tokenHash, fencingEpoch] = this.args as [number, number, string, string, string, number];
+      const rows = [this.db.paperCatalog.get(id), this.db.dataCollections.get(id), this.db.researchMatches.get(id)].filter(Boolean) as Array<PaperCatalogRow | DataCollectionRow | ResearchMatchRow>;
+      const row = rows[0];
+      if (!row || row.discovery_lease_owner !== owner || row.discovery_lease_token_hash !== tokenHash || row.discovery_fencing_epoch !== fencingEpoch || (row.discovery_lease_expires_at ?? 0) <= now) return { meta: { changes: 0 } };
+      row.discovery_lease_expires_at = expiresAt;
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_catalog SET status = 'requested'") && sql.includes("discovery_lease_expires_at <=")) {
+      const [now] = this.args as [number];
+      let changes = 0;
+      for (const row of this.db.paperCatalog.values()) if (row.status === "processing" && (row.discovery_lease_expires_at ?? Infinity) <= now) { row.status = "requested"; row.updated_at = now; row.discovery_lease_owner = null; row.discovery_lease_expires_at = null; row.discovery_lease_token_hash = null; changes += 1; }
+      return { meta: { changes } };
+    }
+    if (sql.includes("UPDATE data_collections SET status = 'uploaded'") && sql.includes("discovery_lease_expires_at <=")) {
+      const [now] = this.args as [number];
+      let changes = 0;
+      for (const row of this.db.dataCollections.values()) if (row.status === "inspecting" && (row.discovery_lease_expires_at ?? Infinity) <= now) { row.status = "uploaded"; row.updated_at = now; row.discovery_lease_owner = null; row.discovery_lease_expires_at = null; row.discovery_lease_token_hash = null; changes += 1; }
+      return { meta: { changes } };
+    }
+    if (sql.includes("UPDATE research_matches SET status = 'candidate'") && sql.includes("discovery_lease_expires_at <=")) {
+      const [now] = this.args as [number];
+      let changes = 0;
+      for (const row of this.db.researchMatches.values()) if (row.status === "evaluating" && row.hard_gate === "pending" && (row.discovery_lease_expires_at ?? Infinity) <= now) { row.status = "candidate"; row.updated_at = now; row.discovery_lease_owner = null; row.discovery_lease_expires_at = null; row.discovery_lease_token_hash = null; changes += 1; }
+      return { meta: { changes } };
+    }
+    if (sql.includes("INSERT INTO projects")) {
+      const [projectId, userId, name, createdAt] = this.args as [string, string, string, number];
+      const existing = [...this.db.projects.values()].find((row) => row.user_id === userId);
+      if (existing) {
+        existing.name = name;
+        return { meta: { changes: 1 } };
+      }
+      this.db.projects.set(projectId, { project_id: projectId, user_id: userId, name, created_at: createdAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT OR IGNORE INTO task_resources")) {
+      const [resourceId, projectId, userId, kind, logicalName, objectKey, contentType, sizeBytes, hash, createdAt] = this.args as [string, string, string, "method" | "dataset", string, string, string, number, string, number];
+      if (this.db.taskResources.has(resourceId) || [...this.db.taskResources.values()].some((row) => row.object_key === objectKey)) return { meta: { changes: 0 } };
+      this.db.taskResources.set(resourceId, { resource_id: resourceId, project_id: projectId, user_id: userId, kind, logical_name: logicalName, object_key: objectKey, content_type: contentType, file_size_bytes: sizeBytes, file_hash_sha256: hash, created_at: createdAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT OR IGNORE INTO method_sources")) {
+      const [methodSourceId, projectId, userId, filename, resourceId, createdAt] = this.args as [string, string, string, string, string, number];
+      if (this.db.methodSources.has(methodSourceId)) return { meta: { changes: 0 } };
+      this.db.methodSources.set(methodSourceId, { method_source_id: methodSourceId, project_id: projectId, user_id: userId, original_filename: filename, resource_id: resourceId, created_at: createdAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT INTO task_specs") || sql.includes("INSERT OR IGNORE INTO task_specs")) {
+      if (sql.includes("'discovery'")) {
+        const [specId, projectId, userId, title, goal, _goalAgain, now] = this.args as [string, string, string, string, string, string, number];
+        if (!this.db.taskSpecs.has(specId)) this.db.taskSpecs.set(specId, { task_spec_id: specId, project_id: projectId, user_id: userId, title, analysis_type: "discovery", research_question: goal, goal, prompt_template_version: "goal-driven-executor-v1", revision: 1, status: "active", created_at: now, updated_at: now, frozen_at: now });
+        return { meta: { changes: 1 } };
+      }
+      const [specId, projectId, userId, title, analysisType, question, goal, template, now] = this.args as [string, string, string, string, string, string, string, string, number];
+      if (this.db.taskSpecs.has(specId)) return { meta: { changes: 0 } };
+      this.db.taskSpecs.set(specId, { task_spec_id: specId, project_id: projectId, user_id: userId, title, analysis_type: analysisType, research_question: question, goal, prompt_template_version: template, revision: 1, status: "draft", created_at: now, updated_at: now, frozen_at: null });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT OR IGNORE INTO dataset_snapshots")) {
+      const [snapshotId, specId, projectId, userId, filename, resourceId, hash, sizeBytes, _valid, createdAt] = this.args as [string, string, string, string, string, string, string, number, number, number];
+      if (this.db.datasetSnapshots.has(snapshotId)) return { meta: { changes: 0 } };
+      this.db.datasetSnapshots.set(snapshotId, { dataset_snapshot_id: snapshotId, task_spec_id: specId, project_id: projectId, user_id: userId, original_filename: filename, resource_id: resourceId, file_hash_sha256: hash, file_size_bytes: sizeBytes, validation_passed: 1, created_at: createdAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT OR IGNORE INTO tasks")) {
+      const [taskId, specId, snapshotId, projectId, methodSourceId, title, userId, now] = this.args as [string, string, string, string, string | null, string, string, number];
+      if (this.db.tasks.has(taskId)) return { meta: { changes: 0 } };
+      this.db.tasks.set(taskId, { task_id: taskId, title, status: "queued", created_by: userId, chat_confirmation_id: null, task_class: "public", attempt_count: 0, max_attempts: 3, created_at: now, updated_at: now, dispatch_policy: "owner_then_public", active_attempt_id: null, cancel_requested_at: null, finished_at: null, task_spec_id: specId, dataset_snapshot_id: snapshotId, project_id: projectId, method_source_id: methodSourceId });
+      return { meta: { changes: 1 } };
+    }
+    // The browser Task Center uses the legacy INSERT ... SELECT shape and
+    // binds a confirmation id as its ninth value. Keep that path distinct
+    // from the Discovery INSERT OR IGNORE shape above so the in-memory D1
+    // mirror preserves the canonical task fields and confirmation binding.
+    if (sql.includes("INSERT INTO tasks")) {
+      const [taskId, specId, snapshotId, projectId, methodSourceId, title, userId, now, confirmationId] = this.args as [string, string, string, string, string | null, string, string, number, string | null];
+      if (this.db.tasks.has(taskId)) return { meta: { changes: 0 } };
+      this.db.tasks.set(taskId, { task_id: taskId, title, status: "queued", created_by: userId, chat_confirmation_id: confirmationId ?? null, task_class: "public", attempt_count: 0, max_attempts: 3, created_at: now, updated_at: now, dispatch_policy: "owner_then_public", active_attempt_id: null, cancel_requested_at: null, finished_at: null, task_spec_id: specId, dataset_snapshot_id: snapshotId, project_id: projectId, method_source_id: methodSourceId });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT OR IGNORE INTO task_idempotency")) {
+      const [userId, key, taskId, requestHash, createdAt] = this.args as [string, string, string, string, number];
+      const idempotencyKey = `${userId}|${key}`;
+      if (this.db.taskIdempotency.has(idempotencyKey)) return { meta: { changes: 0 } };
+      this.db.taskIdempotency.set(idempotencyKey, { user_id: userId, idempotency_key: key, task_id: taskId, request_hash: requestHash, created_at: createdAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT OR IGNORE INTO task_events")) {
+      const [eventId, taskId, eventData, createdAt] = this.args as [string, string, string, number];
+      if (this.db.taskEvents.has(eventId)) return { meta: { changes: 0 } };
+      this.db.taskEvents.set(eventId, { task_event_id: eventId, task_id: taskId, event_type: "task_queued", event_data: eventData, created_at: createdAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT OR IGNORE INTO outbox_events")) {
+      const [eventId, idempotencyKey, aggregateId, payload, createdAt] = this.args as [string, string, string, string, number];
+      if (this.db.outboxEvents.has(eventId) || [...this.db.outboxEvents.values()].some((row) => row.idempotency_key === idempotencyKey)) return { meta: { changes: 0 } };
+      this.db.outboxEvents.set(eventId, { event_id: eventId, idempotency_key: idempotencyKey, aggregate_type: "task", aggregate_id: aggregateId, event_type: "task_queued", payload_json: payload, status: "pending", attempts: 0, next_attempt_at: createdAt, created_at: createdAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT OR IGNORE INTO paper_capabilities")) {
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT OR IGNORE INTO research_matches")) {
+      const [matchId, paperId, collectionId, paperVersion, datasetVersion, coverage, reason, createdAt] = this.args as [string, string, string, string, string, number, string, number];
+      const duplicate = [...this.db.researchMatches.values()].some((row) => row.paper_id === paperId && row.collection_id === collectionId && row.paper_profile_version === paperVersion && row.dataset_profile_version === datasetVersion);
+      if (!duplicate && !this.db.researchMatches.has(matchId)) this.db.researchMatches.set(matchId, { match_id: matchId, paper_id: paperId, collection_id: collectionId, paper_profile_version: paperVersion, dataset_profile_version: datasetVersion, status: "candidate", hard_gate: "pending", coverage_ratio: coverage, execution_confidence: null, scientific_fit: null, evaluator_version: null, evaluation_json: null, created_task_id: null, candidate_reason: reason, created_at: createdAt, updated_at: createdAt, discovery_fencing_epoch: 0 });
+      return { meta: { changes: duplicate ? 0 : 1 } };
+    }
+    if (sql.includes("INSERT INTO literature_watch_state")) {
+      const [source, query, cursor, checkedAt] = this.args as [string, string, string | null, number];
+      const key = `${source}|${query}`;
+      const existing = this.db.literatureWatchState.get(key);
+      if (existing) { existing.last_cursor = cursor; existing.last_checked_at = checkedAt; existing.updated_at = checkedAt; }
+      else this.db.literatureWatchState.set(key, { source, query, last_cursor: cursor, last_checked_at: checkedAt, created_at: checkedAt, updated_at: checkedAt });
+      return { meta: { changes: 1 } };
+    }
     if (sql.includes("INSERT INTO chat_sessions")) {
       const [id, userId, title, createdAt] = this.args as [string, string, string, number];
       this.db.chatSessions.set(id, { id, user_id: userId, title, created_at: createdAt, updated_at: createdAt });
@@ -727,6 +1202,9 @@ class FakeStatement {
       if (!row || row.owner_user_id !== userId || row.visibility !== "private" || row.status === "deleted") return { meta: { changes: 0 } };
       row.status = "deleted";
       row.updated_at = now;
+      row.discovery_lease_owner = null;
+      row.discovery_lease_expires_at = null;
+      row.discovery_lease_token_hash = null;
       return { meta: { changes: 1 } };
     }
     if (sql.includes("INSERT INTO data_collections")) {
@@ -741,11 +1219,14 @@ class FakeStatement {
       if (!row || row.owner_user_id !== userId || row.status === "deleted") return { meta: { changes: 0 } };
       row.status = "deleted";
       row.updated_at = now;
+      row.discovery_lease_owner = null;
+      row.discovery_lease_expires_at = null;
+      row.discovery_lease_token_hash = null;
       return { meta: { changes: 1 } };
     }
     if (sql.includes("INSERT INTO discovery_processor_sessions")) {
-      const [sessionId, processorId, instanceId, tokenHash, createdAt, lastSeenAt, expiresAt, revokedAt] = this.args as [string, string, string, string, number, number, number, number | null];
-      this.db.discoveryProcessorSessions.set(sessionId, { processor_session_id: sessionId, processor_id: processorId, instance_id: instanceId, session_token_hash: tokenHash, created_at: createdAt, last_seen_at: lastSeenAt, expires_at: expiresAt, revoked_at: revokedAt });
+      const [sessionId, processorId, instanceId, tokenHash, createdAt, expiresAt] = this.args as [string, string, string, string, number, number];
+      this.db.discoveryProcessorSessions.set(sessionId, { processor_session_id: sessionId, processor_id: processorId, instance_id: instanceId, session_token_hash: tokenHash, created_at: createdAt, last_seen_at: createdAt, expires_at: expiresAt, revoked_at: null });
       return { meta: { changes: 1 } };
     }
     if (sql.includes("INSERT INTO paper_request_continuations")) {
@@ -1251,7 +1732,56 @@ class FakeStatement {
       row.updated_at = now;
       return { meta: { changes: 1 } };
     }
-    if (sql.includes("INSERT INTO task_events") || sql.includes("INSERT INTO outbox_events")) {
+    if (sql.includes("INSERT INTO task_events")) {
+      const eventId = String(this.args[0] ?? "");
+      const taskId = String(this.args[1] ?? "");
+      const task = this.db.tasks.get(taskId);
+      if (!eventId || !task || this.db.taskEvents.has(eventId)) return { meta: { changes: 0 } };
+      const quotedType = sql.match(/(?:VALUES|SELECT) \(\?1, \?2, '([^']+)'/i)?.[1];
+      const eventType = quotedType ?? String(this.args[2] ?? "");
+      const eventData = quotedType ? String(this.args[2] ?? "null") : String(this.args[3] ?? "null");
+      const createdAtValue = quotedType ? this.args[3] : this.args[4];
+      const createdAt = Number(createdAtValue ?? Math.floor(Date.now() / 1000));
+      // SELECT-shaped lifecycle inserts include a final ownership/status
+      // predicate. Preserve the important ownership guard in the mirror.
+      const ownerArg = sql.includes("created_by = ?5") ? this.args[4] : undefined;
+      if (ownerArg !== undefined && task.created_by !== String(ownerArg)) return { meta: { changes: 0 } };
+      if (sql.includes("status = 'cancelled'") && task.status !== "cancelled") return { meta: { changes: 0 } };
+      this.db.taskEvents.set(eventId, {
+        task_event_id: eventId,
+        task_id: taskId,
+        event_type: eventType,
+        event_data: eventData,
+        created_at: Number.isFinite(createdAt) ? createdAt : Math.floor(Date.now() / 1000),
+      });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT INTO outbox_events")) {
+      const eventId = String(this.args[0] ?? "");
+      const idempotencyKey = String(this.args[1] ?? "");
+      const aggregateId = String(this.args[2] ?? "");
+      const task = this.db.tasks.get(aggregateId);
+      if (!eventId || !idempotencyKey || !task || this.db.outboxEvents.has(eventId)
+        || [...this.db.outboxEvents.values()].some((event) => event.idempotency_key === idempotencyKey)) {
+        return { meta: { changes: 0 } };
+      }
+      const quotedType = sql.match(/(?:VALUES|SELECT) \([^)]*'task', \?3, '([^']+)'/i)?.[1]
+        ?? sql.match(/aggregate_type, aggregate_id, event_type[^)]*\)\s*VALUES \('task', \$?1, '([^']+)'/i)?.[1];
+      const eventType = quotedType ?? (sql.includes("event_type") ? String(this.args[3] ?? "task_queued") : "task_queued");
+      const payload = String(quotedType ? this.args[3] : this.args[3] ?? "{}");
+      const createdAt = Number(quotedType ? this.args[4] : this.args[4] ?? Math.floor(Date.now() / 1000));
+      this.db.outboxEvents.set(eventId, {
+        event_id: eventId,
+        idempotency_key: idempotencyKey,
+        aggregate_type: "task",
+        aggregate_id: aggregateId,
+        event_type: eventType,
+        payload_json: payload,
+        status: "pending",
+        attempts: 0,
+        next_attempt_at: Number.isFinite(createdAt) ? createdAt : Math.floor(Date.now() / 1000),
+        created_at: Number.isFinite(createdAt) ? createdAt : Math.floor(Date.now() / 1000),
+      });
       return { meta: { changes: 1 } };
     }
     if (sql.includes("INSERT INTO chat_events")) {

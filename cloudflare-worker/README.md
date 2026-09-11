@@ -28,6 +28,8 @@ Hyperdrive 或 `DATABASE_URL`，也不做 D1/PostgreSQL 双写。Docker Worker �
 - `/api/sessions/*` 和 `POST /api/chat`
 - `/api/tasks/*`、`/api/task-specs/*` 和 `/api/datasets/*`
 - `/api/worker/v2/*`
+- `/api/discovery/*` (Papers, Data Collections, Matches)
+- `/api/discovery-processor/*` (private, fixed-source Processor protocol)
 - `/image-judge/*`
 
 旧 `/api/worker/v1/*` 明确返回 `410 LEGACY_WORKER_PROTOCOL_DISABLED`，不能被旧 Worker
@@ -78,3 +80,10 @@ Cloudflare Worker 的类型检查和单元测试覆盖 D1 状态机、credential
 合同和 multipart。历史 PostgreSQL acceptance 文件仅用于迁移/回归参考，不能作为当前 D1
 架构的 Case 2/3 通过证据。真实 C5 必须使用 D1、R2、zhangbot Redis Relay、可达 Docker
 Worker 和真实 Claude Code，并记录 Artifact 大小及 SHA-256。
+
+Discovery 的隔离处理器使用 `backend/Dockerfile.discovery-processor`，只通过固定的
+`/api/discovery-processor/*` HTTPS 协议访问 Edge，不直连 D1、R2 或 Redis。Windows 部署可
+使用 `docker-compose.windows-global-workers.yml` 中的 `discovery-processor` 服务；其
+`discovery-processor.cloudflare.env` 只包含管理员在部署时注入的 Edge 地址、处理器 ID 和
+bootstrap secret，不得提交到 Git。`DISCOVERY_AUTO_EXECUTE` 与文献监测默认关闭，必须在
+staging 通过后再显式开启。

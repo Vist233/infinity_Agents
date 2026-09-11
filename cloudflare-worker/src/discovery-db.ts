@@ -19,6 +19,10 @@ export interface PaperCatalogRow {
   overview_object_key: string | null;
   created_at: number;
   updated_at: number;
+  discovery_lease_owner?: string | null;
+  discovery_lease_expires_at?: number | null;
+  discovery_lease_token_hash?: string | null;
+  discovery_fencing_epoch?: number;
 }
 
 export interface DataCollectionRow {
@@ -38,6 +42,10 @@ export interface DataCollectionRow {
   error_message_safe: string | null;
   created_at: number;
   updated_at: number;
+  discovery_lease_owner?: string | null;
+  discovery_lease_expires_at?: number | null;
+  discovery_lease_token_hash?: string | null;
+  discovery_fencing_epoch?: number;
 }
 
 export interface ResearchMatchRow {
@@ -57,6 +65,10 @@ export interface ResearchMatchRow {
   candidate_reason: string | null;
   created_at: number;
   updated_at: number;
+  discovery_lease_owner?: string | null;
+  discovery_lease_expires_at?: number | null;
+  discovery_lease_token_hash?: string | null;
+  discovery_fencing_epoch?: number;
 }
 
 export interface DiscoveryProcessorSessionRow {
@@ -70,10 +82,21 @@ export interface DiscoveryProcessorSessionRow {
   revoked_at: number | null;
 }
 
+export interface LiteratureWatchStateRow {
+  source: string;
+  query: string;
+  last_cursor: string | null;
+  last_checked_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
 export type DiscoveryWork =
-  | { kind: "paper"; paper: PaperCatalogRow; resource_id: string }
-  | { kind: "collection"; collection: DataCollectionRow }
-  | { kind: "match"; match: ResearchMatchRow };
+  | { kind: "paper"; paper: PaperCatalogRow; resource_id: string; fencing_epoch: number; lease_expires_at: number }
+  | { kind: "collection"; collection: DataCollectionRow; fencing_epoch: number; lease_expires_at: number }
+  | { kind: "match"; match: ResearchMatchRow; fencing_epoch: number; lease_expires_at: number };
+
+export const DISCOVERY_LEASE_SECONDS = 5 * 60;
 
 function changed(result: { meta?: { changes?: number } }): boolean {
   return Number(result.meta?.changes ?? 0) === 1;
@@ -100,6 +123,54 @@ export async function getPaperById(env: Env, paperId: string): Promise<PaperCata
   return env.DB.prepare("SELECT * FROM paper_catalog WHERE paper_id = ?1").bind(paperId).first<PaperCatalogRow>();
 }
 
+export async function findPublicPaperBySource(env: Env, sourceKind: "arxiv" | "pubmed_pmc", sourceRef: string): Promise<PaperCatalogRow | null> {
+  return env.DB.prepare(
+    `SELECT p.* FROM paper_catalog p
+       JOIN paper_resources r ON r.resource_id = p.source_resource_id
+      WHERE p.visibility = 'public' AND p.status <> 'deleted'
+        AND r.source_kind = ?1 AND r.source_ref = ?2
+      ORDER BY p.updated_at DESC LIMIT 1`,
+  ).bind(sourceKind, sourceRef).first<PaperCatalogRow>();
+}
+
+export async function getLiteratureWatchState(env: Env, source: string, query: string): Promise<LiteratureWatchStateRow | null> {
+  return env.DB.prepare(
+    "SELECT source, query, last_cursor, last_checked_at, created_at, updated_at FROM literature_watch_state WHERE source = ?1 AND query = ?2",
+  ).bind(source, query).first<LiteratureWatchStateRow>();
+}
+
+export async function saveLiteratureWatchState(env: Env, input: { source: string; query: string; cursor: string | null; now?: number }): Promise<void> {
+  const now = input.now ?? nowSeconds();
+  await env.DB.prepare(
+    `INSERT INTO literature_watch_state (source, query, last_cursor, last_checked_at, created_at, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?4, ?4)
+       ON CONFLICT(source, query) DO UPDATE SET last_cursor = excluded.last_cursor,
+         last_checked_at = excluded.last_checked_at, updated_at = excluded.updated_at`,
+  ).bind(input.source, input.query, input.cursor, now).run();
+}
+
+/** Count only papers materialized by the system watcher in a UTC day. */
+export async function countLiteraturePapersCreatedBetween(env: Env, input: { ownerUserId: string; startAt: number; endAt: number }): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) AS count
+       FROM paper_catalog p
+       JOIN paper_resources r ON r.resource_id = p.source_resource_id
+      WHERE p.visibility = 'public' AND p.owner_user_id IS NULL
+        AND r.user_id = ?1 AND p.status <> 'deleted'
+        AND p.created_at >= ?2 AND p.created_at < ?3`,
+  ).bind(input.ownerUserId, input.startAt, input.endAt).first<{ count: number }>();
+  const count = Number(row?.count ?? 0);
+  return Number.isSafeInteger(count) && count > 0 ? count : 0;
+}
+
+export async function getCollectionById(env: Env, collectionId: string): Promise<DataCollectionRow | null> {
+  return env.DB.prepare("SELECT * FROM data_collections WHERE collection_id = ?1").bind(collectionId).first<DataCollectionRow>();
+}
+
+export async function getMatchById(env: Env, matchId: string): Promise<ResearchMatchRow | null> {
+  return env.DB.prepare("SELECT * FROM research_matches WHERE match_id = ?1").bind(matchId).first<ResearchMatchRow>();
+}
+
 export async function getPaperResourceForCatalogOwner(env: Env, resourceId: string, userId: string): Promise<{ resource_id: string; session_id: string } | null> {
   return env.DB.prepare(
     "SELECT resource_id, session_id FROM paper_resources WHERE resource_id = ?1 AND user_id = ?2",
@@ -108,7 +179,7 @@ export async function getPaperResourceForCatalogOwner(env: Env, resourceId: stri
 
 export async function markPaperDeletedForUser(env: Env, paperId: string, userId: string, now = nowSeconds()): Promise<boolean> {
   return changed(await env.DB.prepare(
-    "UPDATE paper_catalog SET status = 'deleted', updated_at = ?3 WHERE paper_id = ?1 AND owner_user_id = ?2 AND visibility = 'private' AND status <> 'deleted'",
+    "UPDATE paper_catalog SET status = 'deleted', updated_at = ?3, discovery_lease_owner = NULL, discovery_lease_expires_at = NULL, discovery_lease_token_hash = NULL WHERE paper_id = ?1 AND owner_user_id = ?2 AND visibility = 'private' AND status <> 'deleted'",
   ).bind(paperId, userId, now).run());
 }
 
@@ -147,23 +218,27 @@ export async function updatePaperProcessing(env: Env, paperId: string, input: { 
 
 export async function savePaperProfile(
   env: Env,
-  input: { paperId: string; profileVersion: string; profileJson: string; profileSha256: string; overviewObjectKey: string; spamStatus: SpamStatus; title: string; authorsJson: string; year: number | null; venue: string | null; now?: number },
+  input: { paperId: string; profileVersion: string; profileJson: string; profileSha256: string; overviewObjectKey: string; spamStatus: SpamStatus; title: string; authorsJson: string; year: number | null; venue: string | null; leaseOwner?: string; leaseTokenHash?: string; fencingEpoch?: number; now?: number },
 ): Promise<boolean> {
   const now = input.now ?? nowSeconds();
   const result = await env.DB.prepare(
     `UPDATE paper_catalog SET status = 'profiled', spam_status = ?2, profile_version = ?3,
        profile_json = ?4, profile_sha256 = ?5, overview_object_key = ?6, title = ?7,
-       authors_json = ?8, year = ?9, venue = ?10, updated_at = ?11
-     WHERE paper_id = ?1 AND status = 'processing'`,
-  ).bind(input.paperId, input.spamStatus, input.profileVersion, input.profileJson, input.profileSha256, input.overviewObjectKey, input.title, input.authorsJson, input.year, input.venue, now).run();
+       authors_json = ?8, year = ?9, venue = ?10, updated_at = ?11,
+       discovery_lease_owner = NULL, discovery_lease_expires_at = NULL, discovery_lease_token_hash = NULL
+     WHERE paper_id = ?1 AND status = 'processing'
+       AND (?12 IS NULL OR (discovery_lease_owner = ?12 AND discovery_fencing_epoch = ?13 AND discovery_lease_token_hash = ?14 AND discovery_lease_expires_at > ?11))`,
+  ).bind(input.paperId, input.spamStatus, input.profileVersion, input.profileJson, input.profileSha256, input.overviewObjectKey, input.title, input.authorsJson, input.year, input.venue, now, input.leaseOwner ?? null, input.fencingEpoch ?? null, input.leaseTokenHash ?? null).run();
   return changed(result);
 }
 
-export async function failPaperProfile(env: Env, paperId: string, spamStatus: SpamStatus, now = nowSeconds()): Promise<boolean> {
+export async function failPaperProfile(env: Env, paperId: string, spamStatus: SpamStatus, now = nowSeconds(), lease?: { owner: string; tokenHash: string; fencingEpoch: number }): Promise<boolean> {
   const result = await env.DB.prepare(
-    `UPDATE paper_catalog SET status = 'failed', spam_status = ?2, updated_at = ?3
-      WHERE paper_id = ?1 AND status IN ('requested', 'processing')`,
-  ).bind(paperId, spamStatus, now).run();
+    `UPDATE paper_catalog SET status = 'failed', spam_status = ?2, updated_at = ?3,
+       discovery_lease_owner = NULL, discovery_lease_expires_at = NULL, discovery_lease_token_hash = NULL
+      WHERE paper_id = ?1 AND status IN ('requested', 'processing')
+        AND (?4 IS NULL OR (discovery_lease_owner = ?4 AND discovery_fencing_epoch = ?5 AND discovery_lease_token_hash = ?6 AND discovery_lease_expires_at > ?3))`,
+  ).bind(paperId, spamStatus, now, lease?.owner ?? null, lease?.fencingEpoch ?? null, lease?.tokenHash ?? null).run();
   return changed(result);
 }
 
@@ -189,7 +264,7 @@ export async function getCollectionForUser(env: Env, collectionId: string, userI
 
 export async function markCollectionDeletedForUser(env: Env, collectionId: string, userId: string, now = nowSeconds()): Promise<boolean> {
   return changed(await env.DB.prepare(
-    "UPDATE data_collections SET status = 'deleted', updated_at = ?3 WHERE collection_id = ?1 AND owner_user_id = ?2 AND status <> 'deleted'",
+    "UPDATE data_collections SET status = 'deleted', updated_at = ?3, discovery_lease_owner = NULL, discovery_lease_expires_at = NULL, discovery_lease_token_hash = NULL WHERE collection_id = ?1 AND owner_user_id = ?2 AND status <> 'deleted'",
   ).bind(collectionId, userId, now).run());
 }
 
@@ -208,24 +283,34 @@ export async function createCollection(env: Env, input: Omit<DataCollectionRow, 
   return changed(result);
 }
 
-export async function claimCollectionForInspection(env: Env, collectionId: string, now = nowSeconds()): Promise<boolean> {
-  return changed(await env.DB.prepare("UPDATE data_collections SET status = 'inspecting', updated_at = ?2 WHERE collection_id = ?1 AND status = 'uploaded'").bind(collectionId, now).run());
+export async function claimCollectionForInspection(env: Env, collectionId: string, now = nowSeconds(), leaseOwner = "discovery-processor", leaseTokenHash?: string): Promise<boolean> {
+  return changed(await env.DB.prepare(
+    `UPDATE data_collections SET status = 'inspecting', updated_at = ?2,
+       discovery_lease_owner = ?3, discovery_lease_expires_at = ?4, discovery_lease_token_hash = ?5,
+       discovery_fencing_epoch = COALESCE(discovery_fencing_epoch, 0) + 1
+      WHERE collection_id = ?1 AND status = 'uploaded'
+        AND (discovery_lease_expires_at IS NULL OR discovery_lease_expires_at <= ?2)`,
+  ).bind(collectionId, now, leaseOwner, now + DISCOVERY_LEASE_SECONDS, leaseTokenHash ?? null).run());
 }
 
-export async function saveDatasetProfile(env: Env, input: { collectionId: string; profileVersion: string; profileJson: string; profileSha256: string; now?: number }): Promise<boolean> {
+export async function saveDatasetProfile(env: Env, input: { collectionId: string; profileVersion: string; profileJson: string; profileSha256: string; leaseOwner?: string; leaseTokenHash?: string; fencingEpoch?: number; now?: number }): Promise<boolean> {
   const now = input.now ?? nowSeconds();
   return changed(await env.DB.prepare(
     `UPDATE data_collections SET status = 'ready', profile_version = ?2, profile_json = ?3,
-       profile_sha256 = ?4, error_code = NULL, error_message_safe = NULL, updated_at = ?5
-     WHERE collection_id = ?1 AND status = 'inspecting'`,
-  ).bind(input.collectionId, input.profileVersion, input.profileJson, input.profileSha256, now).run());
+       profile_sha256 = ?4, error_code = NULL, error_message_safe = NULL, updated_at = ?5,
+       discovery_lease_owner = NULL, discovery_lease_expires_at = NULL, discovery_lease_token_hash = NULL
+     WHERE collection_id = ?1 AND status = 'inspecting'
+       AND (?6 IS NULL OR (discovery_lease_owner = ?6 AND discovery_fencing_epoch = ?7 AND discovery_lease_token_hash = ?8 AND discovery_lease_expires_at > ?5))`,
+  ).bind(input.collectionId, input.profileVersion, input.profileJson, input.profileSha256, now, input.leaseOwner ?? null, input.fencingEpoch ?? null, input.leaseTokenHash ?? null).run());
 }
 
-export async function failCollection(env: Env, collectionId: string, errorCode: string, message: string, now = nowSeconds()): Promise<boolean> {
+export async function failCollection(env: Env, collectionId: string, errorCode: string, message: string, now = nowSeconds(), lease?: { owner: string; tokenHash: string; fencingEpoch: number }): Promise<boolean> {
   return changed(await env.DB.prepare(
-    `UPDATE data_collections SET status = 'failed', error_code = ?2, error_message_safe = ?3, updated_at = ?4
-      WHERE collection_id = ?1 AND status IN ('uploaded', 'inspecting')`,
-  ).bind(collectionId, errorCode, message.slice(0, 1024), now).run());
+    `UPDATE data_collections SET status = 'failed', error_code = ?2, error_message_safe = ?3, updated_at = ?4,
+       discovery_lease_owner = NULL, discovery_lease_expires_at = NULL, discovery_lease_token_hash = NULL
+      WHERE collection_id = ?1 AND status IN ('uploaded', 'inspecting')
+        AND (?5 IS NULL OR (discovery_lease_owner = ?5 AND discovery_fencing_epoch = ?6 AND discovery_lease_token_hash = ?7 AND discovery_lease_expires_at > ?4))`,
+  ).bind(collectionId, errorCode, message.slice(0, 1024), now, lease?.owner ?? null, lease?.fencingEpoch ?? null, lease?.tokenHash ?? null).run());
 }
 
 export async function createResearchMatchIfMissing(env: Env, input: { matchId: string; paperId: string; collectionId: string; paperProfileVersion: string; datasetProfileVersion: string; coverageRatio: number; candidateReason: string; now?: number }): Promise<ResearchMatchRow | null> {
@@ -262,22 +347,48 @@ export async function getMatchForUser(env: Env, matchId: string, userId: string)
   ).bind(matchId, userId).first<ResearchMatchRow>();
 }
 
-export async function claimMatchForEvaluation(env: Env, matchId: string, now = nowSeconds()): Promise<boolean> {
-  return changed(await env.DB.prepare("UPDATE research_matches SET status = 'evaluating', updated_at = ?2 WHERE match_id = ?1 AND status = 'candidate' AND hard_gate = 'pending'").bind(matchId, now).run());
+export async function claimMatchForEvaluation(env: Env, matchId: string, now = nowSeconds(), leaseOwner = "discovery-processor", leaseTokenHash?: string): Promise<boolean> {
+  return changed(await env.DB.prepare(
+    `UPDATE research_matches SET status = 'evaluating', updated_at = ?2,
+       discovery_lease_owner = ?3, discovery_lease_expires_at = ?4, discovery_lease_token_hash = ?5,
+       discovery_fencing_epoch = COALESCE(discovery_fencing_epoch, 0) + 1
+      WHERE match_id = ?1 AND status = 'candidate' AND hard_gate = 'pending'
+        AND (discovery_lease_expires_at IS NULL OR discovery_lease_expires_at <= ?2)`,
+  ).bind(matchId, now, leaseOwner, now + DISCOVERY_LEASE_SECONDS, leaseTokenHash ?? null).run());
 }
 
-export async function saveMatchEvaluation(env: Env, input: { matchId: string; hardGate: Exclude<HardGate, "pending">; coverageRatio: number; executionConfidence: number; scientificFit: number; evaluatorVersion: string; evaluationJson: string; status: MatchStatus; now?: number }): Promise<boolean> {
+export async function saveMatchEvaluation(env: Env, input: { matchId: string; hardGate: Exclude<HardGate, "pending">; coverageRatio: number; executionConfidence: number; scientificFit: number; evaluatorVersion: string; evaluationJson: string; status: MatchStatus; leaseOwner?: string; leaseTokenHash?: string; fencingEpoch?: number; now?: number }): Promise<boolean> {
   const now = input.now ?? nowSeconds();
   return changed(await env.DB.prepare(
     `UPDATE research_matches SET status = ?2, hard_gate = ?3, coverage_ratio = ?4,
        execution_confidence = ?5, scientific_fit = ?6, evaluator_version = ?7,
-       evaluation_json = ?8, updated_at = ?9
-     WHERE match_id = ?1 AND status IN ('evaluating', 'candidate')`,
-  ).bind(input.matchId, input.status, input.hardGate, input.coverageRatio, input.executionConfidence, input.scientificFit, input.evaluatorVersion, input.evaluationJson, now).run());
+       evaluation_json = ?8, updated_at = ?9,
+       discovery_lease_owner = NULL, discovery_lease_expires_at = NULL, discovery_lease_token_hash = NULL
+     WHERE match_id = ?1 AND status IN ('evaluating', 'candidate')
+       AND (?10 IS NULL OR (discovery_lease_owner = ?10 AND discovery_fencing_epoch = ?11 AND discovery_lease_token_hash = ?12 AND discovery_lease_expires_at > ?9))`,
+  ).bind(input.matchId, input.status, input.hardGate, input.coverageRatio, input.executionConfidence, input.scientificFit, input.evaluatorVersion, input.evaluationJson, now, input.leaseOwner ?? null, input.fencingEpoch ?? null, input.leaseTokenHash ?? null).run());
 }
 
 export async function setMatchTask(env: Env, matchId: string, taskId: string, now = nowSeconds()): Promise<boolean> {
   return changed(await env.DB.prepare("UPDATE research_matches SET created_task_id = ?2, status = 'task_created', updated_at = ?3 WHERE match_id = ?1 AND created_task_id IS NULL AND hard_gate = 'pass'").bind(matchId, taskId, now).run());
+}
+
+export type DiscoveryLeaseKind = "paper" | "collection" | "match";
+
+export async function renewDiscoveryLease(
+  env: Env,
+  input: { kind: DiscoveryLeaseKind; id: string; owner: string; tokenHash: string; fencingEpoch: number; now?: number; leaseExpiresAt?: number },
+): Promise<boolean> {
+  const now = input.now ?? nowSeconds();
+  const expiresAt = input.leaseExpiresAt ?? now + DISCOVERY_LEASE_SECONDS;
+  const table = input.kind === "paper" ? "paper_catalog" : input.kind === "collection" ? "data_collections" : "research_matches";
+  const key = input.kind === "paper" ? "paper_id" : input.kind === "collection" ? "collection_id" : "match_id";
+  const activeStatuses = input.kind === "paper" ? "('processing')" : input.kind === "collection" ? "('inspecting')" : "('evaluating')";
+  return changed(await env.DB.prepare(
+    `UPDATE ${table} SET discovery_lease_expires_at = ?, updated_at = ?
+      WHERE ${key} = ? AND discovery_lease_owner = ? AND discovery_lease_token_hash = ? AND discovery_fencing_epoch = ?
+        AND status IN ${activeStatuses} AND discovery_lease_expires_at > ?`,
+  ).bind(expiresAt, now, input.id, input.owner, input.tokenHash, input.fencingEpoch, now).run());
 }
 
 export async function createDiscoveryProcessorSession(env: Env, input: DiscoveryProcessorSessionRow): Promise<void> {
@@ -296,19 +407,62 @@ export async function touchDiscoveryProcessorSession(env: Env, sessionId: string
   return changed(await env.DB.prepare("UPDATE discovery_processor_sessions SET last_seen_at = ?2, expires_at = ?3 WHERE processor_session_id = ?1 AND revoked_at IS NULL AND expires_at > ?2").bind(sessionId, now, expiresAt).run());
 }
 
-export async function claimNextDiscoveryWork(env: Env, now = nowSeconds()): Promise<DiscoveryWork | null> {
+/** Return abandoned Discovery items to their retryable pre-claim state. */
+export async function recoverExpiredDiscoveryLeases(env: Env, now = nowSeconds()): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE paper_catalog SET status = 'requested', updated_at = ?1,
+          discovery_lease_owner = NULL, discovery_lease_expires_at = NULL, discovery_lease_token_hash = NULL
+        WHERE status = 'processing' AND discovery_lease_expires_at IS NOT NULL AND discovery_lease_expires_at <= ?1`,
+    ).bind(now),
+    env.DB.prepare(
+      `UPDATE data_collections SET status = 'uploaded', updated_at = ?1,
+          discovery_lease_owner = NULL, discovery_lease_expires_at = NULL, discovery_lease_token_hash = NULL
+        WHERE status = 'inspecting' AND discovery_lease_expires_at IS NOT NULL AND discovery_lease_expires_at <= ?1`,
+    ).bind(now),
+    env.DB.prepare(
+      `UPDATE research_matches SET status = 'candidate', updated_at = ?1,
+          discovery_lease_owner = NULL, discovery_lease_expires_at = NULL, discovery_lease_token_hash = NULL
+        WHERE status = 'evaluating' AND hard_gate = 'pending'
+          AND discovery_lease_expires_at IS NOT NULL AND discovery_lease_expires_at <= ?1`,
+    ).bind(now),
+  ]);
+}
+
+/** Claim the oldest available paper, dataset, or match with a fenced lease. */
+export async function claimNextDiscoveryWork(env: Env, processorIdOrNow: string | number = "discovery-processor", maybeNow?: number, leaseTokenHash?: string): Promise<DiscoveryWork | null> {
+  const processorId = typeof processorIdOrNow === "string" ? processorIdOrNow : "discovery-processor";
+  const now = typeof processorIdOrNow === "number" ? processorIdOrNow : (maybeNow ?? nowSeconds());
+  await recoverExpiredDiscoveryLeases(env, now);
   const paper = await env.DB.prepare(
     `SELECT p.*, r.resource_id FROM paper_catalog p
       JOIN paper_resources r ON r.resource_id = p.source_resource_id
      WHERE p.status = 'requested' AND p.spam_status = 'pending' AND r.status = 'ready'
+       AND (p.discovery_lease_expires_at IS NULL OR p.discovery_lease_expires_at <= ?1)
      ORDER BY p.created_at ASC LIMIT 1`,
-  ).first<PaperCatalogRow & { resource_id: string }>();
-  if (paper && changed(await env.DB.prepare("UPDATE paper_catalog SET status = 'processing', updated_at = ?2 WHERE paper_id = ?1 AND status = 'requested'").bind(paper.paper_id, now).run())) {
-    return { kind: "paper", paper: { ...paper, status: "processing" }, resource_id: paper.resource_id };
+  ).bind(now).first<PaperCatalogRow & { resource_id: string }>();
+  if (paper && changed(await env.DB.prepare(
+    `UPDATE paper_catalog SET status = 'processing', updated_at = ?2,
+       discovery_lease_owner = ?3, discovery_lease_expires_at = ?4, discovery_lease_token_hash = ?5,
+       discovery_fencing_epoch = COALESCE(discovery_fencing_epoch, 0) + 1
+      WHERE paper_id = ?1 AND status = 'requested'
+        AND (discovery_lease_expires_at IS NULL OR discovery_lease_expires_at <= ?2)`,
+  ).bind(paper.paper_id, now, processorId, now + DISCOVERY_LEASE_SECONDS, leaseTokenHash ?? null).run())) {
+    const claimed = await env.DB.prepare("SELECT * FROM paper_catalog WHERE paper_id = ?1").bind(paper.paper_id).first<PaperCatalogRow>();
+    const epoch = Number(claimed?.discovery_fencing_epoch ?? 0);
+    return claimed && epoch > 0 ? { kind: "paper", paper: claimed, resource_id: paper.resource_id, fencing_epoch: epoch, lease_expires_at: now + DISCOVERY_LEASE_SECONDS } : null;
   }
   const collection = await env.DB.prepare("SELECT * FROM data_collections WHERE status = 'uploaded' ORDER BY created_at ASC LIMIT 1").first<DataCollectionRow>();
-  if (collection && await claimCollectionForInspection(env, collection.collection_id, now)) return { kind: "collection", collection: { ...collection, status: "inspecting" } };
+  if (collection && await claimCollectionForInspection(env, collection.collection_id, now, processorId, leaseTokenHash)) {
+    const claimed = await env.DB.prepare("SELECT * FROM data_collections WHERE collection_id = ?1").bind(collection.collection_id).first<DataCollectionRow>();
+    const epoch = Number(claimed?.discovery_fencing_epoch ?? 0);
+    if (claimed && epoch > 0) return { kind: "collection", collection: claimed, fencing_epoch: epoch, lease_expires_at: now + DISCOVERY_LEASE_SECONDS };
+  }
   const match = await env.DB.prepare("SELECT * FROM research_matches WHERE status = 'candidate' AND hard_gate = 'pending' ORDER BY created_at ASC LIMIT 1").first<ResearchMatchRow>();
-  if (match && await claimMatchForEvaluation(env, match.match_id, now)) return { kind: "match", match: { ...match, status: "evaluating" } };
+  if (match && await claimMatchForEvaluation(env, match.match_id, now, processorId, leaseTokenHash)) {
+    const claimed = await env.DB.prepare("SELECT * FROM research_matches WHERE match_id = ?1").bind(match.match_id).first<ResearchMatchRow>();
+    const epoch = Number(claimed?.discovery_fencing_epoch ?? 0);
+    if (claimed && epoch > 0) return { kind: "match", match: claimed, fencing_epoch: epoch, lease_expires_at: now + DISCOVERY_LEASE_SECONDS };
+  }
   return null;
 }

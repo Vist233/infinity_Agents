@@ -20,6 +20,9 @@ import { handlePaperResourceApi } from "./paper-resources";
 import { handlePaperProcessorApi } from "./paper-processor";
 import { runPaperResourceCleanup } from "./paper-cleanup";
 import { handleDiscoveryApi } from "./discovery";
+import { handleDiscoveryProcessorApi } from "./discovery-processor";
+import { retryDiscoveryTaskCreation } from "./discovery-task";
+import { runLiteratureDiscovery } from "./literature-watch";
 
 export { ImageJudgeUserConcurrencyLock } from "./image-judge";
 
@@ -75,6 +78,7 @@ export default {
           d1: env.DB ? "configured" : "unconfigured",
           resource_bucket: env.RESOURCE_BUCKET ? "configured" : "unconfigured",
           paper_processor: env.PAPER_PROCESSOR_ID && env.PAPER_PROCESSOR_SOURCE_IP && env.PAPER_PROCESSOR_SHARED_SECRET ? "configured" : "unconfigured",
+          discovery_processor: env.DISCOVERY_PROCESSOR_ID && env.DISCOVERY_PROCESSOR_SOURCE_IP && env.DISCOVERY_PROCESSOR_SHARED_SECRET ? "configured" : "unconfigured",
         },
       });
     }
@@ -120,6 +124,14 @@ export default {
     if (pathname === "/api/paper-processor/connect" || pathname.startsWith("/api/paper-processor/")) {
       const processorResponse = await handlePaperProcessorApi(request, env);
       if (processorResponse) return processorResponse;
+    }
+
+    // Discovery profiling/inspection/evaluation runs in a separate trusted
+    // runtime. It has its own bootstrap/session/lease boundary and is never
+    // accepted by the browser or Worker-v2 routes.
+    if (pathname === "/api/discovery-processor/connect" || pathname.startsWith("/api/discovery-processor/")) {
+      const discoveryProcessorResponse = await handleDiscoveryProcessorApi(request, env);
+      if (discoveryProcessorResponse) return discoveryProcessorResponse;
     }
 
     // The old D1-only Worker protocol is intentionally closed. There is no
@@ -219,5 +231,9 @@ export default {
     await recoverExpiredLeases(env);
     await flushD1Outbox(env);
     await runPaperResourceCleanup(env);
+    if (String(env.DISCOVERY_AUTO_EXECUTE ?? "").trim().toLowerCase() === "true") {
+      await retryDiscoveryTaskCreation(env);
+    }
+    await runLiteratureDiscovery(env);
   },
 } satisfies ExportedHandler<Env>;

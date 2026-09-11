@@ -3,7 +3,7 @@ import type { Env } from "./env";
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/;
 const SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
 
-export type DiscoveryObjectKind = "paper_profile" | "paper_overview" | "dataset_source" | "dataset_profile" | "evaluation";
+export type DiscoveryObjectKind = "paper_profile" | "paper_overview" | "dataset_source" | "dataset_profile" | "evaluation" | "method_materialized";
 
 /** Return a bounded filename suitable for a server-generated dataset key. */
 export function safeDiscoveryFilename(value: string, fallback = "data.bin"): string {
@@ -18,6 +18,7 @@ export function discoveryObjectKey(kind: DiscoveryObjectKind, input: { resourceI
   if (kind === "dataset_source" && input.collectionId && SAFE_ID.test(input.collectionId) && input.filename && SAFE_FILENAME.test(input.filename)) return `datasets/${input.collectionId}/source/${input.filename}`;
   if (kind === "dataset_profile" && input.collectionId && SAFE_ID.test(input.collectionId)) return `datasets/${input.collectionId}/profile/dataset_profile.v1.json`;
   if (kind === "evaluation" && input.matchId && SAFE_ID.test(input.matchId)) return `discovery/${input.matchId}/evaluation.v1.json`;
+  if (kind === "method_materialized" && input.matchId && SAFE_ID.test(input.matchId)) return `discovery/${input.matchId}/method.v1.md`;
   return null;
 }
 

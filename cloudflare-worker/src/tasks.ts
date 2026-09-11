@@ -367,7 +367,7 @@ function publicTask(row: TaskRow): Record<string, unknown> {
   };
 }
 
-async function loadTask(taskIdValue: string, env: Env, user: AuthedUser): Promise<TaskRow | null> {
+async function loadTask(taskIdValue: string, env: Env, user: Pick<AuthedUser, "userId">): Promise<TaskRow | null> {
   return env.DB.prepare(
     `SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
             title, status, attempt_count, max_attempts, result_artifact_id,
@@ -375,6 +375,91 @@ async function loadTask(taskIdValue: string, env: Env, user: AuthedUser): Promis
             chat_confirmation_id, execution_pool_id
      FROM tasks WHERE task_id = ?1 AND created_by = ?2`
   ).bind(taskIdValue, user.userId).first<TaskRow>();
+}
+
+export interface TrustedInternalTaskInput {
+  taskId: string;
+  taskSpecId: string;
+  datasetSnapshotId: string;
+  projectId: string;
+  methodSourceId: string | null;
+  title: string;
+  userId: string;
+  idempotencyKey: string;
+  requestHash: string;
+  now?: number;
+  source?: string;
+  matchId?: string;
+}
+
+export interface TrustedInternalTaskResult {
+  taskId: string;
+  status: string;
+  duplicate: boolean;
+}
+
+/** Materialize an already validated internal flow into the canonical Task tables. */
+export async function createTrustedInternalTask(
+  env: Env,
+  input: TrustedInternalTaskInput,
+): Promise<TrustedInternalTaskResult | null> {
+  const now = input.now ?? nowSeconds();
+  const existing = await env.DB.prepare(
+    "SELECT task_id, request_hash FROM task_idempotency WHERE user_id = ?1 AND idempotency_key = ?2",
+  ).bind(input.userId, input.idempotencyKey).first<{ task_id: string; request_hash: string }>();
+  if (existing) {
+    if (existing.request_hash !== input.requestHash) return null;
+    const duplicate = await loadTask(existing.task_id, env, { userId: input.userId });
+    return duplicate ? { taskId: duplicate.task_id, status: duplicate.status, duplicate: true } : null;
+  }
+
+  const payload = JSON.stringify({
+    task_id: input.taskId,
+    status: "queued",
+    source: input.source ?? "internal",
+    ...(input.matchId ? { match_id: input.matchId } : {}),
+    pool_id: "public-default",
+  });
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO tasks
+          (task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
+           title, status, attempt_count, max_attempts, created_by, created_at, updated_at,
+           chat_confirmation_id, dispatch_policy, task_class, execution_pool_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'queued', 0, 3, ?7, ?8, ?8, NULL,
+                 'owner_then_public', 'public', 'public-default')`,
+      ).bind(input.taskId, input.taskSpecId, input.datasetSnapshotId, input.projectId, input.methodSourceId, input.title, input.userId, now),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO task_idempotency (user_id, idempotency_key, task_id, request_hash, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)`,
+      ).bind(input.userId, input.idempotencyKey, input.taskId, input.requestHash, now),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
+         VALUES (?1, ?2, 'task_queued', ?3, ?4)`,
+      ).bind(`discovery-event-queued-${input.taskId}`, input.taskId, payload, now),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO outbox_events
+          (event_id, idempotency_key, aggregate_type, aggregate_id, event_type,
+           payload_json, status, attempts, next_attempt_at, created_at)
+         VALUES (?1, ?2, 'task', ?3, 'task_queued', ?4, 'pending', 0, ?5, ?5)`,
+      ).bind(`discovery-outbox-queued-${input.taskId}`, `task-queued:${input.taskId}`, input.taskId, payload, now),
+    ]);
+  } catch {
+    const raced = await env.DB.prepare(
+      "SELECT task_id, request_hash FROM task_idempotency WHERE user_id = ?1 AND idempotency_key = ?2",
+    ).bind(input.userId, input.idempotencyKey).first<{ task_id: string; request_hash: string }>();
+    if (!raced || raced.request_hash !== input.requestHash) return null;
+    const duplicate = await loadTask(raced.task_id, env, { userId: input.userId });
+    return duplicate ? { taskId: duplicate.task_id, status: duplicate.status, duplicate: true } : null;
+  }
+
+  const task = await loadTask(input.taskId, env, { userId: input.userId });
+  const idempotency = await env.DB.prepare(
+    "SELECT task_id, request_hash FROM task_idempotency WHERE user_id = ?1 AND idempotency_key = ?2",
+  ).bind(input.userId, input.idempotencyKey).first<{ task_id: string; request_hash: string }>();
+  if (!task || !idempotency || idempotency.task_id !== task.task_id || idempotency.request_hash !== input.requestHash) return null;
+  return { taskId: task.task_id, status: task.status, duplicate: false };
 }
 
 async function handleCreateTask(request: Request, env: Env, user: AuthedUser, directSubmission = false): Promise<Response> {

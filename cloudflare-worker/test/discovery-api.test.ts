@@ -130,4 +130,54 @@ describe("Discovery Paper and Data Collection APIs", () => {
     const reupload = await handleDiscoveryApi(await upload("/api/discovery/data-collections", csvFile("reupload.csv")), env, ALICE);
     expect(reupload?.status).toBe(201);
   });
+
+  it("keeps match evaluation processor-owned while exposing an idempotent browser request", async () => {
+    const { env, db } = setup();
+    db.paperCatalog.set("paper-1", {
+      paper_id: "paper-1", owner_user_id: null, source_resource_id: "resource-1", visibility: "public",
+      title: "Public paper", authors_json: "[]", year: null, venue: null, status: "profiled", spam_status: "scientific_paper",
+      profile_version: "paper-profile-v1", profile_json: null, profile_sha256: null, overview_object_key: null, created_at: 1, updated_at: 1,
+    });
+    db.dataCollections.set("collection-1", {
+      collection_id: "collection-1", owner_user_id: "alice", name: "Data", source_object_key: "datasets/c/source.csv",
+      source_filename: "source.csv", source_content_type: "text/csv", source_sha256: "a".repeat(64), source_size_bytes: 10,
+      status: "ready", profile_version: "dataset-profile-v1", profile_json: null, profile_sha256: null, error_code: null,
+      error_message_safe: null, created_at: 1, updated_at: 1,
+    });
+    db.researchMatches.set("match-1", {
+      match_id: "match-1", paper_id: "paper-1", collection_id: "collection-1", paper_profile_version: "paper-profile-v1",
+      dataset_profile_version: "dataset-profile-v1", status: "candidate", hard_gate: "pending", coverage_ratio: 0.5,
+      execution_confidence: null, scientific_fit: null, evaluator_version: null, evaluation_json: null, created_task_id: null,
+      candidate_reason: "1/2 modules", created_at: 1, updated_at: 1,
+    });
+
+    const queued = await handleDiscoveryApi(request("/api/discovery/matches/match-1/evaluate", { method: "POST" }), env, ALICE);
+    expect(queued?.status).toBe(200);
+    expect(await queued!.json()).toMatchObject({ match_id: "match-1", status: "candidate", queued: true, evaluation: null });
+    expect((await handleDiscoveryApi(request("/api/discovery/matches/match-1/evaluate", { method: "POST" }), env, BOB))?.status).toBe(404);
+  });
+
+  it("does not create a Task from a match until the server-side threshold is passed", async () => {
+    const { env, db } = setup();
+    db.paperCatalog.set("paper-2", {
+      paper_id: "paper-2", owner_user_id: null, source_resource_id: "resource-2", visibility: "public",
+      title: "Public paper", authors_json: "[]", year: null, venue: null, status: "profiled", spam_status: "scientific_paper",
+      profile_version: "paper-profile-v1", profile_json: null, profile_sha256: null, overview_object_key: null, created_at: 1, updated_at: 1,
+    });
+    db.dataCollections.set("collection-2", {
+      collection_id: "collection-2", owner_user_id: "alice", name: "Data", source_object_key: "datasets/c/source.csv",
+      source_filename: "source.csv", source_content_type: "text/csv", source_sha256: "b".repeat(64), source_size_bytes: 10,
+      status: "ready", profile_version: "dataset-profile-v1", profile_json: null, profile_sha256: null, error_code: null,
+      error_message_safe: null, created_at: 1, updated_at: 1,
+    });
+    db.researchMatches.set("match-2", {
+      match_id: "match-2", paper_id: "paper-2", collection_id: "collection-2", paper_profile_version: "paper-profile-v1",
+      dataset_profile_version: "dataset-profile-v1", status: "evaluated", hard_gate: "pass", coverage_ratio: 0.59,
+      execution_confidence: 99, scientific_fit: 99, evaluator_version: "feasibility-v1", evaluation_json: "{}", created_task_id: null,
+      candidate_reason: "", created_at: 1, updated_at: 1,
+    });
+    const response = await handleDiscoveryApi(request("/api/discovery/matches/match-2/create-task", { method: "POST" }), env, ALICE);
+    expect(response?.status).toBe(409);
+    expect(await response!.json()).toMatchObject({ error: { code: "DISCOVERY_TASK_THRESHOLD_NOT_MET" } });
+  });
 });

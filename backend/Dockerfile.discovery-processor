@@ -1,0 +1,20 @@
+# Dedicated Discovery Processor image. The runtime has no database or bucket
+# credentials; it receives only the short-lived Edge session capability and
+# commits durable state through the fixed HTTPS control protocol.
+FROM python:3.12-slim
+
+RUN groupadd --system --gid 10003 discoveryprocessor \
+    && useradd --system --uid 10003 --gid 10003 --create-home --home-dir /home/discoveryprocessor discoveryprocessor
+
+WORKDIR /app
+COPY backend/__init__.py ./backend/__init__.py
+COPY backend/discovery ./backend/discovery
+RUN mkdir -p /var/lib/discovery-processor \
+    && chown -R 10003:10003 /app /home/discoveryprocessor /var/lib/discovery-processor
+
+USER 10003:10003
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV DISCOVERY_PROCESSOR_WORK_ROOT=/var/lib/discovery-processor
+
+CMD ["python", "-m", "backend.discovery.processor"]

@@ -25,12 +25,12 @@ function allMigrations(): string {
     "0014_d1_worker_runtime.sql", "0015_c7_runtime_hardening.sql", "0016_immutable_worker_sessions.sql",
     "0017_chat_events.sql", "0018_paper_resources.sql", "0019_paper_processor_sessions.sql",
     "0020_paper_processor_objects.sql", "0021_paper_privacy_cleanup.sql", "0022_paper_request_continuations.sql",
-    "0023_discovery_catalog.sql",
+    "0023_discovery_catalog.sql", "0024_discovery_leases.sql",
   ];
   return names.map((name) => readFileSync(join(migrationDirectory, name), "utf8")).join("\n");
 }
 
-describe("0023 Discovery D1 schema", () => {
+describe("0023/0024 Discovery D1 schema", () => {
   it("applies on a clean database and leaves the existing Task columns unchanged", () => {
     const sql = `PRAGMA foreign_keys=ON; ${allMigrations()} SELECT name FROM sqlite_master WHERE type='table' AND name IN ('paper_catalog','paper_capabilities','data_collections','dataset_capabilities','research_matches','discovery_processor_sessions','literature_watch_state') ORDER BY name;`;
     const output = runSql(sql).trim().split(/\r?\n/).filter(Boolean);

@@ -24,7 +24,7 @@ interface MobileImageJudgeExample {
 }
 
 interface MobileWorkspaceMenuProps {
-  active: "analysis" | "tasks" | "traits";
+  active: "analysis" | "tasks" | "traits" | "papers" | "collections";
   taskItems?: MobileTaskItem[];
   onNewTask?: () => void;
   activeTaskId?: string;

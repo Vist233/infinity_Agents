@@ -14,8 +14,10 @@ import {
   createCollection,
   findCollectionBySha,
   findPaperByOwnerSha,
+  getCollectionById,
   getCollectionForUser,
   getMatchForUser,
+  getPaperById,
   getPaperForUser,
   getPaperResourceForCatalogOwner,
   listCollectionsForUser,
@@ -32,6 +34,7 @@ import {
   safeDiscoveryFilename,
 } from "./discovery-object-store";
 import { Sha256 } from "./sha256";
+import { createDiscoveryTask } from "./discovery-task";
 
 export const DISCOVERY_MAX_PAPER_BYTES = 64 * 1024 * 1024;
 export const DISCOVERY_MAX_COLLECTION_BYTES = 25 * 1024 * 1024;
@@ -314,6 +317,42 @@ async function getMatch(env: Env, user: AuthedUser, matchId: string): Promise<Re
   return match ? json({ match }) : errorJson("Research match not found", 404, "DISCOVERY_MATCH_NOT_FOUND");
 }
 
+async function evaluateMatch(env: Env, user: AuthedUser, matchId: string): Promise<Response> {
+  if (!PAPER_ID.test(matchId)) return errorJson("Research match not found", 404, "DISCOVERY_MATCH_NOT_FOUND");
+  const match = await getMatchForUser(env, matchId, user.userId);
+  if (!match) return errorJson("Research match not found", 404, "DISCOVERY_MATCH_NOT_FOUND");
+  // Evaluation is performed by the dedicated Discovery Processor. This
+  // browser endpoint is an idempotent request/ack surface; candidates are
+  // already visible to the processor's server-controlled poll queue.
+  const queued = match.status === "candidate" || match.status === "evaluating";
+  const evaluation = parsedJson(match.evaluation_json);
+  return json({ match_id: match.match_id, status: match.status, queued, evaluation });
+}
+
+async function createMatchTask(env: Env, user: AuthedUser, matchId: string): Promise<Response> {
+  if (!PAPER_ID.test(matchId)) return errorJson("Research match not found", 404, "DISCOVERY_MATCH_NOT_FOUND");
+  const match = await getMatchForUser(env, matchId, user.userId);
+  if (!match) return errorJson("Research match not found", 404, "DISCOVERY_MATCH_NOT_FOUND");
+  if (match.created_task_id) {
+    const task = await env.DB.prepare(
+      "SELECT task_id, status FROM tasks WHERE task_id = ?1 AND created_by = ?2",
+    ).bind(match.created_task_id, user.userId).first<{ task_id: string; status: string }>();
+    if (!task) return errorJson("Discovery task is not available", 409, "DISCOVERY_TASK_STATE_CONFLICT");
+    return json({ match_id: match.match_id, task_id: task.task_id, status: "task_created", task_status: task.status, duplicate: true });
+  }
+  if (match.status !== "evaluated" || match.hard_gate !== "pass" || match.coverage_ratio < 0.6 || (match.execution_confidence ?? 0) < 60) {
+    return errorJson("This match has not passed the execution threshold", 409, "DISCOVERY_TASK_THRESHOLD_NOT_MET");
+  }
+  const paper = await getPaperById(env, match.paper_id);
+  const collection = await getCollectionById(env, match.collection_id);
+  const paperProfile = paper?.profile_json ? normalizePaperProfile(parsedJson(paper.profile_json)) : null;
+  const datasetProfile = collection?.profile_json ? normalizeDatasetProfile(parsedJson(collection.profile_json), collection.collection_id) : null;
+  if (!paper || !collection || !paperProfile || !datasetProfile) return errorJson("Match inputs are no longer ready", 409, "DISCOVERY_MATCH_INPUT_NOT_READY");
+  const created = await createDiscoveryTask(env, { match, paper, collection, paperProfile, datasetProfile });
+  if (!created) return errorJson("Discovery task could not be queued; retry is available", 503, "DISCOVERY_TASK_CREATION_RETRYABLE");
+  return json({ match_id: match.match_id, task_id: created.taskId, status: "task_created", duplicate: created.duplicate }, created.duplicate ? 200 : 201);
+}
+
 /** Authenticated browser API for Papers, Data Collections, and read-only matches. */
 export async function handleDiscoveryApi(request: Request, env: Env, user: AuthedUser): Promise<Response | null> {
   const url = new URL(request.url);
@@ -338,6 +377,11 @@ export async function handleDiscoveryApi(request: Request, env: Env, user: Authe
   if (url.pathname === "/api/discovery/matches" && request.method === "GET") return listMatches(env, user);
   const match = url.pathname.match(/^\/api\/discovery\/matches\/([^/]+)$/);
   if (match && request.method === "GET") return getMatch(env, user, decodeURIComponent(match[1]));
+  const matchAction = url.pathname.match(/^\/api\/discovery\/matches\/([^/]+)\/(evaluate|create-task)$/);
+  if (matchAction && request.method === "POST") {
+    const matchId = decodeURIComponent(matchAction[1]);
+    return matchAction[2] === "evaluate" ? evaluateMatch(env, user, matchId) : createMatchTask(env, user, matchId);
+  }
   if (url.pathname.startsWith("/api/discovery/")) return errorJson("Not found", 404, "NOT_FOUND");
   return null;
 }
