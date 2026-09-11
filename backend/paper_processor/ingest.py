@@ -76,7 +76,11 @@ class ExtractionLimits:
     max_image_bytes: int = 8 * 1024 * 1024
     max_total_image_bytes: int = 64 * 1024 * 1024
     max_redirects: int = 3
-    max_resident_memory_bytes: int | None = 192 * 1024 * 1024
+    # Keep direct callers aligned with the deployed zhangbot service.  A lower
+    # 192 MiB default made a process that had already imported PyMuPDF reject
+    # ordinary PDFs before parsing them, despite the service having a 512 MiB
+    # soft cgroup limit and a 768 MiB hard ceiling.
+    max_resident_memory_bytes: int | None = 512 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -88,7 +92,9 @@ class ProcessorRuntimeLimits:
     extraction_timeout_seconds: float = 120.0
     upload_timeout_seconds: float = 90.0
     heartbeat_interval_seconds: float = 30.0
-    max_resident_memory_bytes: int = 192 * 1024 * 1024
+    # This is intentionally below the systemd MemoryMax (768 MiB) configured
+    # for the zhangbot processor, leaving room for orderly failure and cleanup.
+    max_resident_memory_bytes: int = 512 * 1024 * 1024
 
     def __post_init__(self) -> None:
         numeric = (
