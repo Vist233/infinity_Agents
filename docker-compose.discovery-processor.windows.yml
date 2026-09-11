@@ -5,6 +5,10 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile.discovery-processor
+      args:
+        # The deployment script preloads this public base into the Windows
+        # Docker cache so the SSH session never needs registry credentials.
+        DISCOVERY_PYTHON_BASE: infinity-discovery-python:3.12-slim
     image: infinity-agents-discovery-processor:2026.09.11-r1
     pull_policy: never
     restart: unless-stopped

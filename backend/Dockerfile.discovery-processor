@@ -1,9 +1,10 @@
 # Dedicated Discovery Processor image. The runtime has no database or bucket
 # credentials; it receives only the short-lived Edge session capability and
 # commits durable state through the fixed HTTPS control protocol.
-# Use the public Amazon ECR mirror so Windows builds do not depend on Docker
-# Hub credentials or on a project image being published to Docker Hub.
-FROM public.ecr.aws/docker/library/python:3.12-slim
+# Use a public ECR mirror by default. The Windows compose deployment overrides
+# this with a locally preloaded tag so the SSH build never needs registry creds.
+ARG DISCOVERY_PYTHON_BASE=public.ecr.aws/docker/library/python:3.12-slim
+FROM ${DISCOVERY_PYTHON_BASE}
 
 RUN groupadd --system --gid 10003 discoveryprocessor \
     && useradd --system --uid 10003 --gid 10003 --create-home --home-dir /home/discoveryprocessor discoveryprocessor
