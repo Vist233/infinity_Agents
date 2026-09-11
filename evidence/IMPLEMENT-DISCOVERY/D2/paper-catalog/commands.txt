@@ -1,0 +1,4 @@
+cd cloudflare-worker && npm test -- --run test/discovery-api.test.ts
+cd cloudflare-worker && npm run check
+cd cloudflare-worker && npm test
+git diff --check

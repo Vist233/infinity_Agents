@@ -100,6 +100,18 @@ export async function getPaperById(env: Env, paperId: string): Promise<PaperCata
   return env.DB.prepare("SELECT * FROM paper_catalog WHERE paper_id = ?1").bind(paperId).first<PaperCatalogRow>();
 }
 
+export async function getPaperResourceForCatalogOwner(env: Env, resourceId: string, userId: string): Promise<{ resource_id: string; session_id: string } | null> {
+  return env.DB.prepare(
+    "SELECT resource_id, session_id FROM paper_resources WHERE resource_id = ?1 AND user_id = ?2",
+  ).bind(resourceId, userId).first<{ resource_id: string; session_id: string }>();
+}
+
+export async function markPaperDeletedForUser(env: Env, paperId: string, userId: string, now = nowSeconds()): Promise<boolean> {
+  return changed(await env.DB.prepare(
+    "UPDATE paper_catalog SET status = 'deleted', updated_at = ?3 WHERE paper_id = ?1 AND owner_user_id = ?2 AND visibility = 'private' AND status <> 'deleted'",
+  ).bind(paperId, userId, now).run());
+}
+
 export async function findPaperByOwnerSha(env: Env, userId: string, sha256: string): Promise<PaperCatalogRow | null> {
   return env.DB.prepare(
     `SELECT p.* FROM paper_catalog p
@@ -173,6 +185,12 @@ export async function listCollectionsForUser(env: Env, userId: string, limit = 1
 
 export async function getCollectionForUser(env: Env, collectionId: string, userId: string): Promise<DataCollectionRow | null> {
   return env.DB.prepare("SELECT * FROM data_collections WHERE collection_id = ?1 AND owner_user_id = ?2 AND status <> 'deleted'").bind(collectionId, userId).first<DataCollectionRow>();
+}
+
+export async function markCollectionDeletedForUser(env: Env, collectionId: string, userId: string, now = nowSeconds()): Promise<boolean> {
+  return changed(await env.DB.prepare(
+    "UPDATE data_collections SET status = 'deleted', updated_at = ?3 WHERE collection_id = ?1 AND owner_user_id = ?2 AND status <> 'deleted'",
+  ).bind(collectionId, userId, now).run());
 }
 
 export async function findCollectionBySha(env: Env, userId: string, sha256: string): Promise<DataCollectionRow | null> {

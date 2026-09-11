@@ -1,0 +1,6 @@
+Starting implementation commit: 8d431d9 (D1 checkpoint evidence commit)
+Existing Paper Resource API and processor routes were left intact.
+Maximum paper upload: 64 MiB.
+Source validation: `%PDF-` magic bytes plus SHA-256 over the received bytes.
+Visibility: user uploads are private; public catalog rows remain readable only
+through the existing catalog ownership predicate.

@@ -1,0 +1,7 @@
+Discovery API tests: PASS — 4 tests.
+The tests covered:
+- server-generated keys after a traversal-shaped filename;
+- duplicate per-owner SHA handling;
+- unsupported extension rejection;
+- private cross-user detail rejection;
+- owner deletion and exact source-object removal.

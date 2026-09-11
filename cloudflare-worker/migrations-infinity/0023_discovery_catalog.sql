@@ -60,11 +60,13 @@ CREATE TABLE IF NOT EXISTS data_collections (
   error_code TEXT CHECK (error_code IS NULL OR error_code GLOB '[A-Z0-9_]*'),
   error_message_safe TEXT CHECK (error_message_safe IS NULL OR length(error_message_safe) <= 1024),
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  UNIQUE (owner_user_id, source_sha256)
+  updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_data_collections_owner_status
   ON data_collections(owner_user_id, status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_data_collections_owner_sha_active
+  ON data_collections(owner_user_id, source_sha256)
+  WHERE status <> 'deleted';
 
 CREATE TABLE IF NOT EXISTS dataset_capabilities (
   collection_id TEXT NOT NULL,

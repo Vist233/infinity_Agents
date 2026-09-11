@@ -1,0 +1,12 @@
+Discovery API tests: PASS — 4 tests.
+Cloudflare Worker full regression: PASS — 29 test files, 168 tests.
+Cloudflare Worker typecheck: PASS — tsc --noEmit.
+
+Covered negative and recovery cases:
+- non-PDF magic bytes rejected;
+- declared multipart size above the 64 MiB bound rejected;
+- private Paper detail is not visible to another user;
+- duplicate owner upload returns the existing paper without a second catalog
+  row or source resource;
+- source object key is generated server-side and is absent from API output;
+- deletion marks the owner row/resource and removes exact profile objects.

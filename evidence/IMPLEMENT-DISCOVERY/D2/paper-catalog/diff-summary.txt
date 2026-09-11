@@ -1,0 +1,14 @@
+Added:
+- cloudflare-worker/src/discovery.ts
+- cloudflare-worker/src/discovery-object-store.ts
+- cloudflare-worker/test/discovery-api.test.ts
+
+Updated:
+- cloudflare-worker/src/index.ts for authenticated Discovery routing and
+  static detail-shell rewrites;
+- cloudflare-worker/src/discovery-db.ts for owner-scoped deletion/resource
+  helpers;
+- cloudflare-worker/test/fake-d1.ts for the new API test rows.
+
+No existing Paper Processor parser or Worker v2 task path was duplicated or
+modified.

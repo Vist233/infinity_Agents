@@ -1,0 +1,5 @@
+Starting implementation commit: 8d431d9 (D1 checkpoint evidence commit)
+Maximum Data Collection upload: 25 MiB.
+Accepted input: single CSV, TSV, JSON, JSONL, TXT/README/Markdown file, or ZIP
+archive containing inspectable files.
+R2 binding: RESOURCE_BUCKET; D1: data_collections.

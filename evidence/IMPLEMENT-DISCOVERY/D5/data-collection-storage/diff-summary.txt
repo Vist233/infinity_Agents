@@ -1,0 +1,5 @@
+The Data Collection endpoints are implemented in
+cloudflare-worker/src/discovery.ts. Exact-key storage helpers are in
+cloudflare-worker/src/discovery-object-store.ts; D1 owner-scoped row helpers
+are in cloudflare-worker/src/discovery-db.ts. No browser-provided key is
+accepted or persisted.

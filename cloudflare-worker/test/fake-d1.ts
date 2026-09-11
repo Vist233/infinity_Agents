@@ -13,6 +13,12 @@ import type {
   PaperRequestContinuationRow,
   PaperRequestContinuationStatus,
 } from "../src/db";
+import type {
+  DataCollectionRow,
+  DiscoveryProcessorSessionRow,
+  PaperCatalogRow,
+  ResearchMatchRow,
+} from "../src/discovery-db";
 
 /**
  * Minimal in-memory stand-in for the subset of D1 used by the Worker. Statements
@@ -186,6 +192,10 @@ export class FakeD1 {
   paperProcessorObjects = new Map<string, PaperProcessorObjectRow>();
   paperAuditEvents: PaperResourceAuditEventRow[] = [];
   paperCleanupJobs = new Map<string, PaperCleanupJobRow>();
+  paperCatalog = new Map<string, PaperCatalogRow>();
+  dataCollections = new Map<string, DataCollectionRow>();
+  researchMatches = new Map<string, ResearchMatchRow>();
+  discoveryProcessorSessions = new Map<string, DiscoveryProcessorSessionRow>();
   chatTaskConfirmations = new Map<string, ChatTaskConfirmationRow>();
   chatRequestIdempotency = new Map<string, ChatRequestIdempotencyRow>();
   tasks = new Map<string, TaskRow>();
@@ -292,6 +302,41 @@ class FakeStatement {
 
   async first<T>(): Promise<T | null> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("FROM paper_catalog") && sql.includes("paper_id = ?1")) {
+      const [paperId, userId] = this.args as [string, string];
+      const row = this.db.paperCatalog.get(paperId);
+      return row && row.status !== "deleted" && (row.owner_user_id === userId || row.visibility === "public") ? row as T : null;
+    }
+    if (sql.includes("FROM paper_catalog p") && sql.includes("source_sha256 = ?2")) {
+      const [userId, sha256] = this.args as [string, string];
+      const row = [...this.db.paperCatalog.values()]
+        .filter((candidate) => candidate.owner_user_id === userId && candidate.status !== "deleted")
+        .map((candidate) => ({ paper: candidate, resource: this.db.paperResources.get(candidate.source_resource_id) }))
+        .filter((candidate) => candidate.resource?.source_sha256 === sha256)
+        .sort((left, right) => right.paper.updated_at - left.paper.updated_at)[0]?.paper;
+      return row as T ?? null;
+    }
+    if (sql.includes("FROM data_collections") && sql.includes("collection_id = ?1") && sql.includes("owner_user_id = ?2")) {
+      const [collectionId, userId] = this.args as [string, string];
+      const row = this.db.dataCollections.get(collectionId);
+      return row && row.owner_user_id === userId && row.status !== "deleted" ? row as T : null;
+    }
+    if (sql.includes("FROM data_collections") && sql.includes("source_sha256 = ?2")) {
+      const [userId, sha256] = this.args as [string, string];
+      const row = [...this.db.dataCollections.values()]
+        .filter((candidate) => candidate.owner_user_id === userId && candidate.source_sha256 === sha256 && candidate.status !== "deleted")
+        .sort((left, right) => right.updated_at - left.updated_at)[0];
+      return row as T ?? null;
+    }
+    if (sql.includes("FROM research_matches") && sql.includes("m.match_id = ?1")) {
+      const [matchId] = this.args as [string];
+      return (this.db.researchMatches.get(matchId) as T) ?? null;
+    }
+    if (sql.includes("FROM discovery_processor_sessions") && sql.includes("session_token_hash = ?1")) {
+      const [tokenHash, now] = this.args as [string, number];
+      const row = [...this.db.discoveryProcessorSessions.values()].find((candidate) => candidate.session_token_hash === tokenHash && candidate.revoked_at == null && candidate.expires_at > now);
+      return row as T ?? null;
+    }
     if (sql.includes("FROM paper_request_continuations") && sql.includes("FROM paper_request_continuations c")) {
       const [continuationId, sessionId, userId] = this.args as [string, string, string];
       const row = this.db.paperRequestContinuations.get(continuationId);
@@ -549,6 +594,34 @@ class FakeStatement {
 
   async all<T>(): Promise<{ results: T[] }> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("FROM paper_catalog") && sql.includes("ORDER BY updated_at DESC")) {
+      const [userId, limit] = this.args as [string, number];
+      const rows = [...this.db.paperCatalog.values()]
+        .filter((row) => row.status !== "deleted" && (row.owner_user_id === userId || row.visibility === "public"))
+        .sort((left, right) => right.updated_at - left.updated_at || left.paper_id.localeCompare(right.paper_id))
+        .slice(0, Number(limit));
+      return { results: rows as T[] };
+    }
+    if (sql.includes("FROM data_collections") && sql.includes("owner_user_id = ?1") && sql.includes("ORDER BY updated_at DESC")) {
+      const [userId, limit] = this.args as [string, number];
+      const rows = [...this.db.dataCollections.values()]
+        .filter((row) => row.owner_user_id === userId && row.status !== "deleted")
+        .sort((left, right) => right.updated_at - left.updated_at || left.collection_id.localeCompare(right.collection_id))
+        .slice(0, Number(limit));
+      return { results: rows as T[] };
+    }
+    if (sql.includes("FROM research_matches m") && sql.includes("JOIN paper_catalog p")) {
+      const [userId, limit] = this.args as [string, number];
+      const rows = [...this.db.researchMatches.values()]
+        .filter((match) => {
+          const paper = this.db.paperCatalog.get(match.paper_id);
+          const collection = this.db.dataCollections.get(match.collection_id);
+          return collection?.owner_user_id === userId && collection.status !== "deleted" && paper?.status !== "deleted" && (paper?.owner_user_id === userId || paper?.visibility === "public");
+        })
+        .sort((left, right) => right.updated_at - left.updated_at || left.match_id.localeCompare(right.match_id))
+        .slice(0, Number(limit));
+      return { results: rows as T[] };
+    }
     if (sql.includes("FROM paper_request_continuations c") && sql.includes("WHERE c.resource_id = ?1")) {
       const [resourceId, sessionId, userId, limit] = this.args as [string, string, string, number];
       const rows = [...this.db.paperRequestContinuations.values()]
@@ -637,6 +710,44 @@ class FakeStatement {
 
   async run(): Promise<{ meta: { changes: number } }> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("INSERT INTO chat_sessions")) {
+      const [id, userId, title, createdAt] = this.args as [string, string, string, number];
+      this.db.chatSessions.set(id, { id, user_id: userId, title, created_at: createdAt, updated_at: createdAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT INTO paper_catalog")) {
+      const [paperId, ownerUserId, resourceId, visibility, title, authorsJson, year, venue, status, now] = this.args as [string, string | null, string, "private" | "public", string, string, number | null, string | null, PaperCatalogRow["status"], number];
+      if ([...this.db.paperCatalog.values()].some((row) => row.source_resource_id === resourceId)) throw new Error("duplicate paper catalog resource");
+      this.db.paperCatalog.set(paperId, { paper_id: paperId, owner_user_id: ownerUserId, source_resource_id: resourceId, visibility, title, authors_json: authorsJson, year, venue, status, spam_status: "pending", profile_version: null, profile_json: null, profile_sha256: null, overview_object_key: null, created_at: now, updated_at: now });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE paper_catalog SET status = 'deleted'")) {
+      const [paperId, userId, now] = this.args as [string, string, number];
+      const row = this.db.paperCatalog.get(paperId);
+      if (!row || row.owner_user_id !== userId || row.visibility !== "private" || row.status === "deleted") return { meta: { changes: 0 } };
+      row.status = "deleted";
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT INTO data_collections")) {
+      const [collectionId, ownerUserId, name, sourceObjectKey, sourceFilename, contentType, sha256, sizeBytes, now] = this.args as [string, string, string, string, string, string, string, number, number];
+      if ([...this.db.dataCollections.values()].some((row) => row.owner_user_id === ownerUserId && row.source_sha256 === sha256 && row.status !== "deleted")) throw new Error("duplicate collection hash");
+      this.db.dataCollections.set(collectionId, { collection_id: collectionId, owner_user_id: ownerUserId, name, source_object_key: sourceObjectKey, source_filename: sourceFilename, source_content_type: contentType, source_sha256: sha256, source_size_bytes: sizeBytes, status: "uploaded", profile_version: null, profile_json: null, profile_sha256: null, error_code: null, error_message_safe: null, created_at: now, updated_at: now });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE data_collections SET status = 'deleted'")) {
+      const [collectionId, userId, now] = this.args as [string, string, number];
+      const row = this.db.dataCollections.get(collectionId);
+      if (!row || row.owner_user_id !== userId || row.status === "deleted") return { meta: { changes: 0 } };
+      row.status = "deleted";
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT INTO discovery_processor_sessions")) {
+      const [sessionId, processorId, instanceId, tokenHash, createdAt, lastSeenAt, expiresAt, revokedAt] = this.args as [string, string, string, string, number, number, number, number | null];
+      this.db.discoveryProcessorSessions.set(sessionId, { processor_session_id: sessionId, processor_id: processorId, instance_id: instanceId, session_token_hash: tokenHash, created_at: createdAt, last_seen_at: lastSeenAt, expires_at: expiresAt, revoked_at: revokedAt });
+      return { meta: { changes: 1 } };
+    }
     if (sql.includes("INSERT INTO paper_request_continuations")) {
       const [continuationId, sessionId, userId, turnId, clientRequestId, resourceId, status, expiresAt, createdAt] = this.args as [
         string, string, string, string, string | null, string, PaperRequestContinuationStatus, number, number,

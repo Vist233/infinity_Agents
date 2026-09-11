@@ -19,6 +19,7 @@ import { recoverExpiredLeases } from "./lease-recovery";
 import { handlePaperResourceApi } from "./paper-resources";
 import { handlePaperProcessorApi } from "./paper-processor";
 import { runPaperResourceCleanup } from "./paper-cleanup";
+import { handleDiscoveryApi } from "./discovery";
 
 export { ImageJudgeUserConcurrencyLock } from "./image-judge";
 
@@ -36,6 +37,12 @@ function withCookies(response: Response, setCookies?: string[]): Response {
 function taskDetailShellPath(pathname: string): string | null {
   const match = pathname.match(/^\/(code-agent|task-center)\/tasks\/[^/]+\/?$/);
   return match ? `/${match[1]}/tasks/preview/` : null;
+}
+
+function discoveryDetailShellPath(pathname: string): string | null {
+  if (/^\/papers\/[^/]+\/?$/.test(pathname)) return "/papers/preview/";
+  if (/^\/data-collections\/[^/]+\/?$/.test(pathname)) return "/data-collections/preview/";
+  return null;
 }
 
 /** GET /api/me — current user and today's quota usage. */
@@ -141,6 +148,9 @@ export default {
         return withCookies(await handleUserSettings(request, env, user), setCookies);
       }
 
+      const discoveryResponse = await handleDiscoveryApi(request, env, user);
+      if (discoveryResponse) return withCookies(discoveryResponse, setCookies);
+
       const paperContinuationMatch = pathname.match(/^\/api\/paper\/continuations\/([^/]+)$/);
       if (paperContinuationMatch) {
         if (method !== "POST") return withCookies(errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED"), setCookies);
@@ -193,6 +203,12 @@ export default {
       if (shellPath) {
         const shellUrl = new URL(request.url);
         shellUrl.pathname = shellPath;
+        return env.ASSETS.fetch(new Request(shellUrl, request));
+      }
+      const discoveryShellPath = discoveryDetailShellPath(pathname);
+      if (discoveryShellPath) {
+        const shellUrl = new URL(request.url);
+        shellUrl.pathname = discoveryShellPath;
         return env.ASSETS.fetch(new Request(shellUrl, request));
       }
       return env.ASSETS.fetch(request);
