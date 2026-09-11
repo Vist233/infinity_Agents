@@ -1,7 +1,7 @@
 # D1 checkpoint
 
 Status: PASS
-Commit SHA: df7e818f4ab5a7a41b6eaebd3bc40f17fdd3ab4b
+Commit SHA: 50f6cbc (Discovery schema/contract implementation commit)
 
 Verified:
 - additive migration applies after migrations 0001–0022;
