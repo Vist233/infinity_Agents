@@ -1,0 +1,18 @@
+git rev-parse HEAD
+git status --short --branch
+curl -fsS --max-time 20 https://infinity.zhangyvjing.com/health
+curl route probes for /, /task-center/, /auth/login
+ssh windows-ssh hostname
+ssh windows-ssh "docker version"
+ssh windows-ssh "docker ps"
+cd cloudflare-worker && npm test
+cd cloudflare-worker && npm run check
+cd frontend && npm run test:unit
+cd frontend && npm run typecheck
+cd frontend && npm run lint
+cd frontend && npm run build
+pyenv shell Agent && python -m pytest -q tests/test_paper_processor_ingestion.py tests/test_paper_processor_runtime.py tests/test_worker_consumer_v2.py tests/test_worker_v2_executor.py tests/test_regression.py
+
+All network probes were read-only. The first network attempt was blocked by
+the local proxy sandbox; the user then explicitly authorized the external SSH
+and HTTPS checks.

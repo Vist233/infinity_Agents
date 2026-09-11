@@ -1,0 +1,11 @@
+No Discovery source, migration, frontend route, Docker service, or runtime
+file was changed in D0. The only pre-existing worktree changes are listed in
+baseline.txt and were preserved.
+
+Current existing migration tail at baseline:
+0017_chat_events.sql
+0018_paper_resources.sql
+0019_paper_processor_sessions.sql
+0020_paper_processor_objects.sql
+0021_paper_privacy_cleanup.sql
+0022_paper_request_continuations.sql

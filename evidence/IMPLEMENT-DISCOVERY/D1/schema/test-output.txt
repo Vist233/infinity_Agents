@@ -1,0 +1,11 @@
+Cloudflare Worker full regression: PASS — 28 test files, 164 tests.
+Cloudflare Worker typecheck: PASS — tsc --noEmit.
+
+Focused contract/schema regression: PASS — 2 test files, 6 tests.
+Schema negative tests intentionally emitted SQLite constraint errors for the
+duplicate, invalid-status, and foreign-key cases; each was caught by the test
+and the test file passed.
+
+The Paper Processor delivery manifest hash was synchronized with the already
+applied independent memory-default correction so the existing full Worker
+regression remains green.

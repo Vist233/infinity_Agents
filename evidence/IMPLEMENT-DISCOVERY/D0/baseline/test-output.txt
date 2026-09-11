@@ -1,0 +1,18 @@
+Cloudflare Worker npm test: PASS — 26 files, 158 tests.
+Cloudflare Worker npm run check: PASS.
+Frontend unit tests: PASS — 16 files, 78 tests; 3 existing React act warnings.
+Frontend typecheck: PASS.
+Frontend lint: PASS — 0 errors, 3 existing Next warnings.
+Frontend production build: PASS — existing static routes generated.
+
+Python targeted baseline, initial combined invocation: 22 passed, 3 skipped,
+3 failures at the old 192 MiB RSS default. The independent checkpoint
+`ea2c243` changed the default to 512 MiB while retaining the 768 MiB hard
+ceiling. Rerun after that fix: 25 passed, 3 skipped.
+
+The three initially affected tests also passed in fresh processes:
+- test_real_text_pdf_extracts_pages_images_and_manifest_without_local_paths
+- test_process_one_uploads_source_pages_images_manifests_and_cleans
+- test_malformed_encrypted_page_and_image_limits_fail_closed
+The pyenv shim emitted the existing non-fatal warning that its shims directory
+is not writable; Python 3.11.9 ran successfully.

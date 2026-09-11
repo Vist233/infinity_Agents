@@ -1,0 +1,5 @@
+cd cloudflare-worker && npm test
+cd cloudflare-worker && npm run check
+cd cloudflare-worker && npm test -- --run test/discovery-contracts.test.ts test/discovery-schema.test.ts
+git diff --check
+git status --short --untracked-files=all

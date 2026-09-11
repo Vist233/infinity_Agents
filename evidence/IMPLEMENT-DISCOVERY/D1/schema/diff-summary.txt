@@ -1,0 +1,14 @@
+Discovery-only additions:
+- cloudflare-worker/migrations-infinity/0023_discovery_catalog.sql
+- cloudflare-worker/src/discovery-contracts.ts
+- cloudflare-worker/src/discovery-db.ts
+- cloudflare-worker/test/discovery-contracts.test.ts
+- cloudflare-worker/test/discovery-schema.test.ts
+- cloudflare-worker/test/node-shims.d.ts
+
+Related baseline consistency fix:
+- backend/paper_processor/delivery.v1.json now contains the aggregate hash of
+  the source files after the independent ea2c243 memory-default change.
+
+No existing Task/Worker/Chat/Paper Processor table or route definition was
+changed by the Discovery migration.

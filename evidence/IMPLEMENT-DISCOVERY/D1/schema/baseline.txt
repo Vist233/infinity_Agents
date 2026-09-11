@@ -1,0 +1,12 @@
+Repository HEAD before D1 commit: ea2c2438eed7f0db8f83bae660d0666f7a56b320
+Worktree contained pre-existing user changes in backend/code_agent/worker/control_plane.py,
+backend/security.py, tests/test_security_boundaries.py, and several untracked
+documents/compose files. They were not staged for D1.
+
+Existing migration tail before this card:
+0019_paper_processor_sessions.sql
+0020_paper_processor_objects.sql
+0021_paper_privacy_cleanup.sql
+0022_paper_request_continuations.sql
+
+D1 migration added: 0023_discovery_catalog.sql.
