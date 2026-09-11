@@ -23,7 +23,6 @@ describe("Discovery Processor control protocol", () => {
     const { env, db } = makeEnv();
     env.RESOURCE_BUCKET = new MemoryBucket() as unknown as Env["RESOURCE_BUCKET"];
     env.DISCOVERY_PROCESSOR_ID = "discovery-processor-1";
-    env.DISCOVERY_PROCESSOR_SOURCE_IP = "203.0.113.11";
     env.DISCOVERY_PROCESSOR_SHARED_SECRET = "discovery-bootstrap-secret";
     const sourceHeaders = { "content-type": "application/json", "cf-connecting-ip": "203.0.113.11" };
     const connected = await handleDiscoveryProcessorApi(processorRequest("/api/discovery-processor/connect", {

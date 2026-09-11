@@ -1,0 +1,19 @@
+# Independent Windows deployment for the Discovery Processor only.
+# This compose project intentionally contains no Worker v2 services.
+services:
+  discovery-processor:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.discovery-processor
+    image: infinity-agents-discovery-processor:2026.09.11-r1
+    pull_policy: never
+    restart: unless-stopped
+    command: ["python", "-m", "backend.discovery.processor"]
+    env_file:
+      - discovery-processor.windows.env
+    volumes:
+      - discovery_processor_work:/var/lib/discovery-processor
+
+volumes:
+  discovery_processor_work:
+    name: infinity-agents-discovery-processor-work

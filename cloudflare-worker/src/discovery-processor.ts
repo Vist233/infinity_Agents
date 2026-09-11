@@ -447,7 +447,7 @@ async function control(request: Request, env: Env, context: SessionContext): Pro
 export async function handleDiscoveryProcessorApi(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
   if (!isDiscoveryProcessorNamespacePath(url.pathname)) return null;
-  if (!isApprovedDiscoveryProcessorRequest(request, env)) return errorJson("Discovery Processor source or route is not approved", 403, "DISCOVERY_PROCESSOR_SOURCE_FORBIDDEN");
+  if (!isApprovedDiscoveryProcessorRequest(request)) return errorJson("Discovery Processor route is not approved", 403, "DISCOVERY_PROCESSOR_ROUTE_FORBIDDEN");
   if (url.pathname === `${PREFIX}/connect`) {
     if (request.method !== "POST") return errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED");
     return connect(request, env);

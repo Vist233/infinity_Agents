@@ -127,28 +127,20 @@ describe("Infinity Edge route composition", () => {
     expect(await polled.json()).toEqual({ resource: null });
   });
 
-  it("routes the isolated Discovery Processor protocol through its fixed source gate", async () => {
+  it("routes the isolated Discovery Processor protocol through identity and session capabilities", async () => {
     const env = testEnv();
     env.DISCOVERY_PROCESSOR_ID = "discovery-processor-1";
-    env.DISCOVERY_PROCESSOR_SOURCE_IP = "203.0.113.11";
     env.DISCOVERY_PROCESSOR_SHARED_SECRET = "discovery-bootstrap-secret";
-    const forbidden = await worker.fetch(new Request("https://app.test/api/discovery-processor/connect", {
-      method: "POST",
-      headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.12", "x-discovery-processor-id": "discovery-processor-1", "x-discovery-processor-token": "discovery-bootstrap-secret" },
-      body: JSON.stringify({ instance_id: "instance-1" }),
-    }), env);
-    expect(forbidden.status).toBe(403);
-
     const connected = await worker.fetch(new Request("https://app.test/api/discovery-processor/connect", {
       method: "POST",
-      headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.11", "x-discovery-processor-id": "discovery-processor-1", "x-discovery-processor-token": "discovery-bootstrap-secret" },
+      headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.12", "x-discovery-processor-id": "discovery-processor-1", "x-discovery-processor-token": "discovery-bootstrap-secret" },
       body: JSON.stringify({ instance_id: "instance-1" }),
     }), env);
     expect(connected.status).toBe(200);
     const session = await connected.json() as { processor_session_token: string };
     const polled = await worker.fetch(new Request("https://app.test/api/discovery-processor/poll", {
       method: "POST",
-      headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.11", "x-discovery-processor-session": session.processor_session_token },
+      headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.12", "x-discovery-processor-session": session.processor_session_token },
       body: "{}",
     }), env);
     expect(polled.status).toBe(200);

@@ -78,7 +78,7 @@ export default {
           d1: env.DB ? "configured" : "unconfigured",
           resource_bucket: env.RESOURCE_BUCKET ? "configured" : "unconfigured",
           paper_processor: env.PAPER_PROCESSOR_ID && env.PAPER_PROCESSOR_SOURCE_IP && env.PAPER_PROCESSOR_SHARED_SECRET ? "configured" : "unconfigured",
-          discovery_processor: env.DISCOVERY_PROCESSOR_ID && env.DISCOVERY_PROCESSOR_SOURCE_IP && env.DISCOVERY_PROCESSOR_SHARED_SECRET ? "configured" : "unconfigured",
+          discovery_processor: env.DISCOVERY_PROCESSOR_ID && env.DISCOVERY_PROCESSOR_SHARED_SECRET ? "configured" : "unconfigured",
         },
       });
     }

@@ -1,5 +1,3 @@
-import type { Env } from "./env";
-
 const PREFIX = "/api/discovery-processor";
 const ROUTES: ReadonlyArray<{ method: string; path: string }> = [
   { method: "POST", path: `${PREFIX}/connect` },
@@ -7,11 +5,13 @@ const ROUTES: ReadonlyArray<{ method: string; path: string }> = [
   { method: "POST", path: `${PREFIX}/control` },
 ];
 
-/** The Discovery service has its own fixed egress and never uses Worker-v2 credentials. */
-export function isApprovedDiscoveryProcessorRequest(request: Request, env: Env): boolean {
-  const configuredSourceIp = env.DISCOVERY_PROCESSOR_SOURCE_IP?.trim() ?? "";
-  const connectingIp = request.headers.get("cf-connecting-ip")?.trim() ?? "";
-  if (!configuredSourceIp || connectingIp !== configuredSourceIp) return false;
+/**
+ * Discovery is a private backend that initiates outbound HTTPS calls to the
+ * Edge. Its identity, bootstrap secret, short-lived session, and fenced lease
+ * capabilities authenticate the protocol; the backend has no stable public
+ * egress IP to allowlist here.
+ */
+export function isApprovedDiscoveryProcessorRequest(request: Request): boolean {
   const pathname = new URL(request.url).pathname;
   return ROUTES.some((route) => route.method === request.method && route.path === pathname);
 }

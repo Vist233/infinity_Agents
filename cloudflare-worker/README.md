@@ -82,8 +82,21 @@ Cloudflare Worker 的类型检查和单元测试覆盖 D1 状态机、credential
 Worker 和真实 Claude Code，并记录 Artifact 大小及 SHA-256。
 
 Discovery 的隔离处理器使用 `backend/Dockerfile.discovery-processor`，只通过固定的
-`/api/discovery-processor/*` HTTPS 协议访问 Edge，不直连 D1、R2 或 Redis。Windows 部署可
-使用 `docker-compose.windows-global-workers.yml` 中的 `discovery-processor` 服务；其
-`discovery-processor.cloudflare.env` 只包含管理员在部署时注入的 Edge 地址、处理器 ID 和
-bootstrap secret，不得提交到 Git。`DISCOVERY_AUTO_EXECUTE` 与文献监测默认关闭，必须在
-staging 通过后再显式开启。
+`/api/discovery-processor/*` HTTPS 协议访问 Edge，不直连 D1、R2 或 Redis。Windows 部署
+使用仓库根目录的 `docker-compose.discovery-processor.windows.yml` 独立 compose project；
+它只构建并运行 Discovery Processor，不会启动或替换 Worker v2。将
+`discovery-processor.windows.env.example` 复制为未纳入 Git 的 `discovery-processor.windows.env`，
+只填写管理员注入的 Edge 地址、处理器 ID 和 bootstrap secret，再执行：
+
+```powershell
+git switch cf-deploy
+git pull --ff-only origin cf-deploy
+Copy-Item discovery-processor.windows.env.example discovery-processor.windows.env
+docker compose -p infinity-discovery-processor -f docker-compose.discovery-processor.windows.yml up -d --build
+docker compose -p infinity-discovery-processor -f docker-compose.discovery-processor.windows.yml logs --tail 100 discovery-processor
+```
+
+Processor 是无稳定公网源 IP 的私有后端：它主动向 Edge 发起 HTTPS 连接，凭固定 Processor ID
+和 bootstrap secret 建立短期 session，再以 lease/fencing capability 读写任务。不要为 Discovery
+配置 zhangbot 或固定源 IP 白名单。`discovery-processor.windows.env` 不得提交到 Git。
+`DISCOVERY_AUTO_EXECUTE` 与文献监测默认关闭，必须在 staging 通过后再显式开启。

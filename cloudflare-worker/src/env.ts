@@ -68,9 +68,9 @@ export interface Env {
   PAPER_PROCESSOR_SHARED_SECRET?: string;
   // Explicit opt-in for the bounded Paper image-analysis provider egress.
   PAPER_IMAGE_ANALYSIS_EGRESS?: string;
-  // Dedicated Discovery Processor control-plane identity and fixed egress.
+  // Dedicated Discovery Processor control-plane identity. The private
+  // backend initiates outbound HTTPS and has no stable egress IP allowlist.
   DISCOVERY_PROCESSOR_ID?: string;
-  DISCOVERY_PROCESSOR_SOURCE_IP?: string;
   DISCOVERY_PROCESSOR_SHARED_SECRET?: string;
   // Shadow by default; only an explicit true enables Discovery -> Task creation.
   DISCOVERY_AUTO_EXECUTE?: string;
