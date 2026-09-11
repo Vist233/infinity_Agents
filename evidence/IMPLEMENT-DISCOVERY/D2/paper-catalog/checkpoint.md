@@ -1,7 +1,7 @@
 # D2 checkpoint
 
 Status: PASS
-Commit SHA: pending until the D2 implementation commit is created.
+Commit SHA: 1d01ec6 (Paper Catalog and shared storage implementation commit)
 
 Verified the authenticated Paper upload/list/detail/delete boundary and the
 existing Paper Resource source-object contract. The remaining processor-side
