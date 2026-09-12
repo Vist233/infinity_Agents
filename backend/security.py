@@ -29,10 +29,22 @@ class SecurityBoundaryError(ValueError):
     """Raised when an input crosses a local security boundary."""
 
 
+_SECRET_VALUE_PLACEHOLDER = (
+    r"[\"']?(?:none|null|nil|n/?a|na|unknown|missing|unset|empty|false|no|redacted|"
+    r"not(?:[\s_-]+(?:provided|set|applicable|available|used|configured)))\b"
+)
+
+
 _SECRET_PATTERNS = (
     re.compile(r"(?:sk|pk)-[A-Za-z0-9_-]{16,}"),
-    re.compile(r"(?i)\b(?:anthropic|stepfun|openai|aws|github)_[A-Z0-9_]*\s*=\s*[^\s]+"),
-    re.compile(r"(?i)\b(?:api[_-]?key|token|password|secret)\s*[:=]\s*[^\s]+"),
+    re.compile(
+        rf"(?i)\b(?:anthropic|stepfun|openai|aws|github)_[A-Z0-9_]*\s*=\s*"
+        rf"(?!{_SECRET_VALUE_PLACEHOLDER})[^\s]+"
+    ),
+    re.compile(
+        rf"(?i)\b(?:api[_-]?key|token|password|secret)\s*[:=]\s*"
+        rf"(?!{_SECRET_VALUE_PLACEHOLDER})[^\s]+"
+    ),
     re.compile(r"(?i)\b(?:postgres(?:ql)?|redis|mysql|mongodb)://[^\s]+"),
 )
 

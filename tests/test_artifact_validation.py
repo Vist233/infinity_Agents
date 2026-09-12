@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 from backend.app import _validate_result_archive
 from backend.app import _cleanup_worker_staging
-from backend.security import ArtifactCollector
+from backend.security import ArtifactCollector, SecurityBoundaryError
 
 
 def test_worker_result_archive_requires_matching_manifest(tmp_path):
@@ -76,6 +76,36 @@ def test_worker_result_archive_rejects_secret_content(tmp_path):
         _validate_result_archive(archive_path)
 
     assert exc_info.value.status_code == 422
+
+
+def test_worker_result_archive_allows_non_secret_completion_metadata(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "agent_completion.json").write_text(
+        json.dumps({
+            "status": "completed",
+            "summary": "No secret: none; token: not provided",
+            "outputs": {},
+        }),
+        encoding="utf-8",
+    )
+
+    collected = ArtifactCollector().collect(output, tmp_path / "result.zip")
+
+    metadata = _validate_result_archive(collected.archive_path)
+    assert metadata["file_count"] == 1
+
+
+def test_worker_result_archive_still_rejects_secret_in_completion_metadata(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "agent_completion.json").write_text(
+        json.dumps({"summary": "token: do-not-publish-this"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SecurityBoundaryError, match="credential-like content"):
+        ArtifactCollector().collect(output, tmp_path / "result.zip")
 
 
 def test_worker_staging_cleanup_only_removes_stale_entries(tmp_path, monkeypatch):
