@@ -730,6 +730,15 @@ describe("Worker v2 control plane", () => {
     }), envFor(db));
     expect(renewed?.status).toBe(503);
     expect(await renewed?.json()).toMatchObject({ error: { code: "TASK_RENEW_UNAVAILABLE" } });
+
+    db.sessions.get("worker-b")!.lease_expires_at = 0;
+    const reconnect = await handleWorkerV2(new Request("https://app.test/api/worker/v2/connect", {
+      method: "POST",
+      headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" },
+      body: JSON.stringify({ worker_id: "worker-b", instance_id: "machine-a", protocol_version: "2", runtime_capability: "goal-driven-claude-code" }),
+    }), envFor(db));
+    expect(reconnect?.status).toBe(503);
+    expect(await reconnect?.json()).toMatchObject({ error: { code: "WORKER_SESSION_UNAVAILABLE" } });
   });
 
   it("records a fenced Worker failure without an uncaught 500", async () => {
@@ -766,6 +775,43 @@ describe("Worker v2 control plane", () => {
     expect(db.attempts.get(accepted.attempt_id)?.status).toBe("failed");
     expect(db.events).toContain(`task-failed:${accepted.attempt_id}`);
     expect(db.outbox).toContain(`failed:${accepted.attempt_id}`);
+  });
+
+  it("returns a bounded availability error when recording a Worker failure is unavailable", async () => {
+    const db = new RuntimeFakeD1();
+    const credential = "wc_test-persistent-credential";
+    db.workers.set("worker-b", {
+      worker_id: "worker-b", pool_id: "public-default", namespace: "infinity-public", created_by: "worker-owner",
+      credential_hash: hashText(credential), status: "active", protocol_version: "2", runtime_capability: "goal-driven-claude-code", image_digest: null, last_seen_at: null,
+    });
+    db.tasks.set("task-failure-transient", {
+      task_id: "task-failure-transient", task_spec_id: "spec-1", dataset_snapshot_id: "dataset-1", method_source_id: null,
+      title: "Transient failure task", attempt_count: 0, max_attempts: 3, lease_epoch: 0, status: "queued", execution_pool_id: "public-default",
+      active_attempt_id: null, lease_worker_id: null, lease_token_hash: null, lease_expires_at: null,
+    });
+    const connected = await connect(db, "worker-b", credential, "machine-a");
+    const headers = authHeaders("worker-b", credential, "machine-a", connected.session);
+    const acceptedResponse = await handleWorkerV2(new Request("https://app.test/api/worker/v2/tasks/task-failure-transient/accept", {
+      method: "POST", headers,
+    }), envFor(db));
+    const accepted = await acceptedResponse!.json() as { attempt_id: string; lease_token: string };
+    const finishHeaders = new Headers(headers);
+    finishHeaders.set("x-worker-attempt-id", accepted.attempt_id);
+    finishHeaders.set("x-worker-lease-token", accepted.lease_token);
+    db.batchError = new Error("simulated D1 outage");
+
+    const finished = await handleWorkerV2(new Request("https://app.test/api/worker/v2/tasks/task-failure-transient/fail", {
+      method: "POST",
+      headers: finishHeaders,
+      body: JSON.stringify({ error_code: "execution_error", error_message: "bounded failure" }),
+    }), envFor(db));
+
+    expect(finished?.status).toBe(503);
+    expect(await finished?.json()).toMatchObject({ error: { code: "TASK_FINISH_UNAVAILABLE" } });
+    expect(db.tasks.get("task-failure-transient")?.status).toBe("claimed");
+    expect(db.attempts.get(accepted.attempt_id)?.status).toBe("claimed");
+    expect(db.events).not.toContain(`task-failed:${accepted.attempt_id}`);
+    expect(db.outbox).not.toContain(`failed:${accepted.attempt_id}`);
   });
 
   it("streams an artifact part and finalizes it with an independent checksum", async () => {

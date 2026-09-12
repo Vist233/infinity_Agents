@@ -1,7 +1,7 @@
 # D14 — Final regression and archive
 
 Date: 2026-09-12 (Asia/Shanghai)
-Status: CONDITIONAL PASS — rollout complete with intentional gates
+Status: BLOCKED — the follow-up D1 write-side outage left required live gates open
 
 All post-audit local code regressions, frontend checks, Worker dry-run checks,
 and the 15-test Playwright suite passed. Remote migrations 0025-0027 are

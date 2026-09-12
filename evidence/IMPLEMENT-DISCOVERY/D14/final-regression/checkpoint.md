@@ -1,5 +1,4 @@
-Status: CONDITIONAL PASS — rollout and post-rollout verification complete;
-intentional execution gates remain.
+Status: BLOCKED — the follow-up D1 write-side outage left required live gates open.
 
 See `FINAL/` for the complete summary, deployment versions/digests, real-case
 IDs/hashes, known limitations, and rollback plan.

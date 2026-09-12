@@ -1,7 +1,7 @@
 # Paper Discovery + Data Collections — final summary
 
-Status: CONDITIONAL PASS — the D0-D14 implementation, rollout, post-rollout
-regression fix, and live collection/match shadow verification are complete.
+Status: BLOCKED — the D0-D14 implementation and rollout are evidenced, but the
+required live execution gates are not complete and no final pass is claimed.
 The authorized live gate materialized exactly one Task and passed the Redis
 poll-fallback check, but the selected Task exhausted three Worker leases
 without a Claude terminal event or Artifact. Literature and live-model gates

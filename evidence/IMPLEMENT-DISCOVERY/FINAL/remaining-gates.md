@@ -2,8 +2,9 @@
 
 Date: 2026-09-12 (Asia/Shanghai)
 
-Disposition: CONDITIONAL PASS. The implementation, local regressions, remote
-rollout, Processor validation, and real Paper/Data shadow path are evidenced.
+Disposition: BLOCKED. The implementation, local regressions, remote rollout,
+Processor validation, and real Paper/Data shadow path are evidenced, but the
+required live execution gates are still open.
 The authorized live-gate run is recorded in
 `D14/final-regression/gated-live-run-20260912.md`: one real Task was
 materialized exactly once, the Redis fallback passed, but all three Worker
