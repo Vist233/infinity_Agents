@@ -12,7 +12,10 @@ execution and literature durability
 Evidence correction commit: d0e3766 docs: refresh discovery audit evidence
 Validation evidence commit: d903df5 docs: record browser and processor
 validation
-GitHub sync: `origin/cf-deploy` advanced from `3df909f` to `d903df5`.
-No Edge deployment or remote DDL was performed in this audit. The current
-branch contains the post-audit code and corrected verification record;
-unrelated dirty user paths remain excluded.
+Sync correction commit: 392cbed docs: align discovery sync evidence
+Post-rollout lifecycle fix: 89668c7 fix: surface paper processor failures in
+discovery catalog
+
+Remote D1 migrations 0025-0027 are applied and the Worker is live. The final
+evidence commit from this run will follow this code commit. Unrelated dirty
+user paths remain excluded.

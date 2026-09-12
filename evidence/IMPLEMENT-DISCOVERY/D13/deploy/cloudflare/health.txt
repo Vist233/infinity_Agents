@@ -1,2 +1,2 @@
-GET https://infinity.zhangyvjing.com/health: HTTP 200
+GET https://infinity.zhangyvjing.com/health: HTTP 200 (2026-09-12T08:17:17Z)
 {"status":"ok","service":"infinity-agents-edge","readiness":{"d1":"configured","resource_bucket":"configured","paper_processor":"configured","discovery_processor":"configured"}}

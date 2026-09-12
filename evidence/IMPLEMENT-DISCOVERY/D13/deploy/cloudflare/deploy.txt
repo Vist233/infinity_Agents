@@ -1,5 +1,8 @@
-Edge code version: 01f020d9-3f83-41c5-8500-0f82eb7f08ea
-Later secret-only versions observed: a654c1ac-be94-4bcf-b3c7-855077a50b95,
-23ad71b2-21ec-4ef9-a05d-97ff72a15e00
-Worker configuration: DISCOVERY_AUTO_EXECUTE=false;
-DISCOVERY_LITERATURE_ENABLED=false.
+Edge deployment sequence on 2026-09-12:
+- Discovery rollout after migrations: Version ID
+  `5dab1bac-6e71-4ef5-aba9-26a493e5ebc1`.
+- Paper failure-state lifecycle fix (`89668c7`): current Version ID
+  `9941f714-eee6-46bc-8163-968107d8874f`.
+
+Worker configuration remains intentionally gated:
+`DISCOVERY_AUTO_EXECUTE=false`; `DISCOVERY_LITERATURE_ENABLED=false`.

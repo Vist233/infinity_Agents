@@ -1,4 +1,16 @@
 Remote DB: infinity-agents-db (9ee9ec94-cb42-40b5-8372-681c7b57c105)
-Applied: 0023_discovery_catalog.sql
-Applied: 0024_discovery_leases.sql
-Final migration listing: no migrations to apply.
+
+Production rollout on 2026-09-12:
+- 0025_fenced_output_pointers.sql — applied
+- 0026_literature_watch_leases.sql — applied
+- 0027_literature_retries_and_quota.sql — applied
+- final `npx wrangler d1 migrations list ... --remote` — `No migrations to apply!`
+
+Read-only runtime snapshot after rollout (2026-09-12T08:07:33Z):
+- newest Discovery Processor session: `discovery-processor-windows-v1`,
+  instance `discovery-7-751616f4df85aee8`, `revoked_at=null`,
+  `last_seen_at=1789200453`, `expires_at=1789201353`;
+- active Worker v2 sessions: 2;
+  `public-worker-16dab622-4e3b-4212-bb09-0ed738c45314` and
+  `public-worker-adbde17e-29c4-4511-abc8-e9faad10e524`, both protocol 2,
+  `disconnected_at=null` and live leases.

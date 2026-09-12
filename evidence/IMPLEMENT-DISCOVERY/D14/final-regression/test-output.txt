@@ -1,16 +1,23 @@
-Post-audit local verification (268eae8): Python 372 passed, 45 skipped.
-Cloudflare Worker: 31 files/184 tests passed; typecheck passed.
+Post-audit local verification (268eae8 plus lifecycle fix 89668c7): Python 372
+passed, 45 skipped. Cloudflare Worker: 31 files/184 tests passed; typecheck
+passed.
 Frontend: 16 files/78 unit tests passed; typecheck/build passed; lint 0 errors
 and 3 existing warnings; production build passed. Playwright: 15 passed using
 installed Google Chrome against the local production build on port 3100.
-Deployment boundary: no Edge deployment or remote migration was performed for
-268eae8; local Wrangler dry-run exited 0. Remote migration listing shows
+Wrangler dry-run exited 0. Remote rollout applied migrations
 0025_fenced_output_pointers.sql, 0026_literature_watch_leases.sql, and
-0027_literature_retries_and_quota.sql pending.
+0027_literature_retries_and_quota.sql; the final migration listing returned
+`No migrations to apply!`. The Discovery deployment was Version
+`5dab1bac-6e71-4ef5-aba9-26a493e5ebc1`, followed by lifecycle-fix Version
+`9941f714-eee6-46bc-8163-968107d8874f`. Post-deploy health returned HTTP 200
+with D1, R2, Paper Processor, and Discovery Processor readiness configured.
 Windows Processor: `EAPS6CGH-LT`, Docker 29.7.2; container
 `infinity-discovery-processor-discovery-processor-1` running, restart=0, image
-digest `sha256:a905a9f2539f8059cbfc6527a7c414a6c9266cebe4f623f5ba015a5ffb28c586`.
-D1 session `discovery-1-52f52d9a8aa10131` had `revoked_at=null` and heartbeat
-advanced from 1789196224 to 1789196309. This is the pre-audit image; 268eae8
-was not deployed. Prior Edge/D1/R2 and real-case Paper/Data/Match shadow path
-passed for the pre-audit rollout; no Task/Artifact was created.
+digest `sha256:2bb2a1c1171e28e646006d185a2fc9bab3fb190b3aa1b0778e04194087147496`.
+The current Discovery Processor session was unrevoked and active, and two
+Worker v2 sessions had live leases. The authenticated live shadow uploaded a
+fresh public UCI derivative, reached ready dataset profiling, and produced a
+100% evaluated match with hard gate `pass`; the separate public BERT paper
+reached the Paper Processor but was rejected with
+`PAPER_PROCESSOR_RUNTIME_ERROR`. Auto-execute remained disabled, so no
+Task/Artifact was created.

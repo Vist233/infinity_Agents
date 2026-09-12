@@ -1,9 +1,8 @@
 Image: infinity-agents-discovery-processor:2026.09.11-r1
-Digest: sha256:a905a9f2539f8059cbfc6527a7c414a6c9266cebe4f623f5ba015a5ffb28c586
-Source revision: 008b905ddf0598d53b3031da2df8f3ae56b08720
-Runtime: Windows EAPS6CGH-LT, isolated Compose project, running, restart=0.
-Post-audit read-only validation: container
-`infinity-discovery-processor-discovery-processor-1` was `Up 3 hours`; Docker
-Server 29.7.2; D1 session `discovery-1-52f52d9a8aa10131` had
-`revoked_at=null`, and `last_seen_at` advanced from 1789196224 to 1789196309.
-The image remains the pre-audit deployment; commit 268eae8 was not deployed.
+Digest: sha256:2bb2a1c1171e28e646006d185a2fc9bab3fb190b3aa1b0778e04194087147496
+Source revision: 392cbed
+Runtime: Windows EAPS6CGH-LT, isolated Compose project, running, restart=0;
+container started `2026-09-12T07:16:33.687599565Z`.
+Read-only Docker inspection at 2026-09-12T08:02Z showed the service `Up 48
+minutes`, restart count 0, and the image RepoDigest matching the manifest
+digest. Recent logs showed `dataset_profiled` and `match_evaluated`.

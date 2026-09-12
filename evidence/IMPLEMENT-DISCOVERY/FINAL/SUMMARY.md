@@ -1,11 +1,8 @@
 # Paper Discovery + Data Collections — final summary
 
-Status: CONDITIONAL COMPLETE — the D0-D14 implementation and post-audit local
-verification are complete. The earlier production Paper/Data/Match shadow
-verification remains recorded for the deployed code through 008b905; the
-post-audit commit 268eae8 and migrations 0025-0027 are local and have not been
-deployed or applied remotely. Real Task/Artifact execution remains disabled by
-policy/configuration.
+Status: COMPLETE WITH INTENTIONAL GATES — the D0-D14 implementation, rollout,
+post-rollout regression fix, and live collection/match shadow verification are
+complete. Real Task/Artifact execution remains disabled by configuration.
 
 Delivered:
 
@@ -19,9 +16,13 @@ Delivered:
 - idempotent reuse of existing Task Center materialization;
 - bounded opt-in arXiv/Europe PMC watcher with leases, retries, and quota;
 - isolated Windows Discovery Processor over fixed HTTPS control routes;
-- real public arXiv paper + UCI red-wine shadow case verified in production.
+- real public arXiv paper + UCI red-wine shadow case verified in production;
+  a fresh UCI derivative also completed inspection and matching after rollout.
+- Paper Processor failure propagation fixed in `89668c7`, deployed as Edge
+  Version `9941f714-eee6-46bc-8163-968107d8874f`.
 
 The current Edge vars intentionally keep `DISCOVERY_AUTO_EXECUTE=false` and
 `DISCOVERY_LITERATURE_ENABLED=false`, so no Task or Artifact was fabricated.
-No Edge code deployment or remote DDL was performed for the post-audit commit;
-apply the three new migrations before any production rollout of that commit.
+Remote D1 migrations 0025-0027 are applied, and the final migration listing is
+clean. The isolated Windows Discovery Processor is running with restart count
+0 and digest `sha256:2bb2a1c1171e28e646006d185a2fc9bab3fb190b3aa1b0778e04194087147496`.

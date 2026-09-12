@@ -1,5 +1,4 @@
-Post-audit local implementation verification (commit 268eae8, 2026-09-12;
-not deployed):
+Local implementation verification (2026-09-12):
 
 Python: 372 passed, 45 skipped.
 Cloudflare Worker: 31 test files passed, 184 tests passed; `npm run check`
@@ -14,17 +13,29 @@ against the production build on an isolated local port (3100), with a temporary
 local config removed after the run.
 Wrangler dry-run: exited 0 and produced the Worker bundle/bindings; Wrangler
 reported only its nonfatal inability to write a user log outside the workspace.
-The prior R2 read-only verification and production Paper/Data/Match shadow
-case remain historical evidence for the earlier deployed code.
+Worker lifecycle regression fix `89668c7` was covered by the Worker suite
+(31 files, 184 tests) and deployed as Edge Version
+`9941f714-eee6-46bc-8163-968107d8874f`.
 `git diff --check` and the staged/committed Discovery diff checks passed.
-No production deployment or remote migration was performed for 268eae8.
-GitHub sync: `git push origin HEAD:cf-deploy` completed
-`3df909f..d0e3766`.
-Windows Processor validation: host `EAPS6CGH-LT`, Docker Server 29.7.2;
-container `infinity-discovery-processor-discovery-processor-1` was running,
-restart count 0, image digest
-`sha256:a905a9f2539f8059cbfc6527a7c414a6c9266cebe4f623f5ba015a5ffb28c586`,
-and resource use was 0.30% CPU / 21.73 MiB. The D1 session for
-`discovery-processor-windows-v1` had `revoked_at=null`; `last_seen_at` advanced
-from 1789196224 to 1789196309 during validation. The live image is the
-pre-audit image; 268eae8 was not deployed.
+Remote rollout: migrations 0025-0027 applied; final migration listing returned
+`No migrations to apply!`; Edge Version `5dab1bac-6e71-4ef5-aba9-26a493e5ebc1`
+was deployed, followed by the lifecycle-fix Version
+`9941f714-eee6-46bc-8163-968107d8874f`.
+Windows Processor validation: host `EAPS6CGH-LT`, isolated container
+`infinity-discovery-processor-discovery-processor-1` running, restart count 0,
+image digest
+`sha256:2bb2a1c1171e28e646006d185a2fc9bab3fb190b3aa1b0778e04194087147496`.
+The current Discovery Processor session was unrevoked and active; two Worker
+v2 sessions had live leases.
+
+Live authenticated browser shadow:
+- unique public UCI ZIP derivative uploaded through `/data-collections/`;
+  collection `175fc3e5-06f0-4338-bde8-0eb7051ee5e6` reached ready with
+  `dataset-profile-v1`, red/white CSV profiles (1,599/4,898 rows, 12 columns),
+  and a 100% evaluated match to the existing profiled wine-quality paper;
+- match `bd74d122-d7fe-4479-90fd-c1bbc12d262f` had hard gate `pass`, coverage
+  `1`, confidence `100`, scientific fit `100`, and `created_task_id=null`;
+- the original arXiv PDF exercised the hash-deduplication path; a different
+  public BERT PDF persisted as paper `8272108e-5475-41f8-b18d-0c3bb00ad62d`
+  but the external Paper Processor returned
+  `PAPER_PROCESSOR_RUNTIME_ERROR`. No Task or Artifact was created.

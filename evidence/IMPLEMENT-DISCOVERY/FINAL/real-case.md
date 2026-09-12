@@ -13,3 +13,20 @@ Real production shadow case:
 
 `DISCOVERY_AUTO_EXECUTE=false`, so `created_task_id=null`; no Task, Attempt,
 Artifact, or Redis-outage recovery claim is made.
+
+Post-rollout disposable collection shadow:
+
+- Collection `175fc3e5-06f0-4338-bde8-0eb7051ee5e6`; name `Shadow UCI Wine
+  Quality`; ready; source `infinity-discovery-live-wine-shadow.zip`;
+  `dataset-profile-v1`; SHA-256
+  `cdcd8ac23924a64e599ebdddf2b88a25c43ad039b606e6fd2b60cd4afbddfa87`;
+  red/white CSVs profiled as 1599/4898 rows and 12 columns.
+- Match `bd74d122-d7fe-4479-90fd-c1bbc12d262f`; evaluated; hard gate pass;
+  coverage 1.0; execution confidence 100; scientific fit 100; evaluator
+  `feasibility-v1`; `created_task_id=null` because auto-execute is disabled.
+
+The original public arXiv PDF followed the duplicate-by-content path. A
+different public BERT PDF created disposable paper
+`8272108e-5475-41f8-b18d-0c3bb00ad62d`, whose Paper Processor resource
+`b7ea841f-97a3-40e7-8953-8474696fcb3e` terminated with
+`PAPER_PROCESSOR_RUNTIME_ERROR`; no task or artifact was created.

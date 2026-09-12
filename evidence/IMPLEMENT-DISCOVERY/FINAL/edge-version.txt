@@ -1,12 +1,8 @@
-Prior Edge code deployment observed for the pre-audit rollout:
-01f020d9-3f83-41c5-8500-0f82eb7f08ea
-Latest secret-only deployment observed after that code deployment:
-23ad71b2-21ec-4ef9-a05d-97ff72a15e00
-Prior health check: HTTP 200; discovery_processor readiness configured.
-
-Post-audit commit 268eae8 was not deployed in this audit. No new Edge
-deployment was authorized or performed.
-
-GitHub sync completed after the local audit: `origin/cf-deploy` advanced from
-`3df909f` to `d903df5` via `git push origin HEAD:cf-deploy` (implementation and
-validation evidence commits).
+Current Edge Version ID: `9941f714-eee6-46bc-8163-968107d8874f`.
+This is the post-rollout deployment containing commit `89668c7`, which
+surfaces terminal Paper Processor failures in `paper_catalog`.
+The preceding Discovery rollout Version ID was
+`5dab1bac-6e71-4ef5-aba9-26a493e5ebc1`.
+Post-deploy `GET https://infinity.zhangyvjing.com/health` returned HTTP 200
+with D1, R2, Paper Processor, and Discovery Processor readiness all
+`configured`.

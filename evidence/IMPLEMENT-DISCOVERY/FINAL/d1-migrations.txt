@@ -1,14 +1,9 @@
 Database: infinity-agents-db
 Database id: 9ee9ec94-cb42-40b5-8372-681c7b57c105
-Prior remote observation:
-- 0023_discovery_catalog.sql
-- 0024_discovery_leases.sql
 
-Local post-audit commit 268eae8 adds:
+Applied remotely on 2026-09-12 before the Discovery rollout:
 - 0025_fenced_output_pointers.sql
 - 0026_literature_watch_leases.sql
 - 0027_literature_retries_and_quota.sql
 
-No remote DDL or migration apply was performed in this audit. The three local
-migrations remain pending for production and must be applied before deploying
-the post-audit Worker code.
+Final read-only migration listing: `✅ No migrations to apply!`

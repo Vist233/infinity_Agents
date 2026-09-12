@@ -1,14 +1,18 @@
 # D14 — Final regression and archive
 
 Date: 2026-09-12 (Asia/Shanghai)
-Status: CONDITIONAL PASS
+Status: CONDITIONAL PASS — rollout complete with intentional gates
 
 All post-audit local code regressions, frontend checks, Worker dry-run checks,
-and the 15-test Playwright suite passed. The earlier Edge health, D1/R2 and
-real Paper/Data/Match shadow checks remain historical production evidence for
-the pre-audit rollout; the live pre-audit Windows Processor image and D1
-session were independently validated as running and heartbeating. The card
-remains conditional because the current safe production configuration does not
-admit a real Task, so the Task/Artifact/Redis-recovery portion of D12/D14 is
-intentionally not claimed. Commit 268eae8 and migrations 0025-0027 were not
-deployed or applied remotely.
+and the 15-test Playwright suite passed. Remote migrations 0025-0027 are
+applied, the final listing is clean, the current Edge version is
+`9941f714-eee6-46bc-8163-968107d8874f`, post-deploy health is HTTP 200 with all
+readiness bindings configured, and the isolated Windows Processor is running
+with restart count 0 and the recorded digest. An authenticated live public-
+fixture shadow reached dataset profiling and an evaluated 100% match with hard
+gate `pass`; the fresh paper shadow exposed a Paper Processor runtime rejection
+that is now propagated to the Discovery catalog by 89668c7.
+
+The card remains conditional because `DISCOVERY_AUTO_EXECUTE=false`, so the
+Task/Artifact/Redis-recovery portion of D12/D14 is intentionally not claimed;
+`DISCOVERY_LITERATURE_ENABLED=false` also leaves the watcher disabled.
