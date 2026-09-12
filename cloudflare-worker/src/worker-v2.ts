@@ -1171,50 +1171,67 @@ async function finishTask(taskId: string, request: Request, env: Env, context: W
   const errorCode = errorMessage(body?.error_code, target === "cancelled" ? "cancelled" : "worker_failed");
   const errorText = errorMessage(body?.error_message, target === "cancelled" ? "Task cancelled" : "Worker reported failure");
   const payload = JSON.stringify({ task_id: taskId, attempt_id: auth.attempt.attempt_id, status: target, error_code: errorCode });
-  const results = await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE task_attempts SET status = ?7, error_code = ?5, error_message = ?6,
-          updated_at = ?8, finished_at = ?8
-       WHERE attempt_id = ?1 AND task_id = ?2 AND worker_id = ?3
-         AND session_id = ?4 AND lease_token_hash = ?9
-         AND status IN ('claimed', 'running') AND lease_expires_at > ?8
-         AND EXISTS (
-           SELECT 1 FROM worker_sessions_runtime s
-           WHERE s.session_id = ?4 AND s.worker_id = ?3
-             AND s.session_epoch = ?10 AND s.instance_id = ?11
-             AND s.disconnected_at IS NULL AND s.lease_expires_at > ?8
-         )`,
-    ).bind(auth.attempt.attempt_id, taskId, context.worker.worker_id, context.session.session_id,
-      errorCode, errorText, target, now, auth.leaseTokenHash, context.session.session_epoch,
-      context.session.instance_id),
-    env.DB.prepare(
-      `UPDATE tasks SET status = ?5, error_message = ?6, lease_expires_at = ?7,
-          updated_at = ?7, finished_at = ?7
-       WHERE task_id = ?1 AND active_attempt_id = ?2 AND lease_worker_id = ?3
-         AND lease_epoch = ?4 AND lease_token_hash = ?8
-         AND status IN ('claimed', 'running')
-         AND EXISTS (
-           SELECT 1 FROM worker_sessions_runtime s
-           WHERE s.session_id = ?9 AND s.worker_id = ?3
-             AND s.session_epoch = ?10 AND s.instance_id = ?11
-             AND s.disconnected_at IS NULL AND s.lease_expires_at > ?7
-         )`,
-    ).bind(taskId, auth.attempt.attempt_id, context.worker.worker_id, auth.attempt.fencing_epoch,
-      target, errorText, now, auth.leaseTokenHash, context.session.session_id,
-      context.session.session_epoch, context.session.instance_id),
-    env.DB.prepare(
-      `INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
-       SELECT ?1, ?2, ?3, ?4, ?5
-       WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND status = ?6 AND active_attempt_id = ?7)`,
-    ).bind(crypto.randomUUID(), taskId, target === "cancelled" ? "task_cancelled" : "task_failed", payload, now, target, auth.attempt.attempt_id),
-    env.DB.prepare(
-      `INSERT INTO outbox_events
-        (event_id, idempotency_key, aggregate_type, aggregate_id, event_type,
-         payload_json, status, attempts, next_attempt_at, created_at)
-       SELECT ?1, ?2, 'task', ?3, ?4, ?5, 'pending', 0, ?6, ?6
-       WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?3 AND status = ?7 AND active_attempt_id = ?8)`,
-    ).bind(crypto.randomUUID(), `${target}:${auth.attempt.attempt_id}`, taskId, target === "cancelled" ? "task_cancelled" : "task_failed", payload, now, target, auth.attempt.attempt_id),
-  ]);
+  const eventType = target === "cancelled" ? "task_cancelled" : "task_failed";
+  const eventId = `task-${target}:${auth.attempt.attempt_id}`;
+  const idempotencyKey = `${target}:${auth.attempt.attempt_id}`;
+  let results: unknown[];
+  try {
+    results = await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE task_attempts SET status = ?7, error_code = ?5, error_message = ?6,
+            updated_at = ?8, finished_at = ?8
+         WHERE attempt_id = ?1 AND task_id = ?2 AND worker_id = ?3
+           AND session_id = ?4 AND lease_token_hash = ?9
+           AND status IN ('claimed', 'running') AND lease_expires_at > ?8
+           AND EXISTS (
+             SELECT 1 FROM worker_sessions_runtime s
+             WHERE s.session_id = ?4 AND s.worker_id = ?3
+               AND s.session_epoch = ?10 AND s.instance_id = ?11
+               AND s.disconnected_at IS NULL AND s.lease_expires_at > ?8
+           )`,
+      ).bind(auth.attempt.attempt_id, taskId, context.worker.worker_id, context.session.session_id,
+        errorCode, errorText, target, now, auth.leaseTokenHash, context.session.session_epoch,
+        context.session.instance_id),
+      env.DB.prepare(
+        `UPDATE tasks SET status = ?5, error_message = ?6, lease_expires_at = ?7,
+            updated_at = ?7, finished_at = ?7
+         WHERE task_id = ?1 AND active_attempt_id = ?2 AND lease_worker_id = ?3
+           AND lease_epoch = ?4 AND lease_token_hash = ?8
+           AND status IN ('claimed', 'running')
+           AND EXISTS (
+             SELECT 1 FROM worker_sessions_runtime s
+             WHERE s.session_id = ?9 AND s.worker_id = ?3
+               AND s.session_epoch = ?10 AND s.instance_id = ?11
+               AND s.disconnected_at IS NULL AND s.lease_expires_at > ?7
+           )`,
+      ).bind(taskId, auth.attempt.attempt_id, context.worker.worker_id, auth.attempt.fencing_epoch,
+        target, errorText, now, auth.leaseTokenHash, context.session.session_id,
+        context.session.session_epoch, context.session.instance_id),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
+         SELECT ?1, ?2, ?3, ?4, ?5
+         WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND status = ?6 AND active_attempt_id = ?7)`,
+      ).bind(eventId, taskId, eventType, payload, now, target, auth.attempt.attempt_id),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO outbox_events
+          (event_id, idempotency_key, aggregate_type, aggregate_id, event_type,
+           payload_json, status, attempts, next_attempt_at, created_at)
+         SELECT ?1, ?2, 'task', ?3, ?4, ?5, 'pending', 0, ?6, ?6
+         WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?3 AND status = ?7 AND active_attempt_id = ?8)`,
+      ).bind(crypto.randomUUID(), idempotencyKey, taskId, eventType, payload, now, target, auth.attempt.attempt_id),
+    ]);
+  } catch (error) {
+    // Never strand a claimed attempt behind an uncaught Worker 500. The D1
+    // batch remains atomic; lease recovery can safely retry after a bounded
+    // 503 while this log contains no task payload or worker secret.
+    console.error("worker.finish_task_batch_failed", {
+      task_id: taskId,
+      attempt_id: auth.attempt.attempt_id,
+      target,
+      error_type: error instanceof Error ? error.name : "unknown",
+    });
+    return errorJson("Task failure could not be recorded", 503, "TASK_FINISH_UNAVAILABLE");
+  }
   if (changed(results[0]) !== 1 || changed(results[1]) !== 1) return errorJson("Attempt lease is stale", 409, "ATTEMPT_FENCING_REJECTED");
   return json({ task_id: taskId, attempt_id: auth.attempt.attempt_id, status: target });
 }
@@ -1248,7 +1265,10 @@ export async function handleWorkerV2(request: Request, env: Env): Promise<Respon
   const start = url.pathname.match(new RegExp(`^${WORKER_V2_PREFIX}/tasks/([^/]+)/artifacts/start$`));
   if (start) return request.method === "POST" ? startArtifact(decodeURIComponent(start[1]), request, env, context) : errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED");
   const fail = url.pathname.match(new RegExp(`^${WORKER_V2_PREFIX}/tasks/([^/]+)/(fail|cancelled)$`));
-  if (fail) return request.method === "POST" ? finishTask(decodeURIComponent(fail[1]), request, env, context, fail[2] as "failed" | "cancelled") : errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED");
+  if (fail) {
+    const target = fail[2] === "cancelled" ? "cancelled" : "failed";
+    return request.method === "POST" ? finishTask(decodeURIComponent(fail[1]), request, env, context, target) : errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED");
+  }
   const part = url.pathname.match(new RegExp(`^${WORKER_V2_PREFIX}/artifacts/([^/]+)/parts/(\\d+)$`));
   if (part) return request.method === "PUT" ? artifactPart(decodeURIComponent(part[1]), part[2], request, env, context) : errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED");
   const complete = url.pathname.match(new RegExp(`^${WORKER_V2_PREFIX}/artifacts/([^/]+)/complete$`));

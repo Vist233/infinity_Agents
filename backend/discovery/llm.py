@@ -53,7 +53,11 @@ class MoonshotJsonClient:
             raise ModelClientError("Moonshot request is too large")
         payload = json.dumps({
             "model": self.model,
-            "temperature": 0,
+            # kimi-k2.6 currently accepts only temperature=1. Keep the
+            # deterministic zero-temperature behavior for other compatible
+            # Moonshot models unless their caller explicitly supplies a
+            # different client in the future.
+            "temperature": 1 if self.model.lower() == "kimi-k2.6" else 0,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": system_prompt},

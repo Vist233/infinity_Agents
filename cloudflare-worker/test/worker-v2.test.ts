@@ -352,6 +352,36 @@ class RuntimeFakeStatement {
       row.lease_expires_at = lease;
       return { meta: { changes: 1 } };
     }
+    if (sql.includes("UPDATE task_attempts SET status = ?7")) {
+      const [attemptId, taskId, workerId, sessionId, errorCode, errorMessage, target, now, tokenHash, sessionEpoch, instanceId] = this.args as [string, string, string, string, string, string, string, number, string, number, string];
+      const row = this.db.attempts.get(attemptId);
+      const session = this.db.sessionHistory.get(sessionId);
+      if (!row || row.task_id !== taskId || row.worker_id !== workerId || row.session_id !== sessionId
+        || row.lease_token_hash !== tokenHash || !["claimed", "running"].includes(row.status)
+        || row.lease_expires_at <= now || session?.session_epoch !== sessionEpoch
+        || session.instance_id !== instanceId || session.disconnected_at != null
+        || session.lease_expires_at <= now) return { meta: { changes: 0 } };
+      row.status = target;
+      (row as any).error_code = errorCode;
+      (row as any).error_message = errorMessage;
+      (row as any).finished_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE tasks SET status = ?5")) {
+      const [taskId, attemptId, workerId, epoch, target, errorMessage, now, tokenHash, sessionId, sessionEpoch, instanceId] = this.args as [string, string, string, number, string, string, number, string, string, number, string];
+      const row = this.db.tasks.get(taskId);
+      const session = this.db.sessionHistory.get(sessionId);
+      if (!row || row.active_attempt_id !== attemptId || row.lease_worker_id !== workerId
+        || row.lease_epoch !== epoch || row.lease_token_hash !== tokenHash
+        || !["claimed", "running"].includes(row.status) || session?.worker_id !== workerId
+        || session.session_epoch !== sessionEpoch || session.instance_id !== instanceId
+        || session.disconnected_at != null || session.lease_expires_at <= now) return { meta: { changes: 0 } };
+      row.status = target;
+      row.lease_expires_at = now;
+      (row as any).error_message = errorMessage;
+      (row as any).finished_at = now;
+      return { meta: { changes: 1 } };
+    }
     if (sql.includes("INSERT INTO task_attempts")) {
       const [attemptId, taskId, workerId, sessionId, attemptNumber, epoch, tokenHash, lease, now] = this.args as [string, string, string, string, number, number, string, number, number];
       const task = this.db.tasks.get(taskId);
@@ -662,6 +692,42 @@ describe("Worker v2 control plane", () => {
     const rejected = await handleWorkerV2(new Request("https://app.test/api/worker/v2/heartbeat", { method: "POST", headers: forgedPool }), envFor(db));
     expect(rejected?.status).toBe(403);
     expect(await rejected?.json()).toMatchObject({ error: { code: "WORKER_POOL_MISMATCH" } });
+  });
+
+  it("records a fenced Worker failure without an uncaught 500", async () => {
+    const db = new RuntimeFakeD1();
+    const credential = "wc_test-persistent-credential";
+    db.workers.set("worker-b", {
+      worker_id: "worker-b", pool_id: "public-default", namespace: "infinity-public", created_by: "worker-owner",
+      credential_hash: hashText(credential), status: "active", protocol_version: "2", runtime_capability: "goal-driven-claude-code", image_digest: null, last_seen_at: null,
+    });
+    db.tasks.set("task-failure", {
+      task_id: "task-failure", task_spec_id: "spec-1", dataset_snapshot_id: "dataset-1", method_source_id: null,
+      title: "Failure task", attempt_count: 0, max_attempts: 3, lease_epoch: 0, status: "queued", execution_pool_id: "public-default",
+      active_attempt_id: null, lease_worker_id: null, lease_token_hash: null, lease_expires_at: null,
+    });
+    const connected = await connect(db, "worker-b", credential, "machine-a");
+    const headers = authHeaders("worker-b", credential, "machine-a", connected.session);
+    const acceptedResponse = await handleWorkerV2(new Request("https://app.test/api/worker/v2/tasks/task-failure/accept", {
+      method: "POST", headers,
+    }), envFor(db));
+    const accepted = await acceptedResponse!.json() as { attempt_id: string; lease_token: string };
+    const finishHeaders = new Headers(headers);
+    finishHeaders.set("x-worker-attempt-id", accepted.attempt_id);
+    finishHeaders.set("x-worker-lease-token", accepted.lease_token);
+
+    const finished = await handleWorkerV2(new Request("https://app.test/api/worker/v2/tasks/task-failure/fail", {
+      method: "POST",
+      headers: finishHeaders,
+      body: JSON.stringify({ error_code: "execution_error", error_message: "bounded failure" }),
+    }), envFor(db));
+
+    expect(finished?.status).toBe(200);
+    expect(await finished?.json()).toMatchObject({ task_id: "task-failure", status: "failed" });
+    expect(db.tasks.get("task-failure")?.status).toBe("failed");
+    expect(db.attempts.get(accepted.attempt_id)?.status).toBe("failed");
+    expect(db.events).toContain(`task-failed:${accepted.attempt_id}`);
+    expect(db.outbox).toContain(`failed:${accepted.attempt_id}`);
   });
 
   it("streams an artifact part and finalizes it with an independent checksum", async () => {

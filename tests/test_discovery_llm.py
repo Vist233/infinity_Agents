@@ -28,6 +28,7 @@ def test_moonshot_defaults_to_kimi_and_parses_json(monkeypatch):
         captured["url"] = request.full_url
         captured["authorization"] = request.headers.get("Authorization")
         captured["timeout"] = timeout
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
         return FakeResponse({"choices": [{"message": {"content": "```json\n{\"ok\":true}\n```"}}]})
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
@@ -36,6 +37,7 @@ def test_moonshot_defaults_to_kimi_and_parses_json(monkeypatch):
     assert client.complete_json(system_prompt="system", user_prompt="data") == {"ok": True}
     assert captured["url"].endswith("/v1/chat/completions")
     assert captured["authorization"] == "Bearer runtime-secret"
+    assert captured["payload"]["temperature"] == 1
 
 
 def test_moonshot_requires_runtime_secret_and_rejects_invalid_base(monkeypatch):
