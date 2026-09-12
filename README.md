@@ -58,7 +58,9 @@ bash scripts/enroll-worker.sh
 
 # 启动 Worker
 source .env.local
-python -m backend.code_agent.worker.consumer_v2 "$WORKER_1_ID"
+WORKER_CREDENTIAL="$WORKER_1_CREDENTIAL" WORKER_ENROLLMENT_REQUIRED=1 \
+  WORKER_INSTANCE_ID="local-$WORKER_1_ID" \
+  python -m backend.code_agent.worker.consumer "$WORKER_1_ID"
 ```
 
 ## 文档

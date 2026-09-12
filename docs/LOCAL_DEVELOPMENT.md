@@ -54,7 +54,9 @@ bash scripts/enroll-worker.sh
 # 将输出的 WORKER_ID 和 WORKER_CREDENTIAL 填入 .env.local
 # 然后：
 source .env.local
-ANTHROPIC_API_KEY=sk-ant-your-key python -m backend.code_agent.worker.consumer_v2 "$WORKER_1_ID"
+WORKER_CREDENTIAL="$WORKER_1_CREDENTIAL" WORKER_ENROLLMENT_REQUIRED=1 \
+  WORKER_INSTANCE_ID="local-$WORKER_1_ID" \
+  python -m backend.code_agent.worker.consumer "$WORKER_1_ID"
 ```
 
 **注意**：模型 Provider 仅在实际执行研究任务时需要。它不属于本地启动、任务创建、
@@ -98,7 +100,7 @@ $env:ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
 $env:ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 
 # Start the Worker:
-python -m backend.code_agent.worker.consumer_v2 $env:WORKER_ID
+python -m backend.code_agent.worker.consumer $env:WORKER_ID
 ```
 
 **Step 4 — Deploy a second Worker**:
@@ -111,7 +113,7 @@ a second process with a different `WORKER_ID`:
 # (save the new credentials)
 $env:WORKER_ID = "public-worker-yyyy"
 $env:WORKER_CREDENTIAL = "yyyy"
-python -m backend.code_agent.worker.consumer_v2 $env:WORKER_ID
+python -m backend.code_agent.worker.consumer $env:WORKER_ID
 ```
 
 **Important**: The API server's `.env.local` must contain
