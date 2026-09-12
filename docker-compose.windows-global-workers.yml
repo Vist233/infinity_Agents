@@ -3,7 +3,9 @@
 # neither service shares a workspace volume or credential with the other.
 services:
   worker-1:
-    image: docker.io/vist233/infinity-agent-worker:2026.09.11-r1
+    # This is an administrator-loaded local tag; the Windows host must not
+    # pull a public registry image at startup.
+    image: infinity-agents-worker:2026.09.12-r2
     pull_policy: never
     dns:
       - 1.1.1.1
@@ -16,7 +18,7 @@ services:
       - worker_1_workspace:/workspace
 
   worker-2:
-    image: docker.io/vist233/infinity-agent-worker:2026.09.11-r1
+    image: infinity-agents-worker:2026.09.12-r2
     pull_policy: never
     dns:
       - 1.1.1.1
@@ -29,7 +31,7 @@ services:
       - worker_2_workspace:/workspace
 
   discovery-processor:
-    image: docker.io/vist233/infinity-agent-discovery-processor:2026.09.11-r1
+    image: infinity-agents-discovery-processor:2026.09.11-r1
     pull_policy: never
     dns:
       - 1.1.1.1

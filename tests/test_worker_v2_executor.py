@@ -4,6 +4,7 @@ import hashlib
 import asyncio
 from pathlib import Path
 
+import httpx
 import pytest
 
 from backend.code_agent.worker.control_plane import ClaimedTask
@@ -92,6 +93,43 @@ async def test_d1_executor_uploads_result_and_clears_attempt_directory(tmp_path:
     assert client.finished == []
     assert not (work_root / claim.task_id / claim.attempt_id).exists()
     assert archive is None
+
+
+@pytest.mark.asyncio
+async def test_lease_renewal_retries_transient_transport_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    class RetryClient:
+        async def renew(self, _claim: ClaimedTask):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise httpx.ConnectError(
+                    "temporary TLS EOF",
+                    request=httpx.Request("POST", "https://infinity.test/api/worker/v2/tasks/task/renew"),
+                )
+            return {"status": "running"}
+
+        async def spec(self, _claim: ClaimedTask):
+            return {"cancel_requested": False}
+
+    monkeypatch.setattr(executor_v2.asyncio, "sleep", fake_sleep)
+    claim = ClaimedTask(
+        task_id="task-retry", task_spec_id="spec", dataset_snapshot_id="dataset",
+        method_source_id=None, title="Retry", attempt_id="attempt",
+        lease_token="lease", fencing_epoch=1, lease_expires_at=100,
+    )
+    cancel = asyncio.Event()
+
+    await executor_v2._renew_with_retries(RetryClient(), claim, cancel)  # type: ignore[arg-type]
+
+    assert calls == 2
+    assert sleeps == [executor_v2.RENEW_RETRY_INITIAL_SECONDS]
+    assert not cancel.is_set()
 
 
 @pytest.mark.asyncio

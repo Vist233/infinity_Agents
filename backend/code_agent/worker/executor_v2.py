@@ -12,8 +12,11 @@ import asyncio
 import logging
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Any, Mapping
+
+import httpx
 
 from backend.code_agent.worker.claude_runtime import run_claude_task
 from backend.code_agent.worker.control_plane import ClaimedTask, ControlPlaneError, WorkerV2Client
@@ -21,6 +24,10 @@ from backend.security import ArtifactCollector, SecurityBoundaryError
 
 
 DISCOVERY_RUNTIME_GOAL = "Reproduce the validated scientific method against the frozen dataset input and produce auditable deliverables."
+RENEW_INTERVAL_SECONDS = 20.0
+RENEW_RETRY_MAX_SECONDS = 45.0
+RENEW_RETRY_INITIAL_SECONDS = 2.0
+RENEW_RETRY_MAX_DELAY_SECONDS = 10.0
 
 
 def _task_runtime_goal(task_spec: Mapping[str, Any]) -> str:
@@ -54,6 +61,58 @@ def _timeout_seconds() -> float:
         return float(12 * 60 * 60)
 
 
+def _is_transient_lease_error(exc: BaseException) -> bool:
+    """Return whether a renewal failure may recover before the current lease expires."""
+    if isinstance(exc, ControlPlaneError):
+        return exc.status_code in {408, 425, 429} or (exc.status_code is not None and exc.status_code >= 500)
+    return isinstance(exc, (httpx.HTTPError, OSError, asyncio.TimeoutError))
+
+
+async def _renew_with_retries(
+    client: WorkerV2Client,
+    claim: ClaimedTask,
+    cancel: asyncio.Event,
+) -> None:
+    """Renew through a short control-plane interruption without abandoning the lease."""
+    deadline = time.monotonic() + RENEW_RETRY_MAX_SECONDS
+    delay = RENEW_RETRY_INITIAL_SECONDS
+    failures = 0
+    while True:
+        try:
+            await client.renew(claim)
+            try:
+                spec = await client.spec(claim)
+            except Exception as exc:
+                if not _is_transient_lease_error(exc):
+                    raise
+                logger.warning(
+                    "Worker renewed the D1 lease but could not read cancellation state for %s: %s",
+                    claim.task_id,
+                    type(exc).__name__,
+                )
+                return
+            if bool(spec.get("cancel_requested")):
+                cancel.set()
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if not _is_transient_lease_error(exc):
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            failures += 1
+            logger.warning(
+                "Worker lease renewal temporarily failed for %s; retry %d before expiry: %s",
+                claim.task_id,
+                failures,
+                type(exc).__name__,
+            )
+            await asyncio.sleep(min(delay, remaining))
+            delay = min(delay * 2, RENEW_RETRY_MAX_DELAY_SECONDS)
+
+
 async def _renew_until_cancelled(
     client: WorkerV2Client,
     claim: ClaimedTask,
@@ -63,15 +122,12 @@ async def _renew_until_cancelled(
 ) -> None:
     while not stop.is_set():
         try:
-            await asyncio.wait_for(stop.wait(), timeout=20.0)
+            await asyncio.wait_for(stop.wait(), timeout=RENEW_INTERVAL_SECONDS)
             continue
         except asyncio.TimeoutError:
             pass
         try:
-            await client.renew(claim)
-            spec = await client.spec(claim)
-            if bool(spec.get("cancel_requested")):
-                cancel.set()
+            await _renew_with_retries(client, claim, cancel)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
