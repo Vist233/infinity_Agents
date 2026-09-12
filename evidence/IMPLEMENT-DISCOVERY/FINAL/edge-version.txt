@@ -8,4 +8,5 @@ Post-audit commit 268eae8 was not deployed in this audit. No new Edge
 deployment was authorized or performed.
 
 GitHub sync completed after the local audit: `origin/cf-deploy` advanced from
-`3df909f` to `d0e3766` via `git push origin HEAD:cf-deploy`.
+`3df909f` to `d903df5` via `git push origin HEAD:cf-deploy` (implementation and
+validation evidence commits).

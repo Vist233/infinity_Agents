@@ -9,7 +9,10 @@ a440fe0  fix: preload discovery processor base for windows build
 
 Post-audit local Discovery code commit: 268eae8 fix: harden discovery
 execution and literature durability
-Evidence archive commit: this evidence update follows 268eae8; no remote push
-or production deployment was performed in this audit.
-The current local branch contains the post-audit code and the corrected local
-verification record; unrelated dirty user paths remain excluded.
+Evidence correction commit: d0e3766 docs: refresh discovery audit evidence
+Validation evidence commit: d903df5 docs: record browser and processor
+validation
+GitHub sync: `origin/cf-deploy` advanced from `3df909f` to `d903df5`.
+No Edge deployment or remote DDL was performed in this audit. The current
+branch contains the post-audit code and corrected verification record;
+unrelated dirty user paths remain excluded.
