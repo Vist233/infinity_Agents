@@ -14,6 +14,7 @@ from typing import Any
 
 _FIXED_EDGE_HOST = "infinity.zhangyvjing.com"
 _PATHS = {"connect": "/api/discovery-processor/connect", "poll": "/api/discovery-processor/poll", "control": "/api/discovery-processor/control"}
+_USER_AGENT = "Infinity-Discovery-Processor/1.0"
 
 
 class DiscoveryProcessorProtocolError(RuntimeError):
@@ -59,7 +60,7 @@ class DiscoveryProcessorClient:
         if endpoint != "connect" and not self._session_token:
             raise DiscoveryProcessorProtocolError("Discovery Processor session is not connected")
         body = json.dumps(payload if payload is not None else {}, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        headers = {"accept": "application/json", "content-type": "application/json"}
+        headers = {"accept": "application/json", "content-type": "application/json", "user-agent": _USER_AGENT}
         if endpoint == "connect":
             headers.update({"x-discovery-processor-id": self._processor_id, "x-discovery-processor-token": self._bootstrap_token})
         else:
@@ -87,7 +88,7 @@ class DiscoveryProcessorClient:
     def _bytes(self, payload: dict[str, Any], grant: DiscoveryGrant, maximum_bytes: int) -> bytes:
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(self._url("control"), data=body, method="POST", headers={
-            "accept": "application/octet-stream", "content-type": "application/json",
+            "accept": "application/octet-stream", "content-type": "application/json", "user-agent": _USER_AGENT,
             "x-discovery-processor-session": self._session_token or "",
             "x-discovery-processor-lease-token": grant.lease_token,
         })
