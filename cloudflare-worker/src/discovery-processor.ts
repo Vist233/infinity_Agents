@@ -22,17 +22,19 @@ import {
   type PaperCatalogRow,
   type ResearchMatchRow,
 } from "./discovery-db";
+import { getPaperProcessorObject } from "./db";
 import {
   FEASIBILITY_EVALUATOR_VERSION,
   coarseMatch,
   normalizeDatasetProfile,
   normalizeFeasibilityEvaluation,
   normalizePaperProfile,
+  paperEvidenceStatus,
   type DatasetProfile,
   type PaperProfile,
 } from "./discovery-contracts";
-import { getPaperObject } from "./paper-object-store";
-import { deleteDiscoveryObject, putDiscoveryObject } from "./discovery-object-store";
+import { getPaperObject, getPaperObjectAtKey } from "./paper-object-store";
+import { deleteDiscoveryObject, deleteDiscoveryObjectAtKey, discoveryObjectKey, putDiscoveryObject } from "./discovery-object-store";
 import { hashText, Sha256 } from "./sha256";
 import { isApprovedDiscoveryProcessorRequest, isDiscoveryProcessorNamespacePath } from "./discovery-processor-access";
 import { createDiscoveryTask } from "./discovery-task";
@@ -91,11 +93,34 @@ function integerField(body: Record<string, unknown> | null, name: string): numbe
 async function bodyJson(request: Request): Promise<Record<string, unknown> | null | Response> {
   const declared = Number(request.headers.get("content-length") ?? "");
   if (Number.isSafeInteger(declared) && declared > MAX_CONTROL_BYTES) return errorJson("Discovery Processor request is too large", 413, "DISCOVERY_PROCESSOR_BODY_TOO_LARGE");
+  if (!request.body) return null;
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
   try {
-    const value = await request.json();
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > MAX_CONTROL_BYTES) {
+        await reader.cancel("discovery control body exceeds limit");
+        return errorJson("Discovery Processor request is too large", 413, "DISCOVERY_PROCESSOR_BODY_TOO_LARGE");
+      }
+      chunks.push(next.value);
+    }
+    const value = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(
+      (() => {
+        const bytes = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+        return bytes;
+      })(),
+    ));
     return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
   } catch {
     return null;
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -213,7 +238,10 @@ async function inputSource(request: Request, env: Env, context: SessionContext, 
   const authorized = await authorizeWork(request, env, context, body);
   if (authorized instanceof Response) return authorized;
   if (authorized.paper) {
-    const object = await getPaperObject(env, authorized.paper.source_resource_id, "text_pages");
+    const recorded = await getPaperProcessorObject(env, { resourceId: authorized.paper.source_resource_id, kind: "text_pages", objectId: "pages" });
+    const object = recorded?.object_key
+      ? await getPaperObjectAtKey(env, recorded.object_key)
+      : await getPaperObject(env, authorized.paper.source_resource_id, "text_pages");
     if (!object) return errorJson("Paper text pages are not available", 409, "DISCOVERY_PAPER_TEXT_MISSING");
     return new Response(object.body, { headers: { "cache-control": "no-store", "content-type": "application/json" } });
   }
@@ -248,6 +276,11 @@ function profileJson(value: unknown, maximum: number): string | null {
   }
 }
 
+async function deleteDiscoveryKeys(env: Env, keys: Array<string | null | undefined>): Promise<void> {
+  const unique = [...new Set(keys.filter((key): key is string => Boolean(key)))];
+  await Promise.allSettled(unique.map((key) => deleteDiscoveryObjectAtKey(env, key)));
+}
+
 async function savePaper(request: Request, env: Env, context: SessionContext, body: Record<string, unknown>): Promise<Response> {
   const profile = normalizePaperProfile(body.profile);
   if (!profile) return errorJson("Paper Profile does not match paper-profile-v1", 422, "DISCOVERY_PAPER_PROFILE_INVALID");
@@ -265,15 +298,52 @@ async function savePaper(request: Request, env: Env, context: SessionContext, bo
   }
   const paper = authorized.paper!;
   if (profile.provenance.source_resource_id !== paper.source_resource_id) return errorJson("Paper Profile provenance does not match the resource", 409, "DISCOVERY_PROFILE_PROVENANCE_MISMATCH");
-  if (!await putDiscoveryObject(env, "paper_profile", { resourceId: paper.source_resource_id }, new TextEncoder().encode(serialized), "application/json")) return errorJson("Paper Profile storage is unavailable", 503, "DISCOVERY_STORAGE_UNAVAILABLE");
-  if (!await putDiscoveryObject(env, "paper_overview", { resourceId: paper.source_resource_id }, new TextEncoder().encode(overview), "text/markdown; charset=utf-8")) return errorJson("Paper overview storage is unavailable", 503, "DISCOVERY_STORAGE_UNAVAILABLE");
-  const saved = await savePaperProfile(env, { paperId: paper.paper_id, profileVersion: profile.profile_version, profileJson: serialized, profileSha256: sha256, overviewObjectKey: `paper/${paper.source_resource_id}/profile/overview.v1.md`, spamStatus: "scientific_paper", title: profile.paper.title, authorsJson: JSON.stringify(profile.paper.authors), year: profile.paper.year, venue: profile.paper.venue, leaseOwner: context.session.processor_session_id, leaseTokenHash: authorized.leaseTokenHash, fencingEpoch: authorized.identity.fencingEpoch, now: context.now });
-  if (!saved) return errorJson("Paper Profile lease is stale", 409, "DISCOVERY_PROCESSOR_LEASE_CONFLICT");
+  const evidenceStatus = paperEvidenceStatus(profile);
+  if (evidenceStatus !== "scientific_paper") {
+    const failed = await failPaperProfile(env, paper.paper_id, "review", context.now, { owner: context.session.processor_session_id, tokenHash: authorized.leaseTokenHash, fencingEpoch: authorized.identity.fencingEpoch });
+    return failed
+      ? errorJson("Paper Profile evidence requires human review", 422, "DISCOVERY_PAPER_EVIDENCE_REVIEW")
+      : errorJson("Paper Profile lease is stale", 409, "DISCOVERY_PROCESSOR_LEASE_CONFLICT");
+  }
+  const objectInput = { resourceId: paper.source_resource_id, leaseOwner: context.session.processor_session_id, fencingEpoch: authorized.identity.fencingEpoch };
+  const profileObjectKey = discoveryObjectKey("paper_profile", objectInput);
+  const overviewObjectKey = discoveryObjectKey("paper_overview", objectInput);
+  if (!profileObjectKey || !overviewObjectKey) return errorJson("Paper Profile storage key is invalid", 500, "DISCOVERY_STORAGE_UNAVAILABLE");
+  try {
+    if (!await putDiscoveryObject(env, "paper_profile", objectInput, new TextEncoder().encode(serialized), "application/json")) return errorJson("Paper Profile storage is unavailable", 503, "DISCOVERY_STORAGE_UNAVAILABLE");
+    if (!await putDiscoveryObject(env, "paper_overview", objectInput, new TextEncoder().encode(overview), "text/markdown; charset=utf-8")) {
+      await deleteDiscoveryKeys(env, [profileObjectKey]);
+      return errorJson("Paper overview storage is unavailable", 503, "DISCOVERY_STORAGE_UNAVAILABLE");
+    }
+  } catch {
+    await deleteDiscoveryKeys(env, [profileObjectKey, overviewObjectKey]);
+    return errorJson("Paper Profile storage is unavailable", 503, "DISCOVERY_STORAGE_UNAVAILABLE");
+  }
+  let saved = false;
+  try {
+    saved = await savePaperProfile(env, { paperId: paper.paper_id, profileVersion: profile.profile_version, profileJson: serialized, profileSha256: sha256, profileObjectKey, overviewObjectKey, spamStatus: "scientific_paper", title: profile.paper.title, authorsJson: JSON.stringify(profile.paper.authors), year: profile.paper.year, venue: profile.paper.venue, leaseOwner: context.session.processor_session_id, leaseTokenHash: authorized.leaseTokenHash, fencingEpoch: authorized.identity.fencingEpoch, now: context.now });
+  } catch {
+    await deleteDiscoveryKeys(env, [profileObjectKey, overviewObjectKey]);
+    return errorJson("Paper Profile could not be persisted", 503, "DISCOVERY_PROFILE_PERSIST_RETRYABLE");
+  }
+  if (!saved) {
+    await deleteDiscoveryKeys(env, [profileObjectKey, overviewObjectKey]);
+    return errorJson("Paper Profile lease is stale", 409, "DISCOVERY_PROCESSOR_LEASE_CONFLICT");
+  }
+  await deleteDiscoveryKeys(env, [
+    paper.profile_object_key && paper.profile_object_key !== profileObjectKey ? paper.profile_object_key : null,
+    paper.overview_object_key && paper.overview_object_key !== overviewObjectKey ? paper.overview_object_key : null,
+  ]);
   await addPaperCapabilities(env, paper.paper_id, profile.analysis_modules.flatMap((module) => [
     ...module.required_capabilities.map((key) => ({ analysisId: module.analysis_id, key, requirement: "required" as const })),
     ...module.optional_capabilities.map((key) => ({ analysisId: module.analysis_id, key, requirement: "optional" as const })),
   ]), context.now);
-  await createCandidatesForPaper(env, { ...paper, status: "profiled", profile_version: profile.profile_version, profile_json: serialized });
+  try {
+    await createCandidatesForPaper(env, { ...paper, status: "profiled", profile_version: profile.profile_version, profile_json: serialized });
+  } catch {
+    // The profile commit is durable. The scheduled reconciliation pass retries
+    // any candidate rows that could not be fanned out in this response.
+  }
   return json({ work_id: paper.paper_id, status: "profiled", profile_version: profile.profile_version });
 }
 
@@ -283,7 +353,8 @@ async function createCandidatesForPaper(env: Env, paperRow: PaperCatalogRow): Pr
   const collections = await env.DB.prepare("SELECT * FROM data_collections WHERE status = 'ready' ORDER BY created_at ASC LIMIT 512").all<DataCollectionRow>();
   for (const collection of collections.results ?? []) {
     if (paperRow.visibility !== "public" && collection.owner_user_id !== paperRow.owner_user_id) continue;
-    const dataset = collection.profile_json ? normalizeDatasetProfile(JSON.parse(collection.profile_json), collection.collection_id) : null;
+    let dataset: DatasetProfile | null = null;
+    try { dataset = collection.profile_json ? normalizeDatasetProfile(JSON.parse(collection.profile_json), collection.collection_id) : null; } catch { dataset = null; }
     if (!dataset) continue;
     const coverage = coarseMatch(paper, dataset);
     await createResearchMatchIfMissing(env, {
@@ -313,10 +384,37 @@ async function saveDataset(request: Request, env: Env, context: SessionContext, 
     if (collection?.status === "ready" && collection.profile_version === profile.profile_version && collection.profile_sha256 === sha256) return json({ work_id: collection.collection_id, status: "ready", idempotent: true });
     return authorized;
   }
-  if (!await putDiscoveryObject(env, "dataset_profile", { collectionId: identity.workId }, new TextEncoder().encode(serialized), "application/json")) return errorJson("Dataset Profile storage is unavailable", 503, "DISCOVERY_STORAGE_UNAVAILABLE");
-  const saved = await saveDatasetProfile(env, { collectionId: identity.workId, profileVersion: profile.profile_version, profileJson: serialized, profileSha256: sha256, leaseOwner: context.session.processor_session_id, leaseTokenHash: authorized.leaseTokenHash, fencingEpoch: identity.fencingEpoch, now: context.now });
-  if (!saved) return errorJson("Dataset Profile lease is stale", 409, "DISCOVERY_PROCESSOR_LEASE_CONFLICT");
-  await createCandidatesForCollection(env, { ...authorized.collection!, status: "ready", profile_version: profile.profile_version, profile_json: serialized });
+  const objectInput = { collectionId: identity.workId, leaseOwner: context.session.processor_session_id, fencingEpoch: identity.fencingEpoch };
+  const profileObjectKey = discoveryObjectKey("dataset_profile", objectInput);
+  if (!profileObjectKey) return errorJson("Dataset Profile storage key is invalid", 500, "DISCOVERY_STORAGE_UNAVAILABLE");
+  try {
+    if (!await putDiscoveryObject(env, "dataset_profile", objectInput, new TextEncoder().encode(serialized), "application/json")) return errorJson("Dataset Profile storage is unavailable", 503, "DISCOVERY_STORAGE_UNAVAILABLE");
+  } catch {
+    await deleteDiscoveryKeys(env, [profileObjectKey]);
+    return errorJson("Dataset Profile storage is unavailable", 503, "DISCOVERY_STORAGE_UNAVAILABLE");
+  }
+  let saved = false;
+  try {
+    saved = await saveDatasetProfile(env, { collectionId: identity.workId, profileVersion: profile.profile_version, profileJson: serialized, profileSha256: sha256, profileObjectKey, leaseOwner: context.session.processor_session_id, leaseTokenHash: authorized.leaseTokenHash, fencingEpoch: identity.fencingEpoch, now: context.now });
+  } catch {
+    await deleteDiscoveryKeys(env, [profileObjectKey]);
+    return errorJson("Dataset Profile could not be persisted", 503, "DISCOVERY_PROFILE_PERSIST_RETRYABLE");
+  }
+  if (!saved) {
+    await deleteDiscoveryKeys(env, [profileObjectKey]);
+    return errorJson("Dataset Profile lease is stale", 409, "DISCOVERY_PROCESSOR_LEASE_CONFLICT");
+  }
+  await deleteDiscoveryKeys(env, [
+    authorized.collection?.profile_object_key && authorized.collection.profile_object_key !== profileObjectKey
+      ? authorized.collection.profile_object_key
+      : null,
+  ]);
+  try {
+    await createCandidatesForCollection(env, { ...authorized.collection!, status: "ready", profile_version: profile.profile_version, profile_json: serialized });
+  } catch {
+    // Candidate fan-out is intentionally best effort; reconciliation below is
+    // the durable retry path for a transient D1 failure.
+  }
   return json({ work_id: identity.workId, status: "ready", profile_version: profile.profile_version });
 }
 
@@ -326,7 +424,8 @@ async function createCandidatesForCollection(env: Env, collectionRow: DataCollec
   const papers = await env.DB.prepare("SELECT * FROM paper_catalog WHERE status = 'profiled' ORDER BY created_at ASC LIMIT 512").all<PaperCatalogRow>();
   for (const paperRow of papers.results ?? []) {
     if (paperRow.visibility !== "public" && paperRow.owner_user_id !== collectionRow.owner_user_id) continue;
-    const paper = paperRow.profile_json ? normalizePaperProfile(JSON.parse(paperRow.profile_json)) : null;
+    let paper: PaperProfile | null = null;
+    try { paper = paperRow.profile_json ? normalizePaperProfile(JSON.parse(paperRow.profile_json)) : null; } catch { paper = null; }
     if (!paper) continue;
     const coverage = coarseMatch(paper, dataset);
     await createResearchMatchIfMissing(env, {
@@ -339,6 +438,45 @@ async function createCandidatesForCollection(env: Env, collectionRow: DataCollec
       candidateReason: coverage.candidate_reason,
       now: collectionRow.updated_at,
     });
+  }
+}
+
+/** Reconcile candidate fan-out after a processor response or D1 write failed. */
+export async function reconcileDiscoveryCandidates(env: Env, limit = 16): Promise<void> {
+  const page = Math.min(32, Math.max(1, limit));
+  const papers = await env.DB.prepare(
+    `SELECT p.* FROM paper_catalog p
+      WHERE p.status = 'profiled' AND EXISTS (
+        SELECT 1 FROM data_collections c
+         WHERE c.status = 'ready'
+           AND (p.visibility = 'public' OR c.owner_user_id = p.owner_user_id)
+           AND NOT EXISTS (
+             SELECT 1 FROM research_matches m
+              WHERE m.paper_id = p.paper_id AND m.collection_id = c.collection_id
+                AND m.paper_profile_version = p.profile_version
+                AND m.dataset_profile_version = c.profile_version
+           )
+      ) ORDER BY p.updated_at ASC, p.paper_id ASC LIMIT ?1`,
+  ).bind(page).all<PaperCatalogRow>();
+  for (const paper of papers.results ?? []) {
+    try { await createCandidatesForPaper(env, paper); } catch { /* retry next schedule */ }
+  }
+  const collections = await env.DB.prepare(
+    `SELECT c.* FROM data_collections c
+      WHERE c.status = 'ready' AND EXISTS (
+        SELECT 1 FROM paper_catalog p
+         WHERE p.status = 'profiled'
+           AND (p.visibility = 'public' OR p.owner_user_id = c.owner_user_id)
+           AND NOT EXISTS (
+             SELECT 1 FROM research_matches m
+              WHERE m.paper_id = p.paper_id AND m.collection_id = c.collection_id
+                AND m.paper_profile_version = p.profile_version
+                AND m.dataset_profile_version = c.profile_version
+           )
+      ) ORDER BY c.updated_at ASC, c.collection_id ASC LIMIT ?1`,
+  ).bind(page).all<DataCollectionRow>();
+  for (const collection of collections.results ?? []) {
+    try { await createCandidatesForCollection(env, collection); } catch { /* retry next schedule */ }
   }
 }
 
@@ -366,7 +504,10 @@ async function saveEvaluation(request: Request, env: Env, context: SessionContex
   if (!normalized) return errorJson("Evaluation does not match feasibility-v1", 422, "DISCOVERY_EVALUATION_INVALID");
   const serialized = profileJson(normalized, 524_288);
   if (!serialized) return errorJson("Evaluation is too large", 413, "DISCOVERY_EVALUATION_TOO_LARGE");
-  const expectedStatus = normalized.hard_gate === "pass" && normalized.coverage.ratio >= 0.6 && normalized.execution_confidence >= 60 ? "evaluated" : normalized.hard_gate === "fail" ? "rejected" : "review";
+  const thresholdPassed = normalized.hard_gate === "pass"
+    && normalized.coverage.ratio >= 0.6
+    && normalized.execution_confidence >= 60;
+  const expectedStatus = thresholdPassed ? "evaluated" : normalized.hard_gate === "fail" ? "rejected" : "review";
   const authorized = await authorizeWork(request, env, context, body);
   if (authorized instanceof Response) {
     // A processor can finish the D1 update and lose the HTTP response before
@@ -380,14 +521,59 @@ async function saveEvaluation(request: Request, env: Env, context: SessionContex
     return authorized;
   }
   const match = authorized.match!;
-  if (normalized.coverage.total_modules < normalized.coverage.supported_modules || Math.abs(normalized.coverage.ratio - match.coverage_ratio) > 0.000001 || normalized.coverage.ratio < 0.6 && normalized.hard_gate === "pass") return errorJson("Evaluation coverage does not match the server candidate", 409, "DISCOVERY_EVALUATION_COVERAGE_MISMATCH");
+  const paperRow = await getPaperById(env, match.paper_id);
+  const collectionRow = await getCollectionById(env, match.collection_id);
+  let serverPaperProfile: PaperProfile | null = null;
+  let serverDatasetProfile: DatasetProfile | null = null;
+  try {
+    serverPaperProfile = paperRow?.status === "profiled" && paperRow.profile_json ? normalizePaperProfile(JSON.parse(paperRow.profile_json)) : null;
+    serverDatasetProfile = collectionRow?.status === "ready" && collectionRow.profile_json ? normalizeDatasetProfile(JSON.parse(collectionRow.profile_json), collectionRow.collection_id) : null;
+  } catch {
+    serverPaperProfile = null;
+    serverDatasetProfile = null;
+  }
+  if (!paperRow || !collectionRow || !serverPaperProfile || !serverDatasetProfile
+    || serverPaperProfile.profile_version !== match.paper_profile_version
+    || serverDatasetProfile.profile_version !== match.dataset_profile_version) {
+    return errorJson("Match inputs are not ready", 409, "DISCOVERY_MATCH_INPUT_NOT_READY");
+  }
+  const coarse = coarseMatch(serverPaperProfile, serverDatasetProfile);
+  const coverageMatches = normalized.coverage.supported_modules === coarse.supported_modules
+    && normalized.coverage.total_modules === coarse.total_modules
+    && Math.abs(normalized.coverage.ratio - coarse.coverage_ratio) <= 0.000001
+    && Math.abs(match.coverage_ratio - coarse.coverage_ratio) <= 0.000001;
+  if (!coverageMatches || (normalized.hard_gate === "pass" && coarse.missing_required.length > 0) || normalized.coverage.ratio < 0.6 && normalized.hard_gate === "pass") {
+    return errorJson("Evaluation coverage does not match the server candidate", 409, "DISCOVERY_EVALUATION_COVERAGE_MISMATCH");
+  }
   const status = expectedStatus;
-  if (!await putDiscoveryObject(env, "evaluation", { matchId: match.match_id }, new TextEncoder().encode(serialized), "application/json")) return errorJson("Evaluation storage is unavailable", 503, "DISCOVERY_STORAGE_UNAVAILABLE");
-  const saved = await saveMatchEvaluation(env, { matchId: match.match_id, hardGate: normalized.hard_gate, coverageRatio: normalized.coverage.ratio, executionConfidence: normalized.execution_confidence, scientificFit: normalized.scientific_fit, evaluatorVersion: FEASIBILITY_EVALUATOR_VERSION, evaluationJson: serialized, status, leaseOwner: context.session.processor_session_id, leaseTokenHash: authorized.leaseTokenHash, fencingEpoch: authorized.identity.fencingEpoch, now: context.now });
-  if (!saved) return errorJson("Evaluation lease is stale", 409, "DISCOVERY_PROCESSOR_LEASE_CONFLICT");
+  const objectInput = { matchId: match.match_id, leaseOwner: context.session.processor_session_id, fencingEpoch: authorized.identity.fencingEpoch };
+  const evaluationObjectKey = discoveryObjectKey("evaluation", objectInput);
+  if (!evaluationObjectKey) return errorJson("Evaluation storage key is invalid", 500, "DISCOVERY_STORAGE_UNAVAILABLE");
+  try {
+    if (!await putDiscoveryObject(env, "evaluation", objectInput, new TextEncoder().encode(serialized), "application/json")) return errorJson("Evaluation storage is unavailable", 503, "DISCOVERY_STORAGE_UNAVAILABLE");
+  } catch {
+    await deleteDiscoveryKeys(env, [evaluationObjectKey]);
+    return errorJson("Evaluation storage is unavailable", 503, "DISCOVERY_STORAGE_UNAVAILABLE");
+  }
+  let saved = false;
+  try {
+    saved = await saveMatchEvaluation(env, { matchId: match.match_id, hardGate: normalized.hard_gate, coverageRatio: normalized.coverage.ratio, executionConfidence: normalized.execution_confidence, scientificFit: normalized.scientific_fit, evaluatorVersion: FEASIBILITY_EVALUATOR_VERSION, evaluationJson: serialized, evaluationObjectKey, status, leaseOwner: context.session.processor_session_id, leaseTokenHash: authorized.leaseTokenHash, fencingEpoch: authorized.identity.fencingEpoch, now: context.now });
+  } catch {
+    await deleteDiscoveryKeys(env, [evaluationObjectKey]);
+    return errorJson("Evaluation could not be persisted", 503, "DISCOVERY_EVALUATION_PERSIST_RETRYABLE");
+  }
+  if (!saved) {
+    await deleteDiscoveryKeys(env, [evaluationObjectKey]);
+    return errorJson("Evaluation lease is stale", 409, "DISCOVERY_PROCESSOR_LEASE_CONFLICT");
+  }
+  await deleteDiscoveryKeys(env, [
+    match.evaluation_object_key && match.evaluation_object_key !== evaluationObjectKey
+      ? match.evaluation_object_key
+      : null,
+  ]);
   const autoExecute = String(env.DISCOVERY_AUTO_EXECUTE ?? "").trim().toLowerCase() === "true";
   let taskCreated: { taskId: string; duplicate: boolean } | null = null;
-  if (autoExecute && status === "evaluated") {
+  if (autoExecute && thresholdPassed) {
     try {
       const paper = await getPaperById(env, match.paper_id);
       const collection = await getCollectionById(env, match.collection_id);
@@ -409,7 +595,7 @@ async function saveEvaluation(request: Request, env: Env, context: SessionContex
       // the task without re-running the evaluator.
     }
   }
-  return json({ match_id: match.match_id, status, would_create_task: status === "evaluated", auto_execute_enabled: autoExecute, task_created: Boolean(taskCreated), ...(taskCreated ? { task_id: taskCreated.taskId, duplicate: taskCreated.duplicate } : { task_creation_retryable: status === "evaluated" && autoExecute }) });
+  return json({ match_id: match.match_id, status, would_create_task: thresholdPassed, auto_execute_enabled: autoExecute, task_created: Boolean(taskCreated), ...(taskCreated ? { task_id: taskCreated.taskId, duplicate: taskCreated.duplicate } : { task_creation_retryable: thresholdPassed && autoExecute }) });
 }
 
 async function fail(request: Request, env: Env, context: SessionContext, body: Record<string, unknown>): Promise<Response> {

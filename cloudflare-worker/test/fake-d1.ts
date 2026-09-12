@@ -15,6 +15,7 @@ import type {
 } from "../src/db";
 import type {
   DataCollectionRow,
+  LiteratureFailureRow,
   DiscoveryProcessorSessionRow,
   PaperCatalogRow,
   ResearchMatchRow,
@@ -302,7 +303,11 @@ export class FakeD1 {
     last_checked_at: number | null;
     created_at: number;
     updated_at: number;
+    lease_owner: string | null;
+    lease_expires_at: number | null;
   }>();
+  literatureWatchFailures = new Map<string, LiteratureFailureRow>();
+  literatureDailyQuota = new Map<string, { owner_user_id: string; day_start: number; limit_count: number; reserved_count: number; created_at: number; updated_at: number }>();
   discoveryProcessorSessions = new Map<string, DiscoveryProcessorSessionRow>();
   chatTaskConfirmations = new Map<string, ChatTaskConfirmationRow>();
   chatRequestIdempotency = new Map<string, ChatRequestIdempotencyRow>();
@@ -422,6 +427,7 @@ class FakeStatement {
       const [projectId, userId, name, createdAt] = this.args as [string, string, string, number];
       const existing = [...this.db.projects.values()].find((row) => row.user_id === userId);
       if (existing) {
+        if (sql.includes("DO NOTHING")) return null;
         existing.name = name;
         return existing as T;
       }
@@ -437,6 +443,11 @@ class FakeStatement {
       const [projectId, userId] = this.args as [string, string];
       const row = this.db.projects.get(projectId);
       return row && row.user_id === userId ? ({ ok: 1 } as T) : null;
+    }
+    if (sql.includes("FROM projects") && sql.includes("user_id = ?1")) {
+      const [userId] = this.args as [string];
+      const row = [...this.db.projects.values()].find((candidate) => candidate.user_id === userId);
+      return (row as T) ?? null;
     }
     if (sql.includes("FROM projects") && sql.includes("user_id = ?2")) {
       const [, userId] = this.args as [string, string];
@@ -486,6 +497,20 @@ class FakeStatement {
         .filter((candidate) => candidate.resource?.source_sha256 === sha256)
         .sort((left, right) => right.paper.updated_at - left.paper.updated_at)[0]?.paper;
       return row as T ?? null;
+    }
+    if (sql.includes("FROM data_collections c") && sql.includes("JOIN task_resources tr") && sql.includes("t.status IN ('queued', 'claimed', 'running')")) {
+      const [collectionId, userId] = this.args as [string, string];
+      const collection = this.db.dataCollections.get(collectionId);
+      if (!collection || collection.owner_user_id !== userId) return null;
+      const resourceIds = [...this.db.taskResources.values()]
+        .filter((resource) => resource.object_key === collection.source_object_key)
+        .map((resource) => resource.resource_id);
+      const snapshotIds = [...this.db.datasetSnapshots.values()]
+        .filter((snapshot) => resourceIds.includes(snapshot.resource_id))
+        .map((snapshot) => snapshot.dataset_snapshot_id);
+      const task = [...this.db.tasks.values()].find((candidate) => snapshotIds.includes(candidate.dataset_snapshot_id ?? "")
+        && ["queued", "claimed", "running"].includes(candidate.status));
+      return task ? ({ task_id: task.task_id } as T) : null;
     }
     if (sql.includes("FROM data_collections") && sql.includes("collection_id = ?1") && sql.includes("owner_user_id = ?2")) {
       const [collectionId, userId] = this.args as [string, string];
@@ -544,6 +569,38 @@ class FakeStatement {
         .sort((left, right) => left.created_at - right.created_at || left.match_id.localeCompare(right.match_id))[0];
       return (row as T) ?? null;
     }
+    if (sql.includes("INSERT INTO literature_watch_state") && sql.includes("RETURNING source")) {
+      const [source, query, now, owner, expiresAt] = this.args as [string, string, number, string, number];
+      const key = `${source}|${query}`;
+      const existing = this.db.literatureWatchState.get(key);
+      if (existing && existing.lease_owner && existing.lease_expires_at != null && existing.lease_expires_at > now) return null;
+      if (existing) {
+        existing.lease_owner = owner;
+        existing.lease_expires_at = expiresAt;
+        existing.updated_at = now;
+        return existing as T;
+      }
+      const row = { source, query, last_cursor: null, last_checked_at: null, created_at: now, updated_at: now, lease_owner: owner, lease_expires_at: expiresAt };
+      this.db.literatureWatchState.set(key, row);
+      return row as T;
+    }
+    if (sql.includes("INSERT INTO literature_watch_failures") && sql.includes("RETURNING failure_id")) {
+      const [failureId, source, query, sourceRef, recordJson, nextRetryAt, maxAttempts, error, now] = this.args as [string, string, string, string, string, number, number, string, number];
+      const key = `${source}|${query}|${sourceRef}`;
+      const existing = this.db.literatureWatchFailures.get(key);
+      if (existing) {
+        existing.record_json = recordJson;
+        existing.attempts += 1;
+        existing.next_retry_at = nextRetryAt;
+        existing.status = existing.attempts >= maxAttempts ? "dead" : "pending";
+        existing.last_error = error;
+        existing.updated_at = now;
+        return existing as T;
+      }
+      const row: LiteratureFailureRow = { failure_id: failureId, source, query, source_ref: sourceRef, record_json: recordJson, attempts: 1, next_retry_at: nextRetryAt, status: 1 >= maxAttempts ? "dead" : "pending", last_error: error, created_at: now, updated_at: now };
+      this.db.literatureWatchFailures.set(key, row);
+      return row as T;
+    }
     if (sql.includes("FROM literature_watch_state") && sql.includes("source = ?1") && sql.includes("query = ?2")) {
       const [source, query] = this.args as [string, string];
       return (this.db.literatureWatchState.get(`${source}|${query}`) as T) ?? null;
@@ -595,6 +652,11 @@ class FakeStatement {
       const [sessionId, tokenHash, now] = this.args as [string, string, number];
       const row = this.db.paperProcessorSessions.get(sessionId);
       return row && row.session_token_hash === tokenHash && row.revoked_at == null && row.expires_at > now ? (row as T) : null;
+    }
+    if (sql.includes("FROM paper_processor_objects") && sql.includes("resource_id = ?1") && sql.includes("kind = ?2") && sql.includes("object_id = ?3")) {
+      const [resourceId, kind, objectId] = this.args as [string, PaperProcessorObjectRow["kind"], string];
+      const row = this.db.paperProcessorObjects.get(`${resourceId}|${kind}|${objectId}`);
+      return (row as T) ?? null;
     }
     if (sql.includes("SELECT r.resource_id, r.source_kind") && sql.includes("r.status = 'requested'")) {
       const rows = [...this.db.paperResources.values()]
@@ -824,6 +886,14 @@ class FakeStatement {
 
   async all<T>(): Promise<{ results: T[] }> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("FROM literature_watch_failures") && sql.includes("status = 'pending'")) {
+      const [source, query, now, limit] = this.args as [string, string, number, number];
+      const rows = [...this.db.literatureWatchFailures.values()]
+        .filter((row) => row.source === source && row.query === query && row.status === "pending" && row.next_retry_at <= now)
+        .sort((left, right) => left.next_retry_at - right.next_retry_at || left.failure_id.localeCompare(right.failure_id))
+        .slice(0, Number(limit));
+      return { results: rows as T[] };
+    }
     if (sql.includes("FROM tasks WHERE created_by = ?1")) {
       const [userId, limit] = this.args as [string, number];
       const rows = [...this.db.tasks.values()]
@@ -969,6 +1039,40 @@ class FakeStatement {
 
   async run(): Promise<{ meta: { changes: number } }> {
     const sql = this.sql.replace(/\s+/g, " ");
+    if (sql.includes("INSERT INTO literature_watch_daily_quota")) {
+      const [ownerUserId, dayStart, limit, initialCount, now] = this.args as [string, number, number, number, number];
+      const key = `${ownerUserId}|${dayStart}`;
+      const existing = this.db.literatureDailyQuota.get(key);
+      if (existing) {
+        existing.limit_count = limit;
+        existing.updated_at = now;
+      } else {
+        this.db.literatureDailyQuota.set(key, { owner_user_id: ownerUserId, day_start: dayStart, limit_count: limit, reserved_count: Math.max(0, initialCount), created_at: now, updated_at: now });
+      }
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE literature_watch_daily_quota SET reserved_count = reserved_count + 1")) {
+      const [ownerUserId, dayStart, now] = this.args as [string, number, number];
+      const row = this.db.literatureDailyQuota.get(`${ownerUserId}|${dayStart}`);
+      if (!row || row.reserved_count >= row.limit_count) return { meta: { changes: 0 } };
+      row.reserved_count += 1;
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE literature_watch_daily_quota SET reserved_count = MAX")) {
+      const [ownerUserId, dayStart, now] = this.args as [string, number, number];
+      const row = this.db.literatureDailyQuota.get(`${ownerUserId}|${dayStart}`);
+      if (!row || row.reserved_count <= 0) return { meta: { changes: 0 } };
+      row.reserved_count -= 1;
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("DELETE FROM literature_watch_failures")) {
+      const [source, query, sourceRef] = this.args as [string, string, string];
+      const key = `${source}|${query}|${sourceRef}`;
+      const existed = this.db.literatureWatchFailures.delete(key);
+      return { meta: { changes: existed ? 1 : 0 } };
+    }
     if (sql.includes("UPDATE paper_catalog SET status = 'processing'")) {
       const [paperId, now, owner, expiresAt, tokenHash] = this.args as [string, number, string, number, string | null];
       const row = this.db.paperCatalog.get(paperId);
@@ -1005,12 +1109,32 @@ class FakeStatement {
       row.discovery_fencing_epoch = (row.discovery_fencing_epoch ?? 0) + 1;
       return { meta: { changes: 1 } };
     }
+    if (sql.includes("UPDATE literature_watch_state SET last_cursor")) {
+      const [source, query, cursor, now, owner] = this.args as [string, string, string | null, number, string];
+      const row = this.db.literatureWatchState.get(`${source}|${query}`);
+      if (!row || row.lease_owner !== owner || (row.lease_expires_at ?? 0) <= now) return { meta: { changes: 0 } };
+      row.last_cursor = cursor;
+      row.last_checked_at = now;
+      row.updated_at = now;
+      row.lease_owner = null;
+      row.lease_expires_at = null;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE literature_watch_state SET lease_owner = NULL")) {
+      const [source, query, now, owner] = this.args as [string, string, number, string];
+      const row = this.db.literatureWatchState.get(`${source}|${query}`);
+      if (!row || row.lease_owner !== owner || (row.lease_expires_at != null && row.lease_expires_at <= now)) return { meta: { changes: 0 } };
+      row.lease_owner = null;
+      row.lease_expires_at = null;
+      row.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
     if (sql.includes("UPDATE paper_catalog SET status = 'profiled'")) {
-      const [paperId, spamStatus, profileVersion, profileJson, profileSha256, overviewKey, title, authorsJson, year, venue, now, owner, fencingEpoch, tokenHash] = this.args as [string, PaperCatalogRow["spam_status"], string, string, string, string, string, string, number | null, string | null, number, string | null, number | null, string | null];
+      const [paperId, spamStatus, profileVersion, profileJson, profileSha256, profileObjectKey, overviewKey, title, authorsJson, year, venue, now, owner, fencingEpoch, tokenHash] = this.args as [string, PaperCatalogRow["spam_status"], string, string, string, string, string, string, string, number | null, string | null, number, string | null, number | null, string | null];
       const row = this.db.paperCatalog.get(paperId);
       const leaseOkay = owner == null || (row?.discovery_lease_owner === owner && row.discovery_fencing_epoch === fencingEpoch && row.discovery_lease_token_hash === tokenHash && (row.discovery_lease_expires_at ?? 0) > now);
       if (!row || row.status !== "processing" || !leaseOkay) return { meta: { changes: 0 } };
-      Object.assign(row, { status: "profiled", spam_status: spamStatus, profile_version: profileVersion, profile_json: profileJson, profile_sha256: profileSha256, overview_object_key: overviewKey, title, authors_json: authorsJson, year, venue, updated_at: now, discovery_lease_owner: null, discovery_lease_expires_at: null, discovery_lease_token_hash: null });
+      Object.assign(row, { status: "profiled", spam_status: spamStatus, profile_version: profileVersion, profile_json: profileJson, profile_sha256: profileSha256, profile_object_key: profileObjectKey, overview_object_key: overviewKey, title, authors_json: authorsJson, year, venue, updated_at: now, discovery_lease_owner: null, discovery_lease_expires_at: null, discovery_lease_token_hash: null });
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE paper_catalog SET status = 'failed'")) {
@@ -1027,11 +1151,11 @@ class FakeStatement {
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE data_collections SET status = 'ready'")) {
-      const [collectionId, profileVersion, profileJson, profileSha256, now, owner, fencingEpoch, tokenHash] = this.args as [string, string, string, string, number, string | null, number | null, string | null];
+      const [collectionId, profileVersion, profileJson, profileObjectKey, profileSha256, now, owner, fencingEpoch, tokenHash] = this.args as [string, string, string, string, string, number, string | null, number | null, string | null];
       const row = this.db.dataCollections.get(collectionId);
       const leaseOkay = owner == null || (row?.discovery_lease_owner === owner && row.discovery_fencing_epoch === fencingEpoch && row.discovery_lease_token_hash === tokenHash && (row.discovery_lease_expires_at ?? 0) > now);
       if (!row || row.status !== "inspecting" || !leaseOkay) return { meta: { changes: 0 } };
-      Object.assign(row, { status: "ready", profile_version: profileVersion, profile_json: profileJson, profile_sha256: profileSha256, error_code: null, error_message_safe: null, updated_at: now, discovery_lease_owner: null, discovery_lease_expires_at: null, discovery_lease_token_hash: null });
+      Object.assign(row, { status: "ready", profile_version: profileVersion, profile_json: profileJson, profile_object_key: profileObjectKey, profile_sha256: profileSha256, error_code: null, error_message_safe: null, updated_at: now, discovery_lease_owner: null, discovery_lease_expires_at: null, discovery_lease_token_hash: null });
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE data_collections SET status = 'failed'")) {
@@ -1043,11 +1167,11 @@ class FakeStatement {
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE research_matches SET status = ?2, hard_gate = ?3")) {
-      const [matchId, status, hardGate, coverage, confidence, scientificFit, evaluatorVersion, evaluationJson, now, owner, fencingEpoch, tokenHash] = this.args as [string, ResearchMatchRow["status"], ResearchMatchRow["hard_gate"], number, number, number, string, string, number, string | null, number | null, string | null];
+      const [matchId, status, hardGate, coverage, confidence, scientificFit, evaluatorVersion, evaluationJson, evaluationObjectKey, now, owner, fencingEpoch, tokenHash] = this.args as [string, ResearchMatchRow["status"], ResearchMatchRow["hard_gate"], number, number, number, string, string, string, number, string | null, number | null, string | null];
       const row = this.db.researchMatches.get(matchId);
       const leaseOkay = owner == null || (row?.discovery_lease_owner === owner && row.discovery_fencing_epoch === fencingEpoch && row.discovery_lease_token_hash === tokenHash && (row.discovery_lease_expires_at ?? 0) > now);
       if (!row || !["evaluating", "candidate"].includes(row.status) || !leaseOkay) return { meta: { changes: 0 } };
-      Object.assign(row, { status, hard_gate: hardGate, coverage_ratio: coverage, execution_confidence: confidence, scientific_fit: scientificFit, evaluator_version: evaluatorVersion, evaluation_json: evaluationJson, updated_at: now, discovery_lease_owner: null, discovery_lease_expires_at: null, discovery_lease_token_hash: null });
+      Object.assign(row, { status, hard_gate: hardGate, coverage_ratio: coverage, execution_confidence: confidence, scientific_fit: scientificFit, evaluator_version: evaluatorVersion, evaluation_json: evaluationJson, evaluation_object_key: evaluationObjectKey, updated_at: now, discovery_lease_owner: null, discovery_lease_expires_at: null, discovery_lease_token_hash: null });
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE research_matches SET created_task_id = ?2")) {
@@ -1098,6 +1222,7 @@ class FakeStatement {
       const [projectId, userId, name, createdAt] = this.args as [string, string, string, number];
       const existing = [...this.db.projects.values()].find((row) => row.user_id === userId);
       if (existing) {
+        if (sql.includes("DO NOTHING")) return { meta: { changes: 0 } };
         existing.name = name;
         return { meta: { changes: 1 } };
       }
@@ -1118,8 +1243,8 @@ class FakeStatement {
     }
     if (sql.includes("INSERT INTO task_specs") || sql.includes("INSERT OR IGNORE INTO task_specs")) {
       if (sql.includes("'discovery'")) {
-        const [specId, projectId, userId, title, goal, _goalAgain, now] = this.args as [string, string, string, string, string, string, number];
-        if (!this.db.taskSpecs.has(specId)) this.db.taskSpecs.set(specId, { task_spec_id: specId, project_id: projectId, user_id: userId, title, analysis_type: "discovery", research_question: goal, goal, prompt_template_version: "goal-driven-executor-v1", revision: 1, status: "active", created_at: now, updated_at: now, frozen_at: now });
+        const [specId, projectId, userId, title, question, goal, now] = this.args as [string, string, string, string, string, string, number];
+        if (!this.db.taskSpecs.has(specId)) this.db.taskSpecs.set(specId, { task_spec_id: specId, project_id: projectId, user_id: userId, title, analysis_type: "discovery", research_question: question, goal, prompt_template_version: "goal-driven-executor-v1", revision: 1, status: "active", created_at: now, updated_at: now, frozen_at: now });
         return { meta: { changes: 1 } };
       }
       const [specId, projectId, userId, title, analysisType, question, goal, template, now] = this.args as [string, string, string, string, string, string, string, string, number];
@@ -1182,7 +1307,7 @@ class FakeStatement {
       const key = `${source}|${query}`;
       const existing = this.db.literatureWatchState.get(key);
       if (existing) { existing.last_cursor = cursor; existing.last_checked_at = checkedAt; existing.updated_at = checkedAt; }
-      else this.db.literatureWatchState.set(key, { source, query, last_cursor: cursor, last_checked_at: checkedAt, created_at: checkedAt, updated_at: checkedAt });
+      else this.db.literatureWatchState.set(key, { source, query, last_cursor: cursor, last_checked_at: checkedAt, created_at: checkedAt, updated_at: checkedAt, lease_owner: null, lease_expires_at: null });
       return { meta: { changes: 1 } };
     }
     if (sql.includes("INSERT INTO chat_sessions")) {
@@ -1217,6 +1342,12 @@ class FakeStatement {
       const [collectionId, userId, now] = this.args as [string, string, number];
       const row = this.db.dataCollections.get(collectionId);
       if (!row || row.owner_user_id !== userId || row.status === "deleted") return { meta: { changes: 0 } };
+      if (sql.includes("NOT EXISTS") && [...this.db.taskResources.values()]
+        .filter((resource) => resource.object_key === row.source_object_key)
+        .some((resource) => [...this.db.datasetSnapshots.values()]
+          .filter((snapshot) => snapshot.resource_id === resource.resource_id)
+          .some((snapshot) => [...this.db.tasks.values()].some((task) => task.dataset_snapshot_id === snapshot.dataset_snapshot_id
+            && ["queued", "claimed", "running"].includes(task.status))))) return { meta: { changes: 0 } };
       row.status = "deleted";
       row.updated_at = now;
       row.discovery_lease_owner = null;
@@ -1617,16 +1748,16 @@ class FakeStatement {
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE paper_resources SET") && sql.includes("paper_processing_attempts a") && (sql.includes("status = 'uploading'") || sql.includes("pdf_object_key"))) {
-      const [resourceId, attemptId, processorId, tokenHash, fencingEpoch, sizeBytes, sha256, now] = this.args as [string, string, string, string, number, number, string, number];
+      const [resourceId, attemptId, processorId, tokenHash, fencingEpoch, objectKey, sizeBytes, sha256, now] = this.args as [string, string, string, string, number, string, number, string, number];
       const resource = this.db.paperResources.get(resourceId);
       const attempt = this.db.paperProcessingAttempts.get(attemptId);
       const sourcePdf = sql.includes("pdf_object_key");
       const expectedResourceStatus = sourcePdf ? "downloading" : "uploading";
       const allowedAttemptStatuses = sourcePdf ? ["claimed", "downloading"] : ["uploading"];
       if (!resource || !attempt || resource.status !== expectedResourceStatus || attempt.resource_id !== resourceId || attempt.processor_id !== processorId || attempt.lease_token_hash !== tokenHash || attempt.fencing_epoch !== fencingEpoch || !allowedAttemptStatuses.includes(attempt.status) || attempt.lease_expires_at <= now) return { meta: { changes: 0 } };
-      if (sql.includes("pdf_object_key")) { resource.pdf_object_key = `paper/${resourceId}/source.pdf`; resource.pdf_size_bytes = sizeBytes; resource.pdf_sha256 = sha256; resource.source_sha256 = sha256; }
-      else if (sql.includes("text_manifest_key")) resource.text_manifest_key = `paper/${resourceId}/text/manifest.json`;
-      else resource.image_manifest_key = `paper/${resourceId}/images/manifest.json`;
+      if (sql.includes("pdf_object_key")) { resource.pdf_object_key = objectKey; resource.pdf_size_bytes = sizeBytes; resource.pdf_sha256 = sha256; resource.source_sha256 = sha256; }
+      else if (sql.includes("text_manifest_key")) resource.text_manifest_key = objectKey;
+      else resource.image_manifest_key = objectKey;
       resource.updated_at = now;
       return { meta: { changes: 1 } };
     }
@@ -1660,14 +1791,14 @@ class FakeStatement {
       return { meta: { changes: 1 } };
     }
     if (sql.includes("INSERT INTO paper_processor_objects")) {
-      const [resourceId, attemptId, kind, objectId, sizeBytes, sha256, contentType, createdAt, processorId, tokenHash, fencingEpoch] = this.args as [string, string, PaperProcessorObjectRow["kind"], string, number, string, string, number, string, string, number];
+      const [resourceId, attemptId, kind, objectId, objectKey, sizeBytes, sha256, contentType, createdAt, processorId, tokenHash, fencingEpoch] = this.args as [string, string, PaperProcessorObjectRow["kind"], string, string, number, string, string, number, string, string, number];
       const resource = this.db.paperResources.get(resourceId);
       const attempt = this.db.paperProcessingAttempts.get(attemptId);
       if (!resource || resource.status !== "uploading" || !attempt || attempt.resource_id !== resourceId || attempt.processor_id !== processorId || attempt.lease_token_hash !== tokenHash || attempt.fencing_epoch !== fencingEpoch || attempt.status !== "uploading" || attempt.lease_expires_at <= createdAt) return { meta: { changes: 0 } };
       const key = `${resourceId}|${kind}|${objectId}`;
       const existing = this.db.paperProcessorObjects.get(key);
       if (existing && (existing.size_bytes !== sizeBytes || existing.sha256 !== sha256)) return { meta: { changes: 0 } };
-      this.db.paperProcessorObjects.set(key, { resource_id: resourceId, attempt_id: attemptId, kind, object_id: objectId, size_bytes: sizeBytes, sha256, content_type: contentType, created_at: existing?.created_at ?? createdAt });
+      this.db.paperProcessorObjects.set(key, { resource_id: resourceId, attempt_id: attemptId, kind, object_id: objectId, object_key: objectKey, size_bytes: sizeBytes, sha256, content_type: contentType, created_at: existing?.created_at ?? createdAt });
       return { meta: { changes: 1 } };
     }
     if (sql.includes("INSERT INTO paper_resources")) {

@@ -4,6 +4,7 @@ import {
   normalizeDatasetProfile,
   normalizeFeasibilityEvaluation,
   normalizePaperProfile,
+  paperEvidenceStatus,
   passesAutomaticThreshold,
 } from "../src/discovery-contracts";
 
@@ -40,9 +41,44 @@ describe("Discovery contracts", () => {
   it("rejects malformed provenance, invalid keys, and mismatched collection ids", () => {
     expect(normalizePaperProfile({ ...profile, profile_version: "paper-profile-v2" })).toBeNull();
     expect(normalizePaperProfile({ ...profile, provenance: { ...profile.provenance, source_resource_id: "" } })).toBeNull();
+    expect(normalizePaperProfile({
+      ...profile,
+      analysis_modules: [{ ...profile.analysis_modules[0], analysis_id: "analysis-02" }, profile.analysis_modules[1]],
+    })).toBeNull();
     expect(normalizeDatasetProfile({ ...dataset, capabilities: { "../secret": true } }, "collection-1")).toBeNull();
     expect(normalizeDatasetProfile({ ...dataset, domain_hint: 42 }, "collection-1")).toBeNull();
     expect(normalizeDatasetProfile(dataset, "other-collection")).toBeNull();
+  });
+
+  it("rejects malformed samples, preserves data-type keys safely, and bounds capabilities", () => {
+    const file = {
+      path: "data.csv", format: "csv", size_bytes: 1, sha256: "a".repeat(64), rows: 1, columns: 1,
+      column_names: ["x"], data_types: JSON.parse('{"__proto__":"numeric","x":"numeric"}'),
+      missing_ratio: 0, sample: [{ x: 1 }, null],
+    };
+    expect(normalizeDatasetProfile({ ...dataset, files: [file] }, "collection-1")).toBeNull();
+
+    const normalized = normalizeDatasetProfile({ ...dataset, files: [{ ...file, sample: [{ x: 1 }] }] }, "collection-1");
+    expect(normalized).not.toBeNull();
+    expect(Object.getPrototypeOf(normalized!.files[0].data_types)).toBeNull();
+    expect(normalized!.files[0].data_types).toHaveProperty("__proto__", "numeric");
+
+    const tooManyCapabilities = Object.fromEntries(Array.from({ length: 513 }, (_, index) => [`capability-${index}`, true]));
+    expect(normalizeDatasetProfile({ ...dataset, capabilities: tooManyCapabilities }, "collection-1")).toBeNull();
+  });
+
+  it("requires located evidence before a paper can enter the matching catalog", () => {
+    const paper = normalizePaperProfile(profile)!;
+    expect(paperEvidenceStatus(paper)).toBe("review");
+    const verified = normalizePaperProfile({
+      ...profile,
+      evidence: [{ page: 1, section: "Abstract", locator_status: "verified" }],
+      analysis_modules: profile.analysis_modules.map((module) => ({
+        ...module,
+        evidence: [{ page: 2, section: "Methods", locator_status: "verified" }],
+      })),
+    });
+    expect(verified && paperEvidenceStatus(verified)).toBe("scientific_paper");
   });
 
   it("validates evaluator output and enforces the exact threshold", () => {

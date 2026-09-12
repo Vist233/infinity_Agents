@@ -633,7 +633,7 @@ async def _run_claude_execution(
         task_spec_id=task_spec.get("task_spec_id", ""),
         dataset_snapshot_id=dataset.get("dataset_snapshot_id", "") if dataset else "",
         title=task_spec.get("title", ""),
-        goal=task_spec.get("research_question") or task_spec.get("goal") or "",
+        goal=task_spec.get("goal") or "",
         analysis_type=task_spec.get("analysis_type", "generic"),
         case_dir=str(input_dir),
         output_dir=output_dir,

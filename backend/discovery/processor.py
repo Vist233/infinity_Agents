@@ -10,6 +10,8 @@ import hashlib
 import json
 import logging
 import os
+import re
+import shutil
 import tempfile
 import threading
 import time
@@ -26,6 +28,32 @@ from .paper_profile import PaperProfileError, compile_paper_profile, render_over
 LOGGER = logging.getLogger("infinity.discovery_processor")
 MAX_PAPER_BYTES = 64 * 1024 * 1024
 MAX_DATASET_BYTES = 25 * 1024 * 1024
+
+
+def _stale_workdir_seconds() -> float:
+    try:
+        return max(3_600.0, min(float(os.environ.get("DISCOVERY_PROCESSOR_STALE_WORKDIR_SECONDS", str(24 * 60 * 60))), 7 * 24 * 60 * 60))
+    except ValueError:
+        return float(24 * 60 * 60)
+
+
+def cleanup_stale_workdirs(work_root: Path, *, now: float | None = None) -> int:
+    """Remove only abandoned per-inspection directories from the owned root."""
+    if not work_root.exists():
+        return 0
+    current = now if now is not None else time.time()
+    removed = 0
+    for child in work_root.iterdir():
+        if not child.is_dir() or child.is_symlink():
+            continue
+        try:
+            if current - child.stat().st_mtime <= _stale_workdir_seconds():
+                continue
+            shutil.rmtree(child)
+            removed += 1
+        except OSError:
+            LOGGER.warning("discovery_processor event=stale_workdir_cleanup_failed path=%s", child.name)
+    return removed
 
 
 def _parse_text_pages(body: bytes) -> list[str]:
@@ -97,7 +125,17 @@ def process_one(client: DiscoveryProcessorClient, *, work_root: Path, model: Any
             source_filename = metadata.get("source_filename") if isinstance(metadata, dict) else None
             if not isinstance(source_filename, str) or not source_filename.strip():
                 raise DatasetInspectionError("DATASET_FILENAME_MISSING", "Dataset source filename is missing")
-            body = client.input_source(grant, MAX_DATASET_BYTES)
+            expected_size = metadata.get("source_size_bytes") if isinstance(metadata, dict) else None
+            expected_sha256 = metadata.get("source_sha256") if isinstance(metadata, dict) else None
+            if (
+                not isinstance(expected_size, int)
+                or isinstance(expected_size, bool)
+                or expected_size <= 0
+                or expected_size > MAX_DATASET_BYTES
+                or not isinstance(expected_sha256, str)
+                or re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256) is None
+            ):
+                raise DatasetInspectionError("DATASET_SOURCE_METADATA_INVALID", "Dataset source integrity metadata is invalid")
             work_root.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix="discovery-inspect-", dir=work_root) as temporary:
                 # The inspector intentionally uses the filename suffix to
@@ -108,7 +146,9 @@ def process_one(client: DiscoveryProcessorClient, *, work_root: Path, model: Any
                 if not safe_name or safe_name in {".", ".."}:
                     raise DatasetInspectionError("DATASET_FILENAME_INVALID", "Dataset source filename is invalid")
                 source = Path(temporary) / safe_name
-                source.write_bytes(body)
+                actual_size, actual_sha256 = client.input_source_to_file(grant, source, MAX_DATASET_BYTES)
+                if actual_size != expected_size or actual_sha256.lower() != expected_sha256.lower():
+                    raise DatasetInspectionError("DATASET_SOURCE_CHECKSUM_MISMATCH", "Dataset source does not match its frozen Edge metadata")
                 profile = inspect_path(source, grant.work_id)
             client.save_dataset_profile(grant, profile)
             LOGGER.info("discovery_processor event=dataset_profiled")
@@ -143,9 +183,15 @@ def main() -> None:
     client = from_environment()
     client.connect()
     work_root = Path(os.environ.get("DISCOVERY_PROCESSOR_WORK_ROOT", "/tmp/discovery-processor-work"))
+    work_root.mkdir(parents=True, exist_ok=True)
+    cleanup_stale_workdirs(work_root)
     model = _model_from_environment()
+    last_cleanup = time.monotonic()
     while True:
         try:
+            if time.monotonic() - last_cleanup >= 300:
+                cleanup_stale_workdirs(work_root)
+                last_cleanup = time.monotonic()
             processed = process_one(client, work_root=work_root, model=model)
         except Exception:
             try:

@@ -20,7 +20,7 @@ import { handlePaperResourceApi } from "./paper-resources";
 import { handlePaperProcessorApi } from "./paper-processor";
 import { runPaperResourceCleanup } from "./paper-cleanup";
 import { handleDiscoveryApi } from "./discovery";
-import { handleDiscoveryProcessorApi } from "./discovery-processor";
+import { handleDiscoveryProcessorApi, reconcileDiscoveryCandidates } from "./discovery-processor";
 import { retryDiscoveryTaskCreation } from "./discovery-task";
 import { runLiteratureDiscovery } from "./literature-watch";
 
@@ -231,6 +231,7 @@ export default {
     await recoverExpiredLeases(env);
     await flushD1Outbox(env);
     await runPaperResourceCleanup(env);
+    await reconcileDiscoveryCandidates(env);
     if (String(env.DISCOVERY_AUTO_EXECUTE ?? "").trim().toLowerCase() === "true") {
       await retryDiscoveryTaskCreation(env);
     }

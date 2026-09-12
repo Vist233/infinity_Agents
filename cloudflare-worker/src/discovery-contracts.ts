@@ -186,8 +186,7 @@ function analysisModule(value: unknown, index: number): AnalysisModule | null {
   const verification = stringArray(value.verification, 64, 512);
   const evidence = evidenceArray(value.evidence);
   if (!analysisId || !name || goal === null || !required || !optional || !operations || !expected || !verification || !evidence) return null;
-  const expectedId = `analysis-${String(index + 1).padStart(2, "0")}`;
-  if (analysisId !== expectedId && !/^analysis-[A-Za-z0-9][A-Za-z0-9._:-]{0,120}$/.test(analysisId)) return null;
+  if ((index === 0 && analysisId !== "analysis-01") || (index > 0 && !/^analysis-[A-Za-z0-9][A-Za-z0-9._:-]{0,120}$/.test(analysisId))) return null;
   return { analysis_id: analysisId, name, goal, required_capabilities: required, optional_capabilities: optional, operations, expected_outputs: expected, verification, evidence };
 }
 
@@ -242,6 +241,19 @@ export function normalizePaperProfile(value: unknown): PaperProfile | null {
   };
 }
 
+/**
+ * Apply the Edge-side evidence gate before a profile can enter the catalog.
+ * The isolated processor is trusted to perform work, but its model output is
+ * still data; a schema-valid profile with only unlocated claims is review
+ * material, not a scientific paper eligible for matching.
+ */
+export function paperEvidenceStatus(profile: PaperProfile): "scientific_paper" | "review" {
+  const verified = (item: PaperEvidence): boolean => item.locator_status === "verified" && (item.page !== null || item.section !== null);
+  if (!profile.evidence.some(verified)) return "review";
+  if (profile.analysis_modules.some((module) => !module.evidence.some(verified))) return "review";
+  return "scientific_paper";
+}
+
 function datasetFile(value: unknown): DatasetFileProfile | null {
   if (!isRecord(value)) return null;
   const path = stringValue(value.path, 512);
@@ -253,14 +265,14 @@ function datasetFile(value: unknown): DatasetFileProfile | null {
   const columns = value.columns === null || value.columns === undefined ? null : typeof value.columns === "number" && Number.isSafeInteger(value.columns) && value.columns >= 0 ? value.columns : null;
   const names = stringArray(value.column_names, 10_000, 512);
   const dataTypesValue = value.data_types;
-  const dataTypes: DatasetFileProfile["data_types"] = {};
+  const dataTypes: DatasetFileProfile["data_types"] = Object.create(null) as DatasetFileProfile["data_types"];
   if (!isRecord(dataTypesValue) || Object.keys(dataTypesValue).length > 10_000) return null;
   for (const [key, dataType] of Object.entries(dataTypesValue)) {
     if (key.length > 512 || !(dataType === "numeric" || dataType === "categorical" || dataType === "text" || dataType === "boolean" || dataType === "unknown")) return null;
-    dataTypes[key] = dataType;
+    Object.defineProperty(dataTypes, key, { value: dataType, enumerable: true, configurable: true, writable: true });
   }
   const missing = value.missing_ratio === null || value.missing_ratio === undefined ? null : typeof value.missing_ratio === "number" && Number.isFinite(value.missing_ratio) && value.missing_ratio >= 0 && value.missing_ratio <= 1 ? value.missing_ratio : null;
-  const sample = Array.isArray(value.sample) && value.sample.length <= 100 ? value.sample.filter(isRecord).slice(0, 100) : null;
+  const sample = Array.isArray(value.sample) && value.sample.length <= 100 && value.sample.every(isRecord) ? value.sample : null;
   if (!path || !allowedFormats.has(String(format)) || typeof size !== "number" || !Number.isSafeInteger(size) || size < 0 || !sha || !/^[0-9a-f]{64}$/i.test(sha) || (value.rows !== null && value.rows !== undefined && rows === null) || (value.columns !== null && value.columns !== undefined && columns === null) || !names || !sample || (value.missing_ratio !== null && value.missing_ratio !== undefined && missing === null)) return null;
   return { path, format: format as DatasetFileProfile["format"], size_bytes: size, sha256: sha.toLowerCase(), rows, columns, column_names: names, data_types: dataTypes, missing_ratio: missing, sample };
 }
@@ -279,7 +291,7 @@ export function normalizeDatasetProfile(value: unknown, expectedCollectionId?: s
   const capabilitiesValue = isRecord(value.capabilities) ? value.capabilities : null;
   const capabilities: Record<string, unknown> | null = capabilitiesValue && Object.keys(capabilitiesValue).length <= 512
     && Object.keys(capabilitiesValue).every((key) => CAPABILITY_KEY_PATTERN.test(key))
-    ? Object.fromEntries(Object.entries(capabilitiesValue).slice(0, 512))
+    ? Object.fromEntries(Object.entries(capabilitiesValue))
     : null;
   const semantic = isRecord(value.semantic_fields) ? value.semantic_fields : null;
   const target = semantic?.target === null || semantic?.target === undefined ? null : stringValue(semantic.target, 512);

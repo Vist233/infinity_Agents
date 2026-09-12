@@ -1,6 +1,7 @@
 import type { Env } from "./env";
 import { nowSeconds } from "./http";
 import { decryptAuthToken, encryptAuthToken, isEncryptedAuthToken } from "./auth-token-crypto";
+import { paperObjectKey } from "./paper-object-store";
 
 export interface AuthSessionRow {
   sid: string;
@@ -182,6 +183,7 @@ export interface PaperProcessorObjectRow {
   attempt_id: string;
   kind: "text_pages" | "image";
   object_id: string;
+  object_key?: string | null;
   size_bytes: number;
   sha256: string;
   content_type: string;
@@ -1616,40 +1618,56 @@ export async function recordPaperProcessorObject(
 ): Promise<boolean> {
   if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 0 || !/^[0-9a-f]{64}$/.test(input.sha256)) return false;
   if ((input.kind === "text_pages" || input.kind === "image") && (!input.objectId || (input.kind === "image" && !/^page-\d{4}-image-\d{4}$/.test(input.objectId)) || (input.kind === "text_pages" && input.objectId !== "pages"))) return false;
+  const objectKey = paperObjectKey(input.resourceId, input.kind, input.objectId, { attemptId: input.attemptId, fencingEpoch: input.fencingEpoch });
+  if (!objectKey) return false;
   if (input.kind === "text_pages" || input.kind === "image") {
     const result = await env.DB.prepare(
       `INSERT INTO paper_processor_objects
-         (resource_id, attempt_id, kind, object_id, size_bytes, sha256, content_type, created_at)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+         (resource_id, attempt_id, kind, object_id, object_key, size_bytes, sha256, content_type, created_at)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
         WHERE EXISTS (SELECT 1 FROM paper_processing_attempts a
-          WHERE a.attempt_id = ?2 AND a.resource_id = ?1 AND a.processor_id = ?9
-            AND a.lease_token_hash = ?10 AND a.fencing_epoch = ?11
-            AND a.status = 'uploading' AND a.lease_expires_at > ?8)
+          WHERE a.attempt_id = ?2 AND a.resource_id = ?1 AND a.processor_id = ?10
+            AND a.lease_token_hash = ?11 AND a.fencing_epoch = ?12
+            AND a.status = 'uploading' AND a.lease_expires_at > ?9)
           AND EXISTS (SELECT 1 FROM paper_resources r WHERE r.resource_id = ?1 AND r.status = 'uploading')
        ON CONFLICT(resource_id, kind, object_id) DO UPDATE SET
+         attempt_id = excluded.attempt_id, object_key = excluded.object_key,
          size_bytes = excluded.size_bytes, sha256 = excluded.sha256,
          content_type = excluded.content_type
         WHERE paper_processor_objects.size_bytes = excluded.size_bytes
           AND paper_processor_objects.sha256 = excluded.sha256`,
     ).bind(
-      input.resourceId, input.attemptId, input.kind, input.objectId, input.sizeBytes, input.sha256,
+      input.resourceId, input.attemptId, input.kind, input.objectId, objectKey, input.sizeBytes, input.sha256,
       input.contentType ?? "application/octet-stream", input.now, input.processorId, input.leaseTokenHash, input.fencingEpoch,
     ).run();
     return (result.meta?.changes ?? 0) === 1;
   }
   const isSourcePdf = input.kind === "source_pdf";
-  const column = isSourcePdf ? "pdf_object_key = 'paper/' || resource_id || '/source.pdf', pdf_size_bytes = ?6, pdf_sha256 = ?7, source_sha256 = ?7"
-    : input.kind === "text_manifest" ? "text_manifest_key = 'paper/' || resource_id || '/text/manifest.json'"
-      : "image_manifest_key = 'paper/' || resource_id || '/images/manifest.json'";
+  const column = isSourcePdf ? "pdf_object_key = ?6, pdf_size_bytes = ?7, pdf_sha256 = ?8, source_sha256 = ?8"
+    : input.kind === "text_manifest" ? "text_manifest_key = ?6"
+      : "image_manifest_key = ?6";
   const result = await env.DB.prepare(
-    `UPDATE paper_resources SET ${column}, updated_at = ?8
+    `UPDATE paper_resources SET ${column}, updated_at = ?9
       WHERE resource_id = ?1 AND status = '${isSourcePdf ? "downloading" : "uploading"}'
         AND EXISTS (SELECT 1 FROM paper_processing_attempts a
           WHERE a.attempt_id = ?2 AND a.resource_id = ?1 AND a.processor_id = ?3
             AND a.lease_token_hash = ?4 AND a.fencing_epoch = ?5
-            AND a.status IN (${isSourcePdf ? "'claimed', 'downloading'" : "'uploading'"}) AND a.lease_expires_at > ?8)`,
-  ).bind(input.resourceId, input.attemptId, input.processorId, input.leaseTokenHash, input.fencingEpoch, input.sizeBytes, input.sha256, input.now).run();
+            AND a.status IN (${isSourcePdf ? "'claimed', 'downloading'" : "'uploading'"}) AND a.lease_expires_at > ?9)`,
+  ).bind(input.resourceId, input.attemptId, input.processorId, input.leaseTokenHash, input.fencingEpoch, objectKey, input.sizeBytes, input.sha256, input.now).run();
   return (result.meta?.changes ?? 0) === 1;
+}
+
+/** Return the currently published pointer for a per-page Processor object. */
+export async function getPaperProcessorObject(
+  env: Env,
+  input: { resourceId: string; kind: "text_pages" | "image"; objectId: string },
+): Promise<PaperProcessorObjectRow | null> {
+  return env.DB.prepare(
+    `SELECT resource_id, attempt_id, kind, object_id, object_key, size_bytes,
+            sha256, content_type, created_at
+       FROM paper_processor_objects
+      WHERE resource_id = ?1 AND kind = ?2 AND object_id = ?3`,
+  ).bind(input.resourceId, input.kind, input.objectId).first<PaperProcessorObjectRow>();
 }
 
 export async function finalizePaperProcessorAttempt(

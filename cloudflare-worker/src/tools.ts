@@ -11,10 +11,11 @@ import {
   linkPaperResource,
   recordPaperAuditEvent,
   retryTimedOutOwnedPaperResource,
+  getPaperProcessorObject,
   type PaperResourceRow,
   type PaperSourceKind,
 } from "./db";
-import { getPaperObject } from "./paper-object-store";
+import { getPaperObject, getPaperObjectAtKey } from "./paper-object-store";
 
 // Pure-HTTP implementation of Analysis' search_paper / read_paper tools.
 // Sources: arXiv Atom API + PubMed E-utilities. PDF parsing remains in the
@@ -482,8 +483,15 @@ export async function materializePaper(
   }
 }
 
-async function readObjectBytes(env: Env, resourceId: string, kind: "text_pages" | "text_manifest" | "image_manifest" | "image", maximumBytes: number, objectId?: string): Promise<Uint8Array | null> {
-  const object = await getPaperObject(env, resourceId, kind, objectId ?? (kind === "text_pages" ? "pages" : undefined));
+async function readObjectBytes(env: Env, resource: PaperResourceRow, kind: "text_pages" | "text_manifest" | "image_manifest" | "image", maximumBytes: number, objectId?: string): Promise<Uint8Array | null> {
+  const id = objectId ?? (kind === "text_pages" ? "pages" : undefined);
+  const recordedKey = kind === "text_manifest" ? resource.text_manifest_key : kind === "image_manifest" ? resource.image_manifest_key : null;
+  const processorObject = kind === "text_pages" || kind === "image"
+    ? await getPaperProcessorObject(env, { resourceId: resource.resource_id, kind, objectId: id! })
+    : null;
+  const object = (recordedKey || processorObject?.object_key)
+    ? await getPaperObjectAtKey(env, recordedKey ?? processorObject?.object_key)
+    : await getPaperObject(env, resource.resource_id, kind, id);
   if (!object) return null;
   if (object.size > maximumBytes) throw new Error("paper object exceeds the tool limit");
   const bytes = new Uint8Array(await object.arrayBuffer());
@@ -636,18 +644,18 @@ export async function readPaper(env: Env, sessionId: string, userIdOrRef: string
 
   if (mode === "images") {
     let bytes: Uint8Array | null;
-    try { bytes = await readObjectBytes(env, resourceId, "image_manifest", MAX_PAPER_MANIFEST_BYTES); } catch { return JSON.stringify({ error: "paper_manifest_too_large" }); }
+    try { bytes = await readObjectBytes(env, resource, "image_manifest", MAX_PAPER_MANIFEST_BYTES); } catch { return JSON.stringify({ error: "paper_manifest_too_large" }); }
     const images = bytes ? parseImageManifest(bytes, resourceId) : null;
     if (!images) return JSON.stringify({ error: "paper_image_manifest_invalid" });
     return JSON.stringify({ mode: "full_text", operation: "images", resource_id: resourceId, images: images.slice(0, 100) });
   }
 
   let manifestBytes: Uint8Array | null;
-  try { manifestBytes = await readObjectBytes(env, resourceId, "text_manifest", MAX_PAPER_MANIFEST_BYTES); } catch { return JSON.stringify({ error: "paper_manifest_too_large" }); }
+  try { manifestBytes = await readObjectBytes(env, resource, "text_manifest", MAX_PAPER_MANIFEST_BYTES); } catch { return JSON.stringify({ error: "paper_manifest_too_large" }); }
   const manifestPages = manifestBytes ? parsePageManifest(manifestBytes, resourceId) : null;
   if (!manifestPages) return JSON.stringify({ error: "paper_text_manifest_invalid" });
   let pageBytes: Uint8Array | null;
-  try { pageBytes = await readObjectBytes(env, resourceId, "text_pages", MAX_PAPER_PAGES_BYTES); } catch { return JSON.stringify({ error: "paper_text_pages_too_large" }); }
+  try { pageBytes = await readObjectBytes(env, resource, "text_pages", MAX_PAPER_PAGES_BYTES); } catch { return JSON.stringify({ error: "paper_text_pages_too_large" }); }
   const pages = pageBytes ? parseTextPages(pageBytes) : null;
   if (!pages) return JSON.stringify({ error: "paper_text_pages_invalid" });
   const availablePages = new Set(pages.map((page) => page.page));
@@ -711,7 +719,7 @@ export async function analyzePaperImage(
   if (!cleanPrompt) return JSON.stringify({ error: "paper_image_prompt_required" });
   if (detail !== "low" && detail !== "high") return JSON.stringify({ error: "paper_image_detail_invalid" });
   let bytes: Uint8Array | null;
-  try { bytes = await readObjectBytes(env, resourceId, "image_manifest", MAX_PAPER_MANIFEST_BYTES); } catch { return JSON.stringify({ error: "paper_manifest_too_large" }); }
+  try { bytes = await readObjectBytes(env, resource, "image_manifest", MAX_PAPER_MANIFEST_BYTES); } catch { return JSON.stringify({ error: "paper_manifest_too_large" }); }
   const image = bytes ? parseImageManifest(bytes, resourceId)?.find((candidate) => candidate.image_id === imageId) : null;
   if (!image) return JSON.stringify({ error: "paper_image_not_in_manifest" });
   if (env.PAPER_IMAGE_ANALYSIS_EGRESS !== "enabled") {
@@ -719,7 +727,7 @@ export async function analyzePaperImage(
     return JSON.stringify({ error: "paper_image_egress_denied", message: "Image analysis egress is disabled by policy." });
   }
   let imageBytes: Uint8Array | null;
-  try { imageBytes = await readObjectBytes(env, resourceId, "image", 8 * 1024 * 1024, imageId); } catch {
+  try { imageBytes = await readObjectBytes(env, resource, "image", 8 * 1024 * 1024, imageId); } catch {
     await recordPaperAuditEvent(env, { resource_id: resourceId, attempt_id: null, stage: "image_analysis", outcome: "failed", error_code: "PAPER_IMAGE_TOO_LARGE", metadata_json: JSON.stringify({ detail, image_id: imageId }), created_at: Math.floor(Date.now() / 1000) });
     return JSON.stringify({ error: "paper_image_too_large" });
   }

@@ -8,6 +8,7 @@ import {
   getChatSession,
   getOwnedPaperResourceProgress,
   getOwnedPaperResource,
+  getPaperProcessorObject,
   linkPaperResource,
   recordPaperAuditEvent,
   recordUserPaperUpload,
@@ -18,7 +19,7 @@ import {
   type PaperResourceRow,
   type PaperSourceKind,
 } from "./db";
-import { getPaperObject, putPaperObject, type PaperObjectKind } from "./paper-object-store";
+import { getPaperObject, getPaperObjectAtKey, putPaperObject, type PaperObjectKind } from "./paper-object-store";
 import { Sha256 } from "./sha256";
 
 const SOURCE_KINDS = new Set<PaperSourceKind>(["arxiv", "pubmed_pmc", "user_upload"]);
@@ -292,7 +293,7 @@ async function getManifest(request: Request, env: Env, user: AuthedUser, resourc
   const { resource } = result;
   if (resource.status === "deleted") return errorJson("Paper resource was deleted", 410, "PAPER_RESOURCE_DELETED");
   if (resource.status !== "ready" || !resource.text_manifest_key) return errorJson("Paper resource is not ready", 409, "PAPER_RESOURCE_NOT_READY");
-  const object = await getPaperObject(env, resource.resource_id, "text_manifest");
+  const object = await getPaperObjectAtKey(env, resource.text_manifest_key);
   if (!object) return errorJson("Paper manifest not found", 404, "PAPER_MANIFEST_NOT_FOUND");
   const bytes = await object.arrayBuffer();
   if (bytes.byteLength > MAX_MANIFEST_BYTES) return errorJson("Paper manifest is too large", 422, "PAPER_MANIFEST_TOO_LARGE");
@@ -314,7 +315,7 @@ async function getObject(request: Request, env: Env, user: AuthedUser, resourceI
   if (resource.status !== "ready") return errorJson("Paper resource is not ready", 409, "PAPER_RESOURCE_NOT_READY");
   const recordedKey = kind === "source_pdf" ? resource.pdf_object_key : kind === "text_manifest" ? resource.text_manifest_key : resource.image_manifest_key;
   if (!recordedKey) return errorJson("Paper object is not available", 404, "PAPER_OBJECT_NOT_FOUND");
-  const object = await getPaperObject(env, resource.resource_id, kind);
+  const object = await getPaperObjectAtKey(env, recordedKey);
   if (!object) return errorJson("Paper object is not available", 404, "PAPER_OBJECT_NOT_FOUND");
   return new Response(object.body, {
     status: 200,
@@ -325,12 +326,12 @@ async function getObject(request: Request, env: Env, user: AuthedUser, resourceI
   });
 }
 
-async function imageManifestEntry(env: Env, resourceId: string, imageId: string): Promise<Record<string, unknown> | null> {
-  const object = await getPaperObject(env, resourceId, "image_manifest");
+async function imageManifestEntry(env: Env, resource: PaperResourceRow, imageId: string): Promise<Record<string, unknown> | null> {
+  const object = await getPaperObjectAtKey(env, resource.image_manifest_key);
   if (!object || object.size > MAX_MANIFEST_BYTES) return null;
   try {
     const manifest = JSON.parse(new TextDecoder().decode(await object.arrayBuffer())) as Record<string, unknown>;
-    if (manifest.resource_id !== resourceId || !Array.isArray(manifest.images)) return null;
+    if (manifest.resource_id !== resource.resource_id || !Array.isArray(manifest.images)) return null;
     const entry = manifest.images.find((value) => value && typeof value === "object" && (value as Record<string, unknown>).image_id === imageId);
     if (!entry || typeof entry !== "object") return null;
     const image = entry as Record<string, unknown>;
@@ -349,8 +350,11 @@ async function getImage(request: Request, env: Env, user: AuthedUser, resourceId
   if (resource.status !== "ready") return errorJson("Paper resource is not ready", 409, "PAPER_RESOURCE_NOT_READY");
   const imageId = new URL(request.url).searchParams.get("image_id")?.trim() ?? "";
   if (!/^page-\d{4}-image-\d{4}$/.test(imageId)) return errorJson("Invalid paper image", 400, "INVALID_PAPER_IMAGE");
-  if (!(await imageManifestEntry(env, resource.resource_id, imageId))) return errorJson("Paper image is not in the manifest", 404, "PAPER_IMAGE_NOT_FOUND");
-  const object = await getPaperObject(env, resource.resource_id, "image", imageId);
+  if (!(await imageManifestEntry(env, resource, imageId))) return errorJson("Paper image is not in the manifest", 404, "PAPER_IMAGE_NOT_FOUND");
+  const recorded = await getPaperProcessorObject(env, { resourceId: resource.resource_id, kind: "image", objectId: imageId });
+  const object = recorded?.object_key
+    ? await getPaperObjectAtKey(env, recorded.object_key)
+    : await getPaperObject(env, resource.resource_id, "image", imageId);
   if (!object) return errorJson("Paper image is not available", 404, "PAPER_IMAGE_NOT_FOUND");
   if (object.size > MAX_IMAGE_BYTES) return errorJson("Paper image is too large", 413, "PAPER_IMAGE_TOO_LARGE");
   return new Response(object.body, {

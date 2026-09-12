@@ -122,8 +122,9 @@ describe("dedicated Paper Processor control protocol", () => {
     const imageBytes = new Uint8Array([137, 80, 78, 71]);
     const imageUpload = await handlePaperProcessorApi(uploadRequest(session.processor_session_token, grant.lease_token, grant.attempt_id, "resource-1", 1, "image", imageBytes, "page-0001-image-0001", "image/png"), env);
     expect(imageUpload?.status).toBe(200);
-    expect(bucket.objects.has("paper/resource-1/text/pages.jsonl")).toBe(true);
-    expect(bucket.objects.has("paper/resource-1/images/page-0001/image-0001.png")).toBe(true);
+    const stagedPrefix = `paper/resource-1/attempts/${grant.attempt_id}/epoch-${grant.fencing_epoch}`;
+    expect(bucket.objects.has(`${stagedPrefix}/text/pages.jsonl`)).toBe(true);
+    expect(bucket.objects.has(`${stagedPrefix}/images/page-0001/image-0001.png`)).toBe(true);
     const manifest = { resource_id: "resource-1", parser_version: "paper-processor-test", page_count: 1, pages: [{ page: 1, text_bytes: 4, images: ["page-0001-image-0001"] }], images: [{ image_id: "page-0001-image-0001", page: 1 }] };
     const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
     const upload = await handlePaperProcessorApi(uploadRequest(session.processor_session_token, grant.lease_token, grant.attempt_id, "resource-1", 1, "text_manifest", manifestBytes), env);

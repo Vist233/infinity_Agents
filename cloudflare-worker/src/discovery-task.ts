@@ -2,12 +2,17 @@ import type { Env } from "./env";
 import type { DataCollectionRow, PaperCatalogRow, ResearchMatchRow } from "./discovery-db";
 import { getCollectionById, getPaperById, setMatchTask } from "./discovery-db";
 import { discoveryObjectKey, putDiscoveryObject } from "./discovery-object-store";
-import { normalizeDatasetProfile, normalizePaperProfile, type DatasetProfile, type PaperProfile } from "./discovery-contracts";
+import { coarseMatch, normalizeDatasetProfile, normalizePaperProfile, type DatasetProfile, type PaperProfile } from "./discovery-contracts";
 import { hashText } from "./sha256";
 import { createTrustedInternalTask } from "./tasks";
 
 const MAX_METHOD_BYTES = 256 * 1024;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/;
+
+// Discovery paper metadata is untrusted research input. Keep the executor's
+// mission platform-owned so a paper, model response, or profile cannot turn
+// the privileged discovery task into an arbitrary instruction runner.
+export const DISCOVERY_TASK_GOAL = "Reproduce the validated scientific method against the frozen dataset input and produce auditable deliverables.";
 
 export interface DiscoveryTaskInput {
   match: ResearchMatchRow;
@@ -97,12 +102,17 @@ function idempotencyKey(match: ResearchMatchRow): string {
  */
 export async function createDiscoveryTask(env: Env, input: DiscoveryTaskInput): Promise<DiscoveryTaskResult | null> {
   const { match, paper, collection, paperProfile, datasetProfile } = input;
+  const coarse = coarseMatch(paperProfile, datasetProfile);
   if (
     match.paper_id !== paper.paper_id
     || match.collection_id !== collection.collection_id
     || match.paper_profile_version !== paperProfile.profile_version
     || match.dataset_profile_version !== datasetProfile.profile_version
+    || match.status !== "evaluated"
     || match.hard_gate !== "pass"
+    || coarse.missing_required.length > 0
+    || coarse.supported_modules !== coarse.total_modules
+    || Math.abs(match.coverage_ratio - coarse.coverage_ratio) > 0.000001
     || match.coverage_ratio < 0.6
     || (match.execution_confidence ?? 0) < 60
     || collection.status !== "ready"
@@ -111,6 +121,11 @@ export async function createDiscoveryTask(env: Env, input: DiscoveryTaskInput): 
   const ids = taskIds(match.match_id);
   const key = idempotencyKey(match);
   const now = input.now ?? nowSeconds();
+  const method = renderDiscoveryMethod(paperProfile, datasetProfile, match, collection);
+  const methodBytes = new TextEncoder().encode(method);
+  const methodSha = hashText(method);
+  const methodObjectKey = discoveryObjectKey("method_materialized", { matchId: match.match_id, contentSha256: methodSha });
+  if (!methodObjectKey || methodBytes.byteLength === 0 || methodBytes.byteLength > MAX_METHOD_BYTES) return null;
 
   const existing = await env.DB.prepare("SELECT task_id FROM task_idempotency WHERE user_id = ?1 AND idempotency_key = ?2").bind(collection.owner_user_id, key).first<{ task_id: string }>();
   if (existing?.task_id) {
@@ -120,27 +135,25 @@ export async function createDiscoveryTask(env: Env, input: DiscoveryTaskInput): 
     const existingTask = await env.DB.prepare("SELECT task_id FROM tasks WHERE task_id = ?1 AND created_by = ?2").bind(existing.task_id, collection.owner_user_id).first<{ task_id: string }>();
     if (!existingTask) return null;
     await setMatchTask(env, match.match_id, existingTask.task_id, now);
-    return { taskId: existingTask.task_id, duplicate: true, idempotencyKey: key, methodObjectKey: discoveryObjectKey("method_materialized", { matchId: match.match_id }) ?? "", datasetObjectKey: collection.source_object_key };
+    return { taskId: existingTask.task_id, duplicate: true, idempotencyKey: key, methodObjectKey, datasetObjectKey: collection.source_object_key };
   }
   if (!env.RESOURCE_BUCKET) return null;
 
-  const method = renderDiscoveryMethod(paperProfile, datasetProfile, match, collection);
-  const methodBytes = new TextEncoder().encode(method);
-  const methodObjectKey = discoveryObjectKey("method_materialized", { matchId: match.match_id });
-  if (!methodObjectKey || methodBytes.byteLength === 0 || methodBytes.byteLength > MAX_METHOD_BYTES) return null;
   try {
-    if (!await putDiscoveryObject(env, "method_materialized", { matchId: match.match_id }, methodBytes, "text/markdown; charset=utf-8")) return null;
-    const project = await env.DB.prepare(
+    if (!await putDiscoveryObject(env, "method_materialized", { matchId: match.match_id, contentSha256: methodSha }, methodBytes, "text/markdown; charset=utf-8")) return null;
+    const insertedProject = await env.DB.prepare(
       `INSERT INTO projects (project_id, user_id, name, created_at)
        VALUES (?1, ?2, ?3, ?4)
-       ON CONFLICT(user_id) DO UPDATE SET name = excluded.name
+       ON CONFLICT(user_id) DO NOTHING
        RETURNING project_id`,
     ).bind(ids.projectId, collection.owner_user_id, "Discovery Research", now).first<{ project_id: string }>();
+    const project = insertedProject ?? await env.DB.prepare(
+      "SELECT project_id FROM projects WHERE user_id = ?1",
+    ).bind(collection.owner_user_id).first<{ project_id: string }>();
     if (!project?.project_id) return null;
 
-    const methodSha = hashText(method);
     const title = `Reproduce: ${paperProfile.paper.title}`.slice(0, 200);
-    const goal = paperProfile.research_question.slice(0, 8_192);
+    const researchQuestion = paperProfile.research_question.slice(0, 4_096);
     const fingerprint = hashText(JSON.stringify({ key, paper: paper.profile_sha256, dataset: collection.profile_sha256, method: methodSha }));
     await env.DB.batch([
       env.DB.prepare(
@@ -165,7 +178,7 @@ export async function createDiscoveryTask(env: Env, input: DiscoveryTaskInput): 
           (task_spec_id, project_id, user_id, title, analysis_type, research_question,
            goal, prompt_template_version, revision, status, created_at, updated_at, frozen_at)
          VALUES (?1, ?2, ?3, ?4, 'discovery', ?5, ?6, 'goal-driven-executor-v1', 1, 'active', ?7, ?7, ?7)`,
-      ).bind(ids.specId, project.project_id, collection.owner_user_id, title, goal, goal, now),
+      ).bind(ids.specId, project.project_id, collection.owner_user_id, title, researchQuestion, DISCOVERY_TASK_GOAL, now),
       env.DB.prepare(
         `INSERT OR IGNORE INTO dataset_snapshots
           (dataset_snapshot_id, task_spec_id, project_id, user_id, original_filename,

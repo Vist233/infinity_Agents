@@ -9,6 +9,7 @@ import json
 import math
 import re
 import stat
+import tempfile
 import time
 import zipfile
 from datetime import datetime, timezone
@@ -20,9 +21,15 @@ from .contracts import DATASET_PROFILE_VERSION, normalize_dataset_profile
 INSPECTOR_VERSION = "dataset-inspector-v1"
 MAX_MEMBERS = 1_024
 MAX_MEMBER_BYTES = 64 * 1024 * 1024
-MAX_EXPANDED_BYTES = 256 * 1024 * 1024
+MAX_EXPANDED_BYTES = 64 * 1024 * 1024
 MAX_SAMPLE_ROWS = 100
 MAX_SAMPLE_BYTES = 2 * 1024 * 1024
+MAX_SAMPLE_COLUMNS = 128
+MAX_DELIMITER_SAMPLE_BYTES = 64 * 1024
+MAX_JSON_PARSE_BYTES = 8 * 1024 * 1024
+MAX_JSONL_LINE_BYTES = 8 * 1024 * 1024
+MAX_CSV_FIELD_BYTES = 2 * 1024 * 1024
+MAX_TEXT_SAMPLE_BYTES = 16 * 1024
 MAX_COLUMNS = 10_000
 MAX_SCAN_SECONDS = 120.0
 SUPPORTED_SUFFIXES = {".csv", ".tsv", ".json", ".jsonl", ".txt", ".md", ".readme"}
@@ -57,26 +64,44 @@ def _zip_symlink(info: zipfile.ZipInfo) -> bool:
     return stat.S_ISLNK(mode)
 
 
-def _read_stream(stream: BinaryIO, declared_size: int, deadline: float, total_before: int) -> tuple[bytes, int]:
+def _spool_stream(
+    stream: BinaryIO,
+    declared_size: int,
+    deadline: float,
+    total_before: int,
+    *,
+    member_error_code: str,
+) -> tuple[BinaryIO, int, str, int]:
     if declared_size < 0 or declared_size > MAX_MEMBER_BYTES:
-        raise DatasetInspectionError("ARCHIVE_MEMBER_TOO_LARGE", "Archive member exceeds the per-file limit")
-    chunks: list[bytes] = []
+        raise DatasetInspectionError(member_error_code, "Input exceeds the per-file limit")
+    # Small inputs remain memory-backed; larger inputs spill to the processor's
+    # temporary filesystem instead of accumulating one unbounded bytes object.
+    spool = tempfile.SpooledTemporaryFile(max_size=1 * 1024 * 1024, mode="w+b")
     size = 0
     digest_total = total_before
-    while True:
-        _check_deadline(deadline)
-        chunk = stream.read(128 * 1024)
-        if not chunk:
-            break
-        size += len(chunk)
-        digest_total += len(chunk)
-        if size > MAX_MEMBER_BYTES or digest_total > MAX_EXPANDED_BYTES:
-            raise DatasetInspectionError("ARCHIVE_EXPANSION_LIMIT", "Archive expansion exceeds its safety limit")
-        chunks.append(chunk)
-    return b"".join(chunks), digest_total
+    digest = hashlib.sha256()
+    try:
+        while True:
+            _check_deadline(deadline)
+            chunk = stream.read(128 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            digest_total += len(chunk)
+            if size > MAX_MEMBER_BYTES:
+                raise DatasetInspectionError(member_error_code, "Input exceeds the per-file limit")
+            if digest_total > MAX_EXPANDED_BYTES:
+                raise DatasetInspectionError("ARCHIVE_EXPANSION_LIMIT", "Archive expansion exceeds its safety limit")
+            spool.write(chunk)
+            digest.update(chunk)
+    except Exception:
+        spool.close()
+        raise
+    spool.seek(0)
+    return spool, size, digest.hexdigest(), digest_total
 
 
-def _read_plain(path: Path, deadline: float) -> bytes:
+def _read_plain(path: Path, deadline: float) -> tuple[BinaryIO, int, str]:
     if path.is_symlink() or not path.is_file():
         raise DatasetInspectionError("SOURCE_NOT_REGULAR", "Dataset source must be a regular file")
     try:
@@ -86,10 +111,13 @@ def _read_plain(path: Path, deadline: float) -> bytes:
     if size <= 0 or size > MAX_MEMBER_BYTES:
         raise DatasetInspectionError("SOURCE_TOO_LARGE", "Dataset source exceeds its safety limit")
     with path.open("rb") as stream:
-        data, _ = _read_stream(stream, size, deadline, 0)
-    if not data:
+        spool, actual_size, digest, _ = _spool_stream(
+            stream, size, deadline, 0, member_error_code="SOURCE_TOO_LARGE"
+        )
+    if actual_size <= 0:
+        spool.close()
         raise DatasetInspectionError("SOURCE_EMPTY", "Dataset source is empty")
-    return data
+    return spool, actual_size, digest
 
 
 def _format_for_name(name: str) -> str:
@@ -105,9 +133,16 @@ def _format_for_name(name: str) -> str:
     return "unknown"
 
 
-def _tabular_delimiter(text: str, file_format: str) -> str:
+def _tabular_delimiter(stream: BinaryIO, file_format: str, deadline: float) -> str:
     if file_format == "tsv":
         return "\t"
+    stream.seek(0)
+    sample_bytes = stream.read(MAX_DELIMITER_SAMPLE_BYTES)
+    _check_deadline(deadline)
+    try:
+        text = sample_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise DatasetInspectionError("TEXT_DECODE_FAILED", "Tabular data is not valid UTF-8") from exc
     sample = "\n".join(text.splitlines()[:32])[:64 * 1024]
     try:
         dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
@@ -165,55 +200,71 @@ def _target_column(names: list[str]) -> str | None:
     return None
 
 
-def _tabular_profile(name: str, data: bytes, file_format: str, deadline: float) -> dict[str, Any]:
+def _sample_value(value: Any) -> Any:
+    return value[:256] if isinstance(value, str) else value
+
+
+def _tabular_profile(name: str, stream: BinaryIO, file_format: str, size_bytes: int, sha256: str, deadline: float) -> dict[str, Any]:
+    delimiter = _tabular_delimiter(stream, file_format, deadline)
+    stream.seek(0)
+    text_stream = io.TextIOWrapper(stream, encoding="utf-8-sig", newline="")
+    previous_field_limit = csv.field_size_limit()
+    csv.field_size_limit(MAX_CSV_FIELD_BYTES)
     try:
-        text = data.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise DatasetInspectionError("TEXT_DECODE_FAILED", "Tabular data is not valid UTF-8") from exc
-    delimiter = _tabular_delimiter(text, file_format)
-    try:
-        rows = list(csv.reader(io.StringIO(text), delimiter=delimiter))
-    except csv.Error as exc:
+        reader = csv.reader(text_stream, delimiter=delimiter)
+        try:
+            raw_header = next(reader)
+        except StopIteration as exc:
+            raise DatasetInspectionError("CSV_EMPTY", "Tabular data has no header") from exc
+        header = [str(value).strip()[:512] for value in raw_header]
+        if not header or len(header) > MAX_COLUMNS or any(not value for value in header):
+            raise DatasetInspectionError("CSV_WIDE_OR_INVALID", "Tabular header is invalid or too wide")
+        names: list[str] = []
+        seen: dict[str, int] = {}
+        for value in header:
+            count = seen.get(value, 0) + 1
+            seen[value] = count
+            names.append(value if count == 1 else f"{value}_{count}")
+        sample_rows: list[dict[str, Any]] = []
+        sample_size = 0
+        missing_cells = 0
+        total_cells = 0
+        column_values: list[list[Any]] = [[] for _ in names]
+        row_count = 0
+        for row in reader:
+            _check_deadline(deadline)
+            if len(row) > MAX_COLUMNS:
+                raise DatasetInspectionError("CSV_WIDE_OR_INVALID", "A tabular row is too wide")
+            padded = row[: len(names)] + [""] * max(0, len(names) - len(row))
+            total_cells += len(names)
+            missing_cells += sum(1 for value in padded if not value.strip())
+            converted = [_safe_scalar(value) for value in padded]
+            if row_count < MAX_SAMPLE_ROWS:
+                for index, value in enumerate(converted[:MAX_SAMPLE_COLUMNS]):
+                    if index >= len(names):
+                        break
+                    converted[index] = _sample_value(value)
+                candidate = {names[index]: converted[index] for index in range(min(len(names), MAX_SAMPLE_COLUMNS))}
+                candidate_size = len(json.dumps(candidate, ensure_ascii=False).encode("utf-8"))
+                if sample_size + candidate_size <= MAX_SAMPLE_BYTES:
+                    sample_rows.append(candidate)
+                    sample_size += candidate_size
+            if row_count < MAX_SAMPLE_ROWS:
+                for index, value in enumerate(converted):
+                    column_values[index].append(value)
+            row_count += 1
+        data_types = {name: _infer_type(column_values[index]) for index, name in enumerate(names)}
+    except (csv.Error, UnicodeDecodeError) as exc:
         raise DatasetInspectionError("CSV_INVALID", "Tabular data is malformed") from exc
-    _check_deadline(deadline)
-    if not rows:
-        raise DatasetInspectionError("CSV_EMPTY", "Tabular data has no header")
-    header = [str(value).strip()[:512] for value in rows[0]]
-    if not header or len(header) > MAX_COLUMNS or any(not value for value in header):
-        raise DatasetInspectionError("CSV_WIDE_OR_INVALID", "Tabular header is invalid or too wide")
-    names: list[str] = []
-    seen: dict[str, int] = {}
-    for index, value in enumerate(header, 1):
-        count = seen.get(value, 0) + 1
-        seen[value] = count
-        names.append(value if count == 1 else f"{value}_{count}")
-    records = rows[1:]
-    sample_rows: list[dict[str, Any]] = []
-    missing_cells = 0
-    total_cells = 0
-    column_values: list[list[Any]] = [[] for _ in names]
-    for row_index, row in enumerate(records):
-        _check_deadline(deadline)
-        if len(row) > MAX_COLUMNS:
-            raise DatasetInspectionError("CSV_WIDE_OR_INVALID", "A tabular row is too wide")
-        padded = row[: len(names)] + [""] * max(0, len(names) - len(row))
-        total_cells += len(names)
-        missing_cells += sum(1 for value in padded if not value.strip())
-        converted = [_safe_scalar(value) for value in padded]
-        for index, value in enumerate(converted):
-            column_values[index].append(value)
-        if row_index < MAX_SAMPLE_ROWS:
-            sample_rows.append({names[index]: converted[index] for index in range(len(names))})
-    data_types = {name: _infer_type(column_values[index]) for index, name in enumerate(names)}
-    sample_bytes = len(json.dumps(sample_rows, ensure_ascii=False).encode("utf-8"))
-    if sample_bytes > MAX_SAMPLE_BYTES:
-        sample_rows = [{key: (str(value)[:256] if isinstance(value, str) else value) for key, value in row.items()} for row in sample_rows[:20]]
+    finally:
+        csv.field_size_limit(previous_field_limit)
+        text_stream.detach()
     return {
         "path": name,
         "format": file_format,
-        "size_bytes": len(data),
-        "sha256": hashlib.sha256(data).hexdigest(),
-        "rows": len(records),
+        "size_bytes": size_bytes,
+        "sha256": sha256,
+        "rows": row_count,
         "columns": len(names),
         "column_names": names,
         "data_types": data_types,
@@ -222,11 +273,34 @@ def _tabular_profile(name: str, data: bytes, file_format: str, deadline: float) 
     }
 
 
-def _json_profile(name: str, data: bytes, deadline: float) -> dict[str, Any]:
+def _bounded_json_value(value: Any, depth: int = 0) -> Any:
+    if depth >= 3:
+        return str(value)[:256]
+    if isinstance(value, str):
+        return value[:2_048]
+    if isinstance(value, list):
+        return [_bounded_json_value(item, depth + 1) for item in value[:32]]
+    if isinstance(value, dict):
+        return {
+            str(key)[:512]: _bounded_json_value(item, depth + 1)
+            for key, item in list(value.items())[:64]
+        }
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:2_048]
+
+
+def _json_profile(name: str, stream: BinaryIO, size_bytes: int, sha256: str, deadline: float) -> dict[str, Any]:
+    if size_bytes > MAX_JSON_PARSE_BYTES:
+        raise DatasetInspectionError("JSON_TOO_LARGE", "JSON data exceeds the parser safety limit")
+    stream.seek(0)
+    text_stream = io.TextIOWrapper(stream, encoding="utf-8-sig", newline="")
     try:
-        parsed = json.loads(data.decode("utf-8-sig"))
+        parsed = json.load(text_stream)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise DatasetInspectionError("JSON_INVALID", "JSON data is malformed") from exc
+    finally:
+        text_stream.detach()
     _check_deadline(deadline)
     records: list[dict[str, Any]]
     if isinstance(parsed, list):
@@ -240,12 +314,12 @@ def _json_profile(name: str, data: bytes, deadline: float) -> dict[str, Any]:
         rows = 1
     names = list(dict.fromkeys(key[:512] for record in records for key in record if isinstance(key, str)))[:MAX_COLUMNS]
     values = {name: [record.get(name) for record in records] for name in names}
-    sample = [{name: record.get(name) for name in names} for record in records[:MAX_SAMPLE_ROWS]]
+    sample = [{name: _bounded_json_value(record.get(name)) for name in names} for record in records[:MAX_SAMPLE_ROWS]]
     return {
         "path": name,
         "format": "json",
-        "size_bytes": len(data),
-        "sha256": hashlib.sha256(data).hexdigest(),
+        "size_bytes": size_bytes,
+        "sha256": sha256,
         "rows": rows,
         "columns": len(names),
         "column_names": names,
@@ -255,16 +329,18 @@ def _json_profile(name: str, data: bytes, deadline: float) -> dict[str, Any]:
     }
 
 
-def _text_profile(name: str, data: bytes) -> dict[str, Any]:
+def _text_profile(name: str, stream: BinaryIO, size_bytes: int, sha256: str) -> dict[str, Any]:
+    stream.seek(0)
+    sample_bytes = stream.read(MAX_TEXT_SAMPLE_BYTES)
     try:
-        text = data.decode("utf-8-sig", errors="replace")
+        text = sample_bytes.decode("utf-8-sig", errors="replace")
     except Exception:
         text = ""
     return {
         "path": name,
         "format": _format_for_name(name),
-        "size_bytes": len(data),
-        "sha256": hashlib.sha256(data).hexdigest(),
+        "size_bytes": size_bytes,
+        "sha256": sha256,
         "rows": None,
         "columns": None,
         "column_names": [],
@@ -274,42 +350,65 @@ def _text_profile(name: str, data: bytes) -> dict[str, Any]:
     }
 
 
-def _profile_file(name: str, data: bytes, deadline: float) -> dict[str, Any]:
+def _jsonl_profile(name: str, stream: BinaryIO, size_bytes: int, sha256: str, deadline: float) -> dict[str, Any]:
+    stream.seek(0)
+    rows = 0
+    parsed: list[dict[str, Any]] = []
+    first_line = True
+    try:
+        while True:
+            _check_deadline(deadline)
+            line = stream.readline(MAX_JSONL_LINE_BYTES + 1)
+            if not line:
+                break
+            if len(line) > MAX_JSONL_LINE_BYTES:
+                raise DatasetInspectionError("JSONL_LINE_TOO_LARGE", "JSONL record exceeds the per-line limit")
+            try:
+                text = line.decode("utf-8-sig" if first_line else "utf-8")
+            except UnicodeDecodeError as exc:
+                raise DatasetInspectionError("JSON_INVALID", "JSONL data is malformed") from exc
+            first_line = False
+            if not text.strip():
+                continue
+            try:
+                item = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise DatasetInspectionError("JSON_INVALID", "JSONL data is malformed") from exc
+            if isinstance(item, dict) and len(parsed) < MAX_SAMPLE_ROWS:
+                parsed.append(item)
+            rows += 1
+    except OSError as exc:
+        raise DatasetInspectionError("JSON_INVALID", "JSONL data is unreadable") from exc
+    names = list(dict.fromkeys(key[:512] for item in parsed for key in item if isinstance(key, str)))[:MAX_COLUMNS]
+    return {
+        "path": name,
+        "format": "json",
+        "size_bytes": size_bytes,
+        "sha256": sha256,
+        "rows": rows,
+        "columns": len(names),
+        "column_names": names,
+        "data_types": {key: _infer_type([item.get(key) for item in parsed]) for key in names},
+        "missing_ratio": None,
+        "sample": [{key: _bounded_json_value(item.get(key)) for key in names} for item in parsed[:MAX_SAMPLE_ROWS]],
+    }
+
+
+def _profile_file(name: str, stream: BinaryIO, size_bytes: int, sha256: str, deadline: float) -> dict[str, Any]:
     file_format = _format_for_name(name)
     if file_format in {"csv", "tsv"}:
-        return _tabular_profile(name, data, file_format, deadline)
+        return _tabular_profile(name, stream, file_format, size_bytes, sha256, deadline)
     if file_format == "json":
         if name.lower().endswith(".jsonl"):
-            lines = [line for line in data.decode("utf-8-sig").splitlines() if line.strip()]
-            parsed: list[dict[str, Any]] = []
-            for line in lines[:MAX_SAMPLE_ROWS]:
-                try:
-                    item = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    raise DatasetInspectionError("JSON_INVALID", "JSONL data is malformed") from exc
-                if isinstance(item, dict):
-                    parsed.append(item)
-            names = list(dict.fromkeys(key[:512] for item in parsed for key in item if isinstance(key, str)))[:MAX_COLUMNS]
-            return {
-                "path": name,
-                "format": "json",
-                "size_bytes": len(data),
-                "sha256": hashlib.sha256(data).hexdigest(),
-                "rows": len(lines),
-                "columns": len(names),
-                "column_names": names,
-                "data_types": {key: _infer_type([item.get(key) for item in parsed]) for key in names},
-                "missing_ratio": None,
-                "sample": [{key: item.get(key) for key in names} for item in parsed[:MAX_SAMPLE_ROWS]],
-            }
-        return _json_profile(name, data, deadline)
+            return _jsonl_profile(name, stream, size_bytes, sha256, deadline)
+        return _json_profile(name, stream, size_bytes, sha256, deadline)
     if file_format in {"txt", "readme"}:
-        return _text_profile(name, data)
+        return _text_profile(name, stream, size_bytes, sha256)
     return {
         "path": name,
         "format": "unknown",
-        "size_bytes": len(data),
-        "sha256": hashlib.sha256(data).hexdigest(),
+        "size_bytes": size_bytes,
+        "sha256": sha256,
         "rows": None,
         "columns": None,
         "column_names": [],
@@ -411,18 +510,24 @@ def inspect_path(path: Path | str, collection_id: str, *, generated_at: str | No
                     if info.file_size > max(1, info.compress_size) * 100 and info.file_size > 1 * 1024 * 1024:
                         raise DatasetInspectionError("ARCHIVE_COMPRESSION_RATIO", "Archive member compression ratio is unsafe")
                     with archive.open(info, "r") as member:
-                        data, expanded = _read_stream(member, info.file_size, deadline, expanded)
-                    if _format_for_name(safe_name) != "unknown" or safe_name.lower().endswith(".readme"):
-                        files.append(_profile_file(safe_name, data, deadline))
-                    else:
-                        files.append(_profile_file(safe_name, data[:0], deadline) | {"size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+                        spool, size_bytes, sha256, expanded = _spool_stream(
+                            member, info.file_size, deadline, expanded,
+                            member_error_code="ARCHIVE_MEMBER_TOO_LARGE",
+                        )
+                    try:
+                        files.append(_profile_file(safe_name, spool, size_bytes, sha256, deadline))
+                    finally:
+                        spool.close()
         except DatasetInspectionError:
             raise
         except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
             raise DatasetInspectionError("ARCHIVE_INVALID", "ZIP archive is corrupt or unreadable") from exc
     else:
-        data = _read_plain(source, deadline)
-        files.append(_profile_file(source.name, data, deadline))
+        spool, size_bytes, sha256 = _read_plain(source, deadline)
+        try:
+            files.append(_profile_file(source.name, spool, size_bytes, sha256, deadline))
+        finally:
+            spool.close()
     if not files:
         raise DatasetInspectionError("NO_INSPECTABLE_FILES", "Dataset contains no supported files")
     return _profile_collection(collection_id, files, generated_at or _now_iso())

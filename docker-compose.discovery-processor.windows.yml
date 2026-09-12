@@ -15,6 +15,18 @@ services:
     command: ["python", "-m", "backend.discovery.processor"]
     env_file:
       - discovery-processor.windows.env
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: "2.0"
+    pids_limit: 256
+    init: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
     volumes:
       - discovery_processor_work:/var/lib/discovery-processor
 

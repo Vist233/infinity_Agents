@@ -19,6 +19,16 @@ from backend.code_agent.worker.claude_runtime import run_claude_task
 from backend.code_agent.worker.control_plane import ClaimedTask, ControlPlaneError, WorkerV2Client
 from backend.security import ArtifactCollector, SecurityBoundaryError
 
+
+DISCOVERY_RUNTIME_GOAL = "Reproduce the validated scientific method against the frozen dataset input and produce auditable deliverables."
+
+
+def _task_runtime_goal(task_spec: Mapping[str, Any]) -> str:
+    """Return a platform mission for discovery and the frozen user goal otherwise."""
+    if str(task_spec.get("analysis_type") or "").strip().lower() == "discovery":
+        return DISCOVERY_RUNTIME_GOAL
+    return str(task_spec.get("goal") or "").strip()
+
 logger = logging.getLogger(__name__)
 
 
@@ -174,7 +184,7 @@ async def execute_claim(client: WorkerV2Client, claim: ClaimedTask) -> dict[str,
             task_spec_id=claim.task_spec_id,
             dataset_snapshot_id=claim.dataset_snapshot_id,
             title=str(task_spec.get("title") or claim.title),
-            goal=str(task_spec.get("goal") or task_spec.get("research_question") or ""),
+            goal=_task_runtime_goal(task_spec),
             analysis_type=str(task_spec.get("analysis_type") or "generic"),
             case_dir=str(input_dir),
             output_dir=str(output_dir),

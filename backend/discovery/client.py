@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import secrets
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any
 
@@ -103,6 +105,67 @@ class DiscoveryProcessorClient:
             raise DiscoveryProcessorProtocolError("Discovery source exceeds the local limit")
         return value
 
+    @staticmethod
+    def _source_payload(grant: DiscoveryGrant) -> dict[str, Any]:
+        return {
+            "operation": "input_source",
+            "kind": grant.kind,
+            "work_id": grant.work_id,
+            **({"resource_id": grant.resource_id} if grant.resource_id else {}),
+            "fencing_epoch": grant.fencing_epoch,
+        }
+
+    def input_source_to_file(self, grant: DiscoveryGrant, destination: Path | str, maximum_bytes: int) -> tuple[int, str]:
+        """Stream a source response to disk and return its byte count and SHA-256."""
+        if maximum_bytes < 0:
+            raise DiscoveryProcessorProtocolError("Discovery source local limit is invalid")
+        body = json.dumps(self._source_payload(grant), separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(self._url("control"), data=body, method="POST", headers={
+            "accept": "application/octet-stream", "content-type": "application/json", "user-agent": _USER_AGENT,
+            "x-discovery-processor-session": self._session_token or "",
+            "x-discovery-processor-lease-token": grant.lease_token,
+        })
+        path = Path(destination)
+        partial_path = path.with_name(f".{path.name}.partial-{secrets.token_hex(8)}")
+        total = 0
+        digest = hashlib.sha256()
+        published = False
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                content_length = response.headers.get("Content-Length")
+                if content_length is not None:
+                    try:
+                        if int(content_length) > maximum_bytes:
+                            raise DiscoveryProcessorProtocolError("Discovery source exceeds the local limit")
+                    except ValueError:
+                        pass
+                with partial_path.open("wb") as output:
+                    while True:
+                        chunk = response.read(128 * 1024)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > maximum_bytes:
+                            raise DiscoveryProcessorProtocolError("Discovery source exceeds the local limit")
+                        output.write(chunk)
+                        digest.update(chunk)
+            os.replace(partial_path, path)
+            published = True
+        except urllib.error.HTTPError as exc:
+            raise DiscoveryProcessorProtocolError(f"Discovery source HTTP {exc.code}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise DiscoveryProcessorProtocolError("Discovery source transport failed") from exc
+        finally:
+            # A response/read/rename failure must not leave untrusted partial
+            # bytes in the processor workspace. The finally block also covers
+            # non-Exception interruptions such as cancellation.
+            if not published:
+                try:
+                    partial_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return total, digest.hexdigest()
+
     def connect(self) -> dict[str, Any]:
         value = self._request("POST", "connect", {"instance_id": self._instance_id})
         token = value.get("processor_session_token")
@@ -137,7 +200,7 @@ class DiscoveryProcessorClient:
         return self.control("input", grant)
 
     def input_source(self, grant: DiscoveryGrant, maximum_bytes: int = 64 * 1024 * 1024) -> bytes:
-        return self._bytes({"operation": "input_source", "kind": grant.kind, "work_id": grant.work_id, **({"resource_id": grant.resource_id} if grant.resource_id else {}), "fencing_epoch": grant.fencing_epoch}, grant, maximum_bytes)
+        return self._bytes(self._source_payload(grant), grant, maximum_bytes)
 
     def renew(self, grant: DiscoveryGrant) -> dict[str, Any]:
         return self.control("renew", grant)

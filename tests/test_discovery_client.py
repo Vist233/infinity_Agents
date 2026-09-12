@@ -82,3 +82,43 @@ def test_protocol_requests_use_service_user_agent(monkeypatch):
 
     assert len(requests) == 2
     assert all(request.get_header("User-agent") == "Infinity-Discovery-Processor/1.0" for request in requests)
+
+
+def test_streamed_source_removes_partial_file_after_read_failure(monkeypatch, tmp_path):
+    class FailingResponse:
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _maximum=None):
+            if not hasattr(self, "read_once"):
+                self.read_once = True
+                return b"partial"
+            raise OSError("connection reset")
+
+    monkeypatch.setattr(
+        "backend.discovery.client.urllib.request.urlopen",
+        lambda *_args, **_kwargs: FailingResponse(),
+    )
+    client = DiscoveryProcessorClient(
+        "https://infinity.zhangyvjing.com",
+        "processor-1",
+        "bootstrap-secret",
+        "instance-1",
+    )
+    client._session_token = "session-token-123456"
+    destination = tmp_path / "source.csv"
+
+    with pytest.raises(DiscoveryProcessorProtocolError, match="transport failed"):
+        client.input_source_to_file(
+            DiscoveryGrant("collection", "collection-1", "lease-token-123456", 1, 2_000_000_000),
+            destination,
+            1024,
+        )
+
+    assert not destination.exists()
+    assert list(tmp_path.iterdir()) == []

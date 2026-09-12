@@ -16,6 +16,7 @@ import {
   findPaperByOwnerSha,
   getCollectionById,
   getCollectionForUser,
+  collectionHasActiveTask,
   getMatchForUser,
   getPaperById,
   getPaperForUser,
@@ -29,7 +30,8 @@ import {
 import { normalizeDatasetProfile, normalizePaperProfile } from "./discovery-contracts";
 import {
   deleteDiscoveryObject,
-  getDiscoveryObject,
+  deleteDiscoveryObjectAtKey,
+  getDiscoveryObjectAtKey,
   putDiscoveryObject,
   safeDiscoveryFilename,
 } from "./discovery-object-store";
@@ -40,6 +42,13 @@ export const DISCOVERY_MAX_PAPER_BYTES = 64 * 1024 * 1024;
 export const DISCOVERY_MAX_COLLECTION_BYTES = 25 * 1024 * 1024;
 const MAX_MULTIPART_OVERHEAD = 1 * 1024 * 1024;
 const PAPER_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/;
+
+class MultipartLimitError extends Error {
+  constructor() {
+    super("multipart body exceeds the bounded envelope limit");
+    this.name = "MultipartLimitError";
+  }
+}
 
 interface UploadedFileLike {
   name?: string;
@@ -159,18 +168,59 @@ function publicCollection(row: Awaited<ReturnType<typeof getCollectionForUser>>,
   };
 }
 
-async function formData(request: Request): Promise<FormData | Response> {
+async function boundedFormData(request: Request, maximumFileBytes: number): Promise<FormData | Response> {
+  const maximumBodyBytes = maximumFileBytes + MAX_MULTIPART_OVERHEAD;
+  if (multipartTooLarge(request, maximumFileBytes)) return errorJson("Uploaded file is too large", 413, "DISCOVERY_UPLOAD_TOO_LARGE");
+  if (!request.body) return errorJson("Invalid multipart upload", 400, "DISCOVERY_UPLOAD_INVALID");
+  const source = request.body;
+  let total = 0;
+  let exceeded = false;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  const boundedBody = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      reader = source.getReader();
+      try {
+        while (true) {
+          const next = await reader.read();
+          if (next.done) {
+            controller.close();
+            return;
+          }
+          const chunk = next.value instanceof Uint8Array ? next.value : new Uint8Array(next.value);
+          total += chunk.byteLength;
+          if (total > maximumBodyBytes) {
+            exceeded = true;
+            await reader.cancel("multipart envelope exceeds limit");
+            controller.error(new MultipartLimitError());
+            return;
+          }
+          controller.enqueue(chunk);
+        }
+      } catch (error) {
+        controller.error(error);
+      } finally {
+        reader.releaseLock();
+        reader = null;
+      }
+    },
+    async cancel(reason) {
+      if (reader) await reader.cancel(reason);
+    },
+  });
   try {
-    return await request.formData();
-  } catch {
+    // The bounded stream is the body seen by the multipart parser. This keeps
+    // chunked requests subject to the same cap as requests with a length
+    // header, before formData() can accumulate an unbounded body.
+    return await new Request(request, { body: boundedBody, duplex: "half" } as unknown as RequestInit).formData();
+  } catch (error) {
+    if (exceeded || error instanceof MultipartLimitError) return errorJson("Uploaded file is too large", 413, "DISCOVERY_UPLOAD_TOO_LARGE");
     return errorJson("Invalid multipart upload", 400, "DISCOVERY_UPLOAD_INVALID");
   }
 }
 
 async function createPaper(request: Request, env: Env, user: AuthedUser): Promise<Response> {
   if (!env.RESOURCE_BUCKET) return errorJson("Paper object storage is unavailable", 503, "DISCOVERY_STORAGE_UNAVAILABLE");
-  if (multipartTooLarge(request, DISCOVERY_MAX_PAPER_BYTES)) return errorJson("Uploaded PDF is too large", 413, "DISCOVERY_PAPER_TOO_LARGE");
-  const body = await formData(request);
+  const body = await boundedFormData(request, DISCOVERY_MAX_PAPER_BYTES);
   if (body instanceof Response) return body;
   const file = body.get("file");
   if (!isUploadedFile(file)) return errorJson("A PDF file is required", 400, "DISCOVERY_PAPER_FILE_REQUIRED");
@@ -223,7 +273,7 @@ async function getPaper(request: Request, env: Env, user: AuthedUser, paperId: s
   const profile = rawProfile ? normalizePaperProfile(rawProfile) : null;
   let overview: string | null = null;
   if (paper.overview_object_key && paper.status === "profiled") {
-    const object = await getDiscoveryObject(env, "paper_overview", { resourceId: paper.source_resource_id });
+    const object = await getDiscoveryObjectAtKey(env, paper.overview_object_key);
     if (object && object.size <= 256 * 1024) overview = (await object.text()).slice(0, 256 * 1024);
   }
   return json(publicPaper(paper, profile, overview));
@@ -241,15 +291,18 @@ async function deletePaper(env: Env, user: AuthedUser, paperId: string): Promise
   if (!(await markPaperDeletedForUser(env, paperId, user.userId, now))) return errorJson("Paper is already deleted", 409, "DISCOVERY_STATE_CONFLICT");
   const resource = await getPaperResourceForCatalogOwner(env, paper.source_resource_id, user.userId);
   if (resource) await deletePaperResource(env, { resourceId: resource.resource_id, sessionId: resource.session_id, userId: user.userId, now });
-  await deleteDiscoveryObject(env, "paper_profile", { resourceId: paper.source_resource_id });
-  await deleteDiscoveryObject(env, "paper_overview", { resourceId: paper.source_resource_id });
+  await Promise.allSettled([
+    deleteDiscoveryObjectAtKey(env, paper.profile_object_key),
+    deleteDiscoveryObjectAtKey(env, paper.overview_object_key),
+    deleteDiscoveryObject(env, "paper_profile", { resourceId: paper.source_resource_id }),
+    deleteDiscoveryObject(env, "paper_overview", { resourceId: paper.source_resource_id }),
+  ]);
   return json({ paper_id: paperId, status: "deleted" });
 }
 
 async function createDataCollection(request: Request, env: Env, user: AuthedUser): Promise<Response> {
   if (!env.RESOURCE_BUCKET) return errorJson("Data object storage is unavailable", 503, "DISCOVERY_STORAGE_UNAVAILABLE");
-  if (multipartTooLarge(request, DISCOVERY_MAX_COLLECTION_BYTES)) return errorJson("Uploaded data is too large", 413, "DISCOVERY_COLLECTION_TOO_LARGE");
-  const body = await formData(request);
+  const body = await boundedFormData(request, DISCOVERY_MAX_COLLECTION_BYTES);
   if (body instanceof Response) return body;
   const file = body.get("file");
   if (!isUploadedFile(file)) return errorJson("A data file or ZIP archive is required", 400, "DISCOVERY_COLLECTION_FILE_REQUIRED");
@@ -301,9 +354,18 @@ async function deleteCollection(env: Env, user: AuthedUser, collectionId: string
   const collection = await getCollectionForUser(env, collectionId, user.userId);
   if (!collection) return errorJson("Data Collection not found", 404, "DISCOVERY_COLLECTION_NOT_FOUND");
   const now = nowSeconds();
-  if (!(await markCollectionDeletedForUser(env, collectionId, user.userId, now))) return errorJson("Data Collection is already deleted", 409, "DISCOVERY_STATE_CONFLICT");
-  await deleteDiscoveryObject(env, "dataset_source", { collectionId, filename: collection.source_filename });
-  await deleteDiscoveryObject(env, "dataset_profile", { collectionId });
+  if (await collectionHasActiveTask(env, collectionId, user.userId)) return errorJson("Data Collection is still referenced by an active task", 409, "DISCOVERY_COLLECTION_IN_USE");
+  if (!(await markCollectionDeletedForUser(env, collectionId, user.userId, now))) {
+    // The atomic UPDATE also checks for active references, covering a task
+    // created after the read above but before deletion.
+    if (await collectionHasActiveTask(env, collectionId, user.userId)) return errorJson("Data Collection is still referenced by an active task", 409, "DISCOVERY_COLLECTION_IN_USE");
+    return errorJson("Data Collection is already deleted", 409, "DISCOVERY_STATE_CONFLICT");
+  }
+  await Promise.allSettled([
+    deleteDiscoveryObject(env, "dataset_source", { collectionId, filename: collection.source_filename }),
+    deleteDiscoveryObjectAtKey(env, collection.profile_object_key),
+    deleteDiscoveryObject(env, "dataset_profile", { collectionId }),
+  ]);
   return json({ collection_id: collectionId, status: "deleted" });
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AuthedUser } from "../src/auth";
 import type { Env } from "../src/env";
-import { handleDiscoveryApi } from "../src/discovery";
+import { DISCOVERY_MAX_COLLECTION_BYTES, handleDiscoveryApi } from "../src/discovery";
 import { makeEnv } from "./fake-d1";
 
 const ALICE: AuthedUser = { userId: "alice", email: "alice@example.com", sid: "sid-a" };
@@ -94,6 +94,25 @@ describe("Discovery Paper and Data Collection APIs", () => {
     expect(hidden?.status).toBe(404);
   });
 
+  it("caps a chunked multipart envelope before formData can buffer it", async () => {
+    const { env } = setup();
+    const oversizedChunk = new Uint8Array(DISCOVERY_MAX_COLLECTION_BYTES + 1 * 1024 * 1024 + 1);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(oversizedChunk);
+        controller.close();
+      },
+    });
+    const response = await handleDiscoveryApi(request("/api/discovery/data-collections", {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=not-used" },
+      body: stream,
+      duplex: "half",
+    } as unknown as RequestInit), env, ALICE);
+    expect(response?.status).toBe(413);
+    expect(await response!.json()).toMatchObject({ error: { code: "DISCOVERY_UPLOAD_TOO_LARGE" } });
+  });
+
   it("stores a Data Collection under a server-generated key and scopes ownership", async () => {
     const { env, db, bucket } = setup();
     const response = await handleDiscoveryApi(await upload("/api/discovery/data-collections", csvFile("../../wine.csv"), { name: "Wine data" }), env, ALICE);
@@ -121,14 +140,50 @@ describe("Discovery Paper and Data Collection APIs", () => {
     const created = await handleDiscoveryApi(await upload("/api/discovery/data-collections", csvFile()), env, ALICE);
     const collectionId = String((await created!.json() as { collection_id: string }).collection_id);
     const row = db.dataCollections.get(collectionId)!;
+    const profileKey = `discovery/staging/dataset-profile/${collectionId}/processor-1/epoch-1/dataset-profile.v1.json`;
+    row.profile_object_key = profileKey;
+    bucket.objects.set(profileKey, new TextEncoder().encode("{}"));
     const deleted = await handleDiscoveryApi(request(`/api/discovery/data-collections/${collectionId}`, { method: "DELETE" }), env, ALICE);
     expect(deleted?.status).toBe(200);
     expect(row.status).toBe("deleted");
     expect(bucket.objects.has(row.source_object_key)).toBe(false);
+    expect(bucket.objects.has(profileKey)).toBe(false);
     expect((await handleDiscoveryApi(request(`/api/discovery/data-collections/${collectionId}`), env, ALICE))?.status).toBe(404);
 
     const reupload = await handleDiscoveryApi(await upload("/api/discovery/data-collections", csvFile("reupload.csv")), env, ALICE);
     expect(reupload?.status).toBe(201);
+  });
+
+  it("refuses to delete a collection while a queued task still references its immutable object", async () => {
+    const { env, db, bucket } = setup();
+    const created = await handleDiscoveryApi(await upload("/api/discovery/data-collections", csvFile()), env, ALICE);
+    const collectionId = String((await created!.json() as { collection_id: string }).collection_id);
+    const collection = db.dataCollections.get(collectionId)!;
+    collection.status = "ready";
+    const resourceId = "discovery-dataset-resource-1";
+    db.taskResources.set(resourceId, {
+      resource_id: resourceId, project_id: "project-1", user_id: "alice", kind: "dataset",
+      logical_name: collection.source_filename, object_key: collection.source_object_key,
+      content_type: collection.source_content_type, file_size_bytes: collection.source_size_bytes,
+      file_hash_sha256: collection.source_sha256, created_at: 1,
+    });
+    db.datasetSnapshots.set("snapshot-1", {
+      dataset_snapshot_id: "snapshot-1", task_spec_id: "spec-1", project_id: "project-1", user_id: "alice",
+      original_filename: collection.source_filename, resource_id: resourceId,
+      file_hash_sha256: collection.source_sha256, file_size_bytes: collection.source_size_bytes,
+      validation_passed: 1, created_at: 1,
+    });
+    db.tasks.set("task-1", {
+      task_id: "task-1", task_spec_id: "spec-1", dataset_snapshot_id: "snapshot-1", project_id: "project-1",
+      title: "Reproduce", status: "queued", created_by: "alice", chat_confirmation_id: null,
+      task_class: "public", attempt_count: 0, max_attempts: 3, created_at: 1, updated_at: 1,
+    });
+
+    const response = await handleDiscoveryApi(request(`/api/discovery/data-collections/${collectionId}`, { method: "DELETE" }), env, ALICE);
+    expect(response?.status).toBe(409);
+    expect(await response!.json()).toMatchObject({ error: { code: "DISCOVERY_COLLECTION_IN_USE" } });
+    expect(collection.status).toBe("ready");
+    expect(bucket.objects.has(collection.source_object_key)).toBe(true);
   });
 
   it("keeps match evaluation processor-owned while exposing an idempotent browser request", async () => {

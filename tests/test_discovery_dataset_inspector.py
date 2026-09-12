@@ -29,6 +29,15 @@ def test_inspects_wine_like_csv_with_target_and_capabilities(tmp_path):
     assert normalize_dataset_profile(profile, "collection-1") is not None
 
 
+def test_dataset_profile_rejects_more_than_512_capabilities(tmp_path):
+    source = tmp_path / "data.csv"
+    source.write_text("x\n1\n", encoding="utf-8")
+    profile = inspect_path(source, "collection-capabilities", generated_at="2026-09-11T00:00:00Z")
+    profile["capabilities"] = {f"capability{i}": True for i in range(513)}
+
+    assert normalize_dataset_profile(profile, "collection-capabilities") is None
+
+
 def test_detects_semicolon_delimited_csv_with_quoted_header(tmp_path):
     source = tmp_path / "winequality-red.csv"
     source.write_text(

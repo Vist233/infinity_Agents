@@ -266,6 +266,7 @@ def normalize_dataset_profile(value: Any, expected_collection_id: str | None = N
         model_version is None or inspector is None or generated_at is None or files is None or len(files) > 256
         or any(item is None for item in files) or capabilities_value is None or semantic is None or features is None
         or tags is None or (domain_raw is not None and domain is None) or (target_raw is not None and target is None)
+        or len(capabilities_value) > 512
         or any(CAPABILITY_KEY_PATTERN.fullmatch(key) is None for key in capabilities_value)
     ):
         return None

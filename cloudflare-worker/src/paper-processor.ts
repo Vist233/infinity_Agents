@@ -17,7 +17,7 @@ import {
   type PaperProcessorAttemptContext,
   type PaperUploadedObjectKind,
 } from "./db";
-import { getPaperObject, putPaperObject, type PaperObjectKind } from "./paper-object-store";
+import { getPaperObject, getPaperObjectAtKey, putPaperObject, type PaperObjectKind } from "./paper-object-store";
 import { Sha256, hashText } from "./sha256";
 import { isApprovedPaperProcessorRequest, isPaperProcessorNamespacePath } from "./paper-processor-access";
 
@@ -56,12 +56,35 @@ function validId(value: string): boolean {
   return value.length > 0 && value.length <= MAX_ID_BYTES && ID_PATTERN.test(value);
 }
 
-async function bodyJson(request: Request): Promise<Record<string, unknown> | null> {
+async function bodyJson(request: Request): Promise<Record<string, unknown> | null | Response> {
+  const declared = Number(request.headers.get("content-length") ?? "");
+  if (Number.isSafeInteger(declared) && declared > MAX_UPLOAD_ENVELOPE_BYTES) {
+    return errorJson("Paper Processor request is too large", 413, "PAPER_PROCESSOR_BODY_TOO_LARGE");
+  }
+  if (!request.body) return null;
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
   try {
-    const value = await request.json();
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > MAX_UPLOAD_ENVELOPE_BYTES) {
+        await reader.cancel("paper control body exceeds limit");
+        return errorJson("Paper Processor request is too large", 413, "PAPER_PROCESSOR_BODY_TOO_LARGE");
+      }
+      chunks.push(next.value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const value = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes));
     return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
   } catch {
     return null;
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -162,6 +185,7 @@ async function connect(request: Request, env: Env): Promise<Response> {
     return errorJson("Paper Processor bootstrap authentication failed", 401, "PAPER_PROCESSOR_UNAUTHENTICATED");
   }
   const body = await bodyJson(request);
+  if (body instanceof Response) return body;
   const instanceId = stringField(body, "instance_id");
   if (!validId(instanceId)) return errorJson("Processor instance_id is invalid", 400, "INVALID_PAPER_PROCESSOR_INSTANCE");
   const now = nowSeconds();
@@ -182,6 +206,7 @@ async function connect(request: Request, env: Env): Promise<Response> {
 
 async function poll(request: Request, env: Env, context: SessionContext): Promise<Response> {
   const body = await bodyJson(request);
+  if (body instanceof Response) return body;
   if (body && Object.keys(body).length > 0) {
     return errorJson("Processor resource selection is server-controlled", 400, "PAPER_PROCESSOR_SCOPE_FORBIDDEN");
   }
@@ -301,7 +326,10 @@ async function upload(request: Request, env: Env, context: SessionContext): Prom
   if (measuredHash !== expectedHash) return errorJson("Paper object checksum mismatch", 422, "PAPER_OBJECT_CHECKSUM_MISMATCH");
   const contentType = kind === "source_pdf" ? "application/pdf" : kind === "image" ? (request.headers.get("content-type")?.split(";", 1)[0] || "image/png") : "application/json";
   if (kind === "image" && !["image/png", "image/jpeg", "image/jp2"].includes(contentType)) return errorJson("Paper image content type is not supported", 400, "INVALID_PAPER_IMAGE");
-  const stored = await putPaperObject(env, lease.resourceId, kind, bytes, contentType, objectId);
+  const stored = await putPaperObject(env, lease.resourceId, kind, bytes, contentType, objectId, {
+    attemptId: lease.attemptId,
+    fencingEpoch: lease.fencingEpoch,
+  });
   if (!stored) return errorJson("Paper object storage is unavailable", 503, "PAPER_OBJECT_STORAGE_UNAVAILABLE");
   const recorded = await recordPaperProcessorObject(env, {
     attemptId: authorized.attempt.attempt_id,
@@ -345,7 +373,7 @@ async function finalize(request: Request, env: Env, context: SessionContext, bod
   const metadata = safeManifestMetadata(body?.manifest, lease.resourceId);
   if (metadata instanceof Response) return metadata;
   if (!authorized.resource.text_manifest_key || !env.RESOURCE_BUCKET) return errorJson("Paper text manifest is not uploaded", 409, "PAPER_PROCESSOR_OBJECT_MISSING");
-  const object = await getPaperObject(env, lease.resourceId, "text_manifest");
+  const object = await getPaperObjectAtKey(env, authorized.resource.text_manifest_key);
   if (!object) return errorJson("Paper text manifest is not available", 409, "PAPER_PROCESSOR_OBJECT_MISSING");
   const done = await finalizePaperProcessorAttempt(env, {
     ...lease,
@@ -413,6 +441,7 @@ async function fail(request: Request, env: Env, context: SessionContext, body: R
 
 async function control(request: Request, env: Env, context: SessionContext): Promise<Response> {
   const body = await bodyJson(request);
+  if (body instanceof Response) return body;
   const operation = validateControlEnvelope(body);
   if (operation instanceof Response) return operation;
   switch (operation) {
