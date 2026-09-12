@@ -92,6 +92,23 @@ quota exhausted” remains a plausible explanation, but is not proven; the
 precise classification is D1 write-side unavailability with auth failure not
 supported by the bounded evidence.
 
+## Availability recheck after the reset boundary
+
+On 2026-09-13 at approximately `2026-09-12T18:24-18:29Z`, the public Edge
+health endpoint returned `200`, and a remote primary D1 `SELECT 1` returned
+`d1_read=1` with `rows_written=0`. A precise read of the existing Task still
+returned `status=running`, `attempt_count=1`, the same expired Attempt
+`10d1e7f9-7a3e-410b-a182-cba93dda797c`, and `result_artifact_id=null`. The
+authenticated Task Center continued to render backend `HTTP 500`.
+
+A final status-only 30-minute Windows aggregation returned 323
+`WORKER_SESSION_UNAVAILABLE` retries for Worker-1 and 318 for Worker-2, with
+zero `WORKER_AUTH_INVALID`, `WORKER_SESSION_INVALID`,
+`WORKER_SESSION_MISMATCH`, `WORKER_ALREADY_CONNECTED`, or
+`WORKER_POOL_UNAVAILABLE` labels. No Task creation, scheduler SQL, or flag
+change was attempted. This confirms that a successful read probe alone did
+not restore the write-side gate; the task rerun remains deferred.
+
 ## Minimal scoped rerun after write availability returns
 
 1. Perform read-only health/status checks and verify both r3 Workers are still
