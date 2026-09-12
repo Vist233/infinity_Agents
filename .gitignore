@@ -79,3 +79,7 @@ worker.env
 # Local deployment artifacts
 backups/
 local-data/
+
+# Next.js 16 writes these advisory files during `next dev`.
+frontend/AGENTS.md
+frontend/CLAUDE.md

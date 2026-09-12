@@ -1,7 +1,8 @@
 """Infinity Agents unified Worker task executor.
 
 Production tasks use the fixed Claude Code runtime directly in the long-lived
-Worker container. There is no nested-Docker or fixture execution branch.
+Worker container. A deterministic ``local-fixture`` mode exists only for the
+pure-local acceptance path; it is rejected outside development/test.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import asyncio
+import json
 import shutil
 import uuid
 import re
@@ -339,7 +341,12 @@ async def execute_task(
     # The result archive is the durable downloadable artifact.  Input files,
     # unpacked datasets, and Claude's scratch output are disposable and must
     # not accumulate across the long-lived Worker loop.
-    _cleanup_execution_workspace(task_work_dir, preserve_artifact=not bool(control_plane_url))
+    # A local Worker may still carry the API URL for future provider routing,
+    # but without a credential/namespace it publishes into the local
+    # filesystem. Preserve that archive for the local download endpoint; only
+    # a fully authenticated remote Worker has its Artifact stored remotely.
+    remote_artifact = bool(control_plane_url and worker_id and worker_namespace and worker_credential)
+    _cleanup_execution_workspace(task_work_dir, preserve_artifact=not remote_artifact)
 
     return {"success": True, "artifact_id": artifact_id, "output_files": output_files}
 
@@ -546,6 +553,26 @@ async def _run_claude_execution(
     """Run the single production Claude Code execution mode."""
     input_dir = None
     executor_mode = os.getenv("CODE_AGENT_EXECUTOR_MODE", "direct").strip().lower() or "direct"
+    if executor_mode == "local-fixture":
+        if os.getenv("APP_ENV", "development").lower() not in {"development", "dev", "test"}:
+            raise SecurityBoundaryError("local-fixture executor is only available in development/test")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        fixture = {
+            "executor": "local-fixture",
+            "task_id": task_id,
+            "attempt_id": attempt_id,
+            "task_spec_id": str(task_spec.get("task_spec_id") or ""),
+            "dataset_snapshot_id": str(dataset.get("dataset_snapshot_id") or "") if dataset else "",
+            "title": str(task_spec.get("title") or ""),
+            "goal": str(task_spec.get("research_question") or task_spec.get("goal") or ""),
+        }
+        (output_dir / "local-fixture-result.json").write_text(
+            json.dumps(fixture, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        yield {"type": "status", "phase": "fixture"}
+        yield {"type": "done"}
+        return
     if executor_mode != "direct":
         raise SecurityBoundaryError(
             f"Unsupported executor mode {executor_mode!r}; the unified Worker only supports direct Claude Code"
@@ -913,8 +940,19 @@ async def _create_artifacts(
             worker_image_digest=worker_image_digest,
         )
     if lease_token:
+        # The local one-command Worker intentionally has no enrollment row.
+        # Keep the enrollment check for every credentialed/deployed Worker,
+        # while letting the explicitly shared development compatibility path
+        # publish against its lease owner.
+        artifact_worker_id = worker_id
+        if (
+            not worker_credential
+            and not worker_namespace
+            and os.getenv("APP_ENV", "development").lower() in {"development", "dev", "test"}
+        ):
+            artifact_worker_id = None
         artifact = await create_artifact_if_current_lease(
-            db_pool, artifact_obj, lease_token, worker_id=worker_id
+            db_pool, artifact_obj, lease_token, worker_id=artifact_worker_id
         )
         if artifact is None:
             raise RuntimeError("task lease was lost before artifact publication")

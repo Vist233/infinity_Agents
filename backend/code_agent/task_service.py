@@ -673,6 +673,25 @@ async def _worker_scope(pool, worker_id: str) -> Dict[str, Any]:
             worker_id,
         )
     if not row:
+        # The one-command local stack deliberately starts an unenrolled
+        # development Worker.  All local browser requests use the shared
+        # ``local-admin`` principal, so give that compatibility Worker the
+        # same owner scope without creating a production enrollment row.
+        # This branch is only consumed by the development compatibility path
+        # below; acceptance/production still fail closed on missing enrollment.
+        if os.getenv("APP_ENV", "development").lower() in {"development", "dev", "test"}:
+            return {
+                "enrolled": False,
+                "owner_user_id": os.getenv("LOCAL_WORKER_SHARED_USER_ID", "local-admin").strip() or "local-admin",
+                "namespace": None,
+                "execution_pool": "public-default",
+                "protocol_version": "legacy-v0",
+                "runtime_capability": "legacy",
+                "image_digest": None,
+                "active_instance_id": None,
+                "ready": False,
+                "session_epoch": 0,
+            }
         return {
             "enrolled": False,
             "owner_user_id": None,

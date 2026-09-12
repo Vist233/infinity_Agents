@@ -39,6 +39,10 @@ bash scripts/run-local.sh
 4. 启动 FastAPI、Next.js 和本地 Worker；
 5. 将日志和 PID 写入 `local-data/`，便于停止或排障。
 
+默认 `CODE_AGENT_EXECUTOR_MODE=local-fixture`，Worker 不需要模型凭证，会为每个任务生成
+确定性的 JSON Artifact，适合验证 Task→Attempt→Artifact。需要真实 Claude Code 执行时，
+改为 `direct` 并配置本地模型 Provider。
+
 打开 `http://localhost:3000`。停止全部本地服务而不删除数据：
 
 ```bash

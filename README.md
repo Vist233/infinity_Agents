@@ -48,8 +48,9 @@ PostgreSQL、Redis、Python API、前端和本地 Worker。打开 `http://localh
 ## Worker
 
 Worker 随 `run-local.sh` 启动并保持空闲。创建任务后，如果需要由 Claude Code 产生
-研究结果，再在 Task Center 配置一个你自己的模型 Provider；这不是启动本地产品所需的
-生产凭证。
+研究结果，再把 `CODE_AGENT_EXECUTOR_MODE` 改为 `direct` 并在 Task Center 配置你自己的
+模型 Provider。默认的 `local-fixture` 会生成确定性的本地 Artifact，用于验收完整链路，
+这不是启动本地产品所需的生产凭证。
 
 ```bash
 # 注册 Worker (API 需先启动)
