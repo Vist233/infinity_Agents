@@ -126,6 +126,7 @@ async def check_postgres():
 asyncio.run(check_postgres())
 assert redis.Redis.from_url(os.environ["LOCAL_REDIS_URL"]).ping()
 print("    Local runtime aliases: connected")
+PY
 echo "    Migrations complete."
 
 # 6. Create storage directories
