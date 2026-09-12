@@ -36,3 +36,8 @@ Known limitations and deliberate gates:
    The Edge now isolates transient session/renew/recovery batches, but the
    stranded Task must be reconciled by the normal scheduler after write
    availability returns; no manual D1 status write was made.
+8. A subsequent offline-only hardening pass covers browser auth and Discovery
+   persistence behavior during write failures and passed local regressions, but
+   it was not live-deployed or validated against the stranded Task while the
+   D1 write gate remained blocked. See
+   `D14/final-regression/auth-discovery-hardening-20260913.md`.

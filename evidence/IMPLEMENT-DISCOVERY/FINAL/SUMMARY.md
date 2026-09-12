@@ -47,6 +47,14 @@ running with restart count 0 on the local r3 image digest
 The isolated Windows Discovery Processor is running with restart count 0 and digest
 `sha256:2bb2a1c1171e28e646006d185a2fc9bab3fb190b3aa1b0778e04194087147496`.
 
+After the follow-up observation, an offline-only hardening pass added bounded
+auth behavior for D1 write failures and reinforced the Discovery evidence,
+task-read, immutable-source, and deletion gates. It passed the TypeScript
+check, the full Edge suite (32 files / 199 tests), and the relevant Python
+artifact/security suite (34 tests). It was not live-deployed or used to
+reinterpret the blocked Task result; see
+`D14/final-regression/auth-discovery-hardening-20260913.md`.
+
 The live selected Task was visible in Task Center but failed after three
 lease-expired Attempts; it has no Artifact and no duplicate Task was created.
 An existing published Task's authenticated download was independently verified

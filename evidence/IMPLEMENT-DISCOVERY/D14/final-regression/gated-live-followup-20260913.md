@@ -62,6 +62,15 @@ recording, plus an unavailable recovery batch.
 The complete offline Edge suite then passed 31 files / 190 tests; the relevant
 Python Worker, consumer, LLM, and security suites passed 34 tests.
 
+An additional offline-only hardening pass after this live observation added
+auth role-projection/migration/refresh write-failure containment and tightened
+the Discovery evidence, task-read, immutable-source, and deletion boundaries.
+The updated full Edge suite passed 32 files / 199 tests, `npm run check`
+passed, and the same Python artifact/security subset passed 34 tests. These
+changes are recorded in
+`auth-discovery-hardening-20260913.md`; they were not live-deployed or used to
+claim that the stranded Task completed.
+
 ## Root-cause diagnosis from bounded local and Windows evidence
 
 At `2026-09-12T16:42:52Z`, a status-only Windows recheck found both Workers

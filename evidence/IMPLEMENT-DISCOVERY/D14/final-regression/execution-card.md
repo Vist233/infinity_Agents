@@ -34,3 +34,8 @@ was claimed, no duplicate was created, and no manual D1 state write was made.
 The bounded record is `gated-live-followup-20260913.md`. The Edge hardening
 deployed as `9d898d5d-9753-4e14-bf0f-1fb25c829127`; local Worker v2 and lease
 recovery regressions passed. Literature and live Kimi remain open.
+
+The later offline-only auth/Discovery resilience pass is recorded in
+`auth-discovery-hardening-20260913.md`. It passed the TypeScript check, the
+full Edge suite (32 files / 199 tests), and the relevant Python suite (34
+tests), but was not live-deployed while the D1 write gate remained blocked.

@@ -35,7 +35,7 @@ import {
 } from "./discovery-contracts";
 import { getPaperObject, getPaperObjectAtKey } from "./paper-object-store";
 import { deleteDiscoveryObject, deleteDiscoveryObjectAtKey, discoveryObjectKey, putDiscoveryObject } from "./discovery-object-store";
-import { hashText, Sha256 } from "./sha256";
+import { hashReadableStream, hashText, Sha256 } from "./sha256";
 import { isApprovedDiscoveryProcessorRequest, isDiscoveryProcessorNamespacePath } from "./discovery-processor-access";
 import { createDiscoveryTask } from "./discovery-task";
 
@@ -44,6 +44,7 @@ const SESSION_TTL_SECONDS = 15 * 60;
 const MAX_CONTROL_BYTES = 2 * 1024 * 1024;
 const MAX_PROFILE_BYTES = 1_048_576;
 const MAX_OVERVIEW_BYTES = 256 * 1024;
+const MAX_COLLECTION_SOURCE_BYTES = 25 * 1024 * 1024;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/;
 const ERROR_CODE = /^[A-Z0-9_]{1,64}$/;
 
@@ -349,7 +350,7 @@ async function savePaper(request: Request, env: Env, context: SessionContext, bo
 
 async function createCandidatesForPaper(env: Env, paperRow: PaperCatalogRow): Promise<void> {
   const paper = paperRow.profile_json ? normalizePaperProfile(JSON.parse(paperRow.profile_json)) : null;
-  if (!paper || paperRow.status !== "profiled") return;
+  if (!paper || paperRow.status !== "profiled" || paperRow.spam_status !== "scientific_paper" || paperEvidenceStatus(paper) !== "scientific_paper") return;
   const collections = await env.DB.prepare("SELECT * FROM data_collections WHERE status = 'ready' ORDER BY created_at ASC LIMIT 512").all<DataCollectionRow>();
   for (const collection of collections.results ?? []) {
     if (paperRow.visibility !== "public" && collection.owner_user_id !== paperRow.owner_user_id) continue;
@@ -370,6 +371,41 @@ async function createCandidatesForPaper(env: Env, paperRow: PaperCatalogRow): Pr
   }
 }
 
+/**
+ * Revalidate the immutable dataset object at the point its profile is
+ * committed. The processor receives the same metadata through `input`, but a
+ * profile must not become authoritative unless Edge independently confirms
+ * that the R2 bytes still match the D1 snapshot.
+ */
+async function validateCollectionSource(env: Env, collection: DataCollectionRow): Promise<Response | null> {
+  if (!Number.isSafeInteger(collection.source_size_bytes) || collection.source_size_bytes <= 0
+    || collection.source_size_bytes > MAX_COLLECTION_SOURCE_BYTES
+    || !/^[0-9a-fA-F]{64}$/.test(collection.source_sha256)) {
+    return errorJson("Dataset source integrity metadata is invalid", 409, "DISCOVERY_DATASET_SOURCE_INTEGRITY");
+  }
+  if (!env.RESOURCE_BUCKET) return errorJson("Dataset object storage is unavailable", 503, "DISCOVERY_STORAGE_UNAVAILABLE");
+  let object: R2ObjectBody | null;
+  try {
+    object = await env.RESOURCE_BUCKET.get(collection.source_object_key);
+  } catch {
+    return errorJson("Dataset source could not be read", 503, "DISCOVERY_DATASET_SOURCE_UNAVAILABLE");
+  }
+  if (!object?.body) return errorJson("Dataset source is not available", 503, "DISCOVERY_DATASET_SOURCE_UNAVAILABLE");
+  if (object.size !== collection.source_size_bytes) {
+    return errorJson("Dataset source size does not match its frozen metadata", 409, "DISCOVERY_DATASET_SOURCE_INTEGRITY");
+  }
+  let measured: { size: number; sha256: string };
+  try {
+    measured = await hashReadableStream(object.body, MAX_COLLECTION_SOURCE_BYTES);
+  } catch {
+    return errorJson("Dataset source could not be validated", 503, "DISCOVERY_DATASET_SOURCE_UNAVAILABLE");
+  }
+  if (measured.size !== collection.source_size_bytes || measured.sha256.toLowerCase() !== collection.source_sha256.toLowerCase()) {
+    return errorJson("Dataset source checksum does not match its frozen metadata", 409, "DISCOVERY_DATASET_SOURCE_INTEGRITY");
+  }
+  return null;
+}
+
 async function saveDataset(request: Request, env: Env, context: SessionContext, body: Record<string, unknown>): Promise<Response> {
   const identity = workIdentity(body);
   if (identity instanceof Response) return identity;
@@ -384,6 +420,8 @@ async function saveDataset(request: Request, env: Env, context: SessionContext, 
     if (collection?.status === "ready" && collection.profile_version === profile.profile_version && collection.profile_sha256 === sha256) return json({ work_id: collection.collection_id, status: "ready", idempotent: true });
     return authorized;
   }
+  const sourceIntegrity = await validateCollectionSource(env, authorized.collection!);
+  if (sourceIntegrity) return sourceIntegrity;
   const objectInput = { collectionId: identity.workId, leaseOwner: context.session.processor_session_id, fencingEpoch: identity.fencingEpoch };
   const profileObjectKey = discoveryObjectKey("dataset_profile", objectInput);
   if (!profileObjectKey) return errorJson("Dataset Profile storage key is invalid", 500, "DISCOVERY_STORAGE_UNAVAILABLE");
@@ -423,6 +461,7 @@ async function createCandidatesForCollection(env: Env, collectionRow: DataCollec
   if (!dataset || collectionRow.status !== "ready") return;
   const papers = await env.DB.prepare("SELECT * FROM paper_catalog WHERE status = 'profiled' ORDER BY created_at ASC LIMIT 512").all<PaperCatalogRow>();
   for (const paperRow of papers.results ?? []) {
+    if (paperRow.spam_status !== "scientific_paper") continue;
     if (paperRow.visibility !== "public" && paperRow.owner_user_id !== collectionRow.owner_user_id) continue;
     let paper: PaperProfile | null = null;
     try { paper = paperRow.profile_json ? normalizePaperProfile(JSON.parse(paperRow.profile_json)) : null; } catch { paper = null; }
@@ -446,7 +485,7 @@ export async function reconcileDiscoveryCandidates(env: Env, limit = 16): Promis
   const page = Math.min(32, Math.max(1, limit));
   const papers = await env.DB.prepare(
     `SELECT p.* FROM paper_catalog p
-      WHERE p.status = 'profiled' AND EXISTS (
+      WHERE p.status = 'profiled' AND p.spam_status = 'scientific_paper' AND EXISTS (
         SELECT 1 FROM data_collections c
          WHERE c.status = 'ready'
            AND (p.visibility = 'public' OR c.owner_user_id = p.owner_user_id)
@@ -465,7 +504,7 @@ export async function reconcileDiscoveryCandidates(env: Env, limit = 16): Promis
     `SELECT c.* FROM data_collections c
       WHERE c.status = 'ready' AND EXISTS (
         SELECT 1 FROM paper_catalog p
-         WHERE p.status = 'profiled'
+         WHERE p.status = 'profiled' AND p.spam_status = 'scientific_paper'
            AND (p.visibility = 'public' OR p.owner_user_id = c.owner_user_id)
            AND NOT EXISTS (
              SELECT 1 FROM research_matches m
@@ -491,7 +530,7 @@ async function createMatch(request: Request, env: Env, _context: SessionContext,
   const collectionRow = await getCollectionById(env, collectionId);
   const paper = paperRow?.profile_json ? normalizePaperProfile(JSON.parse(paperRow.profile_json)) : null;
   const dataset = collectionRow?.profile_json ? normalizeDatasetProfile(JSON.parse(collectionRow.profile_json), collectionId) : null;
-  if (!paperRow || !collectionRow || paperRow.status !== "profiled" || collectionRow.status !== "ready" || !paper || !dataset || paper.profile_version !== paperVersion || dataset.profile_version !== datasetVersion) return errorJson("Match inputs are not ready", 409, "DISCOVERY_MATCH_INPUT_NOT_READY");
+  if (!paperRow || !collectionRow || !paper || !dataset || paperRow.status !== "profiled" || paperRow.spam_status !== "scientific_paper" || paperEvidenceStatus(paper) !== "scientific_paper" || collectionRow.status !== "ready" || paper.profile_version !== paperVersion || dataset.profile_version !== datasetVersion) return errorJson("Match inputs are not ready", 409, "DISCOVERY_MATCH_INPUT_NOT_READY");
   const coverage = coarseMatch(paper, dataset);
   const match = await createResearchMatchIfMissing(env, { matchId, paperId, collectionId, paperProfileVersion: paperVersion, datasetProfileVersion: datasetVersion, coverageRatio: coverage.coverage_ratio, candidateReason: coverage.candidate_reason });
   return match ? json({ match, coverage }) : errorJson("Match could not be persisted", 503, "DISCOVERY_MATCH_PERSIST_FAILED");

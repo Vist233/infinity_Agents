@@ -17,6 +17,12 @@ import { verifyIdToken } from "./jwt";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30d, matches refresh token TTL
 const STATE_TTL_SECONDS = 60 * 10;
 const CSRF_TTL_SECONDS = SESSION_TTL_SECONDS;
+// The role row is a product-side projection, not an authentication
+// dependency.  Avoid writing it on every browser poll while still allowing a
+// role change to converge in a warm Worker isolate.
+const ROLE_PROJECTION_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const MAX_ROLE_PROJECTION_KEYS = 1_024;
+const roleProjectionAttempts = new Map<string, number>();
 
 interface OidcTransaction {
   state: string;
@@ -33,6 +39,53 @@ export interface AuthedUser {
   sid: string;
   /** Zhang Auth role used for server-side Worker trust assignment. */
   role?: string;
+}
+
+async function projectUserRoleBestEffort(env: Env, userId: string, role: string): Promise<void> {
+  const normalizedRole = role || "user";
+  const key = `${userId}:${normalizedRole}`;
+  const now = Date.now();
+  for (const [candidate, attemptedAt] of roleProjectionAttempts) {
+    if (now - attemptedAt >= ROLE_PROJECTION_MIN_INTERVAL_MS) roleProjectionAttempts.delete(candidate);
+  }
+  const previousAttempt = roleProjectionAttempts.get(key);
+  if (previousAttempt !== undefined && now - previousAttempt < ROLE_PROJECTION_MIN_INTERVAL_MS) return;
+  roleProjectionAttempts.set(key, now);
+  while (roleProjectionAttempts.size > MAX_ROLE_PROJECTION_KEYS) {
+    const oldest = roleProjectionAttempts.keys().next().value;
+    if (typeof oldest !== "string") break;
+    roleProjectionAttempts.delete(oldest);
+  }
+  try {
+    await upsertUserAccessRole(env, userId, normalizedRole);
+  } catch (error) {
+    // This projection must never turn a successfully verified session into a
+    // 500 during a transient D1 write outage.  Keep diagnostics bounded and
+    // free of session IDs, tokens, user IDs, and provider response bodies.
+    console.warn("auth.role_projection_unavailable", {
+      error_type: error instanceof Error ? error.name : "unknown",
+    });
+  }
+}
+
+async function releaseRefreshBestEffort(env: Env, sid: string, owner: string): Promise<void> {
+  try {
+    await releaseAuthSessionRefresh(env, sid, owner);
+  } catch (error) {
+    console.warn("auth.refresh_release_unavailable", {
+      error_type: error instanceof Error ? error.name : "unknown",
+    });
+  }
+}
+
+async function revokeRefreshOwnerBestEffort(env: Env, sid: string, owner: string): Promise<void> {
+  try {
+    await revokeAuthSessionRefreshOwner(env, sid, owner);
+  } catch (error) {
+    console.warn("auth.refresh_revoke_unavailable", {
+      error_type: error instanceof Error ? error.name : "unknown",
+    });
+  }
 }
 
 function randomToken(bytes = 32): string {
@@ -236,34 +289,69 @@ export async function resolveUser(
   const sid = cookies[SESSION_COOKIE];
   if (!sid) return null;
 
-  const session = await getAuthSession(env, sid);
+  let session: Awaited<ReturnType<typeof getAuthSession>>;
+  try {
+    session = await getAuthSession(env, sid);
+  } catch (error) {
+    console.warn("auth.session_read_unavailable", {
+      error_type: error instanceof Error ? error.name : "unknown",
+    });
+    return null;
+  }
   if (!session) return null;
 
   // Refresh proactively if the access token is expired or about to expire.
   if (session.access_expires_at - nowSeconds() <= 30) {
-    const refreshed = await refreshSession(env, session.sid, session.refresh_token);
+    let refreshed: "refreshed" | "pending" | "failed";
+    try {
+      refreshed = await refreshSession(env, session.sid, session.refresh_token);
+    } catch (error) {
+      console.warn("auth.session_refresh_unavailable", {
+        error_type: error instanceof Error ? error.name : "unknown",
+      });
+      return null;
+    }
     if (refreshed !== "refreshed") return null;
   }
 
-  const current = await getAuthSession(env, sid);
+  let current: Awaited<ReturnType<typeof getAuthSession>>;
+  try {
+    current = await getAuthSession(env, sid);
+  } catch (error) {
+    console.warn("auth.session_read_unavailable", {
+      error_type: error instanceof Error ? error.name : "unknown",
+    });
+    return null;
+  }
   if (!current) return null;
 
+  let payload: Awaited<ReturnType<typeof verifyAccessToken>>;
   try {
-    const payload = await verifyAccessToken(current.access_token, env);
+    payload = await verifyAccessToken(current.access_token, env);
     if (payload.sub !== current.user_id) {
       throw new Error("Access token subject does not match the site session");
     }
-    const setCookies = [sessionCookie(sid)];
-    if (!cookies[CSRF_COOKIE]) setCookies.push(csrfCookie(randomToken(32)));
-    await upsertUserAccessRole(env, payload.sub, payload.role ?? "user");
-    return {
-      user: { userId: payload.sub, email: payload.email ?? current.email, name: payload.name ?? null, sid, role: payload.role ?? "user" },
-      setCookies,
-    };
   } catch {
-    await revokeAuthSession(env, sid);
+    // Revocation is a security hygiene action, but D1 availability must not
+    // make an invalid-token response escape as an unhandled 500.
+    try {
+      await revokeAuthSession(env, sid);
+    } catch (error) {
+      console.warn("auth.session_revoke_unavailable", {
+        error_type: error instanceof Error ? error.name : "unknown",
+      });
+    }
     return null;
   }
+
+  const role = payload.role || "user";
+  await projectUserRoleBestEffort(env, payload.sub, role);
+  const setCookies = [sessionCookie(sid)];
+  if (!cookies[CSRF_COOKIE]) setCookies.push(csrfCookie(randomToken(32)));
+  return {
+    user: { userId: payload.sub, email: payload.email ?? current.email, name: payload.name ?? null, sid, role },
+    setCookies,
+  };
 }
 
 async function refreshSession(
@@ -272,7 +360,15 @@ async function refreshSession(
   refreshToken: string,
 ): Promise<"refreshed" | "pending" | "failed"> {
   const owner = randomToken(24);
-  const claimed = await claimAuthSessionRefresh(env, sid, owner, nowSeconds());
+  let claimed: boolean;
+  try {
+    claimed = await claimAuthSessionRefresh(env, sid, owner, nowSeconds());
+  } catch (error) {
+    console.warn("auth.refresh_claim_unavailable", {
+      error_type: error instanceof Error ? error.name : "unknown",
+    });
+    return "failed";
+  }
   if (!claimed) {
     // A concurrent request owns rotation. Wait briefly for its committed token
     // instead of sending the same one-time refresh token to the provider.
@@ -297,7 +393,7 @@ async function refreshSession(
       body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }).toString(),
     });
   } catch {
-    await releaseAuthSessionRefresh(env, sid, owner);
+    await releaseRefreshBestEffort(env, sid, owner);
     return "pending";
   }
   let payload: {
@@ -308,19 +404,19 @@ async function refreshSession(
   try {
     payload = (await res.json()) as typeof payload;
   } catch {
-    await releaseAuthSessionRefresh(env, sid, owner);
+    await releaseRefreshBestEffort(env, sid, owner);
     return "pending";
   }
   if (!res.ok) {
     if (res.status >= 400 && res.status < 500) {
-      await revokeAuthSessionRefreshOwner(env, sid, owner);
+      await revokeRefreshOwnerBestEffort(env, sid, owner);
       return "failed";
     }
-    await releaseAuthSessionRefresh(env, sid, owner);
+    await releaseRefreshBestEffort(env, sid, owner);
     return "pending";
   }
   if (!payload.access_token || !payload.refresh_token) {
-    await releaseAuthSessionRefresh(env, sid, owner);
+    await releaseRefreshBestEffort(env, sid, owner);
     return "pending";
   }
   let exp = nowSeconds() + (payload.expires_in ?? 900);
@@ -328,12 +424,29 @@ async function refreshSession(
     const verified = await verifyAccessToken(payload.access_token, env);
     exp = verified.exp;
   } catch {
-    await releaseAuthSessionRefresh(env, sid, owner);
+    await releaseRefreshBestEffort(env, sid, owner);
     return "pending";
   }
-  const updated = await updateAuthSessionTokens(env, sid, payload.access_token, exp, payload.refresh_token, owner);
+  let updated: boolean;
+  try {
+    updated = await updateAuthSessionTokens(env, sid, payload.access_token, exp, payload.refresh_token, owner);
+  } catch (error) {
+    console.warn("auth.refresh_persist_unavailable", {
+      error_type: error instanceof Error ? error.name : "unknown",
+    });
+    await releaseRefreshBestEffort(env, sid, owner);
+    return "pending";
+  }
   if (updated) return "refreshed";
-  const current = await getAuthSession(env, sid);
+  let current: Awaited<ReturnType<typeof getAuthSession>>;
+  try {
+    current = await getAuthSession(env, sid);
+  } catch (error) {
+    console.warn("auth.session_read_unavailable", {
+      error_type: error instanceof Error ? error.name : "unknown",
+    });
+    return "pending";
+  }
   return current && current.access_expires_at - nowSeconds() > 30 ? "refreshed" : "pending";
 }
 
@@ -344,7 +457,13 @@ export async function handleLogout(request: Request, env: Env): Promise<Response
   if (sid) {
     const session = await getAuthSession(env, sid);
     if (session) {
-      await revokeAuthSession(env, sid);
+      try {
+        await revokeAuthSession(env, sid);
+      } catch (error) {
+        console.warn("auth.session_revoke_unavailable", {
+          error_type: error instanceof Error ? error.name : "unknown",
+        });
+      }
     }
   }
   const headers = new Headers();

@@ -12,6 +12,20 @@ class MemoryBucket {
     else if (value instanceof ArrayBuffer) this.objects.set(key, new Uint8Array(value));
     else this.objects.set(key, new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice());
   }
+
+  async get(key: string): Promise<unknown | null> {
+    const value = this.objects.get(key);
+    if (!value) return null;
+    return {
+      size: value.byteLength,
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(value);
+          controller.close();
+        },
+      }),
+    };
+  }
 }
 
 function processorRequest(path: string, init: RequestInit = {}): Request {
@@ -120,5 +134,89 @@ describe("Discovery Processor control protocol", () => {
     expect(response?.status).toBe(409);
     expect(await response!.json()).toMatchObject({ error: { code: "DISCOVERY_EVALUATION_COVERAGE_MISMATCH" } });
     expect(db.researchMatches.get("match-1")?.status).toBe("evaluating");
+  });
+
+  it("rejects a paper profile without located document evidence before persistence", async () => {
+    const { env, db } = makeEnv();
+    const bucket = new MemoryBucket();
+    env.RESOURCE_BUCKET = bucket as unknown as Env["RESOURCE_BUCKET"];
+    env.DISCOVERY_PROCESSOR_ID = "discovery-processor-1";
+    env.DISCOVERY_PROCESSOR_SHARED_SECRET = "discovery-bootstrap-secret";
+    const sourceHeaders = { "content-type": "application/json", "cf-connecting-ip": "203.0.113.11" };
+    const connected = await handleDiscoveryProcessorApi(processorRequest("/api/discovery-processor/connect", {
+      method: "POST",
+      headers: { ...sourceHeaders, "x-discovery-processor-id": "discovery-processor-1", "x-discovery-processor-token": "discovery-bootstrap-secret" },
+      body: JSON.stringify({ instance_id: "instance-paper-evidence" }),
+    }), env);
+    const session = await connected!.json() as { processor_session_id: string; processor_session_token: string };
+    const leaseToken = "lease-token-for-paper-evidence-123456";
+    const now = Math.floor(Date.now() / 1000);
+    db.paperCatalog.set("paper-evidence", {
+      paper_id: "paper-evidence", owner_user_id: null, source_resource_id: "resource-1", visibility: "public",
+      title: "Example paper", authors_json: "[]", year: 2023, venue: "Test venue", status: "processing", spam_status: "pending",
+      profile_version: null, profile_json: null, profile_sha256: null, profile_object_key: null, overview_object_key: null,
+      created_at: now, updated_at: now, discovery_lease_owner: session.processor_session_id,
+      discovery_lease_expires_at: now + 300, discovery_lease_token_hash: hashText(leaseToken), discovery_fencing_epoch: 1,
+    });
+    const invalidProfile = {
+      ...PAPER_PROFILE,
+      provenance: { ...PAPER_PROFILE.provenance, source_resource_id: "resource-1" },
+      analysis_modules: PAPER_PROFILE.analysis_modules.map((module) => ({ ...module, evidence: [] })),
+    };
+    const response = await handleDiscoveryProcessorApi(processorRequest("/api/discovery-processor/control", {
+      method: "POST",
+      headers: { ...sourceHeaders, "x-discovery-processor-session": session.processor_session_token, "x-discovery-processor-lease-token": leaseToken },
+      body: JSON.stringify({
+        operation: "save_paper_profile", kind: "paper", work_id: "paper-evidence", resource_id: "resource-1", fencing_epoch: 1,
+        profile: invalidProfile, overview: "Overview",
+      }),
+    }), env);
+
+    expect(response?.status).toBe(422);
+    expect(await response!.json()).toMatchObject({ error: { code: "DISCOVERY_PAPER_EVIDENCE_REVIEW" } });
+    expect(db.paperCatalog.get("paper-evidence")).toMatchObject({ status: "failed", spam_status: "review", profile_json: null });
+    expect(bucket.objects.size).toBe(0);
+  });
+
+  it.each([
+    ["checksum", "source-hash"],
+    ["size", "source-size"],
+  ])("validates the immutable dataset source %s before saving its profile", async (_kind, collectionId) => {
+    const { env, db } = makeEnv();
+    const bucket = new MemoryBucket();
+    env.RESOURCE_BUCKET = bucket as unknown as Env["RESOURCE_BUCKET"];
+    env.DISCOVERY_PROCESSOR_ID = "discovery-processor-1";
+    env.DISCOVERY_PROCESSOR_SHARED_SECRET = "discovery-bootstrap-secret";
+    const sourceHeaders = { "content-type": "application/json", "cf-connecting-ip": "203.0.113.11" };
+    const connected = await handleDiscoveryProcessorApi(processorRequest("/api/discovery-processor/connect", {
+      method: "POST",
+      headers: { ...sourceHeaders, "x-discovery-processor-id": "discovery-processor-1", "x-discovery-processor-token": "discovery-bootstrap-secret" },
+      body: JSON.stringify({ instance_id: `instance-${collectionId}` }),
+    }), env);
+    const session = await connected!.json() as { processor_session_id: string; processor_session_token: string };
+    const leaseToken = `lease-token-for-${collectionId}-123456`;
+    const source = new TextEncoder().encode("a,b\n1,2\n");
+    const sourceKey = `datasets/${collectionId}/source/data.csv`;
+    bucket.objects.set(sourceKey, source);
+    const now = Math.floor(Date.now() / 1000);
+    db.dataCollections.set(collectionId, {
+      collection_id: collectionId, owner_user_id: "alice", name: "Data", source_object_key: sourceKey,
+      source_filename: "data.csv", source_content_type: "text/csv", source_sha256: _kind === "checksum" ? "f".repeat(64) : hashText(new TextDecoder().decode(source)),
+      source_size_bytes: _kind === "size" ? source.byteLength + 1 : source.byteLength, status: "inspecting",
+      profile_version: null, profile_json: null, profile_sha256: null, profile_object_key: null, error_code: null,
+      error_message_safe: null, created_at: now, updated_at: now, discovery_lease_owner: session.processor_session_id,
+      discovery_lease_expires_at: now + 300, discovery_lease_token_hash: hashText(leaseToken), discovery_fencing_epoch: 1,
+    });
+    const profile = { ...DATASET_PROFILE, collection_id: collectionId, provenance: { ...DATASET_PROFILE.provenance, collection_id: collectionId } };
+    const response = await handleDiscoveryProcessorApi(processorRequest("/api/discovery-processor/control", {
+      method: "POST",
+      headers: { ...sourceHeaders, "x-discovery-processor-session": session.processor_session_token, "x-discovery-processor-lease-token": leaseToken },
+      body: JSON.stringify({ operation: "save_dataset_profile", kind: "collection", work_id: collectionId, fencing_epoch: 1, profile }),
+    }), env);
+
+    expect(response?.status).toBe(409);
+    expect(await response!.json()).toMatchObject({ error: { code: "DISCOVERY_DATASET_SOURCE_INTEGRITY" } });
+    expect(db.dataCollections.get(collectionId)).toMatchObject({ status: "inspecting", profile_json: null, profile_object_key: null });
+    expect([...bucket.objects.keys()].filter((key) => key.includes("dataset-profile"))).toHaveLength(0);
   });
 });

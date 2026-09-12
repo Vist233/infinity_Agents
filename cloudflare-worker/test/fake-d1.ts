@@ -542,6 +542,7 @@ class FakeStatement {
           && collection.owner_user_id === userId
           && collection.status !== "deleted"
           && paper.status !== "deleted"
+          && (!sql.includes("p.spam_status = 'scientific_paper'") || paper.spam_status === "scientific_paper")
           && (paper.owner_user_id === userId || paper.visibility === "public")
           ? match as T
           : null;
@@ -949,7 +950,9 @@ class FakeStatement {
         .filter((match) => {
           const paper = this.db.paperCatalog.get(match.paper_id);
           const collection = this.db.dataCollections.get(match.collection_id);
-          return collection?.owner_user_id === userId && collection.status !== "deleted" && paper?.status !== "deleted" && (paper?.owner_user_id === userId || paper?.visibility === "public");
+          return collection?.owner_user_id === userId && collection.status !== "deleted" && paper?.status !== "deleted"
+            && (!sql.includes("p.spam_status = 'scientific_paper'") || paper?.spam_status === "scientific_paper")
+            && (paper?.owner_user_id === userId || paper?.visibility === "public");
         })
         .sort((left, right) => right.updated_at - left.updated_at || left.match_id.localeCompare(right.match_id))
         .slice(0, Number(limit));

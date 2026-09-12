@@ -32,3 +32,8 @@ that lease expired, and the Edge was deployed as
 `9d898d5d-9753-4e14-bf0f-1fb25c829127`. Literature and live Kimi gates were
 not run, and the existing flags/services remain in their safe state. See
 `gated-live-followup-20260913.md`.
+
+An offline-only follow-on then hardened browser auth and Discovery persistence
+boundaries for D1/R2 write failures. `npm run check`, the full Edge suite
+(32 files / 199 tests), and the relevant Python artifact/security suite (34
+tests) passed. It was not live-deployed and does not alter the blocked gate.

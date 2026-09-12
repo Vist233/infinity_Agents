@@ -98,3 +98,15 @@ time.
 - D13 deployment, health, D1, R2, Processor, and live shadow: `D13/deploy/`.
 - D14 regression, gated live run, and test output: `D14/final-regression/`.
 - Current final summary, known limitations, and rollback: this directory.
+
+## Offline follow-on hardening (not a live pass)
+
+After the D1 write-side outage was reproduced, a local-only pass contained
+browser auth role-projection, token-migration, refresh, and invalid-session
+cleanup writes, and reinforced the deterministic Paper evidence and immutable
+Dataset source gates. It also added regression coverage for all live Task
+states blocking collection deletion and for hiding review-paper matches.
+`npm run check` and the full Edge suite (32 files / 199 tests) passed; the
+relevant Python artifact/security subset passed 34 tests. The code was not
+live-deployed during this blocked state, so these checks do not close the
+Claude/Artifact, Literature Watcher, or live-model gates.

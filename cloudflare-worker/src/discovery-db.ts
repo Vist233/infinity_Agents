@@ -1,6 +1,6 @@
 import type { Env } from "./env";
 import { nowSeconds } from "./http";
-import type { HardGate, MatchStatus, PaperCatalogStatus, SpamStatus, CollectionStatus } from "./discovery-contracts";
+import { normalizePaperProfile, paperEvidenceStatus, type HardGate, type MatchStatus, type PaperCatalogStatus, type SpamStatus, type CollectionStatus } from "./discovery-contracts";
 
 export interface PaperCatalogRow {
   paper_id: string;
@@ -325,6 +325,16 @@ export async function savePaperProfile(
   env: Env,
   input: { paperId: string; profileVersion: string; profileJson: string; profileSha256: string; profileObjectKey: string; overviewObjectKey: string; spamStatus: SpamStatus; title: string; authorsJson: string; year: number | null; venue: string | null; leaseOwner?: string; leaseTokenHash?: string; fencingEpoch?: number; now?: number },
 ): Promise<boolean> {
+  let profile: ReturnType<typeof normalizePaperProfile> = null;
+  try {
+    profile = normalizePaperProfile(JSON.parse(input.profileJson));
+  } catch {
+    profile = null;
+  }
+  // Keep the deterministic document gate at the persistence boundary too.
+  // This prevents a future processor caller from turning a schema-valid
+  // non-paper/review profile into a matching-eligible `profiled` row.
+  if (input.spamStatus !== "scientific_paper" || !profile || paperEvidenceStatus(profile) !== "scientific_paper") return false;
   const now = input.now ?? nowSeconds();
   const result = await env.DB.prepare(
     `UPDATE paper_catalog SET status = 'profiled', spam_status = ?2, profile_version = ?3,
@@ -458,8 +468,9 @@ export async function listMatchesForUser(env: Env, userId: string, limit = 100):
   const result = await env.DB.prepare(
     `SELECT m.* FROM research_matches m
       JOIN paper_catalog p ON p.paper_id = m.paper_id
-      JOIN data_collections c ON c.collection_id = m.collection_id
+     JOIN data_collections c ON c.collection_id = m.collection_id
      WHERE c.owner_user_id = ?1 AND p.status <> 'deleted' AND c.status <> 'deleted'
+       AND p.spam_status = 'scientific_paper'
        AND (p.owner_user_id = ?1 OR p.visibility = 'public')
      ORDER BY m.updated_at DESC, m.match_id ASC LIMIT ?2`,
   ).bind(userId, Math.min(100, Math.max(1, limit))).all<ResearchMatchRow>();
@@ -473,6 +484,7 @@ export async function getMatchForUser(env: Env, matchId: string, userId: string)
       JOIN data_collections c ON c.collection_id = m.collection_id
      WHERE m.match_id = ?1 AND c.owner_user_id = ?2
        AND p.status <> 'deleted' AND c.status <> 'deleted'
+       AND p.spam_status = 'scientific_paper'
        AND (p.owner_user_id = ?2 OR p.visibility = 'public')`,
   ).bind(matchId, userId).first<ResearchMatchRow>();
 }

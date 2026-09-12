@@ -320,6 +320,28 @@ export interface OwnedTaskRow {
   chat_confirmation_id: string | null;
 }
 
+// Legacy sessions are migrated lazily. Keep a failed migration from turning
+// every browser poll into another D1 write while the database is unavailable.
+const AUTH_TOKEN_MIGRATION_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const MAX_AUTH_TOKEN_MIGRATION_KEYS = 1_024;
+const authTokenMigrationAttempts = new Map<string, number>();
+
+function shouldAttemptAuthTokenMigration(sid: string): boolean {
+  const now = Date.now();
+  for (const [candidate, attemptedAt] of authTokenMigrationAttempts) {
+    if (now - attemptedAt >= AUTH_TOKEN_MIGRATION_MIN_INTERVAL_MS) authTokenMigrationAttempts.delete(candidate);
+  }
+  const previousAttempt = authTokenMigrationAttempts.get(sid);
+  if (previousAttempt !== undefined && now - previousAttempt < AUTH_TOKEN_MIGRATION_MIN_INTERVAL_MS) return false;
+  authTokenMigrationAttempts.set(sid, now);
+  while (authTokenMigrationAttempts.size > MAX_AUTH_TOKEN_MIGRATION_KEYS) {
+    const oldest = authTokenMigrationAttempts.keys().next().value;
+    if (typeof oldest !== "string") break;
+    authTokenMigrationAttempts.delete(oldest);
+  }
+  return true;
+}
+
 // --- auth sessions ---
 
 export async function insertAuthSession(
@@ -347,16 +369,25 @@ export async function getAuthSession(env: Env, sid: string): Promise<AuthSession
     decryptAuthToken(row.access_token, env, sid, "access"),
     decryptAuthToken(row.refresh_token, env, sid, "refresh"),
   ]);
-  if (legacyAccess || legacyRefresh) {
+  if ((legacyAccess || legacyRefresh) && shouldAttemptAuthTokenMigration(sid)) {
     const [encryptedAccess, encryptedRefresh] = await Promise.all([
       encryptAuthToken(accessToken, env, sid, "access"),
       encryptAuthToken(refreshToken, env, sid, "refresh"),
     ]);
-    await env.DB.prepare(
-      `UPDATE auth_sessions SET access_token = ?2, refresh_token = ?3
-       WHERE sid = ?1 AND revoked_at IS NULL
-         AND access_token = ?4 AND refresh_token = ?5`,
-    ).bind(sid, encryptedAccess, encryptedRefresh, row.access_token, row.refresh_token).run();
+    try {
+      await env.DB.prepare(
+        `UPDATE auth_sessions SET access_token = ?2, refresh_token = ?3
+         WHERE sid = ?1 AND revoked_at IS NULL
+           AND access_token = ?4 AND refresh_token = ?5`,
+      ).bind(sid, encryptedAccess, encryptedRefresh, row.access_token, row.refresh_token).run();
+    } catch (error) {
+      // Token encryption is still performed in memory and the verified
+      // plaintext is returned to the caller. A transient D1 write failure
+      // must not make an otherwise valid session look unauthenticated.
+      console.warn("auth.session_token_migration_unavailable", {
+        error_type: error instanceof Error ? error.name : "unknown",
+      });
+    }
   }
   return { ...row, access_token: accessToken, refresh_token: refreshToken };
 }

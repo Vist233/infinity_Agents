@@ -2,7 +2,7 @@ import type { Env } from "./env";
 import type { DataCollectionRow, PaperCatalogRow, ResearchMatchRow } from "./discovery-db";
 import { getCollectionById, getPaperById, setMatchTask } from "./discovery-db";
 import { discoveryObjectKey, putDiscoveryObject } from "./discovery-object-store";
-import { coarseMatch, normalizeDatasetProfile, normalizePaperProfile, type DatasetProfile, type PaperProfile } from "./discovery-contracts";
+import { coarseMatch, normalizeDatasetProfile, normalizePaperProfile, paperEvidenceStatus, type DatasetProfile, type PaperProfile } from "./discovery-contracts";
 import { hashText } from "./sha256";
 import { createTrustedInternalTask } from "./tasks";
 
@@ -140,6 +140,8 @@ export async function createDiscoveryTask(env: Env, input: DiscoveryTaskInput): 
   if ((match.execution_confidence ?? 0) < 60) gateReasons.push("confidence_threshold");
   if (collection.status !== "ready") gateReasons.push("collection_status");
   if (paper.status !== "profiled") gateReasons.push("paper_status");
+  if (paper.spam_status !== "scientific_paper") gateReasons.push("paper_spam_status");
+  if (paperEvidenceStatus(paperProfile) !== "scientific_paper") gateReasons.push("paper_evidence");
   if (gateReasons.length > 0) {
     discoveryTaskDiagnostic(match, `validation:${gateReasons.slice(0, 4).join(",")}`, "rejected");
     return null;

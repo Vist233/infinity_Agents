@@ -157,7 +157,7 @@ describe("Discovery Paper and Data Collection APIs", () => {
     expect(reupload?.status).toBe(201);
   });
 
-  it("refuses to delete a collection while a queued task still references its immutable object", async () => {
+  it.each(["queued", "claimed", "running"])("refuses to delete a collection while a %s task still references its immutable object", async (taskStatus) => {
     const { env, db, bucket } = setup();
     const created = await handleDiscoveryApi(await upload("/api/discovery/data-collections", csvFile()), env, ALICE);
     const collectionId = String((await created!.json() as { collection_id: string }).collection_id);
@@ -178,7 +178,7 @@ describe("Discovery Paper and Data Collection APIs", () => {
     });
     db.tasks.set("task-1", {
       task_id: "task-1", task_spec_id: "spec-1", dataset_snapshot_id: "snapshot-1", project_id: "project-1",
-      title: "Reproduce", status: "queued", created_by: "alice", chat_confirmation_id: null,
+      title: "Reproduce", status: taskStatus, created_by: "alice", chat_confirmation_id: null,
       task_class: "public", attempt_count: 0, max_attempts: 3, created_at: 1, updated_at: 1,
     });
 
@@ -187,6 +187,32 @@ describe("Discovery Paper and Data Collection APIs", () => {
     expect(await response!.json()).toMatchObject({ error: { code: "DISCOVERY_COLLECTION_IN_USE" } });
     expect(collection.status).toBe("ready");
     expect(bucket.objects.has(collection.source_object_key)).toBe(true);
+  });
+
+  it("does not expose matches whose paper is in review", async () => {
+    const { env, db } = setup();
+    db.paperCatalog.set("paper-review", {
+      paper_id: "paper-review", owner_user_id: null, source_resource_id: "resource-review", visibility: "public",
+      title: "Review paper", authors_json: "[]", year: null, venue: null, status: "profiled", spam_status: "review",
+      profile_version: "paper-profile-v1", profile_json: null, profile_sha256: null, overview_object_key: null, created_at: 1, updated_at: 1,
+    });
+    db.dataCollections.set("collection-review", {
+      collection_id: "collection-review", owner_user_id: "alice", name: "Data", source_object_key: "datasets/review/source.csv",
+      source_filename: "source.csv", source_content_type: "text/csv", source_sha256: "a".repeat(64), source_size_bytes: 1,
+      status: "ready", profile_version: "dataset-profile-v1", profile_json: null, profile_sha256: null, error_code: null,
+      error_message_safe: null, created_at: 1, updated_at: 1,
+    });
+    db.researchMatches.set("match-review", {
+      match_id: "match-review", paper_id: "paper-review", collection_id: "collection-review", paper_profile_version: "paper-profile-v1",
+      dataset_profile_version: "dataset-profile-v1", status: "candidate", hard_gate: "pending", coverage_ratio: 0,
+      execution_confidence: null, scientific_fit: null, evaluator_version: null, evaluation_json: null, created_task_id: null,
+      candidate_reason: "review", created_at: 1, updated_at: 1,
+    });
+
+    const response = await handleDiscoveryApi(request("/api/discovery/matches"), env, ALICE);
+    expect(response?.status).toBe(200);
+    expect(await response!.json()).toEqual({ matches: [] });
+    expect((await handleDiscoveryApi(request("/api/discovery/matches/match-review"), env, ALICE))?.status).toBe(404);
   });
 
   it("keeps match evaluation processor-owned while exposing an idempotent browser request", async () => {
@@ -269,8 +295,8 @@ describe("Discovery Paper and Data Collection APIs", () => {
       profile_version: "paper-profile-v1", model_version: "test", provenance: { source_resource_id: "paper-resource", compiler_version: "test", generated_at: "2026-01-01" },
       paper: { title: "Repeatable paper", authors: [], year: null, venue: null, abstract: "", research_question: "Can it be reproduced?", main_claims: [] },
       research_question: "Can it be reproduced?", main_claims: [],
-      analysis_modules: [{ analysis_id: "analysis-01", name: "Model", goal: "Fit a model", required_capabilities: ["tabular.numeric_features"], optional_capabilities: [], operations: ["fit"], expected_outputs: ["metrics"], verification: ["check"], evidence: [] }],
-      paper_level_requirements: [], required_capabilities: ["tabular.numeric_features"], expected_outputs: ["metrics"], verification: ["check"], evidence: [], display_tags: ["Tabular"],
+      analysis_modules: [{ analysis_id: "analysis-01", name: "Model", goal: "Fit a model", required_capabilities: ["tabular.numeric_features"], optional_capabilities: [], operations: ["fit"], expected_outputs: ["metrics"], verification: ["check"], evidence: [{ page: 2, section: "Methods", locator_status: "verified" }] }],
+      paper_level_requirements: [], required_capabilities: ["tabular.numeric_features"], expected_outputs: ["metrics"], verification: ["check"], evidence: [{ page: 1, section: "Abstract", locator_status: "verified" }], display_tags: ["Tabular"],
     };
     const datasetProfile: DatasetProfile = {
       profile_version: "dataset-profile-v1", model_version: "test", provenance: { collection_id: collectionId, inspector_version: "test", generated_at: "2026-01-01" },
