@@ -40,6 +40,8 @@ except ImportError:  # pragma: no cover - only non-Unix runtimes
 
 import fitz
 
+from .client import PaperProcessorProtocolError
+
 
 LOGGER = logging.getLogger("infinity.paper_processor")
 
@@ -47,8 +49,10 @@ LOGGER = logging.getLogger("infinity.paper_processor")
 class ProcessorError(RuntimeError):
     """A safe, machine-readable processing failure."""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, stage: str | None = None, exception_family: str | None = None):
         self.code = code
+        self.stage = stage
+        self.exception_family = exception_family
         super().__init__(f"{code}: {message}")
 
 
@@ -58,6 +62,83 @@ class AdmissionError(ProcessorError):
 
 class DownloadError(ProcessorError):
     pass
+
+
+SAFE_FAILURE_STAGES = frozenset({
+    "connecting", "polling", "downloading", "source_upload", "extracting", "uploading", "finalizing", "unknown",
+})
+SAFE_EXCEPTION_FAMILIES = frozenset({
+    "admission", "source", "pdf", "memory", "timeout", "heartbeat", "protocol", "transport", "io", "runtime",
+})
+SAFE_ERROR_CODE = re.compile(r"^[A-Z0-9_]{1,64}$")
+
+
+@dataclass(frozen=True)
+class ClassifiedProcessorFailure:
+    """A bounded failure record suitable for logs and the fenced fail call."""
+
+    code: str
+    stage: str
+    exception_family: str
+
+
+def _failure_stage(stage: str) -> str:
+    return stage if stage in SAFE_FAILURE_STAGES else "unknown"
+
+
+def _failure_family(error: BaseException) -> str:
+    if isinstance(error, PaperProcessorProtocolError):
+        return error.exception_family if error.exception_family in {"protocol", "transport"} else "protocol"
+    if isinstance(error, MemoryError):
+        return "memory"
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, ProcessorError):
+        if isinstance(error.exception_family, str) and error.exception_family in SAFE_EXCEPTION_FAMILIES:
+            return str(error.exception_family)
+        if isinstance(error, AdmissionError):
+            return "admission"
+        if isinstance(error, DownloadError):
+            return "source"
+        code = error.code if isinstance(error.code, str) else "PAPER_PROCESSOR_RUNTIME_ERROR"
+        if code == "PAPER_PROCESSOR_HEARTBEAT_FAILED":
+            return "heartbeat"
+        if code == "PAPER_PROCESSOR_MEMORY_LIMIT":
+            return "memory"
+        if "TIMEOUT" in code:
+            return "timeout"
+        if code.startswith(("PDF_", "MALFORMED_PDF", "ENCRYPTED_PDF", "PAGE_", "IMAGE_", "TEXT_")):
+            return "pdf"
+        if code.startswith(("SOURCE_", "REDIRECT_", "NON_PDF_", "UPLOAD_INPUT_")):
+            return "source"
+        return "runtime"
+    if isinstance(error, OSError):
+        return "io"
+    return "runtime"
+
+
+def classify_processor_failure(error: BaseException, *, stage: str) -> ClassifiedProcessorFailure:
+    """Map an exception to allowlisted code/stage/family diagnostics only.
+
+    Exception text and chained causes are intentionally ignored.  This keeps
+    document content, URLs, filesystem paths, credentials, and tracebacks out
+    of both the service log and the Processor's fenced failure envelope.
+    """
+    safe_stage = _failure_stage(stage)
+    family = _failure_family(error)
+    if isinstance(error, ProcessorError) and isinstance(error.code, str) and SAFE_ERROR_CODE.fullmatch(error.code):
+        code = error.code
+    elif isinstance(error, PaperProcessorProtocolError):
+        code = "PAPER_PROCESSOR_PROTOCOL_ERROR"
+    elif isinstance(error, MemoryError):
+        code = "PAPER_PROCESSOR_MEMORY_LIMIT"
+    elif isinstance(error, TimeoutError):
+        code = "PAPER_PROCESSOR_TIMEOUT"
+    elif isinstance(error, OSError):
+        code = "PAPER_PROCESSOR_IO_ERROR"
+    else:
+        code = "PAPER_PROCESSOR_RUNTIME_ERROR"
+    return ClassifiedProcessorFailure(code, safe_stage, family)
 
 
 @dataclass(frozen=True)
@@ -649,19 +730,24 @@ def write_downloaded_pdf(body: bytes, destination: Path, *, limits: ExtractionLi
     return DownloadedPdf(destination, len(body), hashlib.sha256(body).hexdigest())
 
 
-def _safe_fail(client: Any, grant: Any, error_code: str) -> None:
-    """Report only a bounded code; never serialize exception details."""
+def _safe_fail(client: Any, grant: Any, failure: ClassifiedProcessorFailure) -> None:
+    """Report only allowlisted failure dimensions; never serialize details."""
     try:
         fail = getattr(client, "fail", None)
         if callable(fail):
-            fail(grant, error_code)
+            fail(
+                grant,
+                failure.code,
+                stage=failure.stage,
+                exception_family=failure.exception_family,
+            )
         else:
+            # The production client always exposes fail.  Keep the legacy
+            # fallback for minimal test/dummy clients, but never fall back to
+            # cancellation when the real failure call itself raises.
             client.cancel(grant)
-    except Exception as error:
-        try:
-            client.cancel(grant)
-        except Exception:
-            pass
+    except Exception:
+        pass
 
 
 def _safe_cancel(client: Any, grant: Any) -> None:
@@ -671,17 +757,25 @@ def _safe_cancel(client: Any, grant: Any) -> None:
         pass
 
 
-def _safe_log(event: str, grant: Any | None = None, *, stage: str = "", error_code: str = "") -> None:
+def _safe_log(
+    event: str,
+    grant: Any | None = None,
+    *,
+    stage: str = "",
+    error_code: str = "",
+    exception_family: str = "",
+) -> None:
     """Emit operational facts without payloads, headers, URLs, or tracebacks."""
     resource_id = getattr(grant, "resource_id", "-") if grant is not None else "-"
     attempt_id = getattr(grant, "attempt_id", "-") if grant is not None else "-"
     LOGGER.info(
-        "paper_processor event=%s resource_id=%s attempt_id=%s stage=%s error_code=%s",
+        "paper_processor event=%s resource_id=%s attempt_id=%s stage=%s error_code=%s exception_family=%s",
         event,
         resource_id,
         attempt_id,
         stage or "-",
         error_code or "-",
+        exception_family or "-",
     )
 
 
@@ -805,25 +899,40 @@ def process_one(
                 _safe_log("succeeded", grant, stage="ready")
                 return True
     except ProcessorError as error:
+        failure = classify_processor_failure(error, stage=stage)
+        error.stage = failure.stage
+        error.exception_family = failure.exception_family
         heartbeat.stop()
-        _safe_fail(client, grant, error.code)
-        _safe_log("failed", grant, stage=stage, error_code=error.code)
+        _safe_fail(client, grant, failure)
+        _safe_log("failed", grant, stage=failure.stage, error_code=failure.code, exception_family=failure.exception_family)
         raise
     except MemoryError as error:
+        failure = classify_processor_failure(error, stage=stage)
         heartbeat.stop()
-        _safe_fail(client, grant, "PAPER_PROCESSOR_MEMORY_LIMIT")
-        _safe_log("failed", grant, stage=stage, error_code="PAPER_PROCESSOR_MEMORY_LIMIT")
-        raise ProcessorError("PAPER_PROCESSOR_MEMORY_LIMIT", "paper processing memory budget exceeded") from error
+        _safe_fail(client, grant, failure)
+        _safe_log("failed", grant, stage=failure.stage, error_code=failure.code, exception_family=failure.exception_family)
+        raise ProcessorError(
+            failure.code,
+            "paper processing memory budget exceeded",
+            stage=failure.stage,
+            exception_family=failure.exception_family,
+        ) from error
     except Exception as error:
+        failure = classify_processor_failure(error, stage=stage)
         heartbeat.stop()
         # A grant has already been leased.  An unexpected local/runtime error
         # must close that exact fenced attempt as a terminal failure, never as
         # cancellation: cancellation would make an infrastructure defect look
         # like user intent and can hide the operational error from a retry
         # decision.  The Edge validates the exact grant token and epoch.
-        _safe_fail(client, grant, "PAPER_PROCESSOR_RUNTIME_ERROR")
-        _safe_log("failed", grant, stage=stage, error_code="PAPER_PROCESSOR_RUNTIME_ERROR")
-        raise ProcessorError("PAPER_PROCESSOR_RUNTIME_ERROR", "paper processor encountered an unexpected runtime error") from error
+        _safe_fail(client, grant, failure)
+        _safe_log("failed", grant, stage=failure.stage, error_code=failure.code, exception_family=failure.exception_family)
+        raise ProcessorError(
+            failure.code,
+            "paper processor encountered an unexpected runtime error",
+            stage=failure.stage,
+            exception_family=failure.exception_family,
+        ) from error
     finally:
         heartbeat.stop()
 

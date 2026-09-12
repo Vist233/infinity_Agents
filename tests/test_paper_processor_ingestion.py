@@ -24,13 +24,14 @@ from backend.paper_processor.ingest import (
     ProcessorRuntimeLimits,
     ProcessorError,
     admit_source,
+    classify_processor_failure,
     download_pdf,
     extract_pdf,
     process_one,
     processor_workspace,
     recover_processor_workspaces,
 )
-from backend.paper_processor.client import ProcessorGrant
+from backend.paper_processor.client import PaperProcessorProtocolError, ProcessorGrant
 
 
 class FakeResponse:
@@ -226,15 +227,29 @@ class FailingProcessorClient(FakeProcessorClient):
     def __init__(self, body: bytes):
         super().__init__(body)
         self.failed: list[str] = []
+        self.failure_diagnostics: list[tuple[str, str]] = []
 
-    def fail(self, _grant: ProcessorGrant, error_code: str) -> dict[str, Any]:
+    def fail(
+        self,
+        _grant: ProcessorGrant,
+        error_code: str,
+        *,
+        stage: str = "unknown",
+        exception_family: str = "runtime",
+    ) -> dict[str, Any]:
         self.failed.append(error_code)
+        self.failure_diagnostics.append((stage, exception_family))
         return {"status": "failed", "error_code": error_code}
 
 
 class RuntimeErrorProcessorClient(FailingProcessorClient):
     def input_metadata(self, _grant: ProcessorGrant) -> dict[str, str]:
         raise RuntimeError("unclassified local runtime failure")
+
+
+class FinalizeProtocolErrorClient(FailingProcessorClient):
+    def finalize(self, _grant: ProcessorGrant, _manifest: dict[str, Any]) -> dict[str, Any]:
+        raise PaperProcessorProtocolError("Processor protocol HTTP 409", http_status=409)
 
 
 def test_process_one_uploads_source_pages_images_manifests_and_cleans(tmp_path: Path) -> None:
@@ -270,6 +285,7 @@ def test_process_one_reports_timeout_as_terminal_failure_and_cleans(tmp_path: Pa
     with pytest.raises(ProcessorError, match="PAPER_PROCESSOR_TIMEOUT"):
         process_one(client, tmp_path / "processor-work", runtime_limits=runtime)
     assert client.failed == ["PAPER_PROCESSOR_TIMEOUT"]
+    assert client.failure_diagnostics == [("downloading", "timeout")]
     assert client.cancelled is False
     assert not (tmp_path / "processor-work").exists() or not any((tmp_path / "processor-work").iterdir())
     log_text = "\n".join(caplog.messages)
@@ -291,6 +307,7 @@ def test_process_one_turns_memory_pressure_into_terminal_failure(tmp_path: Path)
             limits=ExtractionLimits(max_resident_memory_bytes=1),
         )
     assert client.failed == ["PAPER_PROCESSOR_MEMORY_LIMIT"]
+    assert client.failure_diagnostics == [("downloading", "memory")]
     assert client.cancelled is False
     assert client.finalized is False
     assert not (tmp_path / "processor-work").exists() or not any((tmp_path / "processor-work").iterdir())
@@ -302,10 +319,48 @@ def test_process_one_turns_unclassified_runtime_error_into_fenced_failure(tmp_pa
     with pytest.raises(ProcessorError, match="PAPER_PROCESSOR_RUNTIME_ERROR"):
         process_one(client, tmp_path / "processor-work")
     assert client.failed == ["PAPER_PROCESSOR_RUNTIME_ERROR"]
+    assert client.failure_diagnostics == [("downloading", "runtime")]
     assert client.cancelled is False
     assert client.finalized is False
     assert "PAPER_PROCESSOR_RUNTIME_ERROR" in "\n".join(caplog.messages)
+    assert "stage=downloading" in "\n".join(caplog.messages)
+    assert "exception_family=runtime" in "\n".join(caplog.messages)
     assert "unclassified local runtime failure" not in "\n".join(caplog.messages)
+
+
+def test_failure_classifier_preserves_only_allowlisted_dimensions() -> None:
+    classified = classify_processor_failure(
+        RuntimeError("document text https://example.invalid /private/path token=secret"),
+        stage="not-a-stage",
+    )
+    assert classified.code == "PAPER_PROCESSOR_RUNTIME_ERROR"
+    assert classified.stage == "unknown"
+    assert classified.exception_family == "runtime"
+
+    memory = classify_processor_failure(MemoryError("raw PDF bytes"), stage="extracting")
+    assert (memory.code, memory.stage, memory.exception_family) == (
+        "PAPER_PROCESSOR_MEMORY_LIMIT",
+        "extracting",
+        "memory",
+    )
+
+
+def test_finalize_protocol_failure_is_fenced_with_stage_family_and_no_cancel(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="infinity.paper_processor")
+    fixture = make_pdf(tmp_path / "protocol-failure.pdf", pages=1)
+    client = FinalizeProtocolErrorClient(fixture.read_bytes())
+    with pytest.raises(ProcessorError, match="PAPER_PROCESSOR_PROTOCOL_ERROR") as raised:
+        process_one(client, tmp_path / "processor-work", limits=ExtractionLimits(max_pages=5, max_images=4))
+    assert client.failed == ["PAPER_PROCESSOR_PROTOCOL_ERROR"]
+    assert client.failure_diagnostics == [("finalizing", "protocol")]
+    assert client.cancelled is False
+    assert raised.value.stage == "finalizing"
+    assert raised.value.exception_family == "protocol"
+    log_text = "\n".join(caplog.messages)
+    assert "stage=finalizing" in log_text
+    assert "exception_family=protocol" in log_text
+    assert "HTTP 409" not in log_text
+    assert "protocol-failure.pdf" not in log_text
 
 
 def test_lease_heartbeat_renews_and_surfaces_failure_without_payloads() -> None:

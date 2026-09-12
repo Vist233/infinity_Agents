@@ -73,7 +73,7 @@
     "service_unit": "backend/paper_processor/infinity-paper-processor.service",
     "artifact_hash_command": "sha256sum backend/paper_processor/__init__.py backend/paper_processor/client.py backend/paper_processor/ingest.py backend/paper_processor/runner.py | sha256sum",
     "artifact_hashes": {
-      "processor_source_sha256": "beb6e5337cfc6fb402f1e7a24e24a5cb3a2901e91ef318b2d41cb06bd9e4b874",
+      "processor_source_sha256": "c694aeb5a8ae6e9a476bce2c7791a80937e632544777d31d0fe0acb9de34a7e8",
       "dependency_lock_sha256": "e7b669892e0e5790179ee84dedd106d04ac40005ca49943059d2ee585f63ff97",
       "service_unit_sha256": "90212a259718d6c63d31a9582f44cf341bc8047eef5a5056f7832119d71e8003"
     }
@@ -164,7 +164,7 @@
   },
   "logging": {
     "format": "structured safe events",
-    "redaction_policy": "Allow only stage, safe error code, opaque resource/attempt IDs, counts and sizes; redact tokens, headers, URLs, local paths and stack traces",
+    "redaction_policy": "Allow only stage, safe error code, exception family, opaque resource/attempt IDs, counts and sizes; redact tokens, headers, URLs, local paths and stack traces",
     "raw_payloads_forbidden": true,
     "forbidden_fields": ["PAPER_PROCESSOR_TOKEN", "lease_token", "session_token", "pdf_bytes", "full_text", "image_bytes", "source_url", "R2 object key"]
   },

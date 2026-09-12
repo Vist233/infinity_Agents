@@ -6,7 +6,14 @@ import time
 from pathlib import Path
 
 from .client import from_environment
-from .ingest import ExtractionLimits, ProcessorError, ProcessorRuntimeLimits, process_one, recover_processor_workspaces
+from .ingest import (
+    ExtractionLimits,
+    ProcessorError,
+    ProcessorRuntimeLimits,
+    classify_processor_failure,
+    process_one,
+    recover_processor_workspaces,
+)
 
 
 LOGGER = logging.getLogger("infinity.paper_processor")
@@ -34,7 +41,13 @@ def main() -> None:
         try:
             processed = process_one(client, work_root, limits=extraction_limits, runtime_limits=runtime_limits)
         except ProcessorError as error:
-            LOGGER.warning("paper_processor event=attempt_failed error_code=%s", error.code)
+            failure = classify_processor_failure(error, stage=error.stage or "unknown")
+            LOGGER.warning(
+                "paper_processor event=attempt_failed stage=%s error_code=%s exception_family=%s",
+                failure.stage,
+                failure.code,
+                failure.exception_family,
+            )
             try:
                 client.connect()
             except Exception:
@@ -43,7 +56,9 @@ def main() -> None:
         except Exception:
             # Details are intentionally omitted: the Edge receives only the
             # bounded failure code and the next poll remains the recovery path.
-            LOGGER.warning("paper_processor event=attempt_failed error_code=PAPER_PROCESSOR_RUNTIME_ERROR")
+            LOGGER.warning(
+                "paper_processor event=attempt_failed stage=unknown error_code=PAPER_PROCESSOR_RUNTIME_ERROR exception_family=runtime",
+            )
             try:
                 client.connect()
             except Exception:

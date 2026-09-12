@@ -31,6 +31,9 @@ const MAX_PDF_BYTES = 64 * 1024 * 1024;
 const MAX_UPLOAD_ENVELOPE_BYTES = 8 * 1024;
 const OBJECT_KINDS = new Set<PaperObjectKind>(["source_pdf", "text_pages", "text_manifest", "image", "image_manifest"]);
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/;
+const PAPER_FAILURE_STAGES = new Set(["connecting", "polling", "downloading", "source_upload", "extracting", "uploading", "finalizing", "unknown"]);
+const PAPER_FAILURE_FAMILIES = new Set(["admission", "source", "pdf", "memory", "timeout", "heartbeat", "protocol", "transport", "io", "runtime"]);
+const SAFE_FAILURE_MESSAGE = /^Paper Processor failure stage=([a-z_]+) family=([a-z]+)$/;
 
 type ControlOperation = "input" | "input_source" | "renew" | "stage" | "finalize" | "cancel" | "fail";
 const CONTROL_FIELDS: Record<ControlOperation, ReadonlySet<string>> = {
@@ -90,6 +93,15 @@ async function bodyJson(request: Request): Promise<Record<string, unknown> | nul
 
 function stringField(body: Record<string, unknown> | null, name: string): string {
   return typeof body?.[name] === "string" ? body[name]!.trim() : "";
+}
+
+function safeFailureDiagnostic(value: unknown): { message: string; stage: string; exceptionFamily: string } {
+  const raw = typeof value === "string" ? value.slice(0, 256) : "";
+  const match = SAFE_FAILURE_MESSAGE.exec(raw);
+  if (match && PAPER_FAILURE_STAGES.has(match[1]) && PAPER_FAILURE_FAMILIES.has(match[2])) {
+    return { message: `Paper Processor failure stage=${match[1]} family=${match[2]}`, stage: match[1], exceptionFamily: match[2] };
+  }
+  return { message: "Paper Processor rejected the resource", stage: "unknown", exceptionFamily: "runtime" };
 }
 
 function numberField(body: Record<string, unknown> | null, name: string): number | null {
@@ -421,9 +433,9 @@ async function fail(request: Request, env: Env, context: SessionContext, body: R
   const lease = leaseInput(request, body);
   if (lease instanceof Response) return lease;
   const errorCode = stringField(body, "error_code");
-  const errorMessage = stringField(body, "error_message").slice(0, 1_024) || "Paper Processor rejected the resource";
+  const diagnostic = safeFailureDiagnostic(body?.error_message);
   if (!/^[A-Z0-9_]{1,64}$/.test(errorCode)) return errorJson("Processor error code is invalid", 400, "INVALID_PAPER_PROCESSOR_ERROR");
-  const failed = await failPaperProcessorAttempt(env, { ...lease, processorId: context.session.processor_id, now: context.now, errorCode, errorMessageSafe: errorMessage });
+  const failed = await failPaperProcessorAttempt(env, { ...lease, processorId: context.session.processor_id, now: context.now, errorCode, errorMessageSafe: diagnostic.message });
   if (failed) {
     const auditStage = authorized.resource.status === "downloading" ? "download" : authorized.resource.status === "extracting" ? "extraction" : "upload";
     await recordPaperAuditEvent(env, {
@@ -432,7 +444,7 @@ async function fail(request: Request, env: Env, context: SessionContext, body: R
       stage: auditStage,
       outcome: "failed",
       error_code: errorCode,
-      metadata_json: "{}",
+      metadata_json: JSON.stringify({ processor_stage: diagnostic.stage, exception_family: diagnostic.exceptionFamily }),
       created_at: context.now,
     });
   }

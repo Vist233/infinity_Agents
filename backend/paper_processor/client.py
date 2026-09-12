@@ -36,6 +36,16 @@ class ProcessorGrant:
 class PaperProcessorProtocolError(RuntimeError):
     """The Edge rejected a Processor protocol request."""
 
+    _FAMILIES = frozenset({"validation", "protocol", "transport"})
+
+    def __init__(self, message: str, *, exception_family: str = "protocol", http_status: int | None = None) -> None:
+        # The message is always supplied by this module and is intentionally
+        # limited to a fixed description.  In particular, never append an
+        # HTTP response body: the Edge may echo request-derived text there.
+        self.exception_family = exception_family if exception_family in self._FAMILIES else "protocol"
+        self.http_status = http_status if isinstance(http_status, int) and 100 <= http_status <= 599 else None
+        super().__init__(message)
+
 
 _FIXED_EDGE_HOST = "infinity.zhangyvjing.com"
 _ENDPOINT_PATHS = {
@@ -71,6 +81,15 @@ def _new_instance_id() -> str:
     if not boot_id:
         boot_id = "boot-unknown"
     return f"zhangbot-{boot_id}-{os.getpid()}-{secrets.token_hex(8)}"
+
+
+def _safe_failure_message(stage: str, exception_family: str) -> str:
+    """Serialize only the two allowlisted diagnostic dimensions."""
+    allowed_stages = {"connecting", "polling", "downloading", "source_upload", "extracting", "uploading", "finalizing", "unknown"}
+    allowed_families = {"admission", "source", "pdf", "memory", "timeout", "heartbeat", "protocol", "transport", "io", "runtime"}
+    safe_stage = stage if stage in allowed_stages else "unknown"
+    safe_family = exception_family if exception_family in allowed_families else "runtime"
+    return f"Paper Processor failure stage={safe_stage} family={safe_family}"
 
 
 class PaperProcessorClient:
@@ -114,10 +133,9 @@ class PaperProcessorClient:
             with urllib.request.urlopen(request, timeout=request_timeout) as response:
                 decoded = response.read().decode("utf-8")
         except urllib.error.HTTPError as error:
-            detail = error.read(1024).decode("utf-8", errors="replace")
-            raise PaperProcessorProtocolError(f"Processor protocol HTTP {error.code}: {detail}") from error
+            raise PaperProcessorProtocolError(f"Processor protocol HTTP {error.code}", http_status=error.code) from error
         except urllib.error.URLError as error:
-            raise PaperProcessorProtocolError("Processor protocol transport failed") from error
+            raise PaperProcessorProtocolError("Processor protocol transport failed", exception_family="transport") from error
         try:
             value = json.loads(decoded)
         except json.JSONDecodeError as error:
@@ -143,9 +161,9 @@ class PaperProcessorClient:
             with urllib.request.urlopen(request, timeout=30) as response:
                 response_body = response.read(maximum_bytes + 1)
         except urllib.error.HTTPError as error:
-            raise PaperProcessorProtocolError(f"Processor source HTTP {error.code}") from error
+            raise PaperProcessorProtocolError(f"Processor source HTTP {error.code}", http_status=error.code) from error
         except urllib.error.URLError as error:
-            raise PaperProcessorProtocolError("Processor source transport failed") from error
+            raise PaperProcessorProtocolError("Processor source transport failed", exception_family="transport") from error
         if len(response_body) > maximum_bytes:
             raise PaperProcessorProtocolError("Processor source exceeds the local limit")
         return response_body
@@ -292,7 +310,14 @@ class PaperProcessorClient:
             "fencing_epoch": grant.fencing_epoch,
         }, lease_token=grant.lease_token)
 
-    def fail(self, grant: ProcessorGrant, error_code: str) -> dict[str, Any]:
+    def fail(
+        self,
+        grant: ProcessorGrant,
+        error_code: str,
+        *,
+        stage: str = "unknown",
+        exception_family: str = "runtime",
+    ) -> dict[str, Any]:
         if not re.fullmatch(r"[A-Z0-9_]{1,64}", error_code):
             raise ValueError("invalid processor error code")
         return self._request("POST", "control", {
@@ -301,7 +326,7 @@ class PaperProcessorClient:
             "resource_id": grant.resource_id,
             "fencing_epoch": grant.fencing_epoch,
             "error_code": error_code,
-            "error_message": "Paper Processor rejected the resource",
+            "error_message": _safe_failure_message(stage, exception_family),
         }, lease_token=grant.lease_token)
 
 

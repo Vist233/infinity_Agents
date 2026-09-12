@@ -1,5 +1,7 @@
+import io
 import json
 import re
+import urllib.error
 from urllib.parse import urlparse
 
 import pytest
@@ -105,6 +107,35 @@ class _FakeHTTPResponse:
         return None
 
 
+def test_protocol_http_failure_discards_untrusted_response_body(monkeypatch):
+    client = PaperProcessorClient(
+        "https://infinity.zhangyvjing.com",
+        "paper-processor-zhangbot-v1",
+        "test-bootstrap-token",
+        "instance-1",
+    )
+
+    def fake_urlopen(request, timeout=0):
+        del timeout
+        raise urllib.error.HTTPError(
+            request.full_url,
+            409,
+            "conflict",
+            {},
+            io.BytesIO(b"raw document text https://example.invalid /private/path token=secret"),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(PaperProcessorProtocolError) as raised:
+        client.connect()
+    assert str(raised.value) == "Processor protocol HTTP 409"
+    assert raised.value.http_status == 409
+    assert raised.value.exception_family == "protocol"
+    assert "raw document" not in str(raised.value)
+    assert "https://" not in str(raised.value)
+    assert "token" not in str(raised.value)
+
+
 def test_processor_client_uses_only_fixed_paths_and_envelopes(monkeypatch):
     client = PaperProcessorClient(
         "https://infinity.zhangyvjing.com",
@@ -151,7 +182,7 @@ def test_processor_client_uses_only_fixed_paths_and_envelopes(monkeypatch):
     client.upload(grant, "text_pages", b"pages", "application/json", "pages")
     client.finalize(grant, {"resource_id": grant.resource_id, "page_count": 1})
     client.cancel(grant)
-    client.fail(grant, "MALFORMED_PDF")
+    client.fail(grant, "MALFORMED_PDF", stage="finalizing", exception_family="pdf")
 
     paths = [urlparse(request.full_url).path for request in requests]
     assert set(paths) == {
@@ -167,6 +198,12 @@ def test_processor_client_uses_only_fixed_paths_and_envelopes(monkeypatch):
         if urlparse(request.full_url).path == "/api/paper-processor/control"
     ]
     assert control_operations == ["input", "input_source", "renew", "stage", "finalize", "cancel", "fail"]
+    failure_request = next(
+        request for request in reversed(requests)
+        if urlparse(request.full_url).path == "/api/paper-processor/control"
+        and json.loads(request.data.decode())["operation"] == "fail"
+    )
+    assert json.loads(failure_request.data.decode())["error_message"] == "Paper Processor failure stage=finalizing family=pdf"
     object_request = next(request for request in requests if urlparse(request.full_url).path == "/api/paper-processor/object")
     object_headers = {key.lower(): value for key, value in object_request.header_items()}
     assert json.loads(object_headers["x-paper-processor-envelope"]) == {

@@ -323,13 +323,45 @@ describe("dedicated Paper Processor control protocol", () => {
     const session = await connect(env, "instance-fail");
     const poll = await handlePaperProcessorApi(request("/api/paper-processor/poll", { method: "POST", headers: processorHeaders(session.processor_session_token), body: "{}" }), env);
     const grant = await poll!.json() as { attempt_id: string; resource_id: string; fencing_epoch: number; lease_token: string };
-    const failed = await handlePaperProcessorApi(controlRequest(session.processor_session_token, "fail", { attempt_id: grant.attempt_id, resource_id: grant.resource_id, fencing_epoch: grant.fencing_epoch, error_code: "MALFORMED_PDF", error_message: "safe parser failure" }, grant.lease_token), env);
+    const failed = await handlePaperProcessorApi(controlRequest(session.processor_session_token, "fail", { attempt_id: grant.attempt_id, resource_id: grant.resource_id, fencing_epoch: grant.fencing_epoch, error_code: "MALFORMED_PDF", error_message: "Paper Processor failure stage=finalizing family=pdf" }, grant.lease_token), env);
     expect(failed?.status).toBe(200);
     expect(db.paperResources.get(resource.resource_id)?.status).toBe("failed");
+    expect(db.paperResources.get(resource.resource_id)?.error_message_safe).toBe("Paper Processor failure stage=finalizing family=pdf");
     expect(db.paperCatalog.get("catalog-fail")?.status).toBe("failed");
-    expect(db.paperAuditEvents).toEqual(expect.arrayContaining([expect.objectContaining({ resource_id: resource.resource_id, stage: "download", outcome: "failed", error_code: "MALFORMED_PDF" })]));
+    expect(db.paperAuditEvents).toEqual(expect.arrayContaining([expect.objectContaining({
+      resource_id: resource.resource_id,
+      stage: "download",
+      outcome: "failed",
+      error_code: "MALFORMED_PDF",
+      metadata_json: JSON.stringify({ processor_stage: "finalizing", exception_family: "pdf" }),
+    })]));
     const duplicate = await handlePaperProcessorApi(controlRequest(session.processor_session_token, "fail", { attempt_id: grant.attempt_id, resource_id: grant.resource_id, fencing_epoch: grant.fencing_epoch, error_code: "MALFORMED_PDF" }, grant.lease_token), env);
     expect(duplicate?.status).toBe(409);
+  });
+
+  it("drops untrusted failure text and keeps only the bounded diagnostic summary", async () => {
+    const { env, db } = makeEnv({ PAPER_PROCESSOR_ID: "processor-1", PAPER_PROCESSOR_SOURCE_IP: "203.0.113.10", PAPER_PROCESSOR_SHARED_SECRET: "bootstrap-secret" });
+    db.seedChatSession("s1", "alice");
+    const resource = await createPaperResource(env, { resource_id: "resource-unsafe-fail", session_id: "s1", user_id: "alice", source_kind: "arxiv", source_ref: "2401.00009", canonical_ref: "2401.00009", title: "Unsafe failure" });
+    await linkPaperResource(env, "s1", resource.resource_id, "alice", "read");
+    const session = await connect(env, "instance-unsafe-fail");
+    const poll = await handlePaperProcessorApi(request("/api/paper-processor/poll", { method: "POST", headers: processorHeaders(session.processor_session_token), body: "{}" }), env);
+    const grant = await poll!.json() as { attempt_id: string; resource_id: string; fencing_epoch: number; lease_token: string };
+    const raw = "raw PDF text https://example.invalid /private/path token=secret";
+    const failed = await handlePaperProcessorApi(controlRequest(session.processor_session_token, "fail", {
+      attempt_id: grant.attempt_id,
+      resource_id: grant.resource_id,
+      fencing_epoch: grant.fencing_epoch,
+      error_code: "PAPER_PROCESSOR_RUNTIME_ERROR",
+      error_message: raw,
+    }, grant.lease_token), env);
+    expect(failed?.status).toBe(200);
+    expect(db.paperResources.get(resource.resource_id)?.error_message_safe).toBe("Paper Processor rejected the resource");
+    expect(db.paperResources.get(resource.resource_id)?.error_message_safe).not.toContain(raw);
+    expect(db.paperAuditEvents).toEqual(expect.arrayContaining([expect.objectContaining({
+      resource_id: resource.resource_id,
+      metadata_json: JSON.stringify({ processor_stage: "unknown", exception_family: "runtime" }),
+    })]));
   });
 
   it("fails closed for a non-zhangbot source, wrong bootstrap secret, and non-Processor path", async () => {

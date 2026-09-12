@@ -181,11 +181,14 @@ and finalization are admitted.
 
 The runner emits only safe operational events (`grant`, `succeeded`,
 `failed`, `cancelled`, and `poll_empty`) with opaque resource/attempt IDs,
-stage, and bounded error codes. It never logs PDF bytes, extracted text,
-headers, tokens, source URLs, local paths, or exception tracebacks. An
-unexpected transport/runtime error remains a safe cancellation path; if the
-Edge is unreachable, the normal lease/fencing recovery rules apply and the
-service reconnects rather than claiming success.
+stage, bounded error codes, and an allowlisted exception family. The client
+discards HTTP response bodies before raising protocol errors, and the Edge
+normalizes the failure message to that same stage/family pair. It never logs
+PDF bytes, extracted text, headers, tokens, source URLs, local paths, or
+exception tracebacks. An unexpected transport/runtime error is reported once
+through the exact fenced `fail` operation; it is never reclassified as user
+cancellation. If the Edge is unreachable, the normal lease/fencing recovery
+rules apply and the service reconnects rather than claiming success.
 
 ## 4. Ordered installation and release procedure
 
@@ -229,11 +232,11 @@ After the local tests, independent review, diff check, and secret scan pass:
 
 ## 5. Logging, failure and rollback
 
-Logs may contain only stage, safe error code, opaque resource/attempt IDs,
-counts, sizes, and bounded timing. Redact tokens, headers, URLs, local paths,
-stack traces, paper contents, raw manifests, and provider credentials. The
-normal log and evidence scan must prove that no secret or full payload crossed
-the boundary.
+Logs may contain only stage, safe error code, allowlisted exception family,
+opaque resource/attempt IDs, counts, sizes, and bounded timing. Redact tokens,
+headers, URLs, local paths, stack traces, paper contents, raw manifests, and
+provider credentials. The normal log and evidence scan must prove that no
+secret or full payload crossed the boundary.
 
 On any failed step, stop at that step and record whether an external write
 occurred. Revoke Processor capabilities and active sessions first. Stop the
