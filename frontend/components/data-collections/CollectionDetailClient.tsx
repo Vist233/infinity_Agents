@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CheckCircle2, Database, FileWarning, LogIn, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Database, FileWarning, Loader2, LogIn, RefreshCw, Trash2 } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { DiscoveryChrome } from "@/components/discovery/DiscoveryChrome";
 import { CollectionStatusBadge } from "@/components/data-collections/CollectionCard";
 import { Button } from "@/components/ui/button";
 import { getCurrentUser } from "@/lib/api/auth";
-import { deleteCollection, getCollection, listMatches, getPaper, type DiscoveryCollection, type DiscoveryMatch, type DiscoveryPaper } from "@/lib/api/discovery";
+import { createTaskFromMatch, deleteCollection, getCollection, listMatches, getPaper, type DiscoveryCollection, type DiscoveryMatch, type DiscoveryPaper } from "@/lib/api/discovery";
 import { redirectToLogin } from "@/lib/runtime-config";
 import { useLanguage } from "@/lib/i18n";
 
@@ -51,6 +51,7 @@ export default function CollectionDetailClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [creatingMatchId, setCreatingMatchId] = useState<string | null>(null);
 
   const load = useCallback(async (silent = false) => {
     if (!collectionId) { setLoading(false); return; }
@@ -95,6 +96,19 @@ export default function CollectionDetailClient() {
     try { await deleteCollection(collection.collection_id); router.push("/data-collections/"); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setDeleting(false); }
   };
 
+  const handleCreateTask = async (matchId: string) => {
+    setCreatingMatchId(matchId);
+    try {
+      const created = await createTaskFromMatch(matchId);
+      setMatches((current) => current.map((match) => match.match_id === matchId ? { ...match, status: "task_created", created_task_id: created.task_id } : match));
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setCreatingMatchId(null);
+    }
+  };
+
   const profile = collection?.profile;
   const capabilityEntries = profile ? Object.entries(profile.capabilities).sort(([left], [right]) => left.localeCompare(right)) : [];
   return <DiscoveryChrome active="collections" title={t("collections.detailTitle")} icon={Database} actions={authStatus === "authenticated" ? <><Button type="button" variant="ghost" size="sm" className="gap-1.5 rounded-xl" onClick={() => router.push("/data-collections/")}><ArrowLeft className="h-3.5 w-3.5" />{t("collections.back")}</Button><Button type="button" variant="outline" size="sm" className="gap-1.5 rounded-xl" onClick={() => { void load(); }} disabled={loading}><RefreshCw className={loading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />{t("tasks.refresh")}</Button><Button type="button" variant="ghost" size="sm" className="gap-1.5 rounded-xl text-red-600 hover:bg-red-50 hover:text-red-700" onClick={() => { void handleDelete(); }} disabled={deleting}><Trash2 className="h-3.5 w-3.5" />{t("collections.delete")}</Button></> : null}>
@@ -107,7 +121,7 @@ export default function CollectionDetailClient() {
 
       <div className="grid gap-5 lg:grid-cols-2"><section id="capabilities" className="rounded-2xl border border-zinc-200 bg-white/90 p-5 shadow-sm"><h2 className="text-base font-semibold">{t("collections.capabilities")}</h2>{capabilityEntries.length ? <div className="mt-4 grid gap-2 sm:grid-cols-2">{capabilityEntries.map(([key, value]) => <div key={key} className="flex items-center justify-between gap-3 rounded-xl bg-zinc-50 px-3 py-2 text-xs"><span className="truncate text-zinc-600">{key}</span><span className="inline-flex shrink-0 items-center gap-1 font-medium text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />{typeof value === "boolean" ? value ? "yes" : "no" : String(value)}</span></div>)}</div> : <p className="mt-3 text-sm text-zinc-500">{t("collections.noProfile")}</p>}</section><section id="quality" className="rounded-2xl border border-zinc-200 bg-white/90 p-5 shadow-sm"><h2 className="text-base font-semibold">{t("collections.quality")}</h2>{profile?.files.length ? <div className="mt-4 space-y-3">{profile.files.map((file) => <div key={file.path} className="flex items-center justify-between gap-3 text-sm"><span className="truncate text-zinc-600">{file.path}</span><span className="font-medium text-zinc-700">{file.missing_ratio == null ? "—" : `${(file.missing_ratio * 100).toFixed(1)}%`}</span></div>)}</div> : <p className="mt-3 text-sm text-zinc-500">{t("collections.noProfile")}</p>}</section></div>
 
-      <section id="matches" className="rounded-2xl border border-zinc-200 bg-white/90 p-5 shadow-sm"><div className="flex items-center justify-between gap-3"><h2 className="text-base font-semibold">{t("collections.matchedPapers")}</h2><span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs text-zinc-500">{matches.length}</span></div>{matches.length ? <div className="mt-4 grid gap-3 md:grid-cols-2">{matches.map((match) => <div key={match.match_id} className="rounded-xl border border-zinc-100 bg-zinc-50 p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-sm font-semibold text-zinc-700">{papers[match.paper_id]?.title ?? match.paper_id}</h3><p className="mt-1 text-xs text-zinc-400">{t("collections.matchStatus")}: {match.status}</p></div><span className="shrink-0 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">{t("collections.matchCoverage")} {(match.coverage_ratio * 100).toFixed(0)}%</span></div>{papers[match.paper_id] ? <a className="mt-3 inline-block text-xs font-medium text-blue-700 hover:underline" href={`/papers/${encodeURIComponent(match.paper_id)}/`}>{t("collections.viewPaper")}</a> : null}{match.created_task_id ? <a className="mt-3 ml-3 inline-block text-xs font-medium text-blue-700 hover:underline" href={`/task-center/tasks/${encodeURIComponent(match.created_task_id)}/`}>Task {match.created_task_id}</a> : null}</div>)}</div> : <div className="mt-4 flex flex-col items-center rounded-xl border border-dashed border-zinc-200 px-4 py-8 text-center"><FileWarning className="h-6 w-6 text-zinc-300" /><p className="mt-2 text-sm text-zinc-500">{t("collections.noMatches")}</p></div>}</section>
+      <section id="matches" className="rounded-2xl border border-zinc-200 bg-white/90 p-5 shadow-sm"><div className="flex items-center justify-between gap-3"><h2 className="text-base font-semibold">{t("collections.matchedPapers")}</h2><span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs text-zinc-500">{matches.length}</span></div>{matches.length ? <div className="mt-4 grid gap-3 md:grid-cols-2">{matches.map((match) => { const canCreateTask = match.status === "evaluated" && match.hard_gate === "pass" && match.coverage_ratio >= 0.6 && (match.execution_confidence ?? 0) >= 60; return <div key={match.match_id} className="rounded-xl border border-zinc-100 bg-zinc-50 p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-sm font-semibold text-zinc-700">{papers[match.paper_id]?.title ?? match.paper_id}</h3><p className="mt-1 text-xs text-zinc-400">{t("collections.matchStatus")}: {match.status}</p></div><span className="shrink-0 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">{t("collections.matchCoverage")} {(match.coverage_ratio * 100).toFixed(0)}%</span></div>{papers[match.paper_id] ? <a className="mt-3 inline-block text-xs font-medium text-blue-700 hover:underline" href={`/papers/${encodeURIComponent(match.paper_id)}/`}>{t("collections.viewPaper")}</a> : null}{match.created_task_id ? <a className="mt-3 ml-3 inline-block text-xs font-medium text-blue-700 hover:underline" href={`/task-center/tasks/${encodeURIComponent(match.created_task_id)}/`}>Task {match.created_task_id}</a> : canCreateTask ? <Button type="button" variant="outline" size="sm" className="mt-3 ml-3" onClick={() => { void handleCreateTask(match.match_id); }} disabled={creatingMatchId !== null}><>{creatingMatchId === match.match_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{creatingMatchId === match.match_id ? t("tasks.creating") : t("tasks.create")}</></Button> : null}</div>; })}</div> : <div className="mt-4 flex flex-col items-center rounded-xl border border-dashed border-zinc-200 px-4 py-8 text-center"><FileWarning className="h-6 w-6 text-zinc-300" /><p className="mt-2 text-sm text-zinc-500">{t("collections.noMatches")}</p></div>}</section>
       <p className="text-right text-xs text-zinc-400">{formatDate(collection.updated_at)}</p>
     </div> : null}
   </DiscoveryChrome>;
