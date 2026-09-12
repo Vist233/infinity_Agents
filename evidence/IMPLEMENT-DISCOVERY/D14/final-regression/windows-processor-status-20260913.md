@@ -44,9 +44,13 @@ only confirms the isolated runtime is alive and pinned.
 
 ## Git verification
 
-The read-only remote branch listing returned
-`1d190c9ecdeac17df7481a63e3a3385324ac6e52` for `refs/heads/cf-deploy`, which
-is commit `1d190c9` (`fix: contain auth and discovery write outages`).
+The read-only remote branch listing taken during the container inspection
+returned `1d190c9ecdeac17df7481a63e3a3385324ac6e52` for
+`refs/heads/cf-deploy`, which was the then-current commit
+`1d190c9` (`fix: contain auth and discovery write outages`). A subsequent
+read-only verification for this final record resolves the remote branch to
+`5a34f729dd040717b66934b7940b438227d3ecf6`, the documentation commit that
+contains this evidence.
 
 No Cloudflare contact, D1/R2 operation, feature-flag change, secret access,
 live Task creation, or destructive action was performed.
