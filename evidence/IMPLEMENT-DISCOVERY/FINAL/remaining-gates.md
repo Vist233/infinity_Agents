@@ -110,3 +110,5 @@ states blocking collection deletion and for hiding review-paper matches.
 relevant Python artifact/security subset passed 34 tests. The code was not
 live-deployed during this blocked state, so these checks do not close the
 Claude/Artifact, Literature Watcher, or live-model gates.
+The pinned Windows Processor/Worker status check separately passed with zero
+restart counts; see `D14/final-regression/windows-processor-status-20260913.md`.

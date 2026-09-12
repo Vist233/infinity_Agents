@@ -71,6 +71,12 @@ changes are recorded in
 `auth-discovery-hardening-20260913.md`; they were not live-deployed or used to
 claim that the stranded Task completed.
 
+A fresh status-only Windows inspection then confirmed the pinned isolated
+Processor and both Worker containers were running with restart count 0; the
+image IDs, local-tag resolution, no-Docker-Hub boundary, and HTTPS-only
+Processor architecture are recorded in
+`windows-processor-status-20260913.md`.
+
 ## Root-cause diagnosis from bounded local and Windows evidence
 
 At `2026-09-12T16:42:52Z`, a status-only Windows recheck found both Workers

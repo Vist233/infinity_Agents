@@ -54,6 +54,8 @@ check, the full Edge suite (32 files / 199 tests), and the relevant Python
 artifact/security suite (34 tests). It was not live-deployed or used to
 reinterpret the blocked Task result; see
 `D14/final-regression/auth-discovery-hardening-20260913.md`.
+The fresh status-only Windows container inspection is recorded in
+`D14/final-regression/windows-processor-status-20260913.md`.
 
 The live selected Task was visible in Task Center but failed after three
 lease-expired Attempts; it has no Artifact and no duplicate Task was created.
