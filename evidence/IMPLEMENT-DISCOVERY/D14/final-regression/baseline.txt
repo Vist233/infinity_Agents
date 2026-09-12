@@ -1,6 +1,8 @@
 Prior production Discovery code commit: 008b905ddf0598d53b3031da2df8f3ae56b08720
 Post-audit local Discovery code commit: 268eae8.
 Post-rollout Paper Processor lifecycle fix: 89668c7.
+Post-rollout Paper Processor safe-failure runtime: 62e5b7f, activated on
+zhangbot as release 344a93d.
 The post-audit code was rolled out to `origin/cf-deploy`; remote D1 migrations
 0025-0027 are applied, the current Edge version is
 `9941f714-eee6-46bc-8163-968107d8874f`, and the Windows Processor is running

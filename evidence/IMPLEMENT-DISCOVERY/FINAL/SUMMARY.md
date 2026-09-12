@@ -18,6 +18,9 @@ Delivered:
 - isolated Windows Discovery Processor over fixed HTTPS control routes;
 - real public arXiv paper + UCI red-wine shadow case verified in production;
   a fresh UCI derivative also completed inspection and matching after rollout.
+- the dedicated Paper Processor safe-failure release `344a93d` (runtime commit
+  `62e5b7fe4c5a35345c7bc41886ea8ae3e9928228`) deployed to zhangbot; a fresh
+  public ResNet PDF then completed Paper Profile compilation end to end;
 - Paper Processor failure propagation fixed in `89668c7`, deployed as Edge
   Version `9941f714-eee6-46bc-8163-968107d8874f`.
 

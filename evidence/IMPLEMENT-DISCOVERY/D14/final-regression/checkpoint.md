@@ -11,4 +11,7 @@ current Edge deployment is `9941f714-eee6-46bc-8163-968107d8874f`, health is
 HTTP 200 with all four readiness bindings configured, and the isolated Windows
 Processor is running with restart count 0. The 15-test Playwright suite passed
 against the local production build, and the authenticated live public-fixture
-shadow reached dataset profiling and an evaluated match.
+shadow reached dataset profiling and an evaluated match. The dedicated Paper
+Processor safe-failure runtime `62e5b7f` is active on zhangbot as release
+`344a93d`; a fresh public ResNet retry reached `profiled`/`ready` with a
+succeeded attempt.

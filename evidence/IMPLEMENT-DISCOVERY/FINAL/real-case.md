@@ -30,3 +30,15 @@ different public BERT PDF created disposable paper
 `8272108e-5475-41f8-b18d-0c3bb00ad62d`, whose Paper Processor resource
 `b7ea841f-97a3-40e7-8953-8474696fcb3e` terminated with
 `PAPER_PROCESSOR_RUNTIME_ERROR`; no task or artifact was created.
+
+Paper Processor remediation retry:
+
+- Release `344a93d` / reviewed runtime commit
+  `62e5b7fe4c5a35345c7bc41886ea8ae3e9928228` was activated on zhangbot.
+- Fresh public arXiv ResNet PDF 1512.03385 (SHA-256
+  `1e0651b6810ecba34a3dbc5b5b0209226f889004607c1f203540a48d64e5a93a`)
+  created paper `91422e01-f892-4573-89cb-8d5a8e25bdbd`, resource
+  `25023afd-ad2f-4b97-b11f-bdc4066e597e`, and attempt
+  `fb6bc0cf-4f78-48f4-ac42-f1dce22a2620`. D1 confirmed paper `profiled`,
+  profile version `paper-profile-v1`, resource `ready`, attempt `succeeded`,
+  12 pages, and 0 images. No Task or Artifact was created.

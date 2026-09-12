@@ -15,9 +15,12 @@ Known limitations and deliberate gates:
 5. The production browser E2E smoke used public test inputs and an authenticated
    browser session. Full Playwright tests use deterministic route fixtures; the
    real Cloudflare path is covered by the separate production smoke evidence.
-6. The live shadow’s fresh BERT paper reached the Paper Processor but that
-   external service rejected the resource with
-   `PAPER_PROCESSOR_RUNTIME_ERROR`; the Worker now propagates that terminal
-   resource failure to the Discovery catalog. The disposable failed paper and
-   successful shadow collection remain in the authenticated test account until
-   deletion is explicitly confirmed.
+6. The first live BERT shadow reached `finalizing` after download, extraction,
+   and object publication, but the pre-remediation Processor returned the
+   generic `PAPER_PROCESSOR_RUNTIME_ERROR`; its exact remote response was not
+   recoverable without violating the safe logging boundary. The lifecycle
+   Worker fix now propagates future terminal resource failures to the Discovery
+   catalog, and the remediation release adds bounded stage/family diagnostics.
+   A fresh public ResNet equivalent completed successfully on that release.
+   The historical failed paper and successful shadow collection remain in the
+   authenticated test account until deletion is explicitly confirmed.

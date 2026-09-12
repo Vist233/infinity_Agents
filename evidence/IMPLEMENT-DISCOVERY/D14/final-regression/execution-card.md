@@ -10,8 +10,11 @@ applied, the final listing is clean, the current Edge version is
 readiness bindings configured, and the isolated Windows Processor is running
 with restart count 0 and the recorded digest. An authenticated live public-
 fixture shadow reached dataset profiling and an evaluated 100% match with hard
-gate `pass`; the fresh paper shadow exposed a Paper Processor runtime rejection
-that is now propagated to the Discovery catalog by 89668c7.
+gate `pass`; the initial BERT paper shadow exposed a pre-remediation Paper
+Processor runtime rejection that is now propagated to the Discovery catalog by
+89668c7. The safe-failure runtime 62e5b7f was activated on zhangbot as release
+344a93d, and a fresh public ResNet equivalent completed successfully end to
+end.
 
 The card remains conditional because `DISCOVERY_AUTO_EXECUTE=false`, so the
 Task/Artifact/Redis-recovery portion of D12/D14 is intentionally not claimed;

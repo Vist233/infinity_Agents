@@ -15,6 +15,9 @@ validation
 Sync correction commit: 392cbed docs: align discovery sync evidence
 Post-rollout lifecycle fix: 89668c7 fix: surface paper processor failures in
 discovery catalog
+Paper Processor safe-failure runtime: 62e5b7f fix: classify paper processor
+failures safely
+Paper Processor release pin: 344a93d docs: pin paper processor release commit
 
 Remote D1 migrations 0025-0027 are applied and the Worker is live. The final
 evidence commit from this run will follow this code commit. Unrelated dirty

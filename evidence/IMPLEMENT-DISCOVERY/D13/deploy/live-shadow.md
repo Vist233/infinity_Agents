@@ -19,5 +19,16 @@ Live authenticated browser shadow (2026-09-12, Chrome; public fixtures only)
   The lifecycle fix in `89668c7` now synchronizes this terminal resource
   failure to `paper_catalog` for future failures; this pre-fix disposable row
   remains pending deletion confirmation.
+- After the safe-failure Processor release `344a93d` (reviewed runtime commit
+  `62e5b7fe4c5a35345c7bc41886ea8ae3e9928228`), a fresh public arXiv ResNet
+  PDF (`1512.03385`, SHA-256
+  `1e0651b6810ecba34a3dbc5b5b0209226f889004607c1f203540a48d64e5a93a`)
+  completed the same path: paper
+  `91422e01-f892-4573-89cb-8d5a8e25bdbd`, resource
+  `25023afd-ad2f-4b97-b11f-bdc4066e597e`, and attempt
+  `fb6bc0cf-4f78-48f4-ac42-f1dce22a2620` are respectively `profiled`, `ready`,
+  and `succeeded`; the resource produced `paper-profile-v1`, 12 pages, and 0
+  images. This is the successful equivalent retry for the historical BERT
+  failure.
 - No Task Center or Artifact was created because
   `DISCOVERY_AUTO_EXECUTE=false`.

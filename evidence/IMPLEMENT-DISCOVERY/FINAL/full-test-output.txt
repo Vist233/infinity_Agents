@@ -1,7 +1,7 @@
 Local implementation verification (2026-09-12):
 
-Python: 372 passed, 45 skipped.
-Cloudflare Worker: 31 test files passed, 184 tests passed; `npm run check`
+Python: 375 passed, 45 skipped.
+Cloudflare Worker: 31 test files passed, 185 tests passed; `npm run check`
 passed.
 Frontend unit: 16 files passed, 78 tests passed.
 Frontend typecheck: passed after production build.
@@ -14,8 +14,12 @@ local config removed after the run.
 Wrangler dry-run: exited 0 and produced the Worker bundle/bindings; Wrangler
 reported only its nonfatal inability to write a user log outside the workspace.
 Worker lifecycle regression fix `89668c7` was covered by the Worker suite
-(31 files, 184 tests) and deployed as Edge Version
+(31 files, 185 tests) and deployed as Edge Version
 `9941f714-eee6-46bc-8163-968107d8874f`.
+Paper Processor safe-failure runtime commit `62e5b7f` was covered by the
+focused and full Python suites, pushed in release `344a93d`, and activated on
+zhangbot. A post-release public ResNet retry reached `profiled`/`ready` with a
+succeeded attempt (12 pages, 0 images).
 `git diff --check` and the staged/committed Discovery diff checks passed.
 Remote rollout: migrations 0025-0027 applied; final migration listing returned
 `No migrations to apply!`; Edge Version `5dab1bac-6e71-4ef5-aba9-26a493e5ebc1`
@@ -37,5 +41,7 @@ Live authenticated browser shadow:
   `1`, confidence `100`, scientific fit `100`, and `created_task_id=null`;
 - the original arXiv PDF exercised the hash-deduplication path; a different
   public BERT PDF persisted as paper `8272108e-5475-41f8-b18d-0c3bb00ad62d`
-  but the external Paper Processor returned
-  `PAPER_PROCESSOR_RUNTIME_ERROR`. No Task or Artifact was created.
+  but the pre-remediation external Paper Processor returned
+  `PAPER_PROCESSOR_RUNTIME_ERROR`; a fresh public ResNet equivalent uploaded
+  after release `344a93d` completed successfully. No Task or Artifact was
+  created.

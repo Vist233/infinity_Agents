@@ -1,5 +1,6 @@
-Post-audit local verification (268eae8 plus lifecycle fix 89668c7): Python 372
-passed, 45 skipped. Cloudflare Worker: 31 files/184 tests passed; typecheck
+Post-audit local verification (268eae8 plus lifecycle fix 89668c7 and Paper
+Processor safe-failure runtime 62e5b7f): Python 375 passed, 45 skipped.
+Cloudflare Worker: 31 files/185 tests passed; typecheck
 passed.
 Frontend: 16 files/78 unit tests passed; typecheck/build passed; lint 0 errors
 and 3 existing warnings; production build passed. Playwright: 15 passed using
@@ -18,6 +19,8 @@ The current Discovery Processor session was unrevoked and active, and two
 Worker v2 sessions had live leases. The authenticated live shadow uploaded a
 fresh public UCI derivative, reached ready dataset profiling, and produced a
 100% evaluated match with hard gate `pass`; the separate public BERT paper
-reached the Paper Processor but was rejected with
-`PAPER_PROCESSOR_RUNTIME_ERROR`. Auto-execute remained disabled, so no
-Task/Artifact was created.
+reached the pre-fix Paper Processor but was rejected with
+`PAPER_PROCESSOR_RUNTIME_ERROR`. After release `344a93d` was activated on
+zhangbot, a fresh public ResNet paper reached `profiled`/`ready` with a
+succeeded attempt. Auto-execute remained disabled, so no Task/Artifact was
+created.
