@@ -29,4 +29,3 @@ for name in worker frontend api; do
 done
 
 bash scripts/stop-local.sh
-rm -f local-data/pids/.stop-requested
