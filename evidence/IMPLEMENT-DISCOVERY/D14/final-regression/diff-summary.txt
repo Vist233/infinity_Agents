@@ -1,4 +1,5 @@
-Final code diff is represented by the Discovery commit series through
-008b905. The last code change fixed semicolon-delimited CSV detection after
-the first real UCI smoke exposed the issue. Only Discovery evidence was added
-afterward; unrelated user changes were not staged.
+The post-audit local code diff is represented by commit 268eae8 on top of the
+prior Discovery series. It hardens stream cleanup, bounded contracts, fenced
+object-pointer cleanup, server-side evaluation gates, and literature leases,
+retries, and quota. The three new migrations are included in that commit.
+Unrelated user changes were not staged.

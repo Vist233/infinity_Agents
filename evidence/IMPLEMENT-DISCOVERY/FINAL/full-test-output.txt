@@ -1,17 +1,20 @@
-Final implementation verification (HEAD 008b905):
+Post-audit local implementation verification (commit 268eae8, 2026-09-12;
+not deployed):
 
-Python: 368 passed, 45 skipped.
-Cloudflare Worker: 31 test files passed, 174 tests passed; `npm run check`
+Python: 372 passed, 45 skipped.
+Cloudflare Worker: 31 test files passed, 184 tests passed; `npm run check`
 passed.
 Frontend unit: 16 files passed, 78 tests passed.
 Frontend typecheck: passed after production build.
 Frontend lint: 0 errors, 3 existing Next warnings.
 Frontend production build: passed; Papers and Data Collections routes
 prerendered.
-Frontend Playwright: 15 passed using the installed compatible Chromium binary
-and temporary local-port config; the temporary config was removed. The default
-runner separately failed only because its expected browser cache (1208) was not
-installed and the sandbox initially denied local port binding.
-R2 read-only verification: Paper source/text/image manifests and dataset source
-downloaded successfully; public source hashes matched D1.
-Secret scan and `git diff --check`: passed for Discovery changes/evidence.
+Frontend Playwright: not rerun in this post-audit verification; the prior
+compatible-browser result remains historical evidence and is not re-claimed as
+a current result.
+Wrangler dry-run: exited 0 and produced the Worker bundle/bindings; Wrangler
+reported only its nonfatal inability to write a user log outside the workspace.
+The prior R2 read-only verification and production Paper/Data/Match shadow
+case remain historical evidence for the earlier deployed code.
+`git diff --check` and the staged/committed Discovery diff checks passed.
+No production deployment or remote migration was performed for 268eae8.

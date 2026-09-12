@@ -1,6 +1,14 @@
 Database: infinity-agents-db
 Database id: 9ee9ec94-cb42-40b5-8372-681c7b57c105
-Applied remotely:
+Prior remote observation:
 - 0023_discovery_catalog.sql
 - 0024_discovery_leases.sql
-Final `wrangler d1 migrations list --remote`: no migrations to apply.
+
+Local post-audit commit 268eae8 adds:
+- 0025_fenced_output_pointers.sql
+- 0026_literature_watch_leases.sql
+- 0027_literature_retries_and_quota.sql
+
+No remote DDL or migration apply was performed in this audit. The three local
+migrations remain pending for production and must be applied before deploying
+the post-audit Worker code.

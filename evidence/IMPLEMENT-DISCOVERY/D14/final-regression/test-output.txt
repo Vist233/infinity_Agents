@@ -1,8 +1,9 @@
-Python: 368 passed, 45 skipped.
-Cloudflare Worker: 31 files/174 tests passed; typecheck passed.
+Post-audit local verification (268eae8): Python 372 passed, 45 skipped.
+Cloudflare Worker: 31 files/184 tests passed; typecheck passed.
 Frontend: 16 files/78 unit tests passed; typecheck/build passed; lint 0 errors
-and 3 existing warnings; Playwright 15 passed.
-Deployment: Edge health 200; D1 no pending migrations; R2 real-case objects
-readable; Windows Processor running with active heartbeat; Worker v2 sessions
-active.
-Real case: Paper/Data/Match shadow path passed; no Task/Artifact created.
+and 3 existing warnings; production build passed. Playwright was not rerun in
+this post-audit pass.
+Deployment boundary: no Edge deployment or remote migration was performed for
+268eae8; local Wrangler dry-run exited 0. Prior Edge/D1/R2/Processor evidence
+and real-case Paper/Data/Match shadow path passed for the pre-audit rollout; no
+Task/Artifact was created.
