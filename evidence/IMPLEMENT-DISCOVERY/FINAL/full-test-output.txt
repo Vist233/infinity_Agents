@@ -9,12 +9,22 @@ Frontend typecheck: passed after production build.
 Frontend lint: 0 errors, 3 existing Next warnings.
 Frontend production build: passed; Papers and Data Collections routes
 prerendered.
-Frontend Playwright: not rerun in this post-audit verification; the prior
-compatible-browser result remains historical evidence and is not re-claimed as
-a current result.
+Frontend Playwright: 15 passed using the installed Google Chrome executable
+against the production build on an isolated local port (3100), with a temporary
+local config removed after the run.
 Wrangler dry-run: exited 0 and produced the Worker bundle/bindings; Wrangler
 reported only its nonfatal inability to write a user log outside the workspace.
 The prior R2 read-only verification and production Paper/Data/Match shadow
 case remain historical evidence for the earlier deployed code.
 `git diff --check` and the staged/committed Discovery diff checks passed.
 No production deployment or remote migration was performed for 268eae8.
+GitHub sync: `git push origin HEAD:cf-deploy` completed
+`3df909f..d0e3766`.
+Windows Processor validation: host `EAPS6CGH-LT`, Docker Server 29.7.2;
+container `infinity-discovery-processor-discovery-processor-1` was running,
+restart count 0, image digest
+`sha256:a905a9f2539f8059cbfc6527a7c414a6c9266cebe4f623f5ba015a5ffb28c586`,
+and resource use was 0.30% CPU / 21.73 MiB. The D1 session for
+`discovery-processor-windows-v1` had `revoked_at=null`; `last_seen_at` advanced
+from 1789196224 to 1789196309 during validation. The live image is the
+pre-audit image; 268eae8 was not deployed.

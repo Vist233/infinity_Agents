@@ -1,9 +1,16 @@
 Post-audit local verification (268eae8): Python 372 passed, 45 skipped.
 Cloudflare Worker: 31 files/184 tests passed; typecheck passed.
 Frontend: 16 files/78 unit tests passed; typecheck/build passed; lint 0 errors
-and 3 existing warnings; production build passed. Playwright was not rerun in
-this post-audit pass.
+and 3 existing warnings; production build passed. Playwright: 15 passed using
+installed Google Chrome against the local production build on port 3100.
 Deployment boundary: no Edge deployment or remote migration was performed for
-268eae8; local Wrangler dry-run exited 0. Prior Edge/D1/R2/Processor evidence
-and real-case Paper/Data/Match shadow path passed for the pre-audit rollout; no
-Task/Artifact was created.
+268eae8; local Wrangler dry-run exited 0. Remote migration listing shows
+0025_fenced_output_pointers.sql, 0026_literature_watch_leases.sql, and
+0027_literature_retries_and_quota.sql pending.
+Windows Processor: `EAPS6CGH-LT`, Docker 29.7.2; container
+`infinity-discovery-processor-discovery-processor-1` running, restart=0, image
+digest `sha256:a905a9f2539f8059cbfc6527a7c414a6c9266cebe4f623f5ba015a5ffb28c586`.
+D1 session `discovery-1-52f52d9a8aa10131` had `revoked_at=null` and heartbeat
+advanced from 1789196224 to 1789196309. This is the pre-audit image; 268eae8
+was not deployed. Prior Edge/D1/R2 and real-case Paper/Data/Match shadow path
+passed for the pre-audit rollout; no Task/Artifact was created.

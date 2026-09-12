@@ -4,6 +4,11 @@ cd cloudflare-worker && npm run check
 cd frontend && npm run test:unit
 cd frontend && npm run build && npm run typecheck
 cd frontend && npm run lint
-Frontend typecheck was rerun after the build completed; Playwright was not
-rerun in the post-audit pass.
+Frontend typecheck was rerun after the build completed.
+cd frontend && npx playwright test --config=playwright.local.config.ts
+  (temporary config: installed Google Chrome, local production server on port
+  3100; config removed after the run)
+ssh windows-ssh hostname; ssh windows-ssh "docker version"; read-only Docker
+Compose/container/image/log checks; read-only remote D1 session heartbeat query
+and migration listing
 read-only HTTPS, D1, R2, SSH/Docker, and secret-scan verification commands
