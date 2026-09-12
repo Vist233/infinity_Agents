@@ -30,23 +30,8 @@ services:
     volumes:
       - worker_2_workspace:/workspace
 
-  discovery-processor:
-    image: infinity-agents-discovery-processor:2026.09.11-r1
-    pull_policy: never
-    dns:
-      - 1.1.1.1
-      - 8.8.8.8
-    restart: unless-stopped
-    command: ["python", "-m", "backend.discovery.processor"]
-    env_file:
-      - discovery-processor.cloudflare.env
-    volumes:
-      - discovery_processor_work:/var/lib/discovery-processor
-
 volumes:
   worker_1_workspace:
     name: infinity-agents-worker-1-workspace
   worker_2_workspace:
     name: infinity-agents-worker-2-workspace
-  discovery_processor_work:
-    name: infinity-agents-discovery-processor-work
