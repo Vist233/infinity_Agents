@@ -4,7 +4,10 @@ Known limitations and deliberate gates:
    explicitly selected live Task was materialized. The Task Center/idempotency
    and Redis recovery checks passed, but three real Worker Claims/Attempts
    expired before a Claude terminal event or Artifact; successful Worker
-   execution and selected-Task Artifact/download acceptance remain open.
+   execution and selected-Task Artifact/download acceptance remain open. A
+   second distinct scoped Task was later selected once for the repaired Worker
+   path, but its first Attempt could not be finalized after the D1 write path
+   became unavailable.
 2. Literature watcher is implemented but disabled
    (`DISCOVERY_LITERATURE_ENABLED=false`); two live cron rounds were not run.
 3. The production paper profile smoke used the deterministic compiler. The
@@ -26,3 +29,10 @@ Known limitations and deliberate gates:
    A fresh public ResNet equivalent completed successfully on that release.
    The historical failed paper and successful shadow collection remain in the
    authenticated test account until deletion is explicitly confirmed.
+7. During the 2026-09-13 follow-up, D1 reads remained available but the
+   control-plane write path returned bounded 503s to both repaired Worker
+   connects after the second Task's lease expired. The exact Cloudflare
+   provider/quota cause was not asserted from redacted status-only evidence.
+   The Edge now isolates transient session/renew/recovery batches, but the
+   stranded Task must be reconciled by the normal scheduler after write
+   availability returns; no manual D1 status write was made.

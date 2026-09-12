@@ -76,12 +76,14 @@ class RuntimeFakeD1 {
   readonly artifacts = new Map<string, any>();
   readonly policy = { pool_id: "public-default", namespace: "infinity-public", mode: "public" as const };
   afterTaskLoad: (() => void) | null = null;
+  batchError: Error | null = null;
 
   prepare(sql: string): RuntimeFakeStatement {
     return new RuntimeFakeStatement(this, sql);
   }
 
   async batch(statements: RuntimeFakeStatement[]): Promise<unknown[]> {
+    if (this.batchError) throw this.batchError;
     const output: unknown[] = [];
     for (const statement of statements) output.push(await statement.run());
     return output;
@@ -692,6 +694,42 @@ describe("Worker v2 control plane", () => {
     const rejected = await handleWorkerV2(new Request("https://app.test/api/worker/v2/heartbeat", { method: "POST", headers: forgedPool }), envFor(db));
     expect(rejected?.status).toBe(403);
     expect(await rejected?.json()).toMatchObject({ error: { code: "WORKER_POOL_MISMATCH" } });
+  });
+
+  it("returns bounded availability errors when a session or task renewal batch is unavailable", async () => {
+    const db = new RuntimeFakeD1();
+    const credential = "wc_test-persistent-credential";
+    db.workers.set("worker-b", {
+      worker_id: "worker-b", pool_id: "public-default", namespace: "infinity-public", created_by: "worker-owner",
+      credential_hash: hashText(credential), status: "active", protocol_version: "2", runtime_capability: "goal-driven-claude-code", image_digest: null, last_seen_at: null,
+    });
+    db.tasks.set("task-transient", {
+      task_id: "task-transient", task_spec_id: "spec-1", dataset_snapshot_id: "dataset-1", method_source_id: null,
+      title: "Transient D1 task", attempt_count: 0, max_attempts: 3, lease_epoch: 0, status: "queued", execution_pool_id: "public-default",
+      active_attempt_id: null, lease_worker_id: null, lease_token_hash: null, lease_expires_at: null,
+    });
+    const connected = await connect(db, "worker-b", credential, "machine-a");
+    const headers = authHeaders("worker-b", credential, "machine-a", connected.session);
+    const acceptedResponse = await handleWorkerV2(new Request("https://app.test/api/worker/v2/tasks/task-transient/accept", {
+      method: "POST", headers,
+    }), envFor(db));
+    const accepted = await acceptedResponse!.json() as { attempt_id: string; lease_token: string };
+    const attemptHeaders = new Headers(headers);
+    attemptHeaders.set("x-worker-attempt-id", accepted.attempt_id);
+    attemptHeaders.set("x-worker-lease-token", accepted.lease_token);
+    db.batchError = new Error("simulated D1 outage");
+
+    const heartbeat = await handleWorkerV2(new Request("https://app.test/api/worker/v2/heartbeat", {
+      method: "POST", headers,
+    }), envFor(db));
+    expect(heartbeat?.status).toBe(503);
+    expect(await heartbeat?.json()).toMatchObject({ error: { code: "WORKER_SESSION_UNAVAILABLE" } });
+
+    const renewed = await handleWorkerV2(new Request("https://app.test/api/worker/v2/tasks/task-transient/renew", {
+      method: "POST", headers: attemptHeaders,
+    }), envFor(db));
+    expect(renewed?.status).toBe(503);
+    expect(await renewed?.json()).toMatchObject({ error: { code: "TASK_RENEW_UNAVAILABLE" } });
   });
 
   it("records a fenced Worker failure without an uncaught 500", async () => {

@@ -10,6 +10,13 @@ materialized exactly once, the Redis fallback passed, but all three Worker
 Attempts expired without a Claude terminal event or Artifact. Literature and
 live-model configuration changes were not executed.
 
+Follow-up status (2026-09-13): a second, distinct match was selected exactly
+once after the Worker scanner/lease fixes. Its Task reached one claimed
+Attempt, but the D1 write path then returned 503 to both repaired Worker
+connects, leaving that expired Attempt unfinalized. The bounded details are in
+`D14/final-regression/gated-live-followup-20260913.md`; this is a blocker, not
+a passing Claude/Artifact result.
+
 ## Read-only production preflight
 
 At the final preflight, all six rows below were `evaluated`, had hard gate
@@ -34,15 +41,18 @@ operator allowlist; it must not be simulated by hand-editing D1.
 
 ## Gated-run results and gates still open
 
-1. **Task materialization: PASS.** The browser created exactly one deterministic
-   `discovery-task-${match_id}` Task, one idempotency row, one queued event, and
-   the Task Center rendered it. Three fenced retries were recorded; no second
-   Task was created. See `D14/final-regression/gated-live-run-20260912.md`.
-2. **Existing Worker v2 execution: OPEN/FAILED RUN.** The protocol-v2 Workers
-   claimed all three Attempts and leases renewed while active, but no Claude
-   terminal event or Artifact was produced before the maximum-attempt failure.
-   Capture Worker-side executor diagnostics or repair the Worker image before
-   rerunning; do not create a second Task without explicit authorization.
+1. **Task materialization: PASS with two distinct scoped runs.** The browser
+   created one deterministic Task for the original selected match and one
+   deterministic Task for the later distinct match, each once with its own
+   idempotency row. No duplicate Task was created for either match. The first
+   Task recorded three fenced lease expiries; the second is still blocked by
+   the D1 write-side outage. See both D14 live-gate records.
+2. **Existing Worker v2 execution: OPEN/BLOCKED.** The repaired r3 Workers
+   reached the second Task's accept/spec/input boundary, but the control plane
+   returned renew 500s, then session 401s, and finally connect 503s after a
+   narrow Worker-2 recreate. The Edge now maps transient batches to bounded
+   503s and isolates recovery candidates; a successful Claude/Artifact run
+   still requires D1 write availability.
 3. **Artifact integrity and download: OPEN for the selected Task.** Its
    Artifact query was empty. An existing published Task's download and SHA-256
    control passed, but that control is not substituted for the selected Task.
@@ -53,20 +63,19 @@ operator allowlist; it must not be simulated by hand-editing D1.
    closed with 503, D1/Worker leases continued, the same single Task remained
    fenced, and Redis/Relay recovered to 200. Existing Worker v2 containers were
    not stopped. See the D14 gated-run record.
-5. **Literature watcher: OPEN/UNRUN.** It is currently disabled by
-   `DISCOVERY_LITERATURE_ENABLED=false`; the baseline state query had no rows.
-   A temporary local enablement was reverted before deployment because the
-   production configuration mutation was not authorized in this context. Two
-   real cron rounds still require direct authorization.
-6. **Live model provider path: OPEN/UNRUN.** The optional Kimi `kimi-k2.6`
-   JSON profile call was not attempted. No secret, model flag, or remote
-   environment was changed. It requires a separately authorized configuration
-   change and bounded status/family-only diagnostics.
+5. **Literature watcher: OPEN/UNRUN.** It remains disabled by
+   `DISCOVERY_LITERATURE_ENABLED=false`; no watcher rows or catalog writes were
+   made. The authorized rounds were deferred when the D1 write path became
+   unavailable, and must be run only after the flag can be restored safely.
+6. **Live model provider path: OPEN/UNRUN.** The authorized live Kimi
+   `kimi-k2.6` JSON profile call was deferred because the production gate was
+   already blocked. No secret, model flag, or remote Processor environment was
+   changed.
 
 ## Safe execution and rollback notes
 
 Before any gated run, snapshot the read-only preflight, current Edge version
-`9941f714-eee6-46bc-8163-968107d8874f`, current flags, Worker v2 session
+`9d898d5d-9753-4e14-bf0f-1fb25c829127`, current flags, Worker v2 session
 health, and Processor digest
 `sha256:2bb2a1c1171e28e646006d185a2fc9bab3fb190b3aa1b0778e04194087147496`.
 Use a disposable selected match/fixture only after the user authorizes the
@@ -77,10 +86,10 @@ revert only the isolated Discovery Processor release. Retain the additive D1
 migrations and leave existing Worker v2, Task Center, and Redis services
 untouched.
 
-The failed BERT paper, its terminal resource, the shadow collection, and the
-failed selected Task/Attempts are retained for traceability. They were not
-deleted because deletion is a destructive operation requiring confirmation at
-action time.
+The failed BERT paper, its terminal resource, the shadow collection, and both
+selected Task/Attempt sets are retained for traceability. They were not deleted
+because deletion is a destructive operation requiring confirmation at action
+time.
 
 ## Evidence already supporting the conditional pass
 

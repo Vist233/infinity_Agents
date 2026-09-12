@@ -70,47 +70,59 @@ export async function recoverExpiredLeases(env: Pick<Env, "DB">, now = Math.floo
       pool_id: "public-default",
       reason: "lease_expired",
     });
-    const results = await env.DB.batch([
-      env.DB.prepare(
-        `UPDATE task_attempts
-         SET status = 'expired', error_code = 'lease_expired',
-             error_message = ?2, updated_at = ?3, finished_at = ?3
-         WHERE attempt_id = ?1 AND task_id = ?4
-           AND status IN ('claimed', 'running') AND lease_expires_at <= ?3`,
-      ).bind(row.active_attempt_id, boundedError(message), now, row.task_id),
-      env.DB.prepare(
-        `UPDATE tasks
-         SET status = ?2, error_message = ?3,
-             active_attempt_id = NULL, lease_worker_id = NULL,
-             lease_token_hash = NULL, lease_expires_at = NULL,
-             updated_at = ?4,
-             finished_at = CASE WHEN ?2 IN ('queued') THEN NULL ELSE ?4 END
-         WHERE task_id = ?1 AND active_attempt_id = ?5
-           AND status IN ('claimed', 'running') AND lease_expires_at <= ?4
-           AND EXISTS (
-             SELECT 1 FROM task_attempts
-             WHERE attempt_id = ?5 AND status = 'expired'
+    let results: unknown[];
+    try {
+      results = await env.DB.batch([
+        env.DB.prepare(
+          `UPDATE task_attempts
+           SET status = 'expired', error_code = 'lease_expired',
+               error_message = ?2, updated_at = ?3, finished_at = ?3
+           WHERE attempt_id = ?1 AND task_id = ?4
+             AND status IN ('claimed', 'running') AND lease_expires_at <= ?3`,
+        ).bind(row.active_attempt_id, boundedError(message), now, row.task_id),
+        env.DB.prepare(
+          `UPDATE tasks
+           SET status = ?2, error_message = ?3,
+               active_attempt_id = NULL, lease_worker_id = NULL,
+               lease_token_hash = NULL, lease_expires_at = NULL,
+               updated_at = ?4,
+               finished_at = CASE WHEN ?2 IN ('queued') THEN NULL ELSE ?4 END
+           WHERE task_id = ?1 AND active_attempt_id = ?5
+             AND status IN ('claimed', 'running') AND lease_expires_at <= ?4
+             AND EXISTS (
+               SELECT 1 FROM task_attempts
+               WHERE attempt_id = ?5 AND status = 'expired'
+             )`,
+        ).bind(row.task_id, nextStatus, boundedError(message), now, row.active_attempt_id),
+        env.DB.prepare(
+          `INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
+           SELECT ?1, ?2, ?3, ?4, ?5
+           WHERE EXISTS (
+             SELECT 1 FROM tasks WHERE task_id = ?2 AND status = ?6
+               AND active_attempt_id IS NULL AND updated_at = ?5
            )`,
-      ).bind(row.task_id, nextStatus, boundedError(message), now, row.active_attempt_id),
-      env.DB.prepare(
-        `INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
-         SELECT ?1, ?2, ?3, ?4, ?5
-         WHERE EXISTS (
-           SELECT 1 FROM tasks WHERE task_id = ?2 AND status = ?6
-             AND active_attempt_id IS NULL AND updated_at = ?5
-         )`,
-      ).bind(crypto.randomUUID(), row.task_id, eventType, payload, now, nextStatus),
-      env.DB.prepare(
-        `INSERT INTO outbox_events
-          (event_id, idempotency_key, aggregate_type, aggregate_id, event_type,
-           payload_json, status, attempts, next_attempt_at, created_at)
-         SELECT ?1, ?2, 'task', ?3, ?4, ?5, 'pending', 0, ?6, ?6
-         WHERE EXISTS (
-           SELECT 1 FROM tasks WHERE task_id = ?3 AND status = ?7
-             AND active_attempt_id IS NULL AND updated_at = ?6
-         )`,
-      ).bind(crypto.randomUUID(), `task-lease-expired:${row.active_attempt_id}:${nextStatus}`, row.task_id, eventType, payload, now, nextStatus),
-    ]);
+        ).bind(crypto.randomUUID(), row.task_id, eventType, payload, now, nextStatus),
+        env.DB.prepare(
+          `INSERT INTO outbox_events
+            (event_id, idempotency_key, aggregate_type, aggregate_id, event_type,
+             payload_json, status, attempts, next_attempt_at, created_at)
+           SELECT ?1, ?2, 'task', ?3, ?4, ?5, 'pending', 0, ?6, ?6
+           WHERE EXISTS (
+             SELECT 1 FROM tasks WHERE task_id = ?3 AND status = ?7
+               AND active_attempt_id IS NULL AND updated_at = ?6
+           )`,
+        ).bind(crypto.randomUUID(), `task-lease-expired:${row.active_attempt_id}:${nextStatus}`, row.task_id, eventType, payload, now, nextStatus),
+      ]);
+    } catch (error) {
+      // A single transient D1 batch failure must not abort the whole
+      // scheduled handler. The candidate remains fenced and is retried on the
+      // next tick; no partial event or outbox record is emitted by D1.batch.
+      console.warn("task_lease_recovery_unavailable", {
+        task_id: row.task_id,
+        error_type: error instanceof Error ? error.name : "unknown",
+      });
+      continue;
+    }
     if (changed(results[1]) === 1) recovered += 1;
   }
   return recovered;

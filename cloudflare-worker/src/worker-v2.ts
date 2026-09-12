@@ -239,29 +239,38 @@ async function authenticateSession(request: Request, env: Env): Promise<WorkerCo
   return { worker: loaded.row, policy, session, credentialHash: loaded.hash };
 }
 
-async function touchSession(env: Env, context: WorkerContext, now = nowSeconds()): Promise<boolean> {
+async function touchSession(env: Env, context: WorkerContext, now = nowSeconds()): Promise<boolean | Response> {
   const leaseExpiresAt = now + SESSION_TTL_SECONDS;
-  const results = await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE worker_sessions_runtime
-       SET last_seen_at = ?4, lease_expires_at = ?5
-       WHERE session_id = ?1 AND worker_id = ?2 AND session_secret_hash = ?3
-         AND session_epoch = ?6 AND instance_id = ?7
-         AND lease_expires_at > ?4 AND disconnected_at IS NULL`,
-    ).bind(context.session.session_id, context.worker.worker_id, hashText(context.session.session_id), now, leaseExpiresAt,
-      context.session.session_epoch, context.session.instance_id),
-    env.DB.prepare(
-      `UPDATE workers SET last_seen_at = ?2, updated_at = ?2
-       WHERE worker_id = ?1 AND status = 'active'
-         AND EXISTS (
-           SELECT 1 FROM worker_sessions_runtime
-           WHERE session_id = ?3 AND worker_id = ?1 AND session_epoch = ?4
-             AND instance_id = ?5 AND disconnected_at IS NULL
-             AND lease_expires_at > ?2
-         )`,
-    ).bind(context.worker.worker_id, now, context.session.session_id,
-      context.session.session_epoch, context.session.instance_id),
-  ]);
+  let results: unknown[];
+  try {
+    results = await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE worker_sessions_runtime
+         SET last_seen_at = ?4, lease_expires_at = ?5
+         WHERE session_id = ?1 AND worker_id = ?2 AND session_secret_hash = ?3
+           AND session_epoch = ?6 AND instance_id = ?7
+           AND lease_expires_at > ?4 AND disconnected_at IS NULL`,
+      ).bind(context.session.session_id, context.worker.worker_id, hashText(context.session.session_id), now, leaseExpiresAt,
+        context.session.session_epoch, context.session.instance_id),
+      env.DB.prepare(
+        `UPDATE workers SET last_seen_at = ?2, updated_at = ?2
+         WHERE worker_id = ?1 AND status = 'active'
+           AND EXISTS (
+             SELECT 1 FROM worker_sessions_runtime
+             WHERE session_id = ?3 AND worker_id = ?1 AND session_epoch = ?4
+               AND instance_id = ?5 AND disconnected_at IS NULL
+               AND lease_expires_at > ?2
+           )`,
+      ).bind(context.worker.worker_id, now, context.session.session_id,
+        context.session.session_epoch, context.session.instance_id),
+    ]);
+  } catch (error) {
+    console.warn("worker.session_touch_unavailable", {
+      worker_id: context.worker.worker_id,
+      error_type: error instanceof Error ? error.name : "unknown",
+    });
+    return errorJson("Worker session refresh is temporarily unavailable", 503, "WORKER_SESSION_UNAVAILABLE");
+  }
   return changed(results[0]) === 1 && changed(results[1]) === 1;
 }
 
@@ -308,7 +317,9 @@ async function connectWorker(request: Request, env: Env): Promise<Response> {
   }
   if (current && current.lease_expires_at > now && current.disconnected_at == null && current.instance_id === instanceId) {
     const context: WorkerContext = { worker: loaded.row, policy, session: current, credentialHash: loaded.hash };
-    if (!(await touchSession(env, context, now))) return errorJson("Worker session was superseded", 409, "WORKER_SESSION_STALE");
+    const touched = await touchSession(env, context, now);
+    if (touched instanceof Response) return touched;
+    if (!touched) return errorJson("Worker session was superseded", 409, "WORKER_SESSION_STALE");
     return json({
       worker_id: workerId,
       pool_id: policy.pool_id,
@@ -399,7 +410,9 @@ async function heartbeat(request: Request, env: Env, context: WorkerContext): Pr
   const body = await bodyJson(request);
   const forbidden = rejectClientControlledFields(body);
   if (forbidden) return forbidden;
-  if (!(await touchSession(env, context))) return errorJson("Worker session was superseded", 409, "WORKER_SESSION_STALE");
+  const touched = await touchSession(env, context);
+  if (touched instanceof Response) return touched;
+  if (!touched) return errorJson("Worker session was superseded", 409, "WORKER_SESSION_STALE");
   return json({
     worker_id: context.worker.worker_id,
     pool_id: context.policy.pool_id,
@@ -413,7 +426,9 @@ async function pollTasks(request: Request, env: Env, context: WorkerContext): Pr
   const body = await bodyJson(request);
   const forbidden = rejectClientControlledFields(body);
   if (forbidden) return forbidden;
-  if (!(await touchSession(env, context))) return errorJson("Worker session was superseded", 409, "WORKER_SESSION_STALE");
+  const touched = await touchSession(env, context);
+  if (touched instanceof Response) return touched;
+  if (!touched) return errorJson("Worker session was superseded", 409, "WORKER_SESSION_STALE");
   const row = await env.DB.prepare(
     `SELECT task_id, task_spec_id, dataset_snapshot_id, method_source_id,
             title, attempt_count, max_attempts
@@ -593,7 +608,9 @@ async function renewTask(taskId: string, request: Request, env: Env, context: Wo
   if (auth instanceof Response) return auth;
   const now = nowSeconds();
   const leaseExpiresAt = now + SESSION_TTL_SECONDS;
-  const results = await env.DB.batch([
+  let results: unknown[];
+  try {
+    results = await env.DB.batch([
     env.DB.prepare(
       `UPDATE task_attempts SET lease_expires_at = ?6, updated_at = ?6
        WHERE attempt_id = ?1 AND task_id = ?2 AND worker_id = ?3
@@ -622,7 +639,15 @@ async function renewTask(taskId: string, request: Request, env: Env, context: Wo
     ).bind(taskId, auth.attempt.attempt_id, context.worker.worker_id, auth.leaseTokenHash,
       auth.attempt.fencing_epoch, leaseExpiresAt, now, context.session.session_id,
       context.session.session_epoch, context.session.instance_id),
-  ]);
+    ]);
+  } catch (error) {
+    console.warn("worker.task_renew_unavailable", {
+      task_id: taskId,
+      attempt_id: auth.attempt.attempt_id,
+      error_type: error instanceof Error ? error.name : "unknown",
+    });
+    return errorJson("Task lease renewal is temporarily unavailable", 503, "TASK_RENEW_UNAVAILABLE");
+  }
   if (changed(results[0]) !== 1 || changed(results[1]) !== 1) return errorJson("Attempt lease is stale", 409, "ATTEMPT_FENCING_REJECTED");
   return json({ task_id: taskId, attempt_id: auth.attempt.attempt_id, lease_expires_at: leaseExpiresAt, status: "running" });
 }

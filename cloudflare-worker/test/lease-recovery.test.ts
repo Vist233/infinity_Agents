@@ -15,6 +15,8 @@ type Lease = {
 };
 
 class RecoveryFakeD1 {
+  failBatch = false;
+
   constructor(readonly lease: Lease) {}
 
   prepare(sql: string) {
@@ -22,6 +24,7 @@ class RecoveryFakeD1 {
   }
 
   async batch(statements: RecoveryStatement[]) {
+    if (this.failBatch) throw new Error("simulated D1 outage");
     const results = [];
     for (const statement of statements) results.push(await statement.run());
     return results;
@@ -92,5 +95,18 @@ describe("D1 expired lease recovery", () => {
     expect(await recoverExpiredLeases({ DB: cancelled as never }, 20)).toBe(1);
     expect(exhausted.lease.task_status).toBe("failed");
     expect(cancelled.lease.task_status).toBe("cancelled");
+  });
+
+  it("leaves an expired candidate fenced for the next scheduler tick when D1 is unavailable", async () => {
+    const db = new RecoveryFakeD1({
+      task_id: "task-transient", active_attempt_id: "attempt-transient", worker_id: "worker-transient",
+      fencing_epoch: 1, attempt_count: 1, max_attempts: 3, cancel_requested_at: null,
+      task_status: "running", task_lease_expires_at: 10, attempt_status: "running",
+    });
+    db.failBatch = true;
+
+    expect(await recoverExpiredLeases({ DB: db as never }, 20)).toBe(0);
+    expect(db.lease.task_status).toBe("running");
+    expect(db.lease.attempt_status).toBe("running");
   });
 });

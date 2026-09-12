@@ -8,6 +8,14 @@ without a Claude terminal event or Artifact. Literature and live-model gates
 remain unrun; see `FINAL/remaining-gates.md` and
 `D14/final-regression/gated-live-run-20260912.md`.
 
+The authorized follow-up selected one distinct match exactly once after the
+scanner/lease hardening. Its first Attempt reached the accept/spec/input
+boundary, then the D1 write path became unavailable: renew returned 500,
+session refresh returned 401, and both repaired Worker connects returned 503.
+The follow-up Task remains unfinalized and has no Artifact; see
+`D14/final-regression/gated-live-followup-20260913.md`. This does not close the
+Claude/Artifact gate.
+
 Delivered:
 
 - additive D1 Discovery catalog and fenced Processor leases;
@@ -29,10 +37,14 @@ Delivered:
   Version `9941f714-eee6-46bc-8163-968107d8874f`.
 
 The current Edge vars intentionally keep `DISCOVERY_AUTO_EXECUTE=false` and
-`DISCOVERY_LITERATURE_ENABLED=false`; no additional Task or Artifact was
-fabricated beyond the one explicitly selected live test. Remote D1 migrations
-0025-0027 are applied, and the final migration listing is clean. The isolated
-Windows Discovery Processor is running with restart count 0 and digest
+`DISCOVERY_LITERATURE_ENABLED=false`; only the two explicitly selected,
+distinct live test Tasks exist, with no duplicate Task or fabricated Artifact.
+Remote D1 migrations 0025-0027 are applied, and the final migration listing is
+clean. The current Edge deployment is
+`9d898d5d-9753-4e14-bf0f-1fb25c829127`. Both isolated Windows Workers are
+running with restart count 0 on the local r3 image digest
+`sha256:1ac359bfc2a9336d9ee82dbe37b0115b666e6ebd5f9f8ac28674a52c4c2e5227`.
+The isolated Windows Discovery Processor is running with restart count 0 and digest
 `sha256:2bb2a1c1171e28e646006d185a2fc9bab3fb190b3aa1b0778e04194087147496`.
 
 The live selected Task was visible in Task Center but failed after three
