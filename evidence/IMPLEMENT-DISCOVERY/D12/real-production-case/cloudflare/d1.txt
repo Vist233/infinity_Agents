@@ -1,0 +1,9 @@
+Remote database: infinity-agents-db
+Database id: 9ee9ec94-cb42-40b5-8372-681c7b57c105
+Remote migration query: no pending migrations
+Paper/resource/profile facts, collection/profile facts, and evaluated match
+were verified with read-only D1 queries; changes=0 for verification queries.
+The initial ZIP trial (collection 799dac9f-9110-4ffc-8649-1e8bcdafff57) was
+left as a diagnostic rejected row after the old image parsed the semicolon CSV
+as one column. The corrected CSV rerun is collection eee1539e-3db6-4117-922b-
+2c8088131a3a.

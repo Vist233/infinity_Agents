@@ -1,0 +1,3 @@
+Added Data Collections workspace/detail components, API client functions,
+navigation/i18n, upload/error/delete states, schema/capability/quality views,
+and matched-paper links. No second task/data fact source was introduced.

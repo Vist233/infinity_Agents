@@ -1,0 +1,4 @@
+Bucket: infinity-agents-resources
+Verified real-case Paper source/text/image manifest and dataset source objects
+with read-only `wrangler r2 object get` calls. Exact keys and hashes are listed
+in D12/real-production-case/cloudflare/r2.txt.

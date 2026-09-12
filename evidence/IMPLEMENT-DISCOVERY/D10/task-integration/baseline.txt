@@ -1,0 +1,4 @@
+Repository commit before evidence: f5c7472
+Implementation: cloudflare-worker/src/discovery-task.ts and tasks.ts
+Current production control: DISCOVERY_AUTO_EXECUTE=false
+Existing Worker v2 services were not stopped or changed.

@@ -1,0 +1,4 @@
+Routes: /papers/ and /papers/[paperId]/
+Production URL: https://infinity.zhangyvjing.com/papers/f26a1816-34c0-4f0a-939a-b4504d544977
+Authenticated browser identity: zhangyvjing@outlook.com
+Final verification commit: 008b905

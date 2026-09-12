@@ -1,0 +1,2 @@
+Observed production requests were authenticated Data Collections list/detail,
+upload, and lifecycle refresh. The uploaded CSV was the public UCI test input.

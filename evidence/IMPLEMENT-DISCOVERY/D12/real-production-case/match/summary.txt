@@ -1,0 +1,14 @@
+match_id: c34f251b-dfbd-4fae-985d-3ff6c0ea6342
+paper_profile_version: paper-profile-v1
+dataset_profile_version: dataset-profile-v1
+status: evaluated
+hard_gate: pass
+coverage_ratio: 1.0
+execution_confidence: 100
+scientific_fit: 100
+evaluator_version: feasibility-v1
+recommended: true
+created_task_id: null
+
+The match was produced by the deployed Edge/Windows Processor control path,
+not by a hand-edited D1 row.

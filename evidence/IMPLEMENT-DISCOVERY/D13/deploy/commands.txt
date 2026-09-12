@@ -1,0 +1,8 @@
+git push origin cf-deploy
+npx wrangler d1 migrations apply infinity-agents-db --remote --config wrangler.jsonc
+npx wrangler d1 migrations list infinity-agents-db --remote --config wrangler.jsonc
+npx wrangler deploy --config wrangler.jsonc
+ssh windows-ssh: pull exact cf-deploy revision, build, and compose up --force-recreate
+curl -fsS --max-time 20 https://infinity.zhangyvjing.com/health
+read-only D1 queries for Discovery Processor session and Worker v2 sessions
+read-only R2 downloads for real-case source/manifests

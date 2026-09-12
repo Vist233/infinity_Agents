@@ -1,0 +1,4 @@
+Remote DB: infinity-agents-db (9ee9ec94-cb42-40b5-8372-681c7b57c105)
+Applied: 0023_discovery_catalog.sql
+Applied: 0024_discovery_leases.sql
+Final migration listing: no migrations to apply.

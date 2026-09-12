@@ -1,0 +1,4 @@
+Edge code deployment: 01f020d9-3f83-41c5-8500-0f82eb7f08ea
+Latest secret-only deployment observed after the code deployment:
+23ad71b2-21ec-4ef9-a05d-97ff72a15e00
+Health: HTTP 200; discovery_processor readiness configured.

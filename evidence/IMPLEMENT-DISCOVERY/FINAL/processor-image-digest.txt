@@ -1,0 +1,4 @@
+Image: infinity-agents-discovery-processor:2026.09.11-r1
+Digest: sha256:a905a9f2539f8059cbfc6527a7c414a6c9266cebe4f623f5ba015a5ffb28c586
+Source revision: 008b905ddf0598d53b3031da2df8f3ae56b08720
+Runtime: Windows EAPS6CGH-LT, isolated Compose project, running, restart=0.

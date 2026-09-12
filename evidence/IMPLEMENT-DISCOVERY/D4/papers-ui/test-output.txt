@@ -1,0 +1,9 @@
+Frontend unit: PASS — 16 files, 78 tests.
+Typecheck: PASS.
+Lint: PASS — 0 errors, 3 existing Next warnings.
+Production build: PASS; Papers and detail routes were prerendered.
+Playwright: PASS — 15 tests. The repository-default runner initially could not
+find its cached browser; the same suite passed with the preinstalled compatible
+headless Chromium and a temporary config, which was removed after the run.
+Production browser smoke: upload reached ready state and detail rendered the
+real profile/evidence sections.

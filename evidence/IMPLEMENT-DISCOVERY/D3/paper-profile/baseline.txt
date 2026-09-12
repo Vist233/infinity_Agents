@@ -1,0 +1,6 @@
+Repository implementation commit: c2733c4
+Final verification commit: 008b905
+Profile contract: paper-profile-v1
+Compiler: discovery-compiler-v1
+Runtime model mode: disabled by default (`DISCOVERY_USE_MODEL=false`)
+Production paper: f26a1816-34c0-4f0a-939a-b4504d544977

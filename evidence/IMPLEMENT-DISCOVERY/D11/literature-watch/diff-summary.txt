@@ -1,0 +1,4 @@
+Added bounded scheduled source polling, canonical source IDs, cursor state,
+daily/run budgets, deterministic public-paper IDs, duplicate cleanup, and
+failure isolation. No scheduled network call is made while the opt-in flag is
+false.

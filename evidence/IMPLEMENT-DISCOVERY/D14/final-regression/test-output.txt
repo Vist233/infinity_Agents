@@ -1,0 +1,8 @@
+Python: 368 passed, 45 skipped.
+Cloudflare Worker: 31 files/174 tests passed; typecheck passed.
+Frontend: 16 files/78 unit tests passed; typecheck/build passed; lint 0 errors
+and 3 existing warnings; Playwright 15 passed.
+Deployment: Edge health 200; D1 no pending migrations; R2 real-case objects
+readable; Windows Processor running with active heartbeat; Worker v2 sessions
+active.
+Real case: Paper/Data/Match shadow path passed; no Task/Artifact created.

@@ -1,0 +1,5 @@
+Windows checkout revision: 008b905ddf0598d53b3031da2df8f3ae56b08720
+Image: infinity-agents-discovery-processor:2026.09.11-r1
+Manifest digest: sha256:a905a9f2539f8059cbfc6527a7c414a6c9266cebe4f623f5ba015a5ffb28c586
+Base manifest used locally: sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754dc11699ef5c029f2d818ce79
+Container status: running; restart=0.

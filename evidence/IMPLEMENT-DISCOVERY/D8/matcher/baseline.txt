@@ -1,0 +1,4 @@
+Repository commit before evidence: f5c7472
+Implementation: cloudflare-worker/src/discovery-contracts.ts and discovery-db.ts
+Scope: deterministic coarse matching and versioned D1 candidate facts
+No production D1 rows were manually edited for this card.

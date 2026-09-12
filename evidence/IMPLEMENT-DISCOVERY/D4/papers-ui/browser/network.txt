@@ -1,0 +1,3 @@
+Observed production requests were authenticated Papers list/detail/upload and
+the resulting lifecycle refresh. The uploaded input was the public arXiv PDF
+specified by the execution plan; no private file or credential was transmitted.

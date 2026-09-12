@@ -1,0 +1,4 @@
+Added strict feasibility-v1 normalization, deterministic policy fallback,
+coverage consistency checks, prompt-injection-safe model boundaries, and
+idempotent Edge evaluation persistence. Evaluation retries cannot duplicate a
+match or silently create a Task.

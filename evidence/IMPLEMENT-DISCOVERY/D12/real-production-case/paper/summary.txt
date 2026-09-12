@@ -1,0 +1,15 @@
+Real public-paper case: `Prediction of Red Wine Quality Using One-dimensional
+Convolutional Neural Networks`.
+
+paper_id: f26a1816-34c0-4f0a-939a-b4504d544977
+resource_id: e10aac13-021f-4903-a074-bfc27f7206c1
+resource_status: ready
+spam_status: scientific_paper
+profile_version: paper-profile-v1
+analysis_modules: 5
+source_pdf_bytes: 618374
+source_pdf_sha256: f5292f3a0d211db5604177312acc86a43980871326e8c6e2d565a0dcaeafd6cf
+paper_resource_pdf_sha256: f5292f3a0d211db5604177312acc86a43980871326e8c6e2d565a0dcaeafd6cf
+page_count: 7
+image_count: 2
+R2 source, text manifest, and image manifest fetched successfully.

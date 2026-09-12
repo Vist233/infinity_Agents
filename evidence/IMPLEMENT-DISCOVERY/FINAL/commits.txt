@@ -1,0 +1,11 @@
+82a9bdd  feat: add discovery paper and dataset storage APIs
+67617ef  docs: finalize discovery storage checkpoints
+c2733c4  feat: implement paper discovery and data collections
+f5c7472  fix: deploy discovery processor as private windows service
+f7791e9  fix: use public ecr base for discovery processor
+a440fe0  fix: preload discovery processor base for windows build
+798b7f2  fix: identify discovery processor HTTP client
+008b905  fix: detect delimited discovery datasets
+
+Final HEAD: 008b905ddf0598d53b3031da2df8f3ae56b08720
+Remote branch: origin/cf-deploy at 008b905.

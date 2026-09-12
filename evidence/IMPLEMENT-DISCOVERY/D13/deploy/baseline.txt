@@ -1,0 +1,5 @@
+Branch: cf-deploy
+Final commit: 008b905ddf0598d53b3031da2df8f3ae56b08720
+Windows checkout: C:\Users\86138\InfinityAgentsDiscoveryProcessor
+Windows checkout revision: 008b905ddf0598d53b3031da2df8f3ae56b08720
+Existing Worker v2 services were not stopped, replaced, or reconfigured.

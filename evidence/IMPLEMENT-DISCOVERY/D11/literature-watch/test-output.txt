@@ -1,0 +1,4 @@
+Literature-watch/processor tests: 2 files passed, 3 tests passed, exit 0.
+Covered canonical dedupe, cap enforcement, cursor rollback, and isolated
+provider failure behavior.
+Cloudflare typecheck: tsc --noEmit passed, exit 0.

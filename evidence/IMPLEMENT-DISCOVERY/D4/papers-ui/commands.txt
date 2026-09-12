@@ -1,0 +1,6 @@
+cd frontend && npm run test:unit
+cd frontend && npm run typecheck
+cd frontend && npm run lint
+cd frontend && npm run build
+cd frontend && npx playwright test --config=playwright.local.config.ts
+Production browser smoke: /papers/ list, upload, ready card, detail, refresh

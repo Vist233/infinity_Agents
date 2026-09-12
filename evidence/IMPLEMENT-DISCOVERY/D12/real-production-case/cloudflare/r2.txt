@@ -1,0 +1,6 @@
+Verified with read-only R2 downloads from infinity-agents-resources:
+- paper/e10aac13-021f-4903-a074-bfc27f7206c1/source.pdf
+- paper/e10aac13-021f-4903-a074-bfc27f7206c1/text/manifest.json
+- paper/e10aac13-021f-4903-a074-bfc27f7206c1/images/manifest.json
+- datasets/eee1539e-3db6-4117-922b-2c8088131a3a/source/winequality-red.csv
+Paper and dataset source hashes matched D1 and local public inputs.

@@ -1,0 +1,4 @@
+Added safe bounded inspection for CSV/TSV/JSON/JSONL/text/ZIP inputs and
+capability/profile materialization. Final fix detects comma, tab, and
+semicolon-delimited CSVs, including quoted headers; it adds a regression for
+the UCI format.

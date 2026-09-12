@@ -1,0 +1,4 @@
+Final code diff is represented by the Discovery commit series through
+008b905. The last code change fixed semicolon-delimited CSV detection after
+the first real UCI smoke exposed the issue. Only Discovery evidence was added
+afterward; unrelated user changes were not staged.

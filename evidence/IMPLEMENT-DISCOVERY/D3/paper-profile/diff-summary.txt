@@ -1,0 +1,3 @@
+Added the versioned paper profile contract, deterministic compiler, spam/non-
+paper gate, evidence locator handling, overview renderer, and optional model
+adapter. No PDF parser or existing Paper Processor fact source was duplicated.

@@ -1,0 +1,4 @@
+Production browser smoke: no blocking console error observed on the collection
+list/detail pages.
+Local E2E proxy ECONNREFUSED messages were expected because backend routes were
+stubbed by the tests; all 15 cases passed.

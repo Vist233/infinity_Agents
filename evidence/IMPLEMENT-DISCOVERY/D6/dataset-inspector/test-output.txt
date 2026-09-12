@@ -1,0 +1,7 @@
+Inspector focused regression after delimiter fix: PASS — 9 tests.
+Full Python regression after delimiter fix: PASS — 368 passed, 45 skipped.
+Production profile: `rows=1599`, `columns=12`, `target=quality`, 11 feature
+columns, `dataset.sample_count=1599`, no missing values, and
+`dataset-profile-v1`.
+R2 source fetch succeeded and SHA-256 matched the local public input:
+4a402cf041b025d4566d954c3b9ba8635a3a8a01e039005d97d6a710278cf05e.

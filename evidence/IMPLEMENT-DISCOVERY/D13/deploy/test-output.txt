@@ -1,0 +1,9 @@
+Edge health: HTTP 200; d1, resource_bucket, paper_processor, and
+discovery_processor readiness all configured.
+D1 migrations: no pending migrations; 0023_discovery_catalog.sql and
+0024_discovery_leases.sql applied remotely.
+Processor: Windows container running, restart count 0, session active with
+last_seen_at advancing and revoked_at null.
+Worker v2: two existing containers running; two active protocol-v2 sessions
+were visible in D1.
+Real shadow case: Paper/Data/Match gates passed; auto Task remained disabled.

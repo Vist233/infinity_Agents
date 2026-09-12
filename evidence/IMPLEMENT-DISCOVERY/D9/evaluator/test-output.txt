@@ -1,0 +1,5 @@
+Evaluator/profile tests: 5 passed, exit 0.
+Discovery processor/contracts tests: 2 files passed, 4 tests passed, exit 0.
+Cloudflare typecheck: tsc --noEmit passed, exit 0.
+Full Cloudflare regression: 31 files passed, 174 tests passed, exit 0.
+Threshold and hard-gate negative cases are covered by the evaluator tests.

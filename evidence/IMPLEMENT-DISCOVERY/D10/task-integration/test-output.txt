@@ -1,0 +1,6 @@
+Cloudflare full regression: 31 files passed, 174 tests passed, exit 0.
+Cloudflare typecheck: tsc --noEmit passed, exit 0.
+Compose definition is isolated to one discovery-processor service and one
+dedicated volume; it contains no Worker v2 service.
+Real Task claim/Claude/artifact execution has not been claimed as complete
+until the Windows Processor rollout and a non-mock production case pass.

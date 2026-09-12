@@ -1,0 +1,3 @@
+eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q tests/test_discovery_dataset_inspector.py tests/test_discovery_processor.py
+Production browser smoke: upload public winequality-red.csv and open collection detail
+Production D1/R2 read-only verification of source hash and profile fields

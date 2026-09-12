@@ -1,0 +1,4 @@
+Final HEAD: 008b905ddf0598d53b3031da2df8f3ae56b08720
+Remote branch: origin/cf-deploy at 008b905
+Unrelated dirty user paths were preserved and excluded from the Discovery
+commits; see final git status at handoff.

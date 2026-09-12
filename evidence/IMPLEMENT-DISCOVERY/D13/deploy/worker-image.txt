@@ -1,0 +1,4 @@
+Existing image tag: vist233/infinity-agent-worker:2026.09.11-r1
+Windows local image ID/manifest: sha256:9443e245c14f433620ce9041b6ec30eb38d37038157508f8ec6c0a49b9a33f42
+Active D1 Worker v2 session image_digest: sha256:b0e0dcced7ddc0cc58e314e4aa49985a2a85cff7882ae69f7725d0febdf33e40
+No Worker v2 image or container was changed by this rollout.

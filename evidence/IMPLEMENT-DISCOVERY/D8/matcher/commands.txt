@@ -1,0 +1,4 @@
+npm test -- test/discovery-contracts.test.ts test/discovery-api.test.ts
+npm run check
+pytest -q tests/test_discovery_evaluator.py tests/test_discovery_profiles.py
+git diff --check

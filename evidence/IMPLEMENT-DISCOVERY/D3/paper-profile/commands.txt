@@ -1,0 +1,5 @@
+eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q tests/test_discovery_profiles.py tests/test_discovery_llm.py
+eval "$(pyenv init - zsh)"; pyenv shell Agent; pytest -q tests/test_discovery_processor.py
+cd cloudflare-worker && npm test -- test/discovery-processor.test.ts test/discovery-contracts.test.ts
+Production browser smoke: upload public arXiv PDF, refresh, open Papers detail
+Production D1/R2 read-only verification for profile, source PDF, text manifest, and image manifest

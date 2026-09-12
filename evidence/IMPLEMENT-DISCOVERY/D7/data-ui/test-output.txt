@@ -1,0 +1,5 @@
+Frontend unit/typecheck/lint/build: PASS (16 files/78 tests; 0 lint errors).
+Playwright: PASS — 15 tests in the final compatible-browser run.
+Production browser smoke: collection upload reached ready, detail showed
+winequality-red.csv, 1599 rows, 12 columns, target quality, and one evaluated
+matched paper with 100% coverage.

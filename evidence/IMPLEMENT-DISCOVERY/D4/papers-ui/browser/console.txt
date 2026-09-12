@@ -1,0 +1,4 @@
+Production browser smoke: no blocking console error observed while loading
+/papers/ and the authenticated paper detail page.
+The local Playwright run emitted expected ECONNREFUSED proxy messages for
+unmocked backend routes; all 15 tests passed.

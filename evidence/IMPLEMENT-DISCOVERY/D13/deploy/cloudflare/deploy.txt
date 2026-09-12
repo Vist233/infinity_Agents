@@ -1,0 +1,5 @@
+Edge code version: 01f020d9-3f83-41c5-8500-0f82eb7f08ea
+Later secret-only versions observed: a654c1ac-be94-4bcf-b3c7-855077a50b95,
+23ad71b2-21ec-4ef9-a05d-97ff72a15e00
+Worker configuration: DISCOVERY_AUTO_EXECUTE=false;
+DISCOVERY_LITERATURE_ENABLED=false.

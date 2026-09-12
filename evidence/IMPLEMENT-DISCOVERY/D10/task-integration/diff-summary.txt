@@ -1,0 +1,3 @@
+Added frozen Method materialization, immutable Data Collection resource
+reference, trusted Task Center integration, and retry-safe idempotency. No new
+Task/Attempt/Artifact fact source was introduced.

@@ -1,0 +1,5 @@
+Repository commit before evidence: f5c7472
+Implementation: cloudflare-worker/src/literature-watch.ts
+Configured sources: arxiv,europe_pmc
+Configured caps: 10 per run, 100 per day
+Runtime default: DISCOVERY_LITERATURE_ENABLED=false

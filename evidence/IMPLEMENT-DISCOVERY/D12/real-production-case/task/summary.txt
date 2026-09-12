@@ -1,0 +1,5 @@
+Task gate: NOT EXECUTED.
+
+The deployed configuration intentionally remains `DISCOVERY_AUTO_EXECUTE=false`.
+The real match is therefore persisted as an evaluated shadow opportunity with
+`created_task_id=null`; no Task was fabricated for acceptance evidence.

@@ -1,0 +1,4 @@
+Deployment-only changes are isolated to the Discovery Edge routes/config,
+additive Discovery migrations, and the independent Windows Processor compose
+project. No Worker v2 service was added to the Processor compose file and no
+existing Task/Attempt/Artifact source was replaced.

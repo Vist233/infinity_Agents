@@ -1,0 +1,2 @@
+npm test -- test/literature-watch.test.ts test/discovery-processor.test.ts
+npm run check

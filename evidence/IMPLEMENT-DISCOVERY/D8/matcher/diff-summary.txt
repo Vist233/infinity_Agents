@@ -1,0 +1,3 @@
+Added version-aware capability normalization, coarse matching, coverage and
+missing-required facts, and unique match-version persistence. Existing Task,
+Attempt, Worker v2, Artifact, Outbox, and Chat schemas were not repurposed.

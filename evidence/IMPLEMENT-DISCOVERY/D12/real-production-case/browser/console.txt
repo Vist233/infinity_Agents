@@ -1,0 +1,3 @@
+Authenticated Chrome smoke on the deployed site rendered Papers and Data
+Collections list/detail pages with the real case. No blocking console error was
+observed on those pages.

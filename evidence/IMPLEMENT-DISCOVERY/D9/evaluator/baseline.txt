@@ -1,0 +1,4 @@
+Repository commit before evidence: f5c7472
+Implementation: backend/discovery/evaluator.py and cloudflare-worker/src/discovery-processor.ts
+Evaluator version: feasibility-v1
+Runtime default: DISCOVERY_AUTO_EXECUTE=false

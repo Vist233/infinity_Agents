@@ -1,0 +1,4 @@
+Added Papers workspace/detail components, discovery API client functions,
+navigation entry, i18n strings, static route shell, and lifecycle/error UI.
+Existing Chat, Task Center, ImageJudge, and Worker v2 navigation semantics were
+preserved.

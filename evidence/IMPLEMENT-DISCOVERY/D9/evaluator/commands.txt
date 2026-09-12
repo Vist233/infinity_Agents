@@ -1,0 +1,3 @@
+pytest -q tests/test_discovery_evaluator.py tests/test_discovery_profiles.py
+npm test -- test/discovery-processor.test.ts test/discovery-contracts.test.ts
+npm run check

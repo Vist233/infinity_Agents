@@ -1,0 +1,7 @@
+Paper/profile/LLM focused tests: PASS.
+Production paper: `status=profiled`, `spam_status=scientific_paper`,
+`profile_version=paper-profile-v1`, `analysis_modules=5`.
+Paper Resource: `status=ready`, 7 pages, 2 images; text and image manifests
+were fetched successfully from R2.
+The provider-backed model path was not called in this smoke; no provider
+credential was persisted or exposed.

@@ -1,0 +1,4 @@
+The browser submitted only the public arXiv PDF and public UCI red-wine CSV to
+the user's deployed Infinity Edge. Upload, refresh, ready state, detail, and
+match rendering were observed. No browser credential or private file was
+archived.

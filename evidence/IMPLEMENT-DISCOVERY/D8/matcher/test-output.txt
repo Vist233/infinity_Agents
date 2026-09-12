@@ -1,0 +1,5 @@
+Focused Cloudflare matcher/API tests: 2 files passed, 9 tests passed, exit 0.
+Focused evaluator/profile tests: 5 tests passed, exit 0.
+Cloudflare typecheck: tsc --noEmit passed, exit 0.
+Full Python regression: 366 passed, 45 skipped, exit 0.
+No test uses tag overlap as a substitute for capability matching.

@@ -1,0 +1,16 @@
+Real public dataset case: UCI Wine Quality red CSV.
+
+collection_id: eee1539e-3db6-4117-922b-2c8088131a3a
+status: ready
+profile_version: dataset-profile-v1
+source_filename: winequality-red.csv
+source_bytes: 84199
+source_sha256: 4a402cf041b025d4566d954c3b9ba8635a3a8a01e039005d97d6a710278cf05e
+R2 source SHA-256: 4a402cf041b025d4566d954c3b9ba8635a3a8a01e039005d97d6a710278cf05e
+rows: 1599
+columns: 12
+feature_columns: 11
+target: quality
+missing_values: none
+capabilities: tabular.numeric_features=true, target.ordinal_or_numeric=true
+R2 source fetched successfully.

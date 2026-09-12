@@ -1,0 +1,4 @@
+Routes: /data-collections/ and /data-collections/[collectionId]/
+Production URL: https://infinity.zhangyvjing.com/data-collections/eee1539e-3db6-4117-922b-2c8088131a3a
+Authenticated browser identity: zhangyvjing@outlook.com
+Final verification commit: 008b905
