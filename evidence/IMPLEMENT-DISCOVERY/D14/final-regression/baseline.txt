@@ -1,4 +1,5 @@
-Final HEAD: 008b905ddf0598d53b3031da2df8f3ae56b08720
-Remote branch: origin/cf-deploy at 008b905
+Final Discovery code commit: 008b905ddf0598d53b3031da2df8f3ae56b08720
+Evidence archive commit: 45a56e0
+Remote branch contains both commits.
 Unrelated dirty user paths were preserved and excluded from the Discovery
 commits; see final git status at handoff.

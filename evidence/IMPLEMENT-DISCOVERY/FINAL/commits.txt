@@ -7,5 +7,6 @@ a440fe0  fix: preload discovery processor base for windows build
 798b7f2  fix: identify discovery processor HTTP client
 008b905  fix: detect delimited discovery datasets
 
-Final HEAD: 008b905ddf0598d53b3031da2df8f3ae56b08720
-Remote branch: origin/cf-deploy at 008b905.
+Final Discovery code commit: 008b905ddf0598d53b3031da2df8f3ae56b08720
+Evidence archive commit: 45a56e0 (also pushed to origin/cf-deploy).
+The remote branch contains the code commit followed by the evidence archive.
