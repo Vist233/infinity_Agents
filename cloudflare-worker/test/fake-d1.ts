@@ -439,6 +439,10 @@ class FakeStatement {
       const [userId, idempotencyKey] = this.args as [string, string];
       return (this.db.taskIdempotency.get(`${userId}|${idempotencyKey}`) as T) ?? null;
     }
+    if (sql.includes("FROM task_resources") && sql.includes("object_key = ?1")) {
+      const [objectKey] = this.args as [string];
+      return ([...this.db.taskResources.values()].find((row) => row.object_key === objectKey) as T) ?? null;
+    }
     if (sql.includes("FROM projects") && sql.includes("project_id = ?1") && sql.includes("user_id = ?2")) {
       const [projectId, userId] = this.args as [string, string];
       const row = this.db.projects.get(projectId);

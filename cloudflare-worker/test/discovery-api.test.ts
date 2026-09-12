@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { AuthedUser } from "../src/auth";
 import type { Env } from "../src/env";
 import { DISCOVERY_MAX_COLLECTION_BYTES, handleDiscoveryApi } from "../src/discovery";
+import { createDiscoveryTask } from "../src/discovery-task";
+import type { DatasetProfile, PaperProfile } from "../src/discovery-contracts";
+import type { DataCollectionRow, PaperCatalogRow, ResearchMatchRow } from "../src/discovery-db";
 import { makeEnv } from "./fake-d1";
 
 const ALICE: AuthedUser = { userId: "alice", email: "alice@example.com", sid: "sid-a" };
@@ -234,5 +237,56 @@ describe("Discovery Paper and Data Collection APIs", () => {
     const response = await handleDiscoveryApi(request("/api/discovery/matches/match-2/create-task", { method: "POST" }), env, ALICE);
     expect(response?.status).toBe(409);
     expect(await response!.json()).toMatchObject({ error: { code: "DISCOVERY_TASK_THRESHOLD_NOT_MET" } });
+  });
+
+  it("reuses an immutable dataset resource when materializing a second Discovery Task", async () => {
+    const { env, db, bucket } = setup();
+    const paperId = "paper-repeat";
+    const collectionId = "collection-repeat";
+    const matchId = "match-repeat";
+    const projectId = "project-repeat";
+    const objectKey = `datasets/${collectionId}/source/wine.csv`;
+    db.projects.set(projectId, { project_id: projectId, user_id: ALICE.userId, name: "Default Project", created_at: 1 });
+    const existingResourceId = "discovery-dataset-resource-existing";
+    db.taskResources.set(existingResourceId, {
+      resource_id: existingResourceId, project_id: projectId, user_id: ALICE.userId, kind: "dataset",
+      logical_name: "wine.csv", object_key: objectKey, content_type: "text/csv", file_size_bytes: 10,
+      file_hash_sha256: "b".repeat(64), created_at: 1,
+    });
+    const paper: PaperCatalogRow = {
+      paper_id: paperId, owner_user_id: null, source_resource_id: "paper-resource", visibility: "public",
+      title: "Repeatable paper", authors_json: "[]", year: null, venue: null, status: "profiled",
+      spam_status: "scientific_paper", profile_version: "paper-profile-v1", profile_json: null,
+      profile_sha256: "c".repeat(64), overview_object_key: null, created_at: 1, updated_at: 1,
+    };
+    const collection: DataCollectionRow = {
+      collection_id: collectionId, owner_user_id: ALICE.userId, name: "Repeatable data", source_object_key: objectKey,
+      source_filename: "wine.csv", source_content_type: "text/csv", source_sha256: "b".repeat(64), source_size_bytes: 10,
+      status: "ready", profile_version: "dataset-profile-v1", profile_json: null, profile_sha256: "d".repeat(64),
+      error_code: null, error_message_safe: null, created_at: 1, updated_at: 1,
+    };
+    const paperProfile: PaperProfile = {
+      profile_version: "paper-profile-v1", model_version: "test", provenance: { source_resource_id: "paper-resource", compiler_version: "test", generated_at: "2026-01-01" },
+      paper: { title: "Repeatable paper", authors: [], year: null, venue: null, abstract: "", research_question: "Can it be reproduced?", main_claims: [] },
+      research_question: "Can it be reproduced?", main_claims: [],
+      analysis_modules: [{ analysis_id: "analysis-01", name: "Model", goal: "Fit a model", required_capabilities: ["tabular.numeric_features"], optional_capabilities: [], operations: ["fit"], expected_outputs: ["metrics"], verification: ["check"], evidence: [] }],
+      paper_level_requirements: [], required_capabilities: ["tabular.numeric_features"], expected_outputs: ["metrics"], verification: ["check"], evidence: [], display_tags: ["Tabular"],
+    };
+    const datasetProfile: DatasetProfile = {
+      profile_version: "dataset-profile-v1", model_version: "test", provenance: { collection_id: collectionId, inspector_version: "test", generated_at: "2026-01-01" },
+      collection_id: collectionId, domain_hint: "machine_learning", files: [], capabilities: { "tabular.numeric_features": true }, semantic_fields: { target: "quality", feature_names: ["feature"] }, display_tags: ["Tabular"],
+    };
+    const match: ResearchMatchRow = {
+      match_id: matchId, paper_id: paperId, collection_id: collectionId, paper_profile_version: "paper-profile-v1", dataset_profile_version: "dataset-profile-v1",
+      status: "evaluated", hard_gate: "pass", coverage_ratio: 1, execution_confidence: 100, scientific_fit: 100, evaluator_version: "test", evaluation_json: "{}", created_task_id: null,
+      candidate_reason: "", created_at: 1, updated_at: 1,
+    };
+    db.researchMatches.set(matchId, match);
+
+    const result = await createDiscoveryTask(env, { match, paper, collection, paperProfile, datasetProfile, now: 2 });
+    expect(result).toMatchObject({ taskId: `discovery-task-${matchId}`, duplicate: false });
+    expect(db.datasetSnapshots.get(`discovery-dataset-snapshot-${matchId}`)?.resource_id).toBe(existingResourceId);
+    expect(db.tasks.get(`discovery-task-${matchId}`)?.status).toBe("queued");
+    expect(bucket.objects.has(result!.methodObjectKey)).toBe(true);
   });
 });

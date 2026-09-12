@@ -31,6 +31,29 @@ export interface DiscoveryTaskResult {
   datasetObjectKey: string;
 }
 
+function discoveryTaskDiagnostic(match: ResearchMatchRow, stage: string, outcome: "rejected" | "failed"): void {
+  // Keep production diagnostics bounded and free of paper text, dataset values,
+  // credentials, or provider responses. The short match digest lets an
+  // operator correlate one request without putting user identifiers in logs.
+  console.warn("discovery_task_materialization", {
+    outcome,
+    stage,
+    match_digest: hashText(match.match_id).slice(0, 12),
+  });
+}
+
+function discoveryTaskErrorCategory(error: unknown): string {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  const tables = ["projects", "task_resources", "method_sources", "task_specs", "dataset_snapshots"];
+  const table = tables.find((candidate) => message.includes(candidate));
+  if (message.includes("unique") || message.includes("constraint")) return `constraint${table ? `:${table}` : ""}`;
+  if (message.includes("foreign key")) return "foreign_key";
+  if (message.includes("not null")) return "not_null";
+  if (message.includes("syntax")) return "syntax";
+  if (message.includes("d1") || message.includes("sqlite")) return "database";
+  return error instanceof Error ? error.name : "unknown";
+}
+
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
@@ -103,21 +126,24 @@ function idempotencyKey(match: ResearchMatchRow): string {
 export async function createDiscoveryTask(env: Env, input: DiscoveryTaskInput): Promise<DiscoveryTaskResult | null> {
   const { match, paper, collection, paperProfile, datasetProfile } = input;
   const coarse = coarseMatch(paperProfile, datasetProfile);
-  if (
-    match.paper_id !== paper.paper_id
-    || match.collection_id !== collection.collection_id
-    || match.paper_profile_version !== paperProfile.profile_version
-    || match.dataset_profile_version !== datasetProfile.profile_version
-    || match.status !== "evaluated"
-    || match.hard_gate !== "pass"
-    || coarse.missing_required.length > 0
-    || coarse.supported_modules !== coarse.total_modules
-    || Math.abs(match.coverage_ratio - coarse.coverage_ratio) > 0.000001
-    || match.coverage_ratio < 0.6
-    || (match.execution_confidence ?? 0) < 60
-    || collection.status !== "ready"
-    || paper.status !== "profiled"
-  ) return null;
+  const gateReasons: string[] = [];
+  if (match.paper_id !== paper.paper_id) gateReasons.push("paper_mismatch");
+  if (match.collection_id !== collection.collection_id) gateReasons.push("collection_mismatch");
+  if (match.paper_profile_version !== paperProfile.profile_version) gateReasons.push("paper_profile_version");
+  if (match.dataset_profile_version !== datasetProfile.profile_version) gateReasons.push("dataset_profile_version");
+  if (match.status !== "evaluated") gateReasons.push("match_status");
+  if (match.hard_gate !== "pass") gateReasons.push("hard_gate");
+  if (coarse.missing_required.length > 0) gateReasons.push("missing_required");
+  if (coarse.supported_modules !== coarse.total_modules) gateReasons.push("unsupported_module");
+  if (Math.abs(match.coverage_ratio - coarse.coverage_ratio) > 0.000001) gateReasons.push("coverage_mismatch");
+  if (match.coverage_ratio < 0.6) gateReasons.push("coverage_threshold");
+  if ((match.execution_confidence ?? 0) < 60) gateReasons.push("confidence_threshold");
+  if (collection.status !== "ready") gateReasons.push("collection_status");
+  if (paper.status !== "profiled") gateReasons.push("paper_status");
+  if (gateReasons.length > 0) {
+    discoveryTaskDiagnostic(match, `validation:${gateReasons.slice(0, 4).join(",")}`, "rejected");
+    return null;
+  }
   const ids = taskIds(match.match_id);
   const key = idempotencyKey(match);
   const now = input.now ?? nowSeconds();
@@ -125,7 +151,10 @@ export async function createDiscoveryTask(env: Env, input: DiscoveryTaskInput): 
   const methodBytes = new TextEncoder().encode(method);
   const methodSha = hashText(method);
   const methodObjectKey = discoveryObjectKey("method_materialized", { matchId: match.match_id, contentSha256: methodSha });
-  if (!methodObjectKey || methodBytes.byteLength === 0 || methodBytes.byteLength > MAX_METHOD_BYTES) return null;
+  if (!methodObjectKey || methodBytes.byteLength === 0 || methodBytes.byteLength > MAX_METHOD_BYTES) {
+    discoveryTaskDiagnostic(match, "method_materialization", "rejected");
+    return null;
+  }
 
   const existing = await env.DB.prepare("SELECT task_id FROM task_idempotency WHERE user_id = ?1 AND idempotency_key = ?2").bind(collection.owner_user_id, key).first<{ task_id: string }>();
   if (existing?.task_id) {
@@ -133,14 +162,28 @@ export async function createDiscoveryTask(env: Env, input: DiscoveryTaskInput): 
     // missing Task to a match. This can only happen after an interrupted
     // migration/restore, so leave the opportunity retryable for repair.
     const existingTask = await env.DB.prepare("SELECT task_id FROM tasks WHERE task_id = ?1 AND created_by = ?2").bind(existing.task_id, collection.owner_user_id).first<{ task_id: string }>();
-    if (!existingTask) return null;
-    await setMatchTask(env, match.match_id, existingTask.task_id, now);
+    if (!existingTask) {
+      discoveryTaskDiagnostic(match, "stale_idempotency", "rejected");
+      return null;
+    }
+    if (!await setMatchTask(env, match.match_id, existingTask.task_id, now)) {
+      discoveryTaskDiagnostic(match, "attach_existing_task", "failed");
+      return null;
+    }
     return { taskId: existingTask.task_id, duplicate: true, idempotencyKey: key, methodObjectKey, datasetObjectKey: collection.source_object_key };
   }
-  if (!env.RESOURCE_BUCKET) return null;
+  if (!env.RESOURCE_BUCKET) {
+    discoveryTaskDiagnostic(match, "resource_bucket", "failed");
+    return null;
+  }
 
+  let stage = "method_object";
   try {
-    if (!await putDiscoveryObject(env, "method_materialized", { matchId: match.match_id, contentSha256: methodSha }, methodBytes, "text/markdown; charset=utf-8")) return null;
+    if (!await putDiscoveryObject(env, "method_materialized", { matchId: match.match_id, contentSha256: methodSha }, methodBytes, "text/markdown; charset=utf-8")) {
+      discoveryTaskDiagnostic(match, "r2_put", "failed");
+      return null;
+    }
+    stage = "project";
     const insertedProject = await env.DB.prepare(
       `INSERT INTO projects (project_id, user_id, name, created_at)
        VALUES (?1, ?2, ?3, ?4)
@@ -150,11 +193,32 @@ export async function createDiscoveryTask(env: Env, input: DiscoveryTaskInput): 
     const project = insertedProject ?? await env.DB.prepare(
       "SELECT project_id FROM projects WHERE user_id = ?1",
     ).bind(collection.owner_user_id).first<{ project_id: string }>();
-    if (!project?.project_id) return null;
+    if (!project?.project_id) {
+      discoveryTaskDiagnostic(match, "project", "failed");
+      return null;
+    }
+    stage = "dataset_resource";
+    const existingDatasetResource = await env.DB.prepare(
+      "SELECT resource_id, project_id, user_id, kind FROM task_resources WHERE object_key = ?1",
+    ).bind(collection.source_object_key).first<{ resource_id: string; project_id: string; user_id: string; kind: string }>();
+    if (existingDatasetResource && (
+      existingDatasetResource.project_id !== project.project_id
+      || existingDatasetResource.user_id !== collection.owner_user_id
+      || existingDatasetResource.kind !== "dataset"
+    )) {
+      discoveryTaskDiagnostic(match, "dataset_resource_owner", "rejected");
+      return null;
+    }
+    // task_resources.object_key is globally unique. Reuse the immutable
+    // collection resource when another Discovery Task has already referenced
+    // this collection; otherwise the INSERT OR IGNORE below would skip the
+    // row while the new dataset snapshot still pointed at a nonexistent ID.
+    const datasetResourceId = existingDatasetResource?.resource_id ?? ids.datasetResourceId;
 
     const title = `Reproduce: ${paperProfile.paper.title}`.slice(0, 200);
     const researchQuestion = paperProfile.research_question.slice(0, 4_096);
     const fingerprint = hashText(JSON.stringify({ key, paper: paper.profile_sha256, dataset: collection.profile_sha256, method: methodSha }));
+    stage = "transport_batch";
     await env.DB.batch([
       env.DB.prepare(
         `INSERT OR IGNORE INTO task_resources
@@ -167,7 +231,7 @@ export async function createDiscoveryTask(env: Env, input: DiscoveryTaskInput): 
           (resource_id, project_id, user_id, kind, logical_name, object_key, content_type,
            file_size_bytes, file_hash_sha256, created_at)
          VALUES (?1, ?2, ?3, 'dataset', ?4, ?5, ?6, ?7, ?8, ?9)`,
-      ).bind(ids.datasetResourceId, project.project_id, collection.owner_user_id, collection.source_filename, collection.source_object_key, collection.source_content_type, collection.source_size_bytes, collection.source_sha256, now),
+      ).bind(datasetResourceId, project.project_id, collection.owner_user_id, collection.source_filename, collection.source_object_key, collection.source_content_type, collection.source_size_bytes, collection.source_sha256, now),
       env.DB.prepare(
         `INSERT OR IGNORE INTO method_sources
           (method_source_id, project_id, user_id, original_filename, resource_id, created_at)
@@ -184,9 +248,10 @@ export async function createDiscoveryTask(env: Env, input: DiscoveryTaskInput): 
           (dataset_snapshot_id, task_spec_id, project_id, user_id, original_filename,
            resource_id, file_hash_sha256, file_size_bytes, validation_passed, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9)`,
-      ).bind(ids.snapshotId, ids.specId, project.project_id, collection.owner_user_id, collection.source_filename, ids.datasetResourceId, collection.source_sha256, collection.source_size_bytes, now),
+      ).bind(ids.snapshotId, ids.specId, project.project_id, collection.owner_user_id, collection.source_filename, datasetResourceId, collection.source_sha256, collection.source_size_bytes, now),
     ]);
 
+    stage = "task_batch";
     const task = await createTrustedInternalTask(env, {
       taskId: ids.taskId,
       taskSpecId: ids.specId,
@@ -201,10 +266,18 @@ export async function createDiscoveryTask(env: Env, input: DiscoveryTaskInput): 
       source: "discovery",
       matchId: match.match_id,
     });
-    if (!task) return null;
-    await setMatchTask(env, match.match_id, task.taskId, now);
+    if (!task) {
+      discoveryTaskDiagnostic(match, "task_batch_result", "failed");
+      return null;
+    }
+    stage = "match_attach";
+    if (!await setMatchTask(env, match.match_id, task.taskId, now)) {
+      discoveryTaskDiagnostic(match, stage, "failed");
+      return null;
+    }
     return { taskId: task.taskId, duplicate: task.duplicate, idempotencyKey: key, methodObjectKey, datasetObjectKey: collection.source_object_key };
-  } catch {
+  } catch (error) {
+    discoveryTaskDiagnostic(match, `${stage}:${discoveryTaskErrorCategory(error)}`, "failed");
     return null;
   }
 }
