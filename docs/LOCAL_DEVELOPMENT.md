@@ -57,7 +57,7 @@ bash scripts/enroll-worker.sh
 
 # 将输出的 WORKER_ID 和 WORKER_CREDENTIAL 填入 .env.local
 # 然后：
-source .env.local
+set -a; source .env.local; set +a
 WORKER_CREDENTIAL="$WORKER_1_CREDENTIAL" WORKER_ENROLLMENT_REQUIRED=1 \
   WORKER_INSTANCE_ID="local-$WORKER_1_ID" \
   python -m backend.code_agent.worker.consumer "$WORKER_1_ID"

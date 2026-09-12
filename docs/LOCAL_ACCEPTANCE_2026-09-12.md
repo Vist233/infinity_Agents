@@ -30,9 +30,9 @@ for a real locally configured model provider.
 Frontend dependencies and production build:
 
 ```text
-npm ci                         # added 713 packages in 8s
-npm run typecheck              # passed
-npm run build                  # compiled successfully; 9 static pages generated
+cd frontend && npm ci         # added 713 packages in 8s
+cd frontend && npm run typecheck  # passed
+cd frontend && npm run build     # compiled successfully; 9 static pages generated
 ```
 
 Fresh local infrastructure and supervisor:
