@@ -45,6 +45,13 @@ curl -I http://127.0.0.1:3000/
 => HTTP/1.1 200 OK
 ```
 
+Bootstrap also rewrites `LOCAL_RUNTIME_DATABASE_URL` and `LOCAL_REDIS_URL`
+from the selected canonical URLs, then connects through both aliases. The
+launcher’s browser/Worker flow is the legacy PostgreSQL Task API and consumer;
+the isolated Worker v2 control-plane schema is migrated by the same bootstrap
+and covered separately by `tests/test_local_runtime_api.py`, but is not mounted
+as a second API under the main FastAPI app.
+
 While the supervisor was attached, all three PID files were live and the
 Worker log contained `Worker local-worker started, waiting for tasks...`.
 The final post-commit fresh run specifically recorded API PID `85998`, frontend

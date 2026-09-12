@@ -89,10 +89,43 @@ done
 # 5. Run migrations
 echo "==> Running database migrations ..."
 export DATABASE_URL="${DATABASE_URL:-postgresql://${POSTGRES_USER:-infinity}:${POSTGRES_PASSWORD}@localhost:${PG_PORT:-5432}/${POSTGRES_DB:-infinity_local}}"
-export LOCAL_RUNTIME_DATABASE_URL="${LOCAL_RUNTIME_DATABASE_URL:-$DATABASE_URL}"
-export LOCAL_REDIS_URL="${LOCAL_REDIS_URL:-${REDIS_URL:-redis://:${REDIS_PASSWORD}@localhost:${REDIS_PORT:-6379}/0}}"
+export REDIS_URL="${REDIS_URL:-redis://:${REDIS_PASSWORD}@localhost:${REDIS_PORT:-6379}/0}"
+export LOCAL_RUNTIME_DATABASE_URL="$DATABASE_URL"
+export LOCAL_REDIS_URL="$REDIS_URL"
 export LOCAL_OBJECT_ROOT="${LOCAL_OBJECT_ROOT:-./local-data/objects}"
+# Persist the aliases so a separately launched local-runtime control plane
+# sees the same generated credentials and selected ports.
+python3 - "$ENV_FILE" "$LOCAL_RUNTIME_DATABASE_URL" "$LOCAL_REDIS_URL" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+database_url, redis_url = sys.argv[2:]
+lines = path.read_text(encoding="utf-8").splitlines()
+replacements = {
+    "LOCAL_RUNTIME_DATABASE_URL=": f"LOCAL_RUNTIME_DATABASE_URL={database_url}",
+    "LOCAL_REDIS_URL=": f"LOCAL_REDIS_URL={redis_url}",
+}
+for index, line in enumerate(lines):
+    for prefix, replacement in replacements.items():
+        if line.startswith(prefix):
+            lines[index] = replacement
+path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
 python3 -m backend.db_migrate
+python3 - <<'PY'
+import asyncio
+import os
+import asyncpg
+import redis
+
+async def check_postgres():
+    connection = await asyncpg.connect(os.environ["LOCAL_RUNTIME_DATABASE_URL"])
+    await connection.close()
+
+asyncio.run(check_postgres())
+assert redis.Redis.from_url(os.environ["LOCAL_REDIS_URL"]).ping()
+print("    Local runtime aliases: connected")
 echo "    Migrations complete."
 
 # 6. Create storage directories
