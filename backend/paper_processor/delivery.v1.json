@@ -61,7 +61,7 @@
     }
   },
   "artifact": {
-    "reviewed_processor_commit": "455ae849c572aa285cc752a10e21fd69f031b18d",
+    "reviewed_processor_commit": "62e5b7fe4c5a35345c7bc41886ea8ae3e9928228",
     "source_commit_role": "reviewed Paper Processor runtime source commit included in the release history",
     "python_version": "3.10",
     "packaging": "Python virtualenv; Docker is not the zhangbot delivery path",
