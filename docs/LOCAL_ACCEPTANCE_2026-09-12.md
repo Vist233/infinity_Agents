@@ -47,6 +47,8 @@ curl -I http://127.0.0.1:3000/
 
 While the supervisor was attached, all three PID files were live and the
 Worker log contained `Worker local-worker started, waiting for tasks...`.
+The final post-commit fresh run specifically recorded API PID `85998`, frontend
+PID `86000`, and Worker PID `86002` as alive.
 
 Task/Attempt/Artifact acceptance, including idempotency and API download:
 
@@ -60,10 +62,10 @@ Recorded result from the fresh local stack:
 ```text
 IDEMPOTENCY first_new=True replay_new=False same_task=True
 TASK_ATTEMPT_ARTIFACT=succeeded|1|succeeded
-ARTIFACT_SIZE=645
-RECORDED_SHA=5a16e4ce4afc96f67130d6f0222fc7dbe8a3010f2aaa77853ec4bdceb7c6de2e
-STORED_SHA=5a16e4ce4afc96f67130d6f0222fc7dbe8a3010f2aaa77853ec4bdceb7c6de2e
-DOWNLOADED_SHA=5a16e4ce4afc96f67130d6f0222fc7dbe8a3010f2aaa77853ec4bdceb7c6de2e
+ARTIFACT_SIZE=646
+RECORDED_SHA=7dd9af9de57c7f51ec42a4dc12714f0b261dee43f4256391996138f7a62fa76a
+STORED_SHA=7dd9af9de57c7f51ec42a4dc12714f0b261dee43f4256391996138f7a62fa76a
+DOWNLOADED_SHA=7dd9af9de57c7f51ec42a4dc12714f0b261dee43f4256391996138f7a62fa76a
 ```
 
 The focused Worker v2 real-PostgreSQL suite also passed:
@@ -78,7 +80,7 @@ Shutdown verification:
 
 ```text
 bash scripts/stop-local-stack.sh
-=> api=stopped, frontend=stopped, worker=stopped
+=> launcher supervisor exited 0; api=stopped, frontend=stopped, worker=stopped
 => PostgreSQL/Redis containers stopped; named volumes preserved
 ```
 
