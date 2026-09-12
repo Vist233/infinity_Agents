@@ -9,14 +9,52 @@ cd "$REPO_ROOT"
 
 ENV_FILE=".env.local"
 
-# 1. Check .env.local exists
+# 1. Create a safe, self-contained local configuration on first run.  The
+# generated values are URL-safe so the DSNs in the example file stay valid.
 if [ ! -f "$ENV_FILE" ]; then
-  echo "==> .env.local not found. Copying from .env.local.example ..."
+  echo "==> .env.local not found. Creating local configuration ..."
   cp .env.local.example "$ENV_FILE"
-  echo ""
-  echo "   EDIT $ENV_FILE to set passwords, then re-run this script."
-  echo ""
-  exit 1
+  PG_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+  REDIS_LOCAL_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+  # Use the familiar defaults when available, otherwise choose unoccupied
+  # loopback ports. This avoids a local PostgreSQL/Redis installation making
+  # a first-run setup fail before it has even started.
+  choose_port() {
+    python3 - "$1" "$2" <<'PY'
+import socket
+import sys
+
+for candidate in range(int(sys.argv[1]), int(sys.argv[2]) + 1):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", candidate))
+        print(candidate)
+        raise SystemExit(0)
+    except OSError:
+        pass
+    finally:
+        sock.close()
+raise SystemExit("no free local port found")
+PY
+  }
+  LOCAL_PG_PORT="$(choose_port 5432 5442)"
+  LOCAL_REDIS_PORT="$(choose_port 6379 6389)"
+  python3 - "$ENV_FILE" "$PG_PASSWORD" "$REDIS_LOCAL_PASSWORD" "$LOCAL_PG_PORT" "$LOCAL_REDIS_PORT" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+pg_password, redis_password, pg_port, redis_port = sys.argv[2:]
+text = path.read_text(encoding="utf-8")
+text = text.replace("replace-with-a-strong-password", pg_password)
+text = text.replace("replace-with-a-strong-redis-password", redis_password)
+text = text.replace("PG_PORT=5432", f"PG_PORT={pg_port}")
+text = text.replace("REDIS_PORT=6379", f"REDIS_PORT={redis_port}")
+text = text.replace("localhost:5432/", f"localhost:{pg_port}/")
+text = text.replace("localhost:6379/", f"localhost:{redis_port}/")
+path.write_text(text, encoding="utf-8")
+PY
+  echo "    Generated local PostgreSQL and Redis passwords in $ENV_FILE."
 fi
 
 # 2. Source environment
@@ -51,11 +89,14 @@ done
 # 5. Run migrations
 echo "==> Running database migrations ..."
 export DATABASE_URL="${DATABASE_URL:-postgresql://${POSTGRES_USER:-infinity}:${POSTGRES_PASSWORD}@localhost:${PG_PORT:-5432}/${POSTGRES_DB:-infinity_local}}"
+export LOCAL_RUNTIME_DATABASE_URL="${LOCAL_RUNTIME_DATABASE_URL:-$DATABASE_URL}"
+export LOCAL_REDIS_URL="${LOCAL_REDIS_URL:-${REDIS_URL:-redis://:${REDIS_PASSWORD}@localhost:${REDIS_PORT:-6379}/0}}"
+export LOCAL_OBJECT_ROOT="${LOCAL_OBJECT_ROOT:-./local-data/objects}"
 python3 -m backend.db_migrate
 echo "    Migrations complete."
 
 # 6. Create storage directories
-for dir in "$ARTIFACT_STORAGE_ROOT" "$ARTIFACT_DOWNLOAD_ROOT" "$METHOD_SOURCE_UPLOAD_ROOT" "$DATASET_UPLOAD_ROOT"; do
+for dir in "$ARTIFACT_STORAGE_ROOT" "$ARTIFACT_DOWNLOAD_ROOT" "$METHOD_SOURCE_UPLOAD_ROOT" "$DATASET_UPLOAD_ROOT" "$LOCAL_OBJECT_ROOT"; do
   mkdir -p "$dir" 2>/dev/null || true
 done
 
