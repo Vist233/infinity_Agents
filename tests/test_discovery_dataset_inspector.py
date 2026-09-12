@@ -29,6 +29,26 @@ def test_inspects_wine_like_csv_with_target_and_capabilities(tmp_path):
     assert normalize_dataset_profile(profile, "collection-1") is not None
 
 
+def test_detects_semicolon_delimited_csv_with_quoted_header(tmp_path):
+    source = tmp_path / "winequality-red.csv"
+    source.write_text(
+        '"fixed acidity";"volatile acidity";"alcohol";"quality"\n'
+        "7.4;0.7;9.4;5\n"
+        "7.8;0.88;9.8;6\n",
+        encoding="utf-8",
+    )
+
+    profile = inspect_path(source, "collection-semicolon", generated_at="2026-09-12T00:00:00Z")
+
+    file_profile = profile["files"][0]
+    assert file_profile["columns"] == 4
+    assert file_profile["column_names"] == ["fixed acidity", "volatile acidity", "alcohol", "quality"]
+    assert profile["semantic_fields"]["target"] == "quality"
+    assert profile["semantic_fields"]["feature_names"] == ["fixed acidity", "volatile acidity", "alcohol"]
+    assert profile["capabilities"]["tabular.numeric_features"] is True
+    assert profile["capabilities"]["target.ordinal_or_numeric"] is True
+
+
 def test_inspects_zip_without_extracting_and_keeps_readme_bounded(tmp_path):
     archive = tmp_path / "data.zip"
     with zipfile.ZipFile(archive, "w") as writer:

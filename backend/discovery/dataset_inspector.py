@@ -105,6 +105,30 @@ def _format_for_name(name: str) -> str:
     return "unknown"
 
 
+def _tabular_delimiter(text: str, file_format: str) -> str:
+    if file_format == "tsv":
+        return "\t"
+    sample = "\n".join(text.splitlines()[:32])[:64 * 1024]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
+        return dialect.delimiter
+    except csv.Error:
+        # Sniffer is intentionally only a first pass.  A bounded consistency
+        # score keeps ordinary CSVs deterministic when the sample is sparse.
+        scores: list[tuple[int, int, str]] = []
+        for delimiter in (",", ";", "\t"):
+            try:
+                parsed = list(csv.reader(sample.splitlines(), delimiter=delimiter))
+            except csv.Error:
+                continue
+            widths = [len(row) for row in parsed if row]
+            width = max(widths, default=1)
+            consistent = sum(1 for value in widths if value == width)
+            scores.append((width, consistent, delimiter))
+        best = max(scores, default=(1, 0, ","))
+        return best[2] if best[0] > 1 else ","
+
+
 def _safe_scalar(value: str) -> Any:
     value = value.strip()
     if not value:
@@ -146,7 +170,7 @@ def _tabular_profile(name: str, data: bytes, file_format: str, deadline: float) 
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise DatasetInspectionError("TEXT_DECODE_FAILED", "Tabular data is not valid UTF-8") from exc
-    delimiter = "\t" if file_format == "tsv" else ","
+    delimiter = _tabular_delimiter(text, file_format)
     try:
         rows = list(csv.reader(io.StringIO(text), delimiter=delimiter))
     except csv.Error as exc:
