@@ -15,6 +15,8 @@ source .env.local
 set +a
 
 mkdir -p local-data/logs local-data/pids
+STOP_REQUEST="local-data/pids/.stop-requested"
+rm -f "$STOP_REQUEST"
 
 if command -v lsof >/dev/null 2>&1; then
   for port in "${API_PORT:-8008}" 3000; do
@@ -82,6 +84,9 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 while true; do
+  if [[ -f "$STOP_REQUEST" ]]; then
+    exit 0
+  fi
   for name in api frontend worker; do
     pid_file="local-data/pids/${name}.pid"
     if [[ ! -f "$pid_file" ]] || ! kill -0 "$(cat "$pid_file")" 2>/dev/null; then
