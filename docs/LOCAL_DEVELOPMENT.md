@@ -25,49 +25,27 @@ Worker  -> FastAPI control plane (/api/worker/v2/*)
 
 ## 一键启动
 
-### 1. 配置环境
-
 ```bash
-cp .env.local.example .env.local
+pyenv shell Agent
+pip install -r requirements.txt
+bash scripts/run-local.sh
 ```
 
-编辑 `.env.local`，至少修改以下密码：
-- `POSTGRES_PASSWORD`
-- `REDIS_PASSWORD`
-- `DATABASE_URL`（密码需与 `POSTGRES_PASSWORD` 一致）
-- `REDIS_URL`（密码需与 `REDIS_PASSWORD` 一致）
+首次运行会从样例生成 `.env.local`，并生成 URL-safe 的本地数据库密码。该命令会：
 
-### 2. 启动基础设施
+1. 启动 PostgreSQL 和 Redis（Docker named volumes 持久化）；
+2. 迁移产品表及 Worker v2 本地状态机；
+3. 创建本地对象存储目录；
+4. 启动 FastAPI、Next.js 和本地 Worker；
+5. 将日志和 PID 写入 `local-data/`，便于停止或排障。
 
-```bash
-bash scripts/start-local.sh
-```
-
-脚本会：
-1. 启动 PostgreSQL + Redis（Docker named volume 持久化）
-2. 等待健康检查通过
-3. 自动运行数据库迁移（幂等）
-4. 创建存储目录
-5. 输出后续启动命令
-
-### 3. 启动 API
+打开 `http://localhost:3000`。停止全部本地服务而不删除数据：
 
 ```bash
-source .env.local
-uvicorn backend.app:app --host 0.0.0.0 --port 8008 --reload
+bash scripts/stop-local-stack.sh
 ```
 
-### 4. 启动前端
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-打开 `http://localhost:3000`。
-
-### 5. 注册并启动 Worker（可选）
+### 单独注册 Worker（可选）
 
 ```bash
 # 注册 Worker（API 必须先启动）
@@ -79,7 +57,8 @@ source .env.local
 ANTHROPIC_API_KEY=sk-ant-your-key python -m backend.code_agent.worker.consumer_v2 "$WORKER_1_ID"
 ```
 
-**注意**：`ANTHROPIC_API_KEY` 只在 Worker 进程中设置，不要写入 `.env.local` 的 API 配置段。
+**注意**：模型 Provider 仅在实际执行研究任务时需要。它不属于本地启动、任务创建、
+状态追踪或 Artifact 存储的前置条件。
 
 ### Deploying Workers on Windows
 

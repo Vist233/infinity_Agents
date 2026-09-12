@@ -33,30 +33,23 @@ Agent，而是一条从研究问题、论文方法和数据到异步执行结果
 ## 快速开始
 
 ```bash
-# 1. 安装 Python 依赖
 pyenv shell Agent
 pip install -r requirements.txt
-
-# 2. 复制并编辑环境配置
-cp .env.local.example .env.local
-# 编辑 .env.local 设置数据库密码
-
-# 3. 启动基础设施 (PostgreSQL + Redis)
-bash scripts/start-local.sh
-
-# 4. 启动 API (终端 1)
-source .env.local
-uvicorn backend.app:app --host 0.0.0.0 --port 8008 --reload
-
-# 5. 启动前端 (终端 2)
-cd frontend && npm install && npm run dev
+bash scripts/run-local.sh
 ```
+
+首次运行会在 `.env.local` 生成仅用于本机的 PostgreSQL/Redis 密码，并启动
+PostgreSQL、Redis、Python API、前端和本地 Worker。打开 `http://localhost:3000`。
+无需 Cloudflare、Windows SSH 或任何生产凭证。停止并保留数据：
+`bash scripts/stop-local-stack.sh`。
 
 详细说明见 [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md)。
 
 ## Worker
 
-Worker 在宿主机单独运行，需要提供 Anthropic API Key：
+Worker 随 `run-local.sh` 启动并保持空闲。创建任务后，如果需要由 Claude Code 产生
+研究结果，再在 Task Center 配置一个你自己的模型 Provider；这不是启动本地产品所需的
+生产凭证。
 
 ```bash
 # 注册 Worker (API 需先启动)
