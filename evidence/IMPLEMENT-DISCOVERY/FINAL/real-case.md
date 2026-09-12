@@ -11,8 +11,9 @@ Real production shadow case:
   coverage 1.0; confidence 100; scientific fit 100; evaluator
   `feasibility-v1`; recommended true.
 
-`DISCOVERY_AUTO_EXECUTE=false`, so `created_task_id=null`; no Task, Attempt,
-Artifact, or Redis-outage recovery claim is made.
+At the read-only preflight `DISCOVERY_AUTO_EXECUTE=false` and
+`created_task_id=null`; the later explicitly scoped live button test is
+recorded below. This preflight row was not used to claim a successful Task.
 
 Post-rollout disposable collection shadow:
 
@@ -42,3 +43,29 @@ Paper Processor remediation retry:
   `fb6bc0cf-4f78-48f4-ac42-f1dce22a2620`. D1 confirmed paper `profiled`,
   profile version `paper-profile-v1`, resource `ready`, attempt `succeeded`,
   12 pages, and 0 images. No Task or Artifact was created.
+
+Scoped live Task gate:
+
+- Task `discovery-task-c34f251b-dfbd-4fae-985d-3ff6c0ea6342` was materialized
+  exactly once for the primary match, with one idempotency row and one queued
+  event. Task Center rendered it. Three fenced Worker Attempts were claimed,
+  but all leases expired before a Claude terminal event or Artifact; final D1
+  status was `failed`, `attempt_count=3`, with
+  `Worker lease expired; maximum attempts reached`.
+- No duplicate Task and no Artifact were created. See
+  `D14/final-regression/gated-live-run-20260912.md` for the complete event,
+  resource, and hash record.
+
+The deployed configuration intentionally remains `DISCOVERY_AUTO_EXECUTE=false`.
+The real matches remain evaluated shadow opportunities with
+`created_task_id=null`; the one Task above was created through the explicit
+scoped action, not scheduled fanout. The final preflight found six eligible
+rows, and the global switch must not be enabled for a one-row test without a
+scoped selection. See `evidence/IMPLEMENT-DISCOVERY/FINAL/remaining-gates.md`.
+
+Recovery gate: PASS for Redis/Relay fallback. Only the confirmed user-scoped
+Redis unit was stopped briefly. Relay health and hints returned 503, while D1
+Task state and Worker leases continued; the same single Task remained fenced.
+Redis was restarted, Relay health/hints returned 200, and no duplicate
+Task/Attempt appeared. The selected Task's successful Claude/Artifact path
+remains open because the Worker leases expired.

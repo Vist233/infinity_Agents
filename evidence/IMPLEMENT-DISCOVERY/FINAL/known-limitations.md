@@ -1,8 +1,10 @@
 Known limitations and deliberate gates:
 
-1. Auto Task execution is disabled (`DISCOVERY_AUTO_EXECUTE=false`); therefore
-   the real case stops at a persisted evaluated opportunity. No real Worker
-   Claim/Claude run/Artifact or recovery test is claimed.
+1. Auto Task execution is disabled (`DISCOVERY_AUTO_EXECUTE=false`) after one
+   explicitly selected live Task was materialized. The Task Center/idempotency
+   and Redis recovery checks passed, but three real Worker Claims/Attempts
+   expired before a Claude terminal event or Artifact; successful Worker
+   execution and selected-Task Artifact/download acceptance remain open.
 2. Literature watcher is implemented but disabled
    (`DISCOVERY_LITERATURE_ENABLED=false`); two live cron rounds were not run.
 3. The production paper profile smoke used the deterministic compiler. The

@@ -4,9 +4,11 @@ Date: 2026-09-12 (Asia/Shanghai)
 
 Disposition: CONDITIONAL PASS. The implementation, local regressions, remote
 rollout, Processor validation, and real Paper/Data shadow path are evidenced.
-The checks below intentionally remain unrun because they create external
-Task/Attempt/Artifact state, invoke existing Workers, stop infrastructure, or
-enable an external model/provider.
+The authorized live-gate run is recorded in
+`D14/final-regression/gated-live-run-20260912.md`: one real Task was
+materialized exactly once, the Redis fallback passed, but all three Worker
+Attempts expired without a Claude terminal event or Artifact. Literature and
+live-model configuration changes were not executed.
 
 ## Read-only production preflight
 
@@ -30,38 +32,36 @@ switch to `true` would make all six eligible rows candidates. A safe one-row
 test therefore requires an explicit match selection and a scoped one-shot or
 operator allowlist; it must not be simulated by hand-editing D1.
 
-## Gates still open
+## Gated-run results and gates still open
 
-1. **One real Task materialization.** With explicit authorization, select one
-   preflight match and record before/after counts. Verify the deterministic
-   `discovery-task-${match_id}` identity, idempotency key, owner, frozen Method
-   and Dataset resources, one durable `task_queued` event, Task Center
-   visibility, and no second Task after a retry/double trigger. Keep the other
-   five rows disabled.
-2. **Existing Worker v2 execution.** Verify the existing protocol-v2 Worker
-   claims the selected Task, receives the correct Method and Dataset R2 inputs,
-   and emits the durable claim/terminal event sequence. A live Claude Code run
-   is required for this gate; the current active Worker sessions and leases
-   are only readiness evidence, not an execution result.
-3. **Artifact integrity and download.** Verify the selected Task reaches
-   `succeeded`, an Artifact is published only after the successful Attempt,
-   the recorded hash matches the downloaded bytes, and the authenticated Task
-   Center download works. Any test Task/Attempt/Artifact cleanup needs explicit
-   confirmation before deletion.
-4. **Redis failure and poll fallback.** During the selected Task's queued or
-   claimable window, perform a controlled Relay/Redis outage test, then restore
-   it. Verify D1 polling remains authoritative, the Worker resumes or claims
-   exactly once, there is no duplicate Task or Attempt, and the outbox/event
-   state converges after recovery. Do not stop existing Worker v2 containers.
-5. **Literature watcher.** After explicit authorization, enable the watcher
-   for two real scheduled rounds and capture lease, quota, retry, dedupe, and
-   no-duplicate evidence. It is currently disabled by
-   `DISCOVERY_LITERATURE_ENABLED=false`; the live literature-watch state query
-   had no rows at the final preflight.
-6. **Live model provider path.** The optional Kimi `kimi-k2.6` JSON profile
-   call remains unrun. It requires an authorized secret/configuration change
-   (`DISCOVERY_USE_MODEL=true` plus a valid `MOONSHOT_API_KEY`) and must capture
-   only bounded status/family diagnostics, never the key or provider payload.
+1. **Task materialization: PASS.** The browser created exactly one deterministic
+   `discovery-task-${match_id}` Task, one idempotency row, one queued event, and
+   the Task Center rendered it. Three fenced retries were recorded; no second
+   Task was created. See `D14/final-regression/gated-live-run-20260912.md`.
+2. **Existing Worker v2 execution: OPEN/FAILED RUN.** The protocol-v2 Workers
+   claimed all three Attempts and leases renewed while active, but no Claude
+   terminal event or Artifact was produced before the maximum-attempt failure.
+   Capture Worker-side executor diagnostics or repair the Worker image before
+   rerunning; do not create a second Task without explicit authorization.
+3. **Artifact integrity and download: OPEN for the selected Task.** Its
+   Artifact query was empty. An existing published Task's download and SHA-256
+   control passed, but that control is not substituted for the selected Task.
+   Any test Task/Attempt/Artifact cleanup needs explicit confirmation before
+   deletion.
+4. **Redis failure and poll fallback: PASS.** Only the confirmed user-scoped
+   `infinity-redis.service` was stopped briefly. Relay hints/health failed
+   closed with 503, D1/Worker leases continued, the same single Task remained
+   fenced, and Redis/Relay recovered to 200. Existing Worker v2 containers were
+   not stopped. See the D14 gated-run record.
+5. **Literature watcher: OPEN/UNRUN.** It is currently disabled by
+   `DISCOVERY_LITERATURE_ENABLED=false`; the baseline state query had no rows.
+   A temporary local enablement was reverted before deployment because the
+   production configuration mutation was not authorized in this context. Two
+   real cron rounds still require direct authorization.
+6. **Live model provider path: OPEN/UNRUN.** The optional Kimi `kimi-k2.6`
+   JSON profile call was not attempted. No secret, model flag, or remote
+   environment was changed. It requires a separately authorized configuration
+   change and bounded status/family-only diagnostics.
 
 ## Safe execution and rollback notes
 
@@ -77,13 +77,14 @@ revert only the isolated Discovery Processor release. Retain the additive D1
 migrations and leave existing Worker v2, Task Center, and Redis services
 untouched.
 
-The failed BERT paper, its terminal resource, and the shadow collection are
-retained for traceability. They were not deleted because deletion is a
-destructive operation requiring confirmation at action time.
+The failed BERT paper, its terminal resource, the shadow collection, and the
+failed selected Task/Attempts are retained for traceability. They were not
+deleted because deletion is a destructive operation requiring confirmation at
+action time.
 
 ## Evidence already supporting the conditional pass
 
 - D12 real Paper/Data shadow: `D12/real-production-case/`.
 - D13 deployment, health, D1, R2, Processor, and live shadow: `D13/deploy/`.
-- D14 regression and test output: `D14/final-regression/`.
+- D14 regression, gated live run, and test output: `D14/final-regression/`.
 - Current final summary, known limitations, and rollback: this directory.

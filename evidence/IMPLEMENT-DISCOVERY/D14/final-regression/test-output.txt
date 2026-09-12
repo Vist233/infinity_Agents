@@ -22,5 +22,13 @@ fresh public UCI derivative, reached ready dataset profiling, and produced a
 reached the pre-fix Paper Processor but was rejected with
 `PAPER_PROCESSOR_RUNTIME_ERROR`. After release `344a93d` was activated on
 zhangbot, a fresh public ResNet paper reached `profiled`/`ready` with a
-succeeded attempt. Auto-execute remained disabled, so no Task/Artifact was
-created.
+succeeded attempt. The authorized live Task test materialized exactly one
+Discovery Task and no duplicate, but its three protocol-v2 Attempts all
+expired before a Claude terminal event or Artifact; final status was `failed`
+with `Worker lease expired; maximum attempts reached`. A Redis-only outage
+showed Relay health/hints 503 while D1/Worker leases continued, then recovered
+to Relay 200. An existing published Artifact download was independently
+verified at 1,234,445 bytes with SHA-256
+`1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c`.
+`DISCOVERY_AUTO_EXECUTE` and `DISCOVERY_LITERATURE_ENABLED` are restored to
+`false`; the two watcher rounds and live Kimi JSON path remain unrun.

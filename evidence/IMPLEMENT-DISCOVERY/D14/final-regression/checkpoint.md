@@ -3,9 +3,11 @@ intentional execution gates remain.
 
 See `FINAL/` for the complete summary, deployment versions/digests, real-case
 IDs/hashes, known limitations, and rollback plan.
-See `FINAL/remaining-gates.md` for the six eligible-match preflight and the
-authorization required before Task/Artifact, Redis-recovery, literature, or
-live-model execution.
+The authorized live run materialized exactly one Task and exercised the
+Redis-only fallback; the Task exhausted three leases without a Claude terminal
+event or Artifact. See `gated-live-run-20260912.md` and
+`FINAL/remaining-gates.md` for the remaining Worker, selected-Task Artifact,
+Literature Watcher, and live-model gates.
 
 Prior production verification commit: 008b905ddf0598d53b3031da2df8f3ae56b08720.
 Post-audit local verification commit: 268eae8; lifecycle fix: 89668c7. Remote

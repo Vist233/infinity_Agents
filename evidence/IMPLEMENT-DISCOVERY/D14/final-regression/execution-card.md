@@ -16,9 +16,12 @@ Processor runtime rejection that is now propagated to the Discovery catalog by
 344a93d, and a fresh public ResNet equivalent completed successfully end to
 end.
 
-The card remains conditional because `DISCOVERY_AUTO_EXECUTE=false`, so the
-Task/Artifact/Redis-recovery portion of D12/D14 is intentionally not claimed;
-`DISCOVERY_LITERATURE_ENABLED=false` also leaves the watcher disabled. The
-final read-only preflight found six eligible matches, so the current global
-switch cannot be flipped for a one-row test without a scoped authorization.
-See `FINAL/remaining-gates.md` for the exact gates and rollback sequence.
+The authorized live run then created exactly one Task for the selected match.
+Task Center visibility and deterministic idempotency passed, and a Redis-only
+outage showed Relay 503/D1 fallback with recovery to 200. The selected Task
+was claimed three times but all three leases expired before a Claude terminal
+event or Artifact; it ended `failed` with maximum attempts reached. A separate
+existing published Task download/hash control passed, but it does not close the
+selected Task's Artifact gate. `DISCOVERY_LITERATURE_ENABLED=false` remains in
+force and the live Kimi call was not run. See
+`gated-live-run-20260912.md` and `FINAL/remaining-gates.md` for exact evidence.
