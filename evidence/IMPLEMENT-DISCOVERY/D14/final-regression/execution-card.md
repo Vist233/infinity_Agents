@@ -18,4 +18,7 @@ end.
 
 The card remains conditional because `DISCOVERY_AUTO_EXECUTE=false`, so the
 Task/Artifact/Redis-recovery portion of D12/D14 is intentionally not claimed;
-`DISCOVERY_LITERATURE_ENABLED=false` also leaves the watcher disabled.
+`DISCOVERY_LITERATURE_ENABLED=false` also leaves the watcher disabled. The
+final read-only preflight found six eligible matches, so the current global
+switch cannot be flipped for a one-row test without a scoped authorization.
+See `FINAL/remaining-gates.md` for the exact gates and rollback sequence.

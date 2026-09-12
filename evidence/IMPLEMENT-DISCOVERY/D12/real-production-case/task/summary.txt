@@ -1,5 +1,8 @@
 Task gate: NOT EXECUTED.
 
 The deployed configuration intentionally remains `DISCOVERY_AUTO_EXECUTE=false`.
-The real match is therefore persisted as an evaluated shadow opportunity with
-`created_task_id=null`; no Task was fabricated for acceptance evidence.
+The real matches are therefore persisted as evaluated shadow opportunities with
+`created_task_id=null`; no Task was fabricated for acceptance evidence. The
+final preflight found six eligible rows, and the global auto-execute switch
+must not be enabled for a one-row test without an explicit scoped selection.
+See `evidence/IMPLEMENT-DISCOVERY/FINAL/remaining-gates.md`.

@@ -2,4 +2,7 @@ Recovery gate: NOT EXECUTED.
 
 Because the production shadow case created no Task, the requested Task/Redis
 outage/restart recovery sequence was not run. Processor restart and session
-heartbeat were verified independently during rollout.
+heartbeat were verified independently during rollout. The exact controlled
+Redis outage/poll-fallback sequence, duplicate Task/Attempt check, and
+post-recovery convergence remain open gates. See
+`evidence/IMPLEMENT-DISCOVERY/FINAL/remaining-gates.md`.

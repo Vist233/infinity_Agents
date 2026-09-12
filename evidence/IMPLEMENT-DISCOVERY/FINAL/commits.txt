@@ -19,6 +19,6 @@ Paper Processor safe-failure runtime: 62e5b7f fix: classify paper processor
 failures safely
 Paper Processor release pin: 344a93d docs: pin paper processor release commit
 
-Remote D1 migrations 0025-0027 are applied and the Worker is live. The final
-evidence commit from this run will follow this code commit. Unrelated dirty
-user paths remain excluded.
+Remote D1 migrations 0025-0027 are applied and the Worker is live. The
+conditional-pass evidence update is committed after the code/runtime commits
+listed above. Unrelated dirty user paths remain excluded.

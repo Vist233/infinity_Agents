@@ -3,6 +3,9 @@ intentional execution gates remain.
 
 See `FINAL/` for the complete summary, deployment versions/digests, real-case
 IDs/hashes, known limitations, and rollback plan.
+See `FINAL/remaining-gates.md` for the six eligible-match preflight and the
+authorization required before Task/Artifact, Redis-recovery, literature, or
+live-model execution.
 
 Prior production verification commit: 008b905ddf0598d53b3031da2df8f3ae56b08720.
 Post-audit local verification commit: 268eae8; lifecycle fix: 89668c7. Remote

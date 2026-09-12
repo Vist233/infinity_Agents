@@ -1,4 +1,6 @@
 Artifact gate: NOT EXECUTED.
 
 No real Discovery Task was admitted, so no Attempt or Artifact exists for this
-case. Existing Worker v2 artifacts were not reused as a substitute.
+case. Existing Worker v2 artifacts were not reused as a substitute. Artifact
+hash and authenticated download remain authorization-gated; see
+`evidence/IMPLEMENT-DISCOVERY/FINAL/remaining-gates.md`.

@@ -1,8 +1,9 @@
 # Paper Discovery + Data Collections — final summary
 
-Status: COMPLETE WITH INTENTIONAL GATES — the D0-D14 implementation, rollout,
-post-rollout regression fix, and live collection/match shadow verification are
-complete. Real Task/Artifact execution remains disabled by configuration.
+Status: CONDITIONAL PASS — the D0-D14 implementation, rollout, post-rollout
+regression fix, and live collection/match shadow verification are complete.
+D12/D14's real Task/Artifact, recovery, literature, and live-model gates remain
+authorization-gated; see `FINAL/remaining-gates.md`.
 
 Delivered:
 
