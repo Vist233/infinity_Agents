@@ -1137,6 +1137,16 @@ class FakeStatement {
       Object.assign(row, { status: "profiled", spam_status: spamStatus, profile_version: profileVersion, profile_json: profileJson, profile_sha256: profileSha256, profile_object_key: profileObjectKey, overview_object_key: overviewKey, title, authors_json: authorsJson, year, venue, updated_at: now, discovery_lease_owner: null, discovery_lease_expires_at: null, discovery_lease_token_hash: null });
       return { meta: { changes: 1 } };
     }
+    if (sql.includes("UPDATE paper_catalog SET status = 'failed'") && sql.includes("source_resource_id = ?1")) {
+      const [resourceId, now] = this.args as [string, number];
+      let changes = 0;
+      for (const row of this.db.paperCatalog.values()) {
+        if (row.source_resource_id !== resourceId || !["requested", "processing"].includes(row.status)) continue;
+        Object.assign(row, { status: "failed", updated_at: now, discovery_lease_owner: null, discovery_lease_expires_at: null, discovery_lease_token_hash: null });
+        changes += 1;
+      }
+      return { meta: { changes } };
+    }
     if (sql.includes("UPDATE paper_catalog SET status = 'failed'")) {
       const [paperId, spamStatus, now, owner, fencingEpoch, tokenHash] = this.args as [string, PaperCatalogRow["spam_status"], number, string | null, number | null, string | null];
       const row = this.db.paperCatalog.get(paperId);

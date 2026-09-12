@@ -1763,6 +1763,15 @@ export async function failPaperProcessorAttempt(
               lease_expires_at = NULL, last_error_code = ?2, updated_at = ?3
         WHERE resource_id = ?1 AND status IN ('waiting', 'ready', 'running')`,
     ).bind(input.resourceId, input.errorCode, input.now),
+    // A Discovery catalog row is created before the Paper Processor has
+    // materialized a user upload. Surface the terminal resource failure in
+    // that catalog as well; chat-only resources simply have no matching row.
+    env.DB.prepare(
+      `UPDATE paper_catalog SET status = 'failed', updated_at = ?2,
+              discovery_lease_owner = NULL, discovery_lease_expires_at = NULL,
+              discovery_lease_token_hash = NULL
+        WHERE source_resource_id = ?1 AND status IN ('requested', 'processing')`,
+    ).bind(input.resourceId, input.now),
   ]);
   return Number((results[0] as { meta?: { changes?: number } } | undefined)?.meta?.changes ?? 0) === 1
     && Number((results[1] as { meta?: { changes?: number } } | undefined)?.meta?.changes ?? 0) === 1;

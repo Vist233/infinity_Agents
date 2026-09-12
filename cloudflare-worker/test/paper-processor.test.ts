@@ -6,6 +6,7 @@ import { handlePaperProcessorApi } from "../src/paper-processor";
 import { isPaperProcessorNamespacePath, isPaperProcessorProtocolRoute } from "../src/paper-processor-access";
 import { Sha256 } from "../src/sha256";
 import { materializePaper } from "../src/tools";
+import type { PaperCatalogRow } from "../src/discovery-db";
 import { makeEnv } from "./fake-d1";
 
 class MemoryBucket {
@@ -313,12 +314,19 @@ describe("dedicated Paper Processor control protocol", () => {
     db.seedChatSession("s1", "alice");
     const resource = await createPaperResource(env, { resource_id: "resource-fail", session_id: "s1", user_id: "alice", source_kind: "arxiv", source_ref: "2401.00002", canonical_ref: "2401.00002", title: "Bad PDF" });
     await linkPaperResource(env, "s1", resource.resource_id, "alice", "read");
+    db.paperCatalog.set("catalog-fail", {
+      paper_id: "catalog-fail", owner_user_id: "alice", source_resource_id: resource.resource_id,
+      visibility: "private", title: "Bad PDF", authors_json: "[]", year: null, venue: null,
+      status: "requested", spam_status: "pending", profile_version: null, profile_json: null,
+      profile_sha256: null, overview_object_key: null, created_at: 1, updated_at: 1,
+    } satisfies PaperCatalogRow);
     const session = await connect(env, "instance-fail");
     const poll = await handlePaperProcessorApi(request("/api/paper-processor/poll", { method: "POST", headers: processorHeaders(session.processor_session_token), body: "{}" }), env);
     const grant = await poll!.json() as { attempt_id: string; resource_id: string; fencing_epoch: number; lease_token: string };
     const failed = await handlePaperProcessorApi(controlRequest(session.processor_session_token, "fail", { attempt_id: grant.attempt_id, resource_id: grant.resource_id, fencing_epoch: grant.fencing_epoch, error_code: "MALFORMED_PDF", error_message: "safe parser failure" }, grant.lease_token), env);
     expect(failed?.status).toBe(200);
     expect(db.paperResources.get(resource.resource_id)?.status).toBe("failed");
+    expect(db.paperCatalog.get("catalog-fail")?.status).toBe("failed");
     expect(db.paperAuditEvents).toEqual(expect.arrayContaining([expect.objectContaining({ resource_id: resource.resource_id, stage: "download", outcome: "failed", error_code: "MALFORMED_PDF" })]));
     const duplicate = await handlePaperProcessorApi(controlRequest(session.processor_session_token, "fail", { attempt_id: grant.attempt_id, resource_id: grant.resource_id, fencing_epoch: grant.fencing_epoch, error_code: "MALFORMED_PDF" }, grant.lease_token), env);
     expect(duplicate?.status).toBe(409);
