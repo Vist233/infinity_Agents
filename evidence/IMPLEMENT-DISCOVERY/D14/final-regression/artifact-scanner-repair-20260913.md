@@ -1,7 +1,9 @@
 # Artifact scanner repair — 2026-09-13
 
-Status: offline repair complete; one fresh live Task is required to validate
-the Worker image and close the Claude/Artifact gate.
+Status: BLOCKED — the first offline repair was exercised by one fresh live
+Task, which still failed at the completion-metadata scan. A second narrow
+offline repair is now complete and still requires one fresh live Task to close
+the Claude/Artifact gate.
 
 ## Evidence boundary
 
@@ -47,3 +49,40 @@ This repair is not a live success claim. After the branch push and Worker
 image refresh, exactly one distinct scoped Task may be created; its own Claude
 terminal event, single published Artifact, and UI download hash/size must be
 verified before any later gate is considered.
+
+## Post-repair live validation and confirmed scanner mechanism
+
+The Worker image containing commit `1862a8a` and the refreshed r4 compose
+configuration was exercised once with the distinct evaluated match
+`4a2a16cd-2f7a-4397-b06b-1a7733bac017`. Its Task was
+`discovery-task-4a2a16cd-2f7a-4397-b06b-1a7733bac017`; its sole Attempt was
+`3f23b26e-9d11-4cf0-8b28-330d0bfcf4ba`. The Attempt was claimed at
+`2026-09-13 08:39:20` Asia/Shanghai, renewed normally for approximately 46
+minutes, and then ended in `task_failed` / `worker_execution_failed` with the
+same sanitized message `agent_completion.json contains credential-like
+content`. The authenticated UI and D1 both showed no Artifact. No retry or
+duplicate Task was created.
+
+The failed Attempt tree was removed by the Worker before retention, so the
+exact completion field/value is still not recoverable and this evidence does
+not classify that original value as a real secret. The mechanism is nevertheless
+reproducible locally: the generic detector scans the serialized JSON bytes,
+while a safe summary such as `token: "not applicable"` is represented with
+JSON-escaped quotes (`token: \\\"not applicable\\\"`). The placeholder grammar
+accepts the decoded phrase but not that escaped representation, producing the
+same credential-like rejection. This is a confirmed false-positive path in the
+detector; it is not a claim about the deleted live payload.
+
+The second repair adds a completion-specific boundary. `agent_completion.json`
+is size-bounded and parsed with duplicate-key rejection; credential-labelled
+fields are allowed only when their values are null, empty, an empty JSON
+container, or an explicit bounded non-secret placeholder. Every decoded string
+value is still passed through the generic detector, so a real token in a
+summary or credential field remains rejected. The archive validator applies
+the same decoded check after upload, preserving defense in depth.
+
+The offline artifact/security regression subset now passes 39 tests, including
+escaped safe summaries, explicit empty credential-labelled fields, escaped
+credential rejection, and direct credential-field rejection. This second repair
+has not been deployed or used to claim a live pass; one additional fresh
+scoped Task is required only after the branch and Worker image are synchronized.

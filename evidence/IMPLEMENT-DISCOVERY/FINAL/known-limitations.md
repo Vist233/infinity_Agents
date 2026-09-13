@@ -43,8 +43,12 @@ Known limitations and deliberate gates:
    persistence behavior during write failures and passed local regressions, but
    it was not live-deployed or validated against the selected Task. See
    `D14/final-regression/auth-discovery-hardening-20260913.md`.
-9. The post-reset scanner repair is offline-verified, but the failed
-   `agent_completion.json` payload was cleaned before retention; whether the
-   original match was a real credential or an ambiguity in free-form metadata
-   is therefore unproven. See
+9. The first post-reset scanner repair was exercised by one distinct r4 live
+   Task, which again failed at `agent_completion.json` with no Artifact. Its
+   payload was cleaned before retention; whether either live match contained a
+   real credential or an ambiguity in free-form metadata is therefore
+   unproven. A second offline repair now parses the JSON before scanning
+   decoded strings, rejects duplicate keys, and preserves true
+   credential-shaped rejection. It still requires one fresh distinct live Task
+   after image synchronization. See
    `D14/final-regression/artifact-scanner-repair-20260913.md`.

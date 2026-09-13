@@ -3410,7 +3410,7 @@ def _validate_result_archive(path: FilePath) -> Dict[str, Any]:
     import zipfile
     import zlib
 
-    from backend.security import reject_secret_content
+    from backend.security import MAX_COMPLETION_METADATA_BYTES, reject_completion_content, reject_secret_content
 
     max_files = max(1, _env_int("ARTIFACT_MAX_FILES", 5000))
     max_file_bytes = max(1, _env_int("ARTIFACT_MAX_FILE_BYTES", 512 * 1024 * 1024))
@@ -3499,6 +3499,7 @@ def _validate_result_archive(path: FilePath) -> Dict[str, Any]:
             for info, name in files:
                 hasher = hashlib.sha256()
                 size = 0
+                completion_data = bytearray() if name == "agent_completion.json" else None
                 with archive.open(info, "r") as source:
                     overlap = b""
                     while True:
@@ -3510,8 +3511,15 @@ def _validate_result_archive(path: FilePath) -> Dict[str, Any]:
                             raise ValueError("artifact file expands beyond the allowed limit")
                         hasher.update(chunk)
                         window = overlap + chunk
-                        reject_secret_content(window, label=name)
+                        if completion_data is not None:
+                            completion_data.extend(chunk)
+                            if len(completion_data) > MAX_COMPLETION_METADATA_BYTES:
+                                raise ValueError("completion metadata expands beyond the allowed limit")
+                        else:
+                            reject_secret_content(window, label=name)
                         overlap = window[-8192:]
+                if completion_data is not None:
+                    reject_completion_content(bytes(completion_data), label=name)
                 expected = declared[name]
                 if size != expected["size"] or hasher.hexdigest() != expected["sha256"]:
                     raise ValueError("artifact manifest checksum mismatch")

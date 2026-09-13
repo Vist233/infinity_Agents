@@ -115,6 +115,36 @@ def test_worker_result_archive_allows_wrapped_non_secret_completion_status(tmp_p
     assert collected.file_count == 1
 
 
+def test_worker_result_archive_allows_escaped_safe_completion_summary(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "agent_completion.json").write_text(
+        json.dumps({
+            "status": "completed",
+            "summary": 'The metadata record says token: "not applicable".',
+            "outputs": {},
+        }),
+        encoding="utf-8",
+    )
+
+    collected = ArtifactCollector().collect(output, tmp_path / "result.zip")
+
+    assert _validate_result_archive(collected.archive_path)["file_count"] == 1
+
+
+def test_worker_result_archive_allows_explicit_empty_credential_metadata(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "agent_completion.json").write_text(
+        json.dumps({"status": "completed", "token": None, "api_key": "not applicable"}),
+        encoding="utf-8",
+    )
+
+    collected = ArtifactCollector().collect(output, tmp_path / "result.zip")
+
+    assert _validate_result_archive(collected.archive_path)["file_count"] == 1
+
+
 def test_worker_result_archive_still_rejects_secret_in_completion_metadata(tmp_path):
     for summary in ("token: do-not-publish-this", "secret: <not applicable>evil"):
         output = tmp_path / summary.split(":", 1)[0].replace(" ", "-")
@@ -126,6 +156,30 @@ def test_worker_result_archive_still_rejects_secret_in_completion_metadata(tmp_p
 
         with pytest.raises(SecurityBoundaryError, match="credential-like content"):
             ArtifactCollector().collect(output, tmp_path / f"{output.name}.zip")
+
+
+def test_worker_result_archive_rejects_credential_in_escaped_completion_summary(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "agent_completion.json").write_text(
+        json.dumps({"summary": 'token: "do-not-publish-this"'}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SecurityBoundaryError, match="credential-like content"):
+        ArtifactCollector().collect(output, tmp_path / "result.zip")
+
+
+def test_worker_result_archive_rejects_credential_value_in_metadata_field(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "agent_completion.json").write_text(
+        json.dumps({"status": "completed", "token": "do-not-publish-this"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SecurityBoundaryError, match="credential-like content"):
+        ArtifactCollector().collect(output, tmp_path / "result.zip")
 
 
 def test_worker_staging_cleanup_only_removes_stale_entries(tmp_path, monkeypatch):

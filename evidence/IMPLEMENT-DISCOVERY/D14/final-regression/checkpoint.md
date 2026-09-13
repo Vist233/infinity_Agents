@@ -36,6 +36,15 @@ lease expired, and the Edge was deployed as
 not run, and the existing flags/services remain in their safe state. See
 `gated-live-followup-20260913.md`.
 
+After the first scanner repair was pushed and the Windows Workers were
+refreshed to r4, one additional distinct evaluated match was selected exactly
+once as the scanner-validation Task
+`discovery-task-4a2a16cd-2f7a-4397-b06b-1a7733bac017`. Its Attempt renewed for
+about 46 minutes and then terminally failed with the sanitized
+`agent_completion.json contains credential-like content` error and no
+Artifact. The completion payload was cleaned before retention. A second
+scanner repair is now offline-verified and has not yet been deployed.
+
 An offline-only follow-on then hardened browser auth and Discovery persistence
 boundaries for D1/R2 write failures. `npm run check`, the full Edge suite
 (32 files / 199 tests), and the relevant Python artifact/security suite (34

@@ -160,18 +160,45 @@ credential-shaped values and only admits explicit non-secret completion
 metadata placeholders. A fresh live Task is still required to determine
 whether the Worker image now publishes one Artifact successfully.
 
+## Second scanner-validation Task
+
+After the first scanner repair was pushed and the Windows Workers were
+refreshed to the local r4 image, one additional distinct evaluated match was
+selected exactly once: `4a2a16cd-2f7a-4397-b06b-1a7733bac017`. It materialized
+`discovery-task-4a2a16cd-2f7a-4397-b06b-1a7733bac017` with one Attempt,
+`3f23b26e-9d11-4cf0-8b28-330d0bfcf4ba`. The Attempt was claimed at
+`2026-09-13 08:39:20` Asia/Shanghai, renewed normally for about 46 minutes,
+and then ended at approximately `09:26:01` with `task_failed` /
+`worker_execution_failed`. The authenticated Task Center displayed the
+sanitized error `agent_completion.json contains credential-like content`;
+D1 and the UI showed no Artifact. No retry button, duplicate Task, or manual
+status write was used.
+
+The r4 Worker cleaned the failed Attempt tree, so its exact completion payload
+is not retained. A local regression reproduces a specific false-positive
+mechanism in the pre-second-repair path: JSON-escaped quotes around a safe
+placeholder in a free-form summary are scanned as raw bytes rather than as
+decoded metadata. The second repair parses `agent_completion.json`, checks
+credential-labelled fields separately, scans decoded string values, rejects
+duplicate keys, and applies the same rule in the uploaded archive validator.
+Real credential-shaped values remain rejected. The second repair is offline
+only at this point and has not been deployed or used to claim a live pass.
+
 ## Minimal scoped rerun after write availability returns
 
-1. Perform read-only health/status checks and verify both r3 Workers are still
+1. Perform read-only health/status checks and verify both r4 Workers are still
    running with restart count 0. Do not click Create Task again.
-2. Let the normal scheduler reconcile
-   `discovery-task-bd74d122-d7fe-4479-90fd-c1bbc12d262f`. Wait until its
-   expired Attempt is either requeued or the Task is terminal. Do not create a
-   new Task while this row still owns an active or unreconciled Attempt.
-3. If it is requeued, allow that existing Task to run. Capture: accept `201`,
-   spec/method/dataset `200`, recurring heartbeat/renew `200`, a Claude
-   terminal event, Artifact start/parts/complete success, and a succeeded D1
-   Task with exactly one published Artifact.
+2. Confirm that the failed scanner-validation Task
+   `discovery-task-4a2a16cd-2f7a-4397-b06b-1a7733bac017` is terminal and that
+   no active or unreconciled Attempt remains. Do not create another Task until
+   that read-only check is complete.
+3. After the second repair is pushed and the refreshed Worker image is
+   verified, select one remaining evaluated match through the authenticated UI
+   exactly once. Capture: accept `201`, spec/method/dataset `200`, recurring
+   heartbeat/renew `200`, a Claude terminal event, Artifact start/parts/complete
+   success, and a succeeded D1 Task with exactly one published Artifact. If
+   this one validation Task fails, retain it and stop; do not click retry or
+   create another same-match Task.
 4. Download that Artifact through the authenticated UI and compare the local
    byte count and SHA-256 with D1 metadata. Only this closes the
    Claude/Artifact gate. If the Task terminally fails, retain it and stop

@@ -34,9 +34,15 @@ reset, normal scheduler recovery ran the existing Task through three fenced
 Attempts; it terminally failed with the sanitized
 `agent_completion.json contains credential-like content` error and no
 Artifact. No retry click, duplicate Task, or manual D1 state write was made.
-The bounded record is `gated-live-followup-20260913.md`. The Edge hardening
-deployed as `9d898d5d-9753-4e14-bf0f-1fb25c829127`; local Worker v2 and lease
-recovery regressions passed. Literature and live Kimi remain open.
+The r4 scanner-validation Task was then selected once for a third distinct
+match; it renewed normally for about 46 minutes but failed at the same
+completion-metadata boundary with no Artifact. Its payload was cleaned before
+retention. The bounded records are in
+`gated-live-followup-20260913.md` and
+`artifact-scanner-repair-20260913.md`. The Edge hardening deployed as
+`9d898d5d-9753-4e14-bf0f-1fb25c829127`; the second scanner repair is
+offline-only and still needs one synchronized live validation Task.
+Literature and live Kimi remain open.
 
 The later offline-only auth/Discovery resilience pass is recorded in
 `auth-discovery-hardening-20260913.md`. It passed the TypeScript check, the

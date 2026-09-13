@@ -59,6 +59,24 @@ _SECRET_PATTERNS = (
     re.compile(r"(?i)\b(?:postgres(?:ql)?|redis|mysql|mongodb)://[^\s]+"),
 )
 
+MAX_COMPLETION_METADATA_BYTES = 2 * 1024 * 1024
+_SECRET_FIELD_NAME = re.compile(
+    r"(?i)(?:^|[_-])(?:api[_-]?key|token|password|secret|credential|authorization|auth|cookie)(?:$|[_-])"
+)
+
+
+def _is_secret_placeholder(value: object) -> bool:
+    """Return whether a credential-labelled metadata value is explicitly empty."""
+
+    if value is None or value is False or value == [] or value == {}:
+        return True
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text:
+        return True
+    return re.fullmatch(rf"(?i){_SECRET_VALUE_PLACEHOLDER}", text) is not None
+
 
 def redact_secrets(value: object, *, max_chars: int = 2000) -> str:
     """Return a bounded, log-safe representation of *value*."""
@@ -78,6 +96,61 @@ def reject_secret_content(data: bytes, *, label: str = "output") -> None:
     for pattern in _SECRET_PATTERNS:
         if pattern.search(sample):
             raise SecurityBoundaryError(f"{label} contains credential-like content")
+
+
+def reject_completion_content(data: bytes, *, label: str = "agent_completion.json") -> None:
+    """Validate decoded completion metadata without scanning JSON escaping as prose.
+
+    Completion metadata is the one artifact file whose structured JSON may
+    contain words such as ``token`` in a scientific summary. Parse it first so
+    harmless escaped quotes do not create a false positive, while still
+    rejecting credential-labelled fields and credential-like text in every
+    decoded string value.
+    """
+
+    if len(data) > MAX_COMPLETION_METADATA_BYTES:
+        raise SecurityBoundaryError(f"{label} exceeds the completion metadata limit")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SecurityBoundaryError(f"{label} is not valid completion metadata") from exc
+
+    def object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate completion metadata key")
+            result[key] = value
+        return result
+
+    try:
+        parsed = json.loads(text, object_pairs_hook=object_pairs)
+    except (TypeError, ValueError) as exc:
+        raise SecurityBoundaryError(f"{label} is not valid completion metadata") from exc
+    if not isinstance(parsed, dict):
+        raise SecurityBoundaryError(f"{label} is not valid completion metadata")
+
+    def inspect(value: object) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if _SECRET_FIELD_NAME.search(str(key)) and not _is_secret_placeholder(child):
+                    raise SecurityBoundaryError(f"{label} contains credential-like content")
+                inspect(child)
+        elif isinstance(value, list):
+            for child in value:
+                inspect(child)
+        elif isinstance(value, str):
+            reject_secret_content(value.encode("utf-8"), label=label)
+
+    try:
+        # This catches secrets in summaries after JSON escapes have been
+        # decoded, and the structured walk above catches credential-labelled
+        # fields whose key and value are separated by JSON punctuation.
+        inspect(parsed)
+    except SecurityBoundaryError:
+        # Preserve the stable top-level label used by the Worker failure
+        # message while keeping the detailed cause internal.
+        raise SecurityBoundaryError(f"{label} contains credential-like content")
 
 
 def reject_secret_file(
@@ -326,7 +399,13 @@ class ArtifactCollector:
             with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 for path, relative in files:
                     check()
-                    reject_secret_file(path, label=relative, progress_check=check)
+                    if relative == "agent_completion.json":
+                        check()
+                        with path.open("rb") as source:
+                            completion_data = source.read(MAX_COMPLETION_METADATA_BYTES + 1)
+                        reject_completion_content(completion_data, label=relative)
+                    else:
+                        reject_secret_file(path, label=relative, progress_check=check)
                     digest_hasher = hashlib.sha256()
                     size = 0
                     info = zipfile.ZipInfo(relative)
