@@ -238,3 +238,25 @@ files only: the 8 MiB piece above, plus the earlier
 additional `part-001` through `part-048` files, complete archive, or Docker
 load was observed. Missing-piece transfer remains stopped by the external
 safety boundary; no existing staging file was deleted or overwritten.
+
+## r7 staging reconciliation and offline reassembly guard
+
+The bounded transfer handoff contained two incompatible inventory reports: a
+later root-side observation counted 40 `part-*` entries, while the independent
+SFTP listing available to this validation found only
+`infinity-agents-worker-r7-8m-piece-part-000` at `8388608` bytes and the older
+`infinity-agents-worker-r7-piece-000` partial file at `8616960` bytes. The
+reports are retained as separate snapshots; neither is treated as proof of a
+complete archive, and no staging file was deleted or overwritten.
+
+The repository now contains
+`scripts/reassemble-r7-worker-image.ps1`, an idempotent Windows guard for the
+fixed 49-piece r7 archive. It prints bounded name/byte inventory, accepts only
+`part-000` through `part-048` with the expected sizes, rejects missing or
+unexpected pieces, and verifies the full `406582272`-byte archive against
+SHA-256 `bdd3073f097da34d3226ea1f2d9b6182d0b5fa1bf9ede54412d4b2950a623774`
+before an optional `docker load`. Existing mismatched archives are never
+overwritten; the optional load is not part of verification mode. The offline
+contract tests cover the 40-versus-49 discrepancy and the hash-before-load
+ordering. This update performs no SSH, Docker, Worker, Task, flag, or cleanup
+operation.
