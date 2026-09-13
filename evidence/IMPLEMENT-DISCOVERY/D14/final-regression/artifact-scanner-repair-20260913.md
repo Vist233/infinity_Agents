@@ -104,11 +104,13 @@ One remaining evaluated match was selected exactly once through the
 authenticated UI: `fd2bad8e-a28e-473a-93fb-4bd0bd207790`. It materialized
 Task `discovery-task-fd2bad8e-a28e-473a-93fb-4bd0bd207790` with Attempt
 `6e176f72-043c-44a3-b22c-f5c43d52102d`. The Task was created at
-`2026-09-13 10:06:48` Asia/Shanghai and reached `task_failed` at approximately
-`10:10:57`, with 1/3 Attempts. The authenticated UI displayed the sanitized
-error `agent_completion.json contains credential-like content`; D1 showed
-`failed`, a `task_failed` event, and `result_artifact_id=null`. No Artifact
-was published, no retry was clicked, and no duplicate Task was created.
+`2026-09-13 10:06:48` Asia/Shanghai and reached `task_failed` at
+`2026-09-13 10:10:57` Asia/Shanghai, with 1/3 Attempts. A bounded D1 read
+confirmed the failed Task and Attempt, `result_artifact_id=null`, the same
+sanitized error, and `changes=0`/`rows_written=0`. The authenticated UI
+displayed the sanitized error `agent_completion.json contains credential-like
+content`; no Artifact was published, no retry was clicked, and no duplicate
+Task was created.
 
 The compatible r5 image passed a network-free synthetic check that accepts the
 escaped safe placeholder case and rejects a credential-labelled value. The
@@ -151,4 +153,7 @@ paths, and payloads are not logged. Local deterministic coverage now checks
 the pattern and structured-field categories, absence of rejected values from
 telemetry, and the event cap. The broad credential patterns and true-secret
 rejections are unchanged. This follow-on is not a live Task result and no new
-Task is created under the stop rule.
+Task is created under the stop rule. The diagnostic image was assembled and
+smoke-tested locally but was not transferred or deployed to Windows; the
+running Workers therefore remain on the verified r5-compatible image, and no
+live category is inferred from this telemetry yet.
