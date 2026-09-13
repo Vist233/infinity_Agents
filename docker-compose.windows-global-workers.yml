@@ -5,7 +5,7 @@ services:
   worker-1:
     # This is an administrator-loaded local tag; the Windows host must not
     # pull a public registry image at startup.
-    image: infinity-agents-worker:2026.09.12-r3
+    image: infinity-agents-worker:2026.09.12-r4
     pull_policy: never
     dns:
       - 1.1.1.1
@@ -18,7 +18,7 @@ services:
       - worker_1_workspace:/workspace
 
   worker-2:
-    image: infinity-agents-worker:2026.09.12-r3
+    image: infinity-agents-worker:2026.09.12-r4
     pull_policy: never
     dns:
       - 1.1.1.1
