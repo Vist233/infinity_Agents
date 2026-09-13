@@ -1,10 +1,9 @@
 # Artifact scanner repair — 2026-09-13
 
-Status: BLOCKED — the first offline repair and the second, image-synchronized
-repair were each exercised by one fresh live Task, and both still failed at
-the completion-metadata scan. The exact live payloads were not retained, so
-the Claude/Artifact gate remains open and no further retry is authorized by
-this evidence record.
+Status: CONDITIONAL — the controlled r6 public-data validation passed the
+Claude/Artifact/download gate, but the earlier evaluated-match Task still has
+no Artifact and its exact completion payload was not retained. No further
+Discovery Task is authorized by this evidence record.
 
 ## Evidence boundary
 
@@ -46,10 +45,12 @@ real credential-shaped rejection. The Claude runtime test asserts that the
 metadata-only contract is present in the generated prompt. The existing
 successful reference completion schema remains compatible with the collector.
 
-This repair was not treated as a live success claim. After the branch push and
-Worker image refresh, one distinct scoped Task was created; its own Claude
-terminal event and Artifact gate were required for acceptance, but the Task
-failed and is retained below. No later gate was started.
+This repair was not treated as a live success claim based on offline tests
+alone. After the branch push and Worker image refresh, the distinct evaluated
+match Tasks below were retained as failed validation records. A later
+controlled public-data Task on the deployed diagnostic image supplied the
+independent live Claude/Artifact/download evidence recorded at the end of this
+document; it does not replace the failed evaluated-match result.
 
 ## Post-repair live validation and confirmed scanner mechanism
 
@@ -152,8 +153,44 @@ warnings containing only fixed `rule` and `category` labels (for example,
 paths, and payloads are not logged. Local deterministic coverage now checks
 the pattern and structured-field categories, absence of rejected values from
 telemetry, and the event cap. The broad credential patterns and true-secret
-rejections are unchanged. This follow-on is not a live Task result and no new
-Task is created under the stop rule. The diagnostic image was assembled and
-smoke-tested locally but was not transferred or deployed to Windows; the
-running Workers therefore remain on the verified r5-compatible image, and no
-live category is inferred from this telemetry yet.
+rejections are unchanged.
+
+The diagnostic image was then transferred and deployed to both Windows
+Workers under the unique tag
+`infinity-agents-worker:2026.09.13-r6-diagnostics`. Its digest is
+`sha256:ae0b3e18a61f1d0ba1de56204f18d5a359b45021cf232cb889316735b6bbfc27`,
+with source revision `0b80e1a` and scanner marker
+`artifact-secret-scan-v3`. Both Worker containers were recreated without
+dependencies and verified running with restart count 0; the Discovery
+Processor was not changed.
+
+## r6 controlled public-data validation
+
+Before the run, a bounded D1 read found zero active Tasks, zero active
+Attempts, zero open uploads on active Attempts, zero pending outbox rows, and
+zero writes to the result table. A minimal method and the public UCI red-wine
+ZIP were used; they contain no credentials, environment reads, or private
+inputs. One fresh scoped Task was created once through the authenticated UI:
+`b73a3306-590d-442f-a76e-55f0008a9a86`, with sole Attempt
+`5352cdfb-4efa-4948-91b7-9e2642655631` and Worker
+`public-worker-16dab622-4e3b-4212-bb09-0ed738c45314`. It was created at
+`2026-09-13 11:43:49` Asia/Shanghai, claimed at `11:43:50`, and succeeded at
+`11:45:55`.
+
+D1 reported exactly one published Artifact for that Attempt:
+`d7a03fe6-eed4-4aec-b0b6-f71d03a624f5`, named `result.zip`,
+`kind=result_archive`, `file_size_bytes=9625`,
+`checksum_sha256=7c2e955b6e6a18abd4fce48fa82b0edcd339eef2be9a19b6665ae44401db5ece`,
+`status=published`, and `release_state=published`. Its manifest listed only
+the expected metadata/report files and no raw payload. The authenticated Task
+Center displayed exactly one Artifact; clicking its `查看` link emitted the
+browser download, whose local size and SHA-256 matched those D1 values
+exactly. No Artifact contents were read or exported.
+
+This closes the Claude/Artifact/download gate for the controlled public-data
+path and demonstrates that the deployed v3 scanner can accept safe completion
+metadata while preserving the offline credential rejection tests. It does
+not reinterpret either prior sanitized failure, recover their deleted
+payloads, or prove the evaluated-match Discovery result. The four selected
+Discovery Tasks and this one diagnostic Task are retained; no retry, duplicate
+Task, flag change, Literature Watcher round, Kimi call, or cleanup followed.

@@ -157,8 +157,9 @@ Watcher round, Kimi call, flag change, or destructive cleanup followed it.
 The offline repair and its evidence boundary are recorded in
 `artifact-scanner-repair-20260913.md`. It preserves rejection of real
 credential-shaped values and only admits explicit non-secret completion
-metadata placeholders. A fresh live Task is still required to determine
-whether the Worker image now publishes one Artifact successfully.
+metadata placeholders. A later controlled public-data Task on the diagnostic
+image published one Artifact and passed the authenticated download/hash check;
+the evaluated-match result remains a separate blocked gate.
 
 ## Second scanner-validation Task
 
@@ -207,7 +208,34 @@ the live result does not establish whether the remaining error is a true
 credential match or an uncovered false-positive form. This is the terminal
 scanner-validation outcome; no further Task is created under the stop rule.
 
-## Minimal scoped rerun after write availability returns
+## r6 controlled public-data validation
+
+The v3 diagnostic image was transferred to the Windows host and loaded under
+the unique tag `infinity-agents-worker:2026.09.13-r6-diagnostics`, digest
+`sha256:ae0b3e18a61f1d0ba1de56204f18d5a359b45021cf232cb889316735b6bbfc27`.
+Both Workers were recreated without dependencies and verified running with
+restart count 0; the Discovery Processor was not changed. A bounded D1
+preflight found no active Task, Attempt, active upload, pending outbox row, or
+result-table write.
+
+One fresh scoped public-data Task was created exactly once through the
+authenticated UI using a minimal method and the public UCI red-wine ZIP:
+Task `b73a3306-590d-442f-a76e-55f0008a9a86`, sole Attempt
+`5352cdfb-4efa-4948-91b7-9e2642655631`, Worker
+`public-worker-16dab622-4e3b-4212-bb09-0ed738c45314`. It was created at
+`2026-09-13 11:43:49` Asia/Shanghai and succeeded at `11:45:55`.
+
+D1 and the UI showed exactly one published `result.zip` Artifact. D1 recorded
+9,625 bytes and SHA-256
+`7c2e955b6e6a18abd4fce48fa82b0edcd339eef2be9a19b6665ae44401db5ece`; the
+authenticated UI download independently produced the same size and SHA-256.
+No Artifact contents were read or exported. This controlled run closes the
+Claude/Artifact/download gate for the public-data path, but does not replace
+the failed evaluated-match Task or classify its deleted completion payload.
+No retry, duplicate Task, flag change, Literature Watcher round, Kimi call,
+or cleanup followed.
+
+## Stop rule and no further reruns
 
 1. The synchronized r5 validation Task is terminally failed with no Artifact;
    do not click retry, create another Task, or hand-edit D1 status.

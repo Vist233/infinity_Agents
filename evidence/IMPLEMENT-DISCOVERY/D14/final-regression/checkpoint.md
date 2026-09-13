@@ -1,4 +1,5 @@
-Status: BLOCKED — the follow-up D1 write-side outage left required live gates open.
+Status: BLOCKED — the evaluated-match Artifact gate remains open, although a
+controlled r6 public-data Task later passed the Claude/Artifact/download gate.
 
 See `FINAL/` for the complete summary, deployment versions/digests, real-case
 IDs/hashes, known limitations, and rollback plan.
@@ -51,6 +52,19 @@ and exercised by one final distinct Task
 `6e176f72-043c-44a3-b22c-f5c43d52102d`. It again terminally failed at the
 completion-metadata boundary with no Artifact; the payload was cleaned before
 retention. No further Task is created under the stop rule.
+
+After that bounded failure, the v3 diagnostic image
+`infinity-agents-worker:2026.09.13-r6-diagnostics` (digest
+`sha256:ae0b3e18a61f1d0ba1de56204f18d5a359b45021cf232cb889316735b6bbfc27`)
+was transferred to and deployed on both Windows Workers. One fresh scoped
+public-data Task `b73a3306-590d-442f-a76e-55f0008a9a86` succeeded with sole
+Attempt `5352cdfb-4efa-4948-91b7-9e2642655631` and exactly one published
+Artifact. D1 recorded 9,625 bytes and SHA-256
+`7c2e955b6e6a18abd4fce48fa82b0edcd339eef2be9a19b6665ae44401db5ece`; an
+authenticated UI download independently matched both values. This validates
+the controlled public-data path, but does not replace the failed
+evaluated-match Task. No further Task, retry, flag change, Literature Watcher,
+or Kimi call was made.
 
 An offline-only follow-on then hardened browser auth and Discovery persistence
 boundaries for D1/R2 write failures. `npm run check`, the full Edge suite

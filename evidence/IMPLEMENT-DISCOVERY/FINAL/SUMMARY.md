@@ -1,7 +1,9 @@
 # Paper Discovery + Data Collections — final summary
 
-Status: BLOCKED — the D0-D14 implementation and rollout are evidenced, but the
-required live execution gates are not complete and no final pass is claimed.
+Status: BLOCKED — the D0-D14 implementation and rollout are evidenced, and a
+controlled r6 public-data Task passed the Claude/Artifact/download gate, but
+the evaluated-match Artifact gate and later Literature/live-model gates remain
+open; no overall final pass is claimed.
 The authorized live gate materialized exactly one Task and passed the Redis
 poll-fallback check, but the selected Task exhausted three Worker leases
 without a Claude terminal event or Artifact. Literature and live-model gates
@@ -33,6 +35,18 @@ and exercised by one final distinct match; that Task again failed at the same
 boundary with no Artifact, so this remains a blocked live result rather than a
 false-positive or credential finding.
 
+The v3 diagnostic image was then deployed to both Windows Workers as
+`infinity-agents-worker:2026.09.13-r6-diagnostics`, digest
+`sha256:ae0b3e18a61f1d0ba1de56204f18d5a359b45021cf232cb889316735b6bbfc27`.
+One fresh scoped public-data Task
+`b73a3306-590d-442f-a76e-55f0008a9a86` succeeded with sole Attempt
+`5352cdfb-4efa-4948-91b7-9e2642655631` and exactly one published Artifact.
+D1 recorded `result.zip` at 9,625 bytes with SHA-256
+`7c2e955b6e6a18abd4fce48fa82b0edcd339eef2be9a19b6665ae44401db5ece`; an
+authenticated UI download independently matched both values. This is a
+controlled public-data gate pass, not a replacement for the failed
+evaluated-match Task.
+
 Delivered:
 
 - additive D1 Discovery catalog and fenced Processor leases;
@@ -54,13 +68,14 @@ Delivered:
   Version `9941f714-eee6-46bc-8163-968107d8874f`.
 
 The current Edge vars intentionally keep `DISCOVERY_AUTO_EXECUTE=false` and
-`DISCOVERY_LITERATURE_ENABLED=false`; only the four explicitly selected,
-distinct live test Tasks exist, with no duplicate Task or fabricated Artifact.
+`DISCOVERY_LITERATURE_ENABLED=false`; the four explicitly selected Discovery
+Tasks plus one scoped public-data diagnostic Task are retained, with no
+duplicate Task or fabricated Artifact.
 Remote D1 migrations 0025-0027 are applied, and the final migration listing is
 clean. The current Edge deployment is
 `9d898d5d-9753-4e14-bf0f-1fb25c829127`. Both isolated Windows Workers are
-running with restart count 0 on the compatible r5 image digest
-`sha256:0a9c5ad4eecab27fd5f9ccedd85f5b81992a821796134409e01714041e588ce2`.
+running with restart count 0 on the diagnostic r6 image digest
+`sha256:ae0b3e18a61f1d0ba1de56204f18d5a359b45021cf232cb889316735b6bbfc27`.
 The isolated Windows Discovery Processor is running with restart count 0 and digest
 `sha256:2bb2a1c1171e28e646006d185a2fc9bab3fb190b3aa1b0778e04194087147496`.
 
@@ -74,13 +89,15 @@ reinterpret the blocked Task result; see
 The fresh status-only Windows container inspection is recorded in
 `D14/final-regression/windows-processor-status-20260913.md`.
 
-The four selected live Tasks were retained without duplicates. The follow-up
+The four selected live Discovery Tasks and one scoped diagnostic Task were
+retained without duplicates. The follow-up
 Task was visible in Task Center and terminally failed after three Attempts
 once normal D1 writes recovered; it has no Artifact and no duplicate Task was
 created. The final compatible r5 validation Task also terminally failed with no
 Artifact after the image was synchronized; its payload was cleaned before
-retention, so the exact scanner match remains unproven and no further Task is
-created under the stop rule.
+retention, so the exact scanner match remains unproven. The later r6
+public-data diagnostic Task succeeded and its authenticated download matched
+the D1 size and SHA-256; no further Task is created under the stop rule.
 An existing published Task's authenticated download was independently verified
 at 1,234,445 bytes with SHA-256
 `1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c`.

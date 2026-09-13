@@ -1,7 +1,8 @@
 Known limitations and deliberate gates:
 
-1. Auto Task execution is disabled (`DISCOVERY_AUTO_EXECUTE=false`) after one
-   explicitly selected live Task was materialized. The Task Center/idempotency
+1. Auto Task execution is disabled (`DISCOVERY_AUTO_EXECUTE=false`) after four
+   explicitly selected Discovery Tasks and one scoped diagnostic Task were
+   materialized. The Task Center/idempotency
    and Redis recovery checks passed, but three real Worker Claims/Attempts
    expired before a Claude terminal event or Artifact; successful Worker
    execution and selected-Task Artifact/download acceptance remain open. A
@@ -9,7 +10,9 @@ Known limitations and deliberate gates:
    path. Its first Attempt could not be finalized while the D1 write path was
    unavailable; after availability returned, the normal scheduler ran the
    existing Task through three Attempts and it terminally failed with no
-   Artifact.
+   Artifact. The later scoped r6 public-data diagnostic Task completed with one
+   published Artifact and an authenticated download whose size and SHA-256
+   matched D1, but it does not replace the failed evaluated-match Task.
 2. Literature watcher is implemented but disabled
    (`DISCOVERY_LITERATURE_ENABLED=false`); two live cron rounds were not run.
 3. The production paper profile smoke used the deterministic compiler. The
@@ -51,6 +54,7 @@ Known limitations and deliberate gates:
    strings, rejects duplicate keys, and preserves true credential-shaped
    rejection. It was synchronized to the compatible r5 image and exercised by
    one final distinct live Task, which again failed with no Artifact. The exact
-   payload remains unavailable, and no further Task is created under the stop
-   rule. See
+   payload remains unavailable. A subsequent v3 diagnostic r6 image passed one
+   controlled public-data Task with a single Artifact and matching download;
+   no further Task is created under the stop rule. See
    `D14/final-regression/artifact-scanner-repair-20260913.md`.

@@ -11,6 +11,11 @@ materialized exactly once, the Redis fallback passed, but all three Worker
 Attempts expired without a Claude terminal event or Artifact. Literature and
 live-model configuration changes were not executed.
 
+A later controlled public-data diagnostic Task on the deployed v3 scanner
+completed with one published Artifact and an authenticated download whose
+size and SHA-256 matched D1. The evaluated-match Discovery Task still has no
+Artifact, so this controlled pass does not close the evaluated-match gate.
+
 Follow-up status (2026-09-13): a second, distinct match was selected exactly
 once after the Worker scanner/lease fixes. Its Task first encountered the D1
 write-side outage; after the user-confirmed availability reset, normal
@@ -33,6 +38,15 @@ then synchronized to the compatible r5 Worker image and exercised by one final
 distinct evaluated match; it again ended with the same sanitized error and no
 Artifact. The exact payload remains unavailable, so the live result does not
 establish a true credential finding or a remaining false-positive form.
+
+The follow-on v3 diagnostic image was deployed as
+`infinity-agents-worker:2026.09.13-r6-diagnostics`, digest
+`sha256:ae0b3e18a61f1d0ba1de56204f18d5a359b45021cf232cb889316735b6bbfc27`.
+One fresh scoped public-data Task succeeded with exactly one published
+Artifact at 9,625 bytes and SHA-256
+`7c2e955b6e6a18abd4fce48fa82b0edcd339eef2be9a19b6665ae44401db5ece`; an
+authenticated UI download independently matched both values. No further Task
+is created under the bounded stop rule.
 
 The preflight table below is historical: it was captured before these four
 selected matches were materialized. Their current `created_task_id` values are
@@ -62,16 +76,17 @@ operator allowlist; it must not be simulated by hand-editing D1.
 
 ## Gated-run results and gates still open
 
-1. **Task materialization: PASS with four distinct scoped runs.** The browser
+1. **Task materialization: PASS with four Discovery runs plus one diagnostic run.** The browser
    created one deterministic Task for each selected match, each exactly once
    with its own idempotency row. No duplicate Task was created for any match.
    The first Task recorded three fenced lease expiries; the second reached its
    configured three-Attempt limit after D1 write recovery and terminally
    failed without an Artifact; the third was the r4 scanner-validation Task
    and terminally failed without an Artifact; the fourth was the compatible-r5
-   validation Task and terminally failed without an Artifact. See both D14
-   live-gate records.
-2. **Existing Worker v2 execution: OPEN/BLOCKED.** The repaired r3 Workers
+   validation Task and terminally failed without an Artifact. The separately
+   scoped r6 public-data Task succeeded with one published Artifact and no
+   duplicate. See both D14 live-gate records and the scanner repair record.
+2. **Evaluated-match Worker execution: OPEN/BLOCKED; controlled public-data path PASS.** The repaired r3 Workers
    reached the second Task's accept/spec/input boundary, but the control plane
    returned renew 500s, then session 401s, and finally connect 503s after a
    narrow Worker-2 recreate. After the write path recovered, the existing Task
@@ -79,11 +94,17 @@ operator allowlist; it must not be simulated by hand-editing D1.
    credential-like-content failure and no Artifact. The r4 scanner-validation
    Task also reached the completion-metadata boundary and failed with no
    Artifact. The Edge now maps transient batches to bounded 503s and isolates
-   recovery candidates; a successful Claude/Artifact run remains unverified,
-   and no further live Task is created under the stop rule.
-3. **Artifact integrity and download: OPEN for the selected Task.** Its
-   Artifact query was empty. An existing published Task's download and SHA-256
-   control passed, but that control is not substituted for the selected Task.
+   recovery candidates; a successful Claude/Artifact run remains unverified
+   for the evaluated match, and no further live Task is created under the stop
+   rule. The later r6 controlled public-data Task passed the Claude terminal,
+   single Artifact, and download/hash checks, but it is not substituted for
+   the evaluated match.
+3. **Artifact integrity and download: OPEN for the evaluated-match Task; PASS for the r6 diagnostic Task.** The evaluated
+   Artifact query was empty. The r6 Task published exactly one Artifact at
+   9,625 bytes with SHA-256
+   `7c2e955b6e6a18abd4fce48fa82b0edcd339eef2be9a19b6665ae44401db5ece`, and
+   its authenticated download matched; that control is not substituted for
+   the evaluated-match Task.
    Any test Task/Attempt/Artifact cleanup needs explicit confirmation before
    deletion.
 4. **Redis failure and poll fallback: PASS.** Only the confirmed user-scoped
@@ -106,8 +127,11 @@ Before any gated run, snapshot the read-only preflight, current Edge version
 `9d898d5d-9753-4e14-bf0f-1fb25c829127`, current flags, Worker v2 session
 health, current Worker image/digest, and Processor digest
 `sha256:2bb2a1c1171e28e646006d185a2fc9bab3fb190b3aa1b0778e04194087147496`.
-The current local Worker image is the compatible r5 image with digest
-`sha256:0a9c5ad4eecab27fd5f9ccedd85f5b81992a821796134409e01714041e588ce2`.
+The current deployed Worker image is the diagnostic r6 image with digest
+`sha256:ae0b3e18a61f1d0ba1de56204f18d5a359b45021cf232cb889316735b6bbfc27`;
+the compatible r5 digest
+`sha256:0a9c5ad4eecab27fd5f9ccedd85f5b81992a821796134409e01714041e588ce2`
+is retained as the rollback reference.
 Use a disposable selected match/fixture only after the user authorizes the
 external effects. Keep `DISCOVERY_AUTO_EXECUTE=false` and
 `DISCOVERY_LITERATURE_ENABLED=false` as the immediate stop control; if a live
@@ -116,8 +140,9 @@ revert only the isolated Discovery Processor release. Retain the additive D1
 migrations and leave existing Worker v2, Task Center, and Redis services
 untouched.
 
-The failed BERT paper, its terminal resource, the shadow collection, and all
-four selected Task/Attempt sets are retained for traceability. They were not deleted
+The failed BERT paper, its terminal resource, the shadow collection, all four
+selected Task/Attempt sets, and the r6 diagnostic Task/Attempt are retained for
+traceability. They were not deleted
 because deletion is a destructive operation requiring confirmation at action
 time.
 
@@ -144,4 +169,6 @@ restart counts; see `D14/final-regression/windows-processor-status-20260913.md`.
 The r4 Worker image was used by the third scanner-validation Task. The second
 repair was synchronized to the compatible r5 image and used by a fourth
 validation Task, which still failed at completion metadata; its exact payload
-was cleaned before retention and no further validation Task is created.
+was cleaned before retention. The v3 diagnostic r6 image then passed one
+controlled public-data Task with a single Artifact and matching authenticated
+download/hash. No further validation Task is created.

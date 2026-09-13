@@ -1,7 +1,8 @@
 # D14 — Final regression and archive
 
 Date: 2026-09-12 (Asia/Shanghai)
-Status: BLOCKED — the follow-up D1 write-side outage left required live gates open
+Status: BLOCKED — the evaluated-match Artifact gate remains open; a
+controlled r6 public-data Task later passed the Claude/Artifact/download gate
 
 All post-audit local code regressions, frontend checks, Worker dry-run checks,
 and the 15-test Playwright suite passed. Remote migrations 0025-0027 are
@@ -48,7 +49,19 @@ the same completion-metadata boundary with no Artifact; the exact payload was
 cleaned before retention. The Edge hardening deployed as
 `9d898d5d-9753-4e14-bf0f-1fb25c829127`. No further Task is created under the
 stop rule.
-Literature and live Kimi remain open.
+Literature and live Kimi remain open. After the compatible-r5 failure, the v3
+diagnostic image `infinity-agents-worker:2026.09.13-r6-diagnostics` (digest
+`sha256:ae0b3e18a61f1d0ba1de56204f18d5a359b45021cf232cb889316735b6bbfc27`)
+was deployed to both Windows Workers, which remained running with restart
+count 0. One fresh scoped public-data Task
+`b73a3306-590d-442f-a76e-55f0008a9a86` succeeded with sole Attempt
+`5352cdfb-4efa-4948-91b7-9e2642655631` and exactly one published Artifact.
+D1 recorded 9,625 bytes and SHA-256
+`7c2e955b6e6a18abd4fce48fa82b0edcd339eef2be9a19b6665ae44401db5ece`; an
+authenticated UI download independently matched both values. This closes the
+controlled public-data Claude/Artifact/download gate, but it does not replace
+the failed evaluated-match Task. No further Task, retry, or flag change was
+made.
 
 The later offline-only auth/Discovery resilience pass is recorded in
 `auth-discovery-hardening-20260913.md`. It passed the TypeScript check, the
