@@ -231,3 +231,10 @@ subsequent SSH status probes timed out. The r7 image was not loaded on
 Windows, neither Worker was recreated, and no new live Task was created. The
 deployed state therefore remains the r6 diagnostic image and the
 evaluated-match Claude/Artifact gate remains blocked.
+
+The latest bounded SFTP listings reconcile the remote staging state as two
+files only: the 8 MiB piece above, plus the earlier
+`infinity-agents-worker-r7-piece-000` partial file at `8616960` bytes. No
+additional `part-001` through `part-048` files, complete archive, or Docker
+load was observed. Missing-piece transfer remains stopped by the external
+safety boundary; no existing staging file was deleted or overwritten.
