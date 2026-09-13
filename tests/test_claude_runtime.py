@@ -62,6 +62,10 @@ def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch)
     assert "Save every deliverable" in prompt
     assert "Never include provider configuration" in prompt
     assert "authorization data" in prompt
+    assert '"inputs": {"dataset": "input/<relative file>"}' in prompt
+    assert '"outputs": {"report": "report/summary.md"}' in prompt
+    assert "invent other top-level fields" in prompt
+    assert "never serialize a transcript into the summary" in prompt
     assert "attempt-token" not in args
     assert kwargs["env"]["ANTHROPIC_AUTH_TOKEN"] == "attempt-token"
     assert kwargs["env"].get("ANTHROPIC_API_KEY") is None

@@ -153,6 +153,32 @@ passwords, secrets, authorization data, or copied command output. Use null or
 an explicit non-secret status such as "not applicable" when a metadata value
 does not apply.
 
+Use only this completion metadata contract. All fields are optional, but do not
+invent other top-level fields:
+{{
+  "task_id": "<task identifier>",
+  "task_spec_id": "<task-spec identifier>",
+  "dataset_snapshot_id": "<dataset snapshot identifier>",
+  "title": "<task title>",
+  "analysis_type": "<analysis type>",
+  "status": "completed",
+  "inputs": {{"dataset": "input/<relative file>"}},
+  "outputs": {{"report": "report/summary.md"}},
+  "summary": {{
+    "method": "<short scientific method>",
+    "n_rows": 0,
+    "validated": true
+  }}
+}}
+The permitted summary text fields are conclusion, limitations, method, notes,
+observations, result, summary, text, and verification. Numeric summary fields
+are metrics only (for example n_rows, n_samples, accuracy, rmse, or p_value),
+and validated/reproducible are the only boolean summary fields. The inputs and
+outputs values must be relative paths to files under the output/input trees.
+Do not put goals, errors, traces, environment details, tool output, provider
+responses, or credential-labelled values in this record. Omit a field when it
+does not apply; never serialize a transcript into the summary.
+
 FAILURE RULES
 - Maximum tool calls: {max_tool_calls}.
 - Maximum retries per command: 3.

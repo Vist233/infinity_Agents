@@ -11,6 +11,7 @@ import hashlib
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import socket
@@ -25,7 +26,7 @@ from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger(__name__)
 
-ARTIFACT_SCANNER_VERSION = "artifact-secret-scan-v3"
+ARTIFACT_SCANNER_VERSION = "artifact-secret-scan-v4"
 MAX_SECURITY_DIAGNOSTIC_EVENTS = 64
 _security_diagnostic_events = 0
 _security_diagnostic_lock = threading.Lock()
@@ -41,6 +42,11 @@ _SECURITY_DIAGNOSTIC_CATEGORIES = frozenset({
     "invalid_utf8",
     "metadata_size",
     "root_not_object",
+    "schema_invalid",
+    "unknown_field_dropped",
+    "credential_field_redacted",
+    "schema_depth",
+    "non_finite_number",
 })
 
 
@@ -80,9 +86,73 @@ _SECRET_PATTERN_RULES = (
 _SECRET_PATTERNS = tuple(pattern for _, pattern in _SECRET_PATTERN_RULES)
 
 MAX_COMPLETION_METADATA_BYTES = 2 * 1024 * 1024
+MAX_COMPLETION_METADATA_DEPTH = 8
+MAX_COMPLETION_METADATA_FIELDS = 128
+MAX_COMPLETION_TEXT_CHARS = 8 * 1024
+MAX_COMPLETION_PATH_CHARS = 512
 _SECRET_FIELD_NAME = re.compile(
     r"(?i)(?:^|[_-])(?:api[_-]?key|token|password|secret|credential|authorization|auth|cookie)(?:$|[_-])"
 )
+_COMPLETION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,254}\Z")
+_COMPLETION_FIELD = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
+_COMPLETION_TOP_LEVEL_FIELDS = frozenset({
+    "task_id",
+    "task_spec_id",
+    "dataset_snapshot_id",
+    "title",
+    "analysis_type",
+    "status",
+    "inputs",
+    "outputs",
+    "summary",
+})
+_COMPLETION_STATUS_ALIASES = {
+    "complete": "completed",
+    "completed": "completed",
+    "done": "completed",
+    "success": "completed",
+    "succeeded": "completed",
+    "blocked": "blocked",
+    "cancelled": "cancelled",
+    "canceled": "cancelled",
+    "failed": "failed",
+    "incomplete": "incomplete",
+    "pending": "pending",
+}
+_COMPLETION_SUMMARY_TEXT_FIELDS = frozenset({
+    "conclusion",
+    "limitations",
+    "method",
+    "notes",
+    "observations",
+    "result",
+    "summary",
+    "text",
+    "verification",
+})
+_COMPLETION_SUMMARY_NUMBER_FIELDS = frozenset({
+    "accuracy",
+    "columns",
+    "f1",
+    "features",
+    "mae",
+    "mean_gc_percent",
+    "n_columns",
+    "n_features",
+    "n_rows",
+    "n_samples",
+    "num_sequences",
+    "p_value",
+    "padj",
+    "precision",
+    "r2",
+    "recall",
+    "rows",
+    "rmse",
+    "samples",
+    "total_length_bp",
+})
+_COMPLETION_SUMMARY_BOOLEAN_FIELDS = frozenset({"reproducible", "validated"})
 
 
 def _is_secret_placeholder(value: object) -> bool:
@@ -153,59 +223,247 @@ class _DuplicateCompletionMetadataKey(ValueError):
     """Internal parse marker used for safe diagnostic categorization."""
 
 
-def reject_completion_content(data: bytes, *, label: str = "agent_completion.json") -> None:
-    """Validate decoded completion metadata without scanning JSON escaping as prose.
+def _reject_completion_constant(value: str) -> object:
+    raise ValueError(f"non-finite JSON constant: {value}")
 
-    Completion metadata is the one artifact file whose structured JSON may
-    contain words such as ``token`` in a scientific summary. Parse it first so
-    harmless escaped quotes do not create a false positive, while still
-    rejecting credential-labelled fields and credential-like text in every
-    decoded string value.
-    """
 
+def _parse_completion_object(data: bytes, *, label: str) -> dict[str, object]:
+    """Parse completion JSON with bounded, duplicate-free object semantics."""
     if len(data) > MAX_COMPLETION_METADATA_BYTES:
+        _record_security_diagnostic("completion_metadata", "metadata_size")
         raise SecurityBoundaryError(f"{label} exceeds the completion metadata limit")
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
+        _record_security_diagnostic("completion_metadata", "invalid_utf8")
         raise SecurityBoundaryError(f"{label} is not valid completion metadata") from exc
 
     def object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
         result: dict[str, object] = {}
         for key, value in pairs:
             if key in result:
-                raise ValueError("duplicate completion metadata key")
+                raise _DuplicateCompletionMetadataKey("duplicate completion metadata key")
             result[key] = value
         return result
 
     try:
-        parsed = json.loads(text, object_pairs_hook=object_pairs)
+        parsed = json.loads(
+            text,
+            object_pairs_hook=object_pairs,
+            parse_constant=_reject_completion_constant,
+        )
+    except _DuplicateCompletionMetadataKey as exc:
+        _record_security_diagnostic("completion_metadata", "duplicate_key")
+        raise SecurityBoundaryError(f"{label} is not valid completion metadata") from exc
     except (TypeError, ValueError) as exc:
+        _record_security_diagnostic("completion_metadata", "invalid_json")
         raise SecurityBoundaryError(f"{label} is not valid completion metadata") from exc
     if not isinstance(parsed, dict):
+        _record_security_diagnostic("completion_metadata", "root_not_object")
         raise SecurityBoundaryError(f"{label} is not valid completion metadata")
+    return parsed
 
-    def inspect(value: object) -> None:
-        if isinstance(value, dict):
-            for key, child in value.items():
-                if _SECRET_FIELD_NAME.search(str(key)) and not _is_secret_placeholder(child):
-                    raise SecurityBoundaryError(f"{label} contains credential-like content")
-                inspect(child)
-        elif isinstance(value, list):
-            for child in value:
-                inspect(child)
-        elif isinstance(value, str):
-            reject_secret_content(value.encode("utf-8"), label=label)
+
+def _scan_decoded_completion_strings(value: object, *, label: str, depth: int = 0) -> None:
+    """Scan every decoded string, including values that will later be dropped."""
+
+    if depth > MAX_COMPLETION_METADATA_DEPTH:
+        _record_security_diagnostic("completion_metadata", "schema_depth")
+        raise SecurityBoundaryError(f"{label} is not valid completion metadata")
+    if isinstance(value, dict):
+        for child in value.values():
+            _scan_decoded_completion_strings(child, label=label, depth=depth + 1)
+    elif isinstance(value, list):
+        for child in value:
+            _scan_decoded_completion_strings(child, label=label, depth=depth + 1)
+    elif isinstance(value, str):
+        reject_secret_content(
+            value.encode("utf-8"),
+            label=label,
+            diagnostic_rule="completion_metadata",
+        )
+
+
+def _reject_completion_credential_fields(value: object, *, label: str, depth: int = 0) -> None:
+    """Reject credential-labelled fields in the strict validation path."""
+
+    if depth > MAX_COMPLETION_METADATA_DEPTH:
+        _record_security_diagnostic("completion_metadata", "schema_depth")
+        raise SecurityBoundaryError(f"{label} is not valid completion metadata")
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if _SECRET_FIELD_NAME.search(str(key)) and not _is_secret_placeholder(child):
+                _record_security_diagnostic("completion_metadata", "credential_field")
+                raise SecurityBoundaryError(f"{label} contains credential-like content")
+            _reject_completion_credential_fields(child, label=label, depth=depth + 1)
+    elif isinstance(value, list):
+        for child in value:
+            _reject_completion_credential_fields(child, label=label, depth=depth + 1)
+
+
+def reject_completion_content(data: bytes, *, label: str = "agent_completion.json") -> None:
+    """Validate decoded completion metadata without scanning JSON escaping as prose."""
+
+    parsed = _parse_completion_object(data, label=label)
 
     try:
         # This catches secrets in summaries after JSON escapes have been
         # decoded, and the structured walk above catches credential-labelled
         # fields whose key and value are separated by JSON punctuation.
-        inspect(parsed)
+        _scan_decoded_completion_strings(parsed, label=label)
+        _reject_completion_credential_fields(parsed, label=label)
     except SecurityBoundaryError:
         # Preserve the stable top-level label used by the Worker failure
         # message while keeping the detailed cause internal.
         raise SecurityBoundaryError(f"{label} contains credential-like content")
+
+
+def _completion_invalid(label: str, category: str = "schema_invalid") -> SecurityBoundaryError:
+    _record_security_diagnostic("completion_metadata", category)
+    return SecurityBoundaryError(f"{label} is not valid completion metadata")
+
+
+def _completion_text(value: object, *, label: str, maximum: int = MAX_COMPLETION_TEXT_CHARS) -> str:
+    if not isinstance(value, str):
+        raise _completion_invalid(label)
+    text = value.strip()
+    if len(text) > maximum:
+        raise _completion_invalid(label)
+    reject_secret_content(text.encode("utf-8"), label=label, diagnostic_rule="completion_metadata")
+    return text
+
+
+def _completion_id(value: object, *, label: str) -> str:
+    text = _completion_text(value, label=label, maximum=255)
+    if not _COMPLETION_ID.fullmatch(text):
+        raise _completion_invalid(label)
+    return text
+
+
+def _redact_completion_credential_field(value: object, *, label: str) -> None:
+    """Drop an explicitly empty credential field; reject any other value."""
+
+    if _is_secret_placeholder(value):
+        _record_security_diagnostic("completion_metadata", "credential_field_redacted")
+        return
+    _scan_decoded_completion_strings(value, label=label)
+    _record_security_diagnostic("completion_metadata", "credential_field")
+    raise SecurityBoundaryError(f"{label} contains credential-like content")
+
+
+def _completion_path_map(value: object, *, label: str) -> dict[str, str]:
+    if not isinstance(value, dict) or len(value) > MAX_COMPLETION_METADATA_FIELDS:
+        raise _completion_invalid(label)
+    result: dict[str, str] = {}
+    for key, child in value.items():
+        if not isinstance(key, str) or not _COMPLETION_FIELD.fullmatch(key):
+            raise _completion_invalid(label)
+        if _SECRET_FIELD_NAME.search(key):
+            _redact_completion_credential_field(child, label=label)
+            continue
+        if not isinstance(child, str) or len(child) > MAX_COMPLETION_PATH_CHARS:
+            raise _completion_invalid(label)
+        try:
+            normalized = safe_relative_path(child)
+        except SecurityBoundaryError as exc:
+            raise _completion_invalid(label) from exc
+        result[key] = normalized
+    return result
+
+
+def _completion_number(value: object, *, label: str) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(float(value)) or abs(float(value)) > 1e15:
+        _record_security_diagnostic("completion_metadata", "non_finite_number")
+        return None
+    return value
+
+
+def _completion_summary(value: object, *, label: str) -> dict[str, object]:
+    if isinstance(value, str):
+        return {"text": _completion_text(value, label=label)}
+    if not isinstance(value, dict) or len(value) > MAX_COMPLETION_METADATA_FIELDS:
+        raise _completion_invalid(label)
+    result: dict[str, object] = {}
+    for key, child in value.items():
+        if not isinstance(key, str) or not _COMPLETION_FIELD.fullmatch(key):
+            _record_security_diagnostic("completion_metadata", "unknown_field_dropped")
+            continue
+        if _SECRET_FIELD_NAME.search(key):
+            _redact_completion_credential_field(child, label=label)
+            continue
+        if key in _COMPLETION_SUMMARY_TEXT_FIELDS:
+            if isinstance(child, str):
+                result[key] = _completion_text(child, label=label)
+            else:
+                _record_security_diagnostic("completion_metadata", "unknown_field_dropped")
+        elif key in _COMPLETION_SUMMARY_NUMBER_FIELDS:
+            number = _completion_number(child, label=label)
+            if number is not None:
+                result[key] = number
+        elif key in _COMPLETION_SUMMARY_BOOLEAN_FIELDS:
+            if isinstance(child, bool):
+                result[key] = child
+        elif key == "metrics" and isinstance(child, dict):
+            metrics: dict[str, int | float] = {}
+            for metric_key, metric_value in child.items():
+                if not isinstance(metric_key, str) or not _COMPLETION_FIELD.fullmatch(metric_key):
+                    continue
+                if _SECRET_FIELD_NAME.search(metric_key):
+                    _redact_completion_credential_field(metric_value, label=label)
+                    continue
+                number = _completion_number(metric_value, label=label)
+                if number is not None:
+                    metrics[metric_key] = number
+            if metrics:
+                result[key] = metrics
+        else:
+            _record_security_diagnostic("completion_metadata", "unknown_field_dropped")
+    return result
+
+
+def canonicalize_completion_content(data: bytes, *, label: str = "agent_completion.json") -> bytes:
+    """Return stable, secret-scanned completion metadata for archive collection.
+
+    The input is parsed and fully scanned before filtering. Only the frozen
+    metadata contract is retained; unknown fields are omitted, and explicitly
+    empty credential-labelled fields are omitted after their values are
+    scanned. Non-empty credential-labelled fields are rejected. The canonical
+    JSON is deterministic so the archive validator can require the same
+    boundary on upload.
+    """
+
+    parsed = _parse_completion_object(data, label=label)
+    try:
+        _scan_decoded_completion_strings(parsed, label=label)
+        canonical: dict[str, object] = {}
+        for key, value in parsed.items():
+            if not isinstance(key, str) or key not in _COMPLETION_TOP_LEVEL_FIELDS:
+                if isinstance(key, str) and _SECRET_FIELD_NAME.search(key):
+                    _redact_completion_credential_field(value, label=label)
+                else:
+                    _record_security_diagnostic("completion_metadata", "unknown_field_dropped")
+                continue
+            if key in {"task_id", "task_spec_id", "dataset_snapshot_id"}:
+                canonical[key] = _completion_id(value, label=label)
+            elif key in {"title", "analysis_type"}:
+                canonical[key] = _completion_text(value, label=label, maximum=512 if key == "title" else 128)
+            elif key == "status":
+                status = _completion_text(value, label=label, maximum=32).lower()
+                if status not in _COMPLETION_STATUS_ALIASES:
+                    raise _completion_invalid(label)
+                canonical[key] = _COMPLETION_STATUS_ALIASES[status]
+            elif key in {"inputs", "outputs"}:
+                canonical[key] = _completion_path_map(value, label=label)
+            elif key == "summary":
+                canonical[key] = _completion_summary(value, label=label)
+        canonical_data = (json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        if len(canonical_data) > MAX_COMPLETION_METADATA_BYTES:
+            raise _completion_invalid(label, "metadata_size")
+        return canonical_data
+    except SecurityBoundaryError:
+        raise
 
 
 def reject_secret_file(
@@ -448,17 +706,19 @@ class ArtifactCollector:
             raise SecurityBoundaryError("total output size exceeds limit")
         manifest = {"version": 1, "files": [], "metadata": metadata or {}}
         archive_path.parent.mkdir(parents=True, exist_ok=True)
+        archived_total = 0
         with tempfile.NamedTemporaryFile(prefix="artifact-", suffix=".zip", dir=archive_path.parent, delete=False) as tmp:
             temporary = Path(tmp.name)
         try:
             with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 for path, relative in files:
                     check()
+                    canonical_completion: Optional[bytes] = None
                     if relative == "agent_completion.json":
                         check()
                         with path.open("rb") as source:
                             completion_data = source.read(MAX_COMPLETION_METADATA_BYTES + 1)
-                        reject_completion_content(completion_data, label=relative)
+                        canonical_completion = canonicalize_completion_content(completion_data, label=relative)
                     else:
                         reject_secret_file(path, label=relative, progress_check=check)
                     digest_hasher = hashlib.sha256()
@@ -466,15 +726,31 @@ class ArtifactCollector:
                     info = zipfile.ZipInfo(relative)
                     info.date_time = (1980, 1, 1, 0, 0, 0)
                     info.compress_type = zipfile.ZIP_DEFLATED
-                    with path.open("rb") as source, archive.open(info, "w") as destination:
-                        while True:
-                            check()
-                            chunk = source.read(1024 * 1024)
-                            if not chunk:
-                                break
-                            size += len(chunk)
-                            digest_hasher.update(chunk)
-                            destination.write(chunk)
+                    with archive.open(info, "w") as destination:
+                        if canonical_completion is not None:
+                            offset = 0
+                            while offset < len(canonical_completion):
+                                check()
+                                chunk = canonical_completion[offset:offset + 1024 * 1024]
+                                offset += len(chunk)
+                                size += len(chunk)
+                                digest_hasher.update(chunk)
+                                destination.write(chunk)
+                        else:
+                            with path.open("rb") as source:
+                                while True:
+                                    check()
+                                    chunk = source.read(1024 * 1024)
+                                    if not chunk:
+                                        break
+                                    size += len(chunk)
+                                    digest_hasher.update(chunk)
+                                    destination.write(chunk)
+                    if size > self.max_file_bytes:
+                        raise SecurityBoundaryError(f"output file exceeds size limit: {relative}")
+                    archived_total += size
+                    if archived_total > self.max_total_bytes:
+                        raise SecurityBoundaryError("total output size exceeds limit")
                     manifest["files"].append({"path": relative, "size": size, "sha256": digest_hasher.hexdigest()})
                 manifest_data = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
                 manifest_info = zipfile.ZipInfo("manifest.json")
@@ -491,4 +767,4 @@ class ArtifactCollector:
                 check()
                 checksum_hasher.update(chunk)
         checksum = checksum_hasher.hexdigest()
-        return CollectedArtifact(archive_path, manifest, checksum, len(files), total)
+        return CollectedArtifact(archive_path, manifest, checksum, len(files), archived_total)

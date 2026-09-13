@@ -3410,7 +3410,11 @@ def _validate_result_archive(path: FilePath) -> Dict[str, Any]:
     import zipfile
     import zlib
 
-    from backend.security import MAX_COMPLETION_METADATA_BYTES, reject_completion_content, reject_secret_content
+    from backend.security import (
+        MAX_COMPLETION_METADATA_BYTES,
+        canonicalize_completion_content,
+        reject_secret_content,
+    )
 
     max_files = max(1, _env_int("ARTIFACT_MAX_FILES", 5000))
     max_file_bytes = max(1, _env_int("ARTIFACT_MAX_FILE_BYTES", 512 * 1024 * 1024))
@@ -3519,7 +3523,10 @@ def _validate_result_archive(path: FilePath) -> Dict[str, Any]:
                             reject_secret_content(window, label=name)
                         overlap = window[-8192:]
                 if completion_data is not None:
-                    reject_completion_content(bytes(completion_data), label=name)
+                    completion_bytes = bytes(completion_data)
+                    canonical_completion = canonicalize_completion_content(completion_bytes, label=name)
+                    if canonical_completion != completion_bytes:
+                        raise ValueError("completion metadata is not canonical")
                 expected = declared[name]
                 if size != expected["size"] or hasher.hexdigest() != expected["sha256"]:
                     raise ValueError("artifact manifest checksum mismatch")
