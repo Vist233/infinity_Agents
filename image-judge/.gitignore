@@ -14,3 +14,4 @@ apps/worker/.wrangler/
 apps/worker/.dev.vars
 apps/desktop/build/
 apps/desktop/dist/
+apps/desktop/package/

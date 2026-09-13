@@ -29,6 +29,7 @@ fixedQuantityProg/results.csv # Exclude results from fixed prog
 .env
 .env.local
 *.env
+/env/
 venv/
 .claude/
 
@@ -59,16 +60,21 @@ htmlcov/
 .venv/
 env/
 
-# Runtime paper artifacts (generated locally)
-papers/
-workspace/
+# Runtime paper artifacts (generated locally).
+# These MUST stay root-anchored: an unanchored `papers/` also matched
+# frontend/components/papers/ and silently dropped the Papers UI from commits.
+/papers/
+/workspace/
 
-# Cloudflare Worker deployment surfaces remain exclusive to cloudflare-deploy.
-cloudflare-worker/
+# This branch owns the Cloudflare Worker source, so it must stay visible to
+# git; leaving it ignored silently drops new files from commits. Keep the
+# generated/local surfaces below ignored instead.
 .wrangler/
+.dev.vars
+.dev.vars.*
 
 # Generated desktop release bundles (uploaded by GitHub Actions).
-package/
+/package/
 
 # Local generated figures
 normal_distribution.png
