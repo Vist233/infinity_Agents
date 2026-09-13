@@ -29,9 +29,20 @@ class SecurityBoundaryError(ValueError):
     """Raised when an input crosses a local security boundary."""
 
 
+_SECRET_PLACEHOLDER_WORDS = (
+    r"(?:none|null|nil|n/?a|na|unknown|missing|unset|empty|false|no|redacted|"
+    r"absent|disabled|unavailable|not(?:[\s_-]+(?:provided|set|applicable|"
+    r"available|used|configured|required|specified|present|needed|detected|"
+    r"supplied|included)))"
+)
 _SECRET_VALUE_PLACEHOLDER = (
-    r"[\"']?(?:none|null|nil|n/?a|na|unknown|missing|unset|empty|false|no|redacted|"
-    r"not(?:[\s_-]+(?:provided|set|applicable|available|used|configured)))\b"
+    r"(?:[\"']{2}|\[\s*\]|\{\s*\}|"
+    + r"[\"']?\s*"
+    + _SECRET_PLACEHOLDER_WORDS
+    + r"\b\s*[\"']?|"
+    + r"[\"']?\s*[<({\[]\s*[\"']?\s*"
+    + _SECRET_PLACEHOLDER_WORDS
+    + r"\b\s*[\"']?\s*[>)}\]]\s*[\"']?)(?:[.,;:!?])*(?=\s|$|[>)}\]])"
 )
 
 

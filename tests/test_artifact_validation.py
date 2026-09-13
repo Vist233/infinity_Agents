@@ -96,16 +96,36 @@ def test_worker_result_archive_allows_non_secret_completion_metadata(tmp_path):
     assert metadata["file_count"] == 1
 
 
-def test_worker_result_archive_still_rejects_secret_in_completion_metadata(tmp_path):
+def test_worker_result_archive_allows_wrapped_non_secret_completion_status(tmp_path):
     output = tmp_path / "output"
     output.mkdir()
     (output / "agent_completion.json").write_text(
-        json.dumps({"summary": "token: do-not-publish-this"}),
+        json.dumps({
+            "status": "completed",
+            "summary": "No API key, token, password, or secret was used.",
+            "api_key": "<not applicable>",
+            "token": "",
+            "secret": [],
+        }),
         encoding="utf-8",
     )
 
-    with pytest.raises(SecurityBoundaryError, match="credential-like content"):
-        ArtifactCollector().collect(output, tmp_path / "result.zip")
+    collected = ArtifactCollector().collect(output, tmp_path / "result.zip")
+
+    assert collected.file_count == 1
+
+
+def test_worker_result_archive_still_rejects_secret_in_completion_metadata(tmp_path):
+    for summary in ("token: do-not-publish-this", "secret: <not applicable>evil"):
+        output = tmp_path / summary.split(":", 1)[0].replace(" ", "-")
+        output.mkdir()
+        (output / "agent_completion.json").write_text(
+            json.dumps({"summary": summary}),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(SecurityBoundaryError, match="credential-like content"):
+            ArtifactCollector().collect(output, tmp_path / f"{output.name}.zip")
 
 
 def test_worker_staging_cleanup_only_removes_stale_entries(tmp_path, monkeypatch):

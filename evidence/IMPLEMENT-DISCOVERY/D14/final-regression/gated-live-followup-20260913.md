@@ -154,6 +154,12 @@ observation only; it does not establish whether the scanner report was a
 false positive or a real credential finding. No retry, duplicate Task,
 Watcher round, Kimi call, flag change, or destructive cleanup followed it.
 
+The offline repair and its evidence boundary are recorded in
+`artifact-scanner-repair-20260913.md`. It preserves rejection of real
+credential-shaped values and only admits explicit non-secret completion
+metadata placeholders. A fresh live Task is still required to determine
+whether the Worker image now publishes one Artifact successfully.
+
 ## Minimal scoped rerun after write availability returns
 
 1. Perform read-only health/status checks and verify both r3 Workers are still

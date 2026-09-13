@@ -18,7 +18,11 @@ scheduler recovery ran the existing Task through three Attempts and it
 terminally failed with a sanitized `agent_completion.json contains
 credential-like content` error and no Artifact. The bounded details are in
 `D14/final-regression/gated-live-followup-20260913.md`; this is a blocker, not
-a passing Claude/Artifact result.
+a passing Claude/Artifact result. The retained evidence does not contain the
+failed completion payload, so the exact matching field/value is not asserted.
+The narrow offline repair is recorded in
+`D14/final-regression/artifact-scanner-repair-20260913.md` and still needs one
+fresh scoped live Task for validation.
 
 ## Read-only production preflight
 

@@ -17,7 +17,10 @@ allowed to recover normally; it reached three Attempts and terminally failed
 with the sanitized `agent_completion.json contains credential-like content`
 error and no Artifact. See
 `D14/final-regression/gated-live-followup-20260913.md`. This does not close the
-Claude/Artifact gate.
+Claude/Artifact gate. The retained evidence identifies only the output file;
+the Worker cleaned the failed Attempt tree before any raw completion payload
+was retained. The narrow offline scanner repair and prompt contract are
+recorded in `D14/final-regression/artifact-scanner-repair-20260913.md`.
 
 Delivered:
 
@@ -63,7 +66,8 @@ The fresh status-only Windows container inspection is recorded in
 The two selected live Tasks were retained without duplicates. The follow-up
 Task was visible in Task Center and terminally failed after three Attempts
 once normal D1 writes recovered; it has no Artifact and no duplicate Task was
-created.
+created. The scanner repair is offline-verified but requires one fresh
+distinct scoped Task before it can change the live disposition.
 An existing published Task's authenticated download was independently verified
 at 1,234,445 bytes with SHA-256
 `1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c`.

@@ -43,3 +43,8 @@ Known limitations and deliberate gates:
    persistence behavior during write failures and passed local regressions, but
    it was not live-deployed or validated against the selected Task. See
    `D14/final-regression/auth-discovery-hardening-20260913.md`.
+9. The post-reset scanner repair is offline-verified, but the failed
+   `agent_completion.json` payload was cleaned before retention; whether the
+   original match was a real credential or an ambiguity in free-form metadata
+   is therefore unproven. See
+   `D14/final-regression/artifact-scanner-repair-20260913.md`.

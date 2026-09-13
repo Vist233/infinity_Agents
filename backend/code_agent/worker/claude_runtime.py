@@ -146,6 +146,13 @@ PHASE PROTOCOL
 7. Write {output_dir / 'report' / 'summary.md'}.
 8. Write {output_dir / 'agent_completion.json'}.
 
+The completion JSON is a small metadata record, not a transcript. Keep it to
+task identifiers, status, relative output paths, and the scientific summary.
+Never include provider configuration, environment variables, API keys, tokens,
+passwords, secrets, authorization data, or copied command output. Use null or
+an explicit non-secret status such as "not applicable" when a metadata value
+does not apply.
+
 FAILURE RULES
 - Maximum tool calls: {max_tool_calls}.
 - Maximum retries per command: 3.

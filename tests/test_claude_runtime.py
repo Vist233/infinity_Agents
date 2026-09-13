@@ -60,6 +60,8 @@ def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch)
     assert '"goal": "Produce a reproducible result"' in (input_dir.parent / "spec" / "task_spec.json").read_text()
     assert "MISSION" in prompt
     assert "Save every deliverable" in prompt
+    assert "Never include provider configuration" in prompt
+    assert "authorization data" in prompt
     assert "attempt-token" not in args
     assert kwargs["env"]["ANTHROPIC_AUTH_TOKEN"] == "attempt-token"
     assert kwargs["env"].get("ANTHROPIC_API_KEY") is None
