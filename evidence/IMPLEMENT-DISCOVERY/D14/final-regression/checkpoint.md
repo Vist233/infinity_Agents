@@ -42,8 +42,15 @@ once as the scanner-validation Task
 `discovery-task-4a2a16cd-2f7a-4397-b06b-1a7733bac017`. Its Attempt renewed for
 about 46 minutes and then terminally failed with the sanitized
 `agent_completion.json contains credential-like content` error and no
-Artifact. The completion payload was cleaned before retention. A second
-scanner repair is now offline-verified and has not yet been deployed.
+Artifact. The completion payload was cleaned before retention. The second
+scanner repair was synchronized to the compatible r5 image
+`infinity-agents-worker:2026.09.13-r5-compat`, digest
+`sha256:0a9c5ad4eecab27fd5f9ccedd85f5b81992a821796134409e01714041e588ce2`,
+and exercised by one final distinct Task
+`discovery-task-fd2bad8e-a28e-473a-93fb-4bd0bd207790` with Attempt
+`6e176f72-043c-44a3-b22c-f5c43d52102d`. It again terminally failed at the
+completion-metadata boundary with no Artifact; the payload was cleaned before
+retention. No further Task is created under the stop rule.
 
 An offline-only follow-on then hardened browser auth and Discovery persistence
 boundaries for D1/R2 write failures. `npm run check`, the full Edge suite

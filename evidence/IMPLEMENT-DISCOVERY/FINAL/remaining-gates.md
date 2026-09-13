@@ -21,14 +21,22 @@ credential-like content` error and no Artifact. The bounded details are in
 a passing Claude/Artifact result. The retained evidence does not contain the
 failed completion payload, so the exact matching field/value is not asserted.
 The narrow offline repair is recorded in
-`D14/final-regression/artifact-scanner-repair-20260913.md` and still needs one
-fresh scoped live Task for validation.
+`D14/final-regression/artifact-scanner-repair-20260913.md`; the final
+compatible-r5 validation Task also failed at the same boundary with no
+Artifact, so this remains a blocker.
 
 The first post-repair Worker image was then exercised once with a third,
 distinct evaluated match. Its Attempt renewed normally for about 46 minutes
 but ended with the same sanitized completion-metadata error and no Artifact.
-The exact payload was cleaned before retention. A second scanner repair is now
-complete locally, but it has not been deployed or validated live.
+The exact payload was cleaned before retention. A second scanner repair was
+then synchronized to the compatible r5 Worker image and exercised by one final
+distinct evaluated match; it again ended with the same sanitized error and no
+Artifact. The exact payload remains unavailable, so the live result does not
+establish a true credential finding or a remaining false-positive form.
+
+The preflight table below is historical: it was captured before these four
+selected matches were materialized. Their current `created_task_id` values are
+not null, and no further match is selected under the bounded stop rule.
 
 ## Read-only production preflight
 
@@ -54,13 +62,15 @@ operator allowlist; it must not be simulated by hand-editing D1.
 
 ## Gated-run results and gates still open
 
-1. **Task materialization: PASS with three distinct scoped runs.** The browser
+1. **Task materialization: PASS with four distinct scoped runs.** The browser
    created one deterministic Task for each selected match, each exactly once
    with its own idempotency row. No duplicate Task was created for any match.
    The first Task recorded three fenced lease expiries; the second reached its
    configured three-Attempt limit after D1 write recovery and terminally
    failed without an Artifact; the third was the r4 scanner-validation Task
-   and terminally failed without an Artifact. See both D14 live-gate records.
+   and terminally failed without an Artifact; the fourth was the compatible-r5
+   validation Task and terminally failed without an Artifact. See both D14
+   live-gate records.
 2. **Existing Worker v2 execution: OPEN/BLOCKED.** The repaired r3 Workers
    reached the second Task's accept/spec/input boundary, but the control plane
    returned renew 500s, then session 401s, and finally connect 503s after a
@@ -69,8 +79,8 @@ operator allowlist; it must not be simulated by hand-editing D1.
    credential-like-content failure and no Artifact. The r4 scanner-validation
    Task also reached the completion-metadata boundary and failed with no
    Artifact. The Edge now maps transient batches to bounded 503s and isolates
-   recovery candidates; a successful Claude/Artifact run still requires a
-   clean terminal execution after the second scanner repair is deployed.
+   recovery candidates; a successful Claude/Artifact run remains unverified,
+   and no further live Task is created under the stop rule.
 3. **Artifact integrity and download: OPEN for the selected Task.** Its
    Artifact query was empty. An existing published Task's download and SHA-256
    control passed, but that control is not substituted for the selected Task.
@@ -96,8 +106,8 @@ Before any gated run, snapshot the read-only preflight, current Edge version
 `9d898d5d-9753-4e14-bf0f-1fb25c829127`, current flags, Worker v2 session
 health, current Worker image/digest, and Processor digest
 `sha256:2bb2a1c1171e28e646006d185a2fc9bab3fb190b3aa1b0778e04194087147496`.
-The current local Worker image is r4 with digest
-`sha256:9aa76ec21071427671311a5dc8a4bb3e9992336d4e6c0e9eca64c5efacb64b6a`.
+The current local Worker image is the compatible r5 image with digest
+`sha256:0a9c5ad4eecab27fd5f9ccedd85f5b81992a821796134409e01714041e588ce2`.
 Use a disposable selected match/fixture only after the user authorizes the
 external effects. Keep `DISCOVERY_AUTO_EXECUTE=false` and
 `DISCOVERY_LITERATURE_ENABLED=false` as the immediate stop control; if a live
@@ -107,7 +117,7 @@ migrations and leave existing Worker v2, Task Center, and Redis services
 untouched.
 
 The failed BERT paper, its terminal resource, the shadow collection, and all
-three selected Task/Attempt sets are retained for traceability. They were not deleted
+four selected Task/Attempt sets are retained for traceability. They were not deleted
 because deletion is a destructive operation requiring confirmation at action
 time.
 
@@ -131,5 +141,7 @@ live-deployed during this blocked state, so these checks do not close the
 Claude/Artifact, Literature Watcher, or live-model gates.
 The pinned Windows Processor/Worker status check separately passed with zero
 restart counts; see `D14/final-regression/windows-processor-status-20260913.md`.
-The r4 Worker image was the image used by the third scanner-validation Task;
-the second repair requires a new synchronized image before another live Task.
+The r4 Worker image was used by the third scanner-validation Task. The second
+repair was synchronized to the compatible r5 image and used by a fourth
+validation Task, which still failed at completion metadata; its exact payload
+was cleaned before retention and no further validation Task is created.

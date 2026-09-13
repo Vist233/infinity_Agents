@@ -39,9 +39,15 @@ match; it renewed normally for about 46 minutes but failed at the same
 completion-metadata boundary with no Artifact. Its payload was cleaned before
 retention. The bounded records are in
 `gated-live-followup-20260913.md` and
-`artifact-scanner-repair-20260913.md`. The Edge hardening deployed as
-`9d898d5d-9753-4e14-bf0f-1fb25c829127`; the second scanner repair is
-offline-only and still needs one synchronized live validation Task.
+`artifact-scanner-repair-20260913.md`. The second scanner repair was
+synchronized to `infinity-agents-worker:2026.09.13-r5-compat`, digest
+`sha256:0a9c5ad4eecab27fd5f9ccedd85f5b81992a821796134409e01714041e588ce2`,
+and exercised once by a fourth distinct Task
+`discovery-task-fd2bad8e-a28e-473a-93fb-4bd0bd207790`. It terminally failed at
+the same completion-metadata boundary with no Artifact; the exact payload was
+cleaned before retention. The Edge hardening deployed as
+`9d898d5d-9753-4e14-bf0f-1fb25c829127`. No further Task is created under the
+stop rule.
 Literature and live Kimi remain open.
 
 The later offline-only auth/Discovery resilience pass is recorded in

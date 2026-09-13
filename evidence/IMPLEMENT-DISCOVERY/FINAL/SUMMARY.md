@@ -27,9 +27,11 @@ distinct evaluated match. Its sole Attempt renewed normally for about 46
 minutes but terminally failed with the same sanitized
 `agent_completion.json contains credential-like content` error and no
 Artifact. The failed completion payload was cleaned before retention. A second
-offline repair now parses completion JSON before scanning decoded values and
-keeps real credential-field rejection; it has not yet been deployed or used to
-claim a live pass.
+offline repair parsed completion JSON before scanning decoded values and kept
+real credential-field rejection. It was synchronized to a compatible r5 image
+and exercised by one final distinct match; that Task again failed at the same
+boundary with no Artifact, so this remains a blocked live result rather than a
+false-positive or credential finding.
 
 Delivered:
 
@@ -52,13 +54,13 @@ Delivered:
   Version `9941f714-eee6-46bc-8163-968107d8874f`.
 
 The current Edge vars intentionally keep `DISCOVERY_AUTO_EXECUTE=false` and
-`DISCOVERY_LITERATURE_ENABLED=false`; only the three explicitly selected,
+`DISCOVERY_LITERATURE_ENABLED=false`; only the four explicitly selected,
 distinct live test Tasks exist, with no duplicate Task or fabricated Artifact.
 Remote D1 migrations 0025-0027 are applied, and the final migration listing is
 clean. The current Edge deployment is
 `9d898d5d-9753-4e14-bf0f-1fb25c829127`. Both isolated Windows Workers are
-running with restart count 0 on the local r4 image digest
-`sha256:9aa76ec21071427671311a5dc8a4bb3e9992336d4e6c0e9eca64c5efacb64b6a`.
+running with restart count 0 on the compatible r5 image digest
+`sha256:0a9c5ad4eecab27fd5f9ccedd85f5b81992a821796134409e01714041e588ce2`.
 The isolated Windows Discovery Processor is running with restart count 0 and digest
 `sha256:2bb2a1c1171e28e646006d185a2fc9bab3fb190b3aa1b0778e04194087147496`.
 
@@ -72,12 +74,13 @@ reinterpret the blocked Task result; see
 The fresh status-only Windows container inspection is recorded in
 `D14/final-regression/windows-processor-status-20260913.md`.
 
-The three selected live Tasks were retained without duplicates. The follow-up
+The four selected live Tasks were retained without duplicates. The follow-up
 Task was visible in Task Center and terminally failed after three Attempts
 once normal D1 writes recovered; it has no Artifact and no duplicate Task was
-created. The second scanner repair is offline-verified but requires one fresh
-distinct scoped Task after image synchronization before it can change the live
-disposition.
+created. The final compatible r5 validation Task also terminally failed with no
+Artifact after the image was synchronized; its payload was cleaned before
+retention, so the exact scanner match remains unproven and no further Task is
+created under the stop rule.
 An existing published Task's authenticated download was independently verified
 at 1,234,445 bytes with SHA-256
 `1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c`.

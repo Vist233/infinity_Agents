@@ -184,31 +184,39 @@ duplicate keys, and applies the same rule in the uploaded archive validator.
 Real credential-shaped values remain rejected. The second repair is offline
 only at this point and has not been deployed or used to claim a live pass.
 
+## Final r5 validation Task
+
+After the second repair was pushed, the Workers were synchronized to the
+compatible r5 image
+`infinity-agents-worker:2026.09.13-r5-compat` with digest
+`sha256:0a9c5ad4eecab27fd5f9ccedd85f5b81992a821796134409e01714041e588ce2`.
+One remaining evaluated match was selected exactly once through the
+authenticated UI: `fd2bad8e-a28e-473a-93fb-4bd0bd207790`. It materialized
+`discovery-task-fd2bad8e-a28e-473a-93fb-4bd0bd207790` with Attempt
+`6e176f72-043c-44a3-b22c-f5c43d52102d`. The Task was created at
+`2026-09-13 10:06:48` Asia/Shanghai and ended at approximately `10:10:57`
+with `task_failed` / `worker_execution_failed`, 1/3 Attempts. The UI
+displayed the sanitized `agent_completion.json contains credential-like
+content` error; D1 showed no Artifact. No retry button, duplicate Task, or
+manual status write was used. Both Workers remained running with restart count
+0 on the compatible r5 digest after the failure.
+
+The compatible r5 image passed the bounded synthetic safe/credential scanner
+check, but the live completion payload was cleaned before retention. Therefore
+the live result does not establish whether the remaining error is a true
+credential match or an uncovered false-positive form. This is the terminal
+scanner-validation outcome; no further Task is created under the stop rule.
+
 ## Minimal scoped rerun after write availability returns
 
-1. Perform read-only health/status checks and verify both r4 Workers are still
-   running with restart count 0. Do not click Create Task again.
-2. Confirm that the failed scanner-validation Task
-   `discovery-task-4a2a16cd-2f7a-4397-b06b-1a7733bac017` is terminal and that
-   no active or unreconciled Attempt remains. Do not create another Task until
-   that read-only check is complete.
-3. After the second repair is pushed and the refreshed Worker image is
-   verified, select one remaining evaluated match through the authenticated UI
-   exactly once. Capture: accept `201`, spec/method/dataset `200`, recurring
-   heartbeat/renew `200`, a Claude terminal event, Artifact start/parts/complete
-   success, and a succeeded D1 Task with exactly one published Artifact. If
-   this one validation Task fails, retain it and stop; do not click retry or
-   create another same-match Task.
-4. Download that Artifact through the authenticated UI and compare the local
-   byte count and SHA-256 with D1 metadata. Only this closes the
-   Claude/Artifact gate. If the Task terminally fails, retain it and stop
-   before creating another duplicate or same-match Task.
-5. After the Artifact gate passes, snapshot configuration, run exactly two
-   temporary Literature Watcher rounds, run the authorized Kimi JSON profile
-   without exposing the existing secret, then restore
-   `DISCOVERY_LITERATURE_ENABLED=false`, Processor model settings, and service
-   state. Verify the restored flags and health before recording the final
-   result.
+1. The synchronized r5 validation Task is terminally failed with no Artifact;
+   do not click retry, create another Task, or hand-edit D1 status.
+2. Keep `DISCOVERY_AUTO_EXECUTE=false` and
+   `DISCOVERY_LITERATURE_ENABLED=false`; Literature Watcher and live Kimi
+   gates remain deferred.
+3. If a future, separately authorized investigation is opened, begin with
+   read-only health/status checks and a new evidence boundary. It must not
+   reuse any of the four selected match IDs or their Tasks.
 
 ## Remaining gates and stop state
 

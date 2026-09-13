@@ -1,9 +1,10 @@
 # Artifact scanner repair — 2026-09-13
 
-Status: BLOCKED — the first offline repair was exercised by one fresh live
-Task, which still failed at the completion-metadata scan. A second narrow
-offline repair is now complete and still requires one fresh live Task to close
-the Claude/Artifact gate.
+Status: BLOCKED — the first offline repair and the second, image-synchronized
+repair were each exercised by one fresh live Task, and both still failed at
+the completion-metadata scan. The exact live payloads were not retained, so
+the Claude/Artifact gate remains open and no further retry is authorized by
+this evidence record.
 
 ## Evidence boundary
 
@@ -45,10 +46,10 @@ real credential-shaped rejection. The Claude runtime test asserts that the
 metadata-only contract is present in the generated prompt. The existing
 successful reference completion schema remains compatible with the collector.
 
-This repair is not a live success claim. After the branch push and Worker
-image refresh, exactly one distinct scoped Task may be created; its own Claude
-terminal event, single published Artifact, and UI download hash/size must be
-verified before any later gate is considered.
+This repair was not treated as a live success claim. After the branch push and
+Worker image refresh, one distinct scoped Task was created; its own Claude
+terminal event and Artifact gate were required for acceptance, but the Task
+failed and is retained below. No later gate was started.
 
 ## Post-repair live validation and confirmed scanner mechanism
 
@@ -84,5 +85,35 @@ the same decoded check after upload, preserving defense in depth.
 The offline artifact/security regression subset now passes 39 tests, including
 escaped safe summaries, explicit empty credential-labelled fields, escaped
 credential rejection, and direct credential-field rejection. This second repair
-has not been deployed or used to claim a live pass; one additional fresh
-scoped Task is required only after the branch and Worker image are synchronized.
+was deployed to the compatible r5 Worker image below, but the live validation
+still failed with the same sanitized error and no Artifact; this record does
+not claim that the failure was a false positive or a real credential finding.
+
+## Final r5 validation Task
+
+After the second repair was pushed, the Windows Workers were synchronized to
+the uniquely tagged compatible image
+`infinity-agents-worker:2026.09.13-r5-compat`, digest
+`sha256:0a9c5ad4eecab27fd5f9ccedd85f5b81992a821796134409e01714041e588ce2`.
+The image records scanner source revision `0cd4e6f` and r4 base digest
+`sha256:9aa76ec21071427671311a5dc8a4bb3e9992336d4e6c0e9eca64c5efacb64b6a`;
+the compatibility base was retained because the running Workers require the
+pre-existing DNS allowlist runtime change.
+
+One remaining evaluated match was selected exactly once through the
+authenticated UI: `fd2bad8e-a28e-473a-93fb-4bd0bd207790`. It materialized
+Task `discovery-task-fd2bad8e-a28e-473a-93fb-4bd0bd207790` with Attempt
+`6e176f72-043c-44a3-b22c-f5c43d52102d`. The Task was created at
+`2026-09-13 10:06:48` Asia/Shanghai and reached `task_failed` at approximately
+`10:10:57`, with 1/3 Attempts. The authenticated UI displayed the sanitized
+error `agent_completion.json contains credential-like content`; D1 showed
+`failed`, a `task_failed` event, and `result_artifact_id=null`. No Artifact
+was published, no retry was clicked, and no duplicate Task was created.
+
+The compatible r5 image passed a network-free synthetic check that accepts the
+escaped safe placeholder case and rejects a credential-labelled value. The
+live Task nonetheless failed at the same boundary. Because the Worker deletes
+the Attempt tree before retention, the payload and exact matching field/value
+remain unavailable. Under the bounded stop rule, this is the terminal
+scanner-validation result: the branch and image are synchronized, but the live
+Claude/Artifact gate is still BLOCKED and no additional Task is created.

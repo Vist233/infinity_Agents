@@ -47,8 +47,10 @@ Known limitations and deliberate gates:
    Task, which again failed at `agent_completion.json` with no Artifact. Its
    payload was cleaned before retention; whether either live match contained a
    real credential or an ambiguity in free-form metadata is therefore
-   unproven. A second offline repair now parses the JSON before scanning
-   decoded strings, rejects duplicate keys, and preserves true
-   credential-shaped rejection. It still requires one fresh distinct live Task
-   after image synchronization. See
+   unproven. A second repair now parses the JSON before scanning decoded
+   strings, rejects duplicate keys, and preserves true credential-shaped
+   rejection. It was synchronized to the compatible r5 image and exercised by
+   one final distinct live Task, which again failed with no Artifact. The exact
+   payload remains unavailable, and no further Task is created under the stop
+   rule. See
    `D14/final-regression/artifact-scanner-repair-20260913.md`.
