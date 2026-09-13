@@ -218,8 +218,16 @@ embedded security/runtime hashes
 An in-image synthetic check accepted the escaped non-secret placeholder and
 rejected a credential-like value without printing payloads.
 
-The image archive was saved and the private-host transfer was stopped by the
-external safety boundary requiring explicit authorization for that payload.
-The r7 image was not loaded on Windows, neither Worker was recreated, and no
-new live Task was created. The deployed state therefore remains the r6
-diagnostic image and the evaluated-match Claude/Artifact gate remains blocked.
+The image archive was saved at
+`/private/tmp/infinity-agents-worker-r7-canonical-986de061.tar` with
+`406582272` bytes and SHA-256
+`bdd3073f097da34d3226ea1f2d9b6182d0b5fa1bf9ede54412d4b2950a623774`.
+The first bounded SFTP session disconnected after creating only
+`C:/Users/86138/InfinityAgentsWorkers/infinity-agents-worker-r7-8m-piece-part-000`
+with `8388608` bytes; no complete remote archive or Docker load exists. The
+next private-image transfer was stopped by the external safety boundary, and
+the alternative disposable repository-sync container exited with code 128;
+subsequent SSH status probes timed out. The r7 image was not loaded on
+Windows, neither Worker was recreated, and no new live Task was created. The
+deployed state therefore remains the r6 diagnostic image and the
+evaluated-match Claude/Artifact gate remains blocked.
