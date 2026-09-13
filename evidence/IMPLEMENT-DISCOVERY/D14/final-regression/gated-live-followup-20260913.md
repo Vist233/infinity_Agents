@@ -1,8 +1,10 @@
 # D12/D14 authorized live-gate follow-up — 2026-09-13
 
-Status: BLOCKED BY OBSERVED D1/Cloudflare WRITE UNAVAILABILITY. This follow-up
-did not produce a successful Claude/Artifact result and must not be counted as
-a passing production gate.
+Status: BLOCKED — this follow-up did not produce a successful Claude/Artifact
+result and must not be counted as a passing production gate. The earlier D1
+write-side outage later recovered enough for normal scheduler activity, but
+the one existing Task then terminally failed after three fenced Attempts and
+still has no Artifact.
 
 ## Scoped Task and duplicate control
 
@@ -124,6 +126,34 @@ zero `WORKER_AUTH_INVALID`, `WORKER_SESSION_INVALID`,
 change was attempted. This confirms that a successful read probe alone did
 not restore the write-side gate; the task rerun remains deferred.
 
+## Post-reset bounded recovery and terminal Task outcome
+
+After the user confirmed that the availability window had reset, one bounded
+status-only observation of the Workers' normal control-plane traffic showed a
+successful `/connect` 2xx response, recurring heartbeat 2xx responses, and
+renew 2xx responses, with zero `WORKER_AUTH_INVALID`,
+`WORKER_SESSION_INVALID`, `WORKER_SESSION_MISMATCH`,
+`WORKER_ALREADY_CONNECTED`, or `WORKER_POOL_UNAVAILABLE` labels. This was the
+write-recovery decision point; no hand-authored D1 status SQL was used.
+
+The normal scheduler then processed the existing Task; no new Task was
+created and the authenticated UI retry action was not clicked. The Task
+reached its configured maximum of three Attempts and terminally failed:
+
+- first Attempt: `10d1e7f9-7a3e-410b-a182-cba93dda797c`;
+- second Attempt: `b21649d0-7752-427b-8f00-052903212540`;
+- third Attempt: `6fd6f9e9-5c86-4be0-bdd8-937b7b99aac3`;
+- terminal event: `task_failed`, error code `worker_execution_failed`;
+- authenticated Task Center error: `agent_completion.json contains
+  credential-like content`;
+- final state: failed, 3/3 Attempts, no available Artifact.
+
+The Task Center recorded the terminal failure at approximately
+`2026-09-13 08:06:37` Asia/Shanghai. This is a sanitized status/error
+observation only; it does not establish whether the scanner report was a
+false positive or a real credential finding. No retry, duplicate Task,
+Watcher round, Kimi call, flag change, or destructive cleanup followed it.
+
 ## Minimal scoped rerun after write availability returns
 
 1. Perform read-only health/status checks and verify both r3 Workers are still
@@ -155,7 +185,9 @@ and no Processor model flag or secret was changed. The live Kimi JSON profile
 was not run. The current task and all prior test rows were retained; no
 destructive cleanup was performed.
 
-After D1/Cloudflare write availability returns, the next action is a
-read-only status check followed by normal scheduler recovery. The existing
-Task must reach a terminal/requeued state before any additional Task creation;
-the same match must never be clicked again.
+The bounded write-recovery observation succeeded, but the existing Task
+terminally failed at its three-Attempt limit without an Artifact. The selected
+match must not be clicked again and no duplicate Task may be created. The
+Claude/Artifact gate, Literature Watcher gate, and live Kimi gate therefore
+remain open; `DISCOVERY_AUTO_EXECUTE=false` and
+`DISCOVERY_LITERATURE_ENABLED=false` remain the stop controls.

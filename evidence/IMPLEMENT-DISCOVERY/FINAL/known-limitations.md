@@ -6,8 +6,10 @@ Known limitations and deliberate gates:
    expired before a Claude terminal event or Artifact; successful Worker
    execution and selected-Task Artifact/download acceptance remain open. A
    second distinct scoped Task was later selected once for the repaired Worker
-   path, but its first Attempt could not be finalized after the D1 write path
-   became unavailable.
+   path. Its first Attempt could not be finalized while the D1 write path was
+   unavailable; after availability returned, the normal scheduler ran the
+   existing Task through three Attempts and it terminally failed with no
+   Artifact.
 2. Literature watcher is implemented but disabled
    (`DISCOVERY_LITERATURE_ENABLED=false`); two live cron rounds were not run.
 3. The production paper profile smoke used the deterministic compiler. The
@@ -30,14 +32,14 @@ Known limitations and deliberate gates:
    The historical failed paper and successful shadow collection remain in the
    authenticated test account until deletion is explicitly confirmed.
 7. During the 2026-09-13 follow-up, D1 reads remained available but the
-   control-plane write path returned bounded 503s to both repaired Worker
-   connects after the second Task's lease expired. The exact Cloudflare
-   provider/quota cause was not asserted from redacted status-only evidence.
-   The Edge now isolates transient session/renew/recovery batches, but the
-   stranded Task must be reconciled by the normal scheduler after write
-   availability returns; no manual D1 status write was made.
+   control-plane write path initially returned bounded 503s to both repaired
+   Worker connects after the second Task's lease expired. The exact
+   Cloudflare provider/quota cause was not asserted from redacted status-only
+   evidence. After the user-confirmed availability reset, normal scheduler
+   recovery ran that existing Task through three Attempts; it terminally
+   failed with the sanitized `agent_completion.json contains credential-like
+   content` error and no Artifact. No manual D1 status write was made.
 8. A subsequent offline-only hardening pass covers browser auth and Discovery
    persistence behavior during write failures and passed local regressions, but
-   it was not live-deployed or validated against the stranded Task while the
-   D1 write gate remained blocked. See
+   it was not live-deployed or validated against the selected Task. See
    `D14/final-regression/auth-discovery-hardening-20260913.md`.

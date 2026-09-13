@@ -12,9 +12,11 @@ Attempts expired without a Claude terminal event or Artifact. Literature and
 live-model configuration changes were not executed.
 
 Follow-up status (2026-09-13): a second, distinct match was selected exactly
-once after the Worker scanner/lease fixes. Its Task reached one claimed
-Attempt, but the D1 write path then returned 503 to both repaired Worker
-connects, leaving that expired Attempt unfinalized. The bounded details are in
+once after the Worker scanner/lease fixes. Its Task first encountered the D1
+write-side outage; after the user-confirmed availability reset, normal
+scheduler recovery ran the existing Task through three Attempts and it
+terminally failed with a sanitized `agent_completion.json contains
+credential-like content` error and no Artifact. The bounded details are in
 `D14/final-regression/gated-live-followup-20260913.md`; this is a blocker, not
 a passing Claude/Artifact result.
 
@@ -46,14 +48,17 @@ operator allowlist; it must not be simulated by hand-editing D1.
    created one deterministic Task for the original selected match and one
    deterministic Task for the later distinct match, each once with its own
    idempotency row. No duplicate Task was created for either match. The first
-   Task recorded three fenced lease expiries; the second is still blocked by
-   the D1 write-side outage. See both D14 live-gate records.
+   Task recorded three fenced lease expiries; the second reached its
+   configured three-Attempt limit after D1 write recovery and terminally
+   failed without an Artifact. See both D14 live-gate records.
 2. **Existing Worker v2 execution: OPEN/BLOCKED.** The repaired r3 Workers
    reached the second Task's accept/spec/input boundary, but the control plane
    returned renew 500s, then session 401s, and finally connect 503s after a
-   narrow Worker-2 recreate. The Edge now maps transient batches to bounded
-   503s and isolates recovery candidates; a successful Claude/Artifact run
-   still requires D1 write availability.
+   narrow Worker-2 recreate. After the write path recovered, the existing Task
+   was retried by normal scheduler fencing but ended with the sanitized
+   credential-like-content failure and no Artifact. The Edge now maps
+   transient batches to bounded 503s and isolates recovery candidates; a
+   successful Claude/Artifact run still requires a clean terminal execution.
 3. **Artifact integrity and download: OPEN for the selected Task.** Its
    Artifact query was empty. An existing published Task's download and SHA-256
    control passed, but that control is not substituted for the selected Task.

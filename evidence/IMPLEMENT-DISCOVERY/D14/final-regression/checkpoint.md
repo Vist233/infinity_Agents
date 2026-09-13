@@ -24,11 +24,14 @@ succeeded attempt.
 
 Follow-up on 2026-09-13: after the Worker scanner and lease changes, a distinct
 evaluated match was selected once and materialized as
-`discovery-task-bd74d122-d7fe-4479-90fd-c1bbc12d262f`. Its sole Attempt reached
-the accept/spec/input boundary but then the D1 write path became unavailable;
-the lease expired without an Artifact. Both Windows Workers were rebuilt on
-the local r3 digest with restart count 0, Worker-2 was recreated only after
-that lease expired, and the Edge was deployed as
+`discovery-task-bd74d122-d7fe-4479-90fd-c1bbc12d262f`. Its first Attempt
+reached the accept/spec/input boundary but then the D1 write path became
+unavailable. After the user-confirmed availability reset, normal scheduler
+recovery ran this existing Task through three Attempts; it terminally failed
+with the sanitized `agent_completion.json contains credential-like content`
+error and no Artifact. Both Windows Workers were rebuilt on the local r3
+digest with restart count 0, Worker-2 was recreated only after the initial
+lease expired, and the Edge was deployed as
 `9d898d5d-9753-4e14-bf0f-1fb25c829127`. Literature and live Kimi gates were
 not run, and the existing flags/services remain in their safe state. See
 `gated-live-followup-20260913.md`.

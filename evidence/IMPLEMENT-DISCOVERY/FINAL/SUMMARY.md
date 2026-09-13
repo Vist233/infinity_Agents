@@ -12,7 +12,10 @@ The authorized follow-up selected one distinct match exactly once after the
 scanner/lease hardening. Its first Attempt reached the accept/spec/input
 boundary, then the D1 write path became unavailable: renew returned 500,
 session refresh returned 401, and both repaired Worker connects returned 503.
-The follow-up Task remains unfinalized and has no Artifact; see
+After the user-confirmed availability reset, the same existing Task was
+allowed to recover normally; it reached three Attempts and terminally failed
+with the sanitized `agent_completion.json contains credential-like content`
+error and no Artifact. See
 `D14/final-regression/gated-live-followup-20260913.md`. This does not close the
 Claude/Artifact gate.
 
@@ -57,8 +60,10 @@ reinterpret the blocked Task result; see
 The fresh status-only Windows container inspection is recorded in
 `D14/final-regression/windows-processor-status-20260913.md`.
 
-The live selected Task was visible in Task Center but failed after three
-lease-expired Attempts; it has no Artifact and no duplicate Task was created.
+The two selected live Tasks were retained without duplicates. The follow-up
+Task was visible in Task Center and terminally failed after three Attempts
+once normal D1 writes recovered; it has no Artifact and no duplicate Task was
+created.
 An existing published Task's authenticated download was independently verified
 at 1,234,445 bytes with SHA-256
 `1885153939abd104471a20e3d332285f86d39c2c8ef1efef5b9a00d5fb5f780c`.
