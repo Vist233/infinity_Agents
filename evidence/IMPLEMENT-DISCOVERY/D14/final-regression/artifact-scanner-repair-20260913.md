@@ -117,3 +117,38 @@ the Attempt tree before retention, the payload and exact matching field/value
 remain unavailable. Under the bounded stop rule, this is the terminal
 scanner-validation result: the branch and image are synchronized, but the live
 Claude/Artifact gate is still BLOCKED and no additional Task is created.
+
+## Deployed-version proof and diagnostic follow-on
+
+Before investigating the identical failure further, bounded read-only checks
+were taken on the Windows host. Both Worker containers resolved to
+`infinity-agents-worker:2026.09.13-r5-compat`; Worker-1 resolved the image to
+digest
+`sha256:0a9c5ad4eecab27fd5f9ccedd85f5b81992a821796134409e01714041e588ce2`.
+Inside the running Worker-1 container, `backend/security.py` had SHA-256
+`4ea02da5325033e30fbd605c0e23155c8b2c04bc635841eba0c9a082244a83e0` and
+`claude_runtime.py` had SHA-256
+`efb1243ec6ac9d6f6a31a18d15e5c207549a302e3fbf1b03798cfff8e6b71a83`. The
+runtime hash exactly matches the file at commit `1862a8a`; the security hash
+matches the tested working-tree file, whose only difference from the scanner
+repair at `0cd4e6f` is the pre-existing explicit DNS allowlist hunk. The
+container reports Claude Code `2.1.226`; the metadata-only and secret-exclusion
+prompt markers are present, as are the completion parser, size-bound, and
+duplicate-key markers. `backend/app.py` is not in this Worker image by design,
+so the relevant live boundary is the Worker-side `ArtifactCollector`.
+
+No Worker environment, raw log, completion payload, or secret was read. This
+proves the failed Task did run the repaired r5 Worker-side scanner and the
+`1862a8a` runtime; it does not prove whether the removed completion payload
+contained a real credential or an as-yet-uncovered false-positive form.
+
+The follow-on repair introduces scanner policy version
+`artifact-secret-scan-v3` diagnostics. Rejections emit at most 64 process-local
+warnings containing only fixed `rule` and `category` labels (for example,
+`completion_metadata`/`credential_field` or
+`completion_metadata`/`generic_secret_assignment`); values, field names,
+paths, and payloads are not logged. Local deterministic coverage now checks
+the pattern and structured-field categories, absence of rejected values from
+telemetry, and the event cap. The broad credential patterns and true-secret
+rejections are unchanged. This follow-on is not a live Task result and no new
+Task is created under the stop rule.

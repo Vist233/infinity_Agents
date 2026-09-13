@@ -16,6 +16,7 @@ import re
 import socket
 import stat
 import tempfile
+import threading
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,24 @@ from typing import Callable, Iterable, Iterator, Optional
 from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger(__name__)
+
+ARTIFACT_SCANNER_VERSION = "artifact-secret-scan-v3"
+MAX_SECURITY_DIAGNOSTIC_EVENTS = 64
+_security_diagnostic_events = 0
+_security_diagnostic_lock = threading.Lock()
+_SECURITY_DIAGNOSTIC_RULES = frozenset({"secret_pattern", "completion_metadata"})
+_SECURITY_DIAGNOSTIC_CATEGORIES = frozenset({
+    "token_shape",
+    "provider_env_assignment",
+    "generic_secret_assignment",
+    "database_url",
+    "credential_field",
+    "duplicate_key",
+    "invalid_json",
+    "invalid_utf8",
+    "metadata_size",
+    "root_not_object",
+})
 
 
 class SecurityBoundaryError(ValueError):
@@ -46,18 +65,19 @@ _SECRET_VALUE_PLACEHOLDER = (
 )
 
 
-_SECRET_PATTERNS = (
-    re.compile(r"(?:sk|pk)-[A-Za-z0-9_-]{16,}"),
-    re.compile(
+_SECRET_PATTERN_RULES = (
+    ("token_shape", re.compile(r"(?:sk|pk)-[A-Za-z0-9_-]{16,}")),
+    ("provider_env_assignment", re.compile(
         rf"(?i)\b(?:anthropic|stepfun|openai|aws|github)_[A-Z0-9_]*\s*=\s*"
         rf"(?!{_SECRET_VALUE_PLACEHOLDER})[^\s]+"
-    ),
-    re.compile(
+    )),
+    ("generic_secret_assignment", re.compile(
         rf"(?i)\b(?:api[_-]?key|token|password|secret)\s*[:=]\s*"
         rf"(?!{_SECRET_VALUE_PLACEHOLDER})[^\s]+"
-    ),
-    re.compile(r"(?i)\b(?:postgres(?:ql)?|redis|mysql|mongodb)://[^\s]+"),
+    )),
+    ("database_url", re.compile(r"(?i)\b(?:postgres(?:ql)?|redis|mysql|mongodb)://[^\s]+")),
 )
+_SECRET_PATTERNS = tuple(pattern for _, pattern in _SECRET_PATTERN_RULES)
 
 MAX_COMPLETION_METADATA_BYTES = 2 * 1024 * 1024
 _SECRET_FIELD_NAME = re.compile(
@@ -89,13 +109,48 @@ def redact_secrets(value: object, *, max_chars: int = 2000) -> str:
     return text
 
 
-def reject_secret_content(data: bytes, *, label: str = "output") -> None:
+def _record_security_diagnostic(rule: str, category: str) -> None:
+    """Emit bounded, value-free rejection telemetry for operator diagnosis."""
+
+    global _security_diagnostic_events
+    if rule not in _SECURITY_DIAGNOSTIC_RULES or category not in _SECURITY_DIAGNOSTIC_CATEGORIES:
+        return
+    with _security_diagnostic_lock:
+        if _security_diagnostic_events >= MAX_SECURITY_DIAGNOSTIC_EVENTS:
+            return
+        _security_diagnostic_events += 1
+    logger.warning(
+        "artifact security rejection scanner=%s rule=%s category=%s",
+        ARTIFACT_SCANNER_VERSION,
+        rule,
+        category,
+    )
+
+
+def _secret_pattern_category(data: bytes) -> Optional[str]:
+    sample = data[:2 * 1024 * 1024].decode("utf-8", errors="ignore")
+    for category, pattern in _SECRET_PATTERN_RULES:
+        if pattern.search(sample):
+            return category
+    return None
+
+
+def reject_secret_content(
+    data: bytes,
+    *,
+    label: str = "output",
+    diagnostic_rule: str = "secret_pattern",
+) -> None:
     """Reject a byte payload that appears to contain a long-lived secret."""
 
-    sample = data[:2 * 1024 * 1024].decode("utf-8", errors="ignore")
-    for pattern in _SECRET_PATTERNS:
-        if pattern.search(sample):
-            raise SecurityBoundaryError(f"{label} contains credential-like content")
+    category = _secret_pattern_category(data)
+    if category:
+        _record_security_diagnostic(diagnostic_rule, category)
+        raise SecurityBoundaryError(f"{label} contains credential-like content")
+
+
+class _DuplicateCompletionMetadataKey(ValueError):
+    """Internal parse marker used for safe diagnostic categorization."""
 
 
 def reject_completion_content(data: bytes, *, label: str = "agent_completion.json") -> None:

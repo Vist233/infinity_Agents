@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import zipfile
 
 import pytest
@@ -9,7 +10,13 @@ from fastapi import HTTPException
 
 from backend.app import _validate_result_archive
 from backend.app import _cleanup_worker_staging
-from backend.security import ArtifactCollector, SecurityBoundaryError
+from backend.security import (
+    ArtifactCollector,
+    MAX_SECURITY_DIAGNOSTIC_EVENTS,
+    SecurityBoundaryError,
+    reject_completion_content,
+    reject_secret_content,
+)
 
 
 def test_worker_result_archive_requires_matching_manifest(tmp_path):
@@ -180,6 +187,56 @@ def test_worker_result_archive_rejects_credential_value_in_metadata_field(tmp_pa
 
     with pytest.raises(SecurityBoundaryError, match="credential-like content"):
         ArtifactCollector().collect(output, tmp_path / "result.zip")
+
+
+def test_completion_diagnostic_identifies_pattern_without_values(caplog):
+    caplog.set_level(logging.WARNING, logger="backend.security")
+    payload = json.dumps({"summary": "token: do-not-publish-this"}).encode("utf-8")
+
+    with pytest.raises(SecurityBoundaryError, match="credential-like content"):
+        reject_completion_content(payload)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "scanner=artifact-secret-scan-v3 rule=completion_metadata category=generic_secret_assignment" in message
+        for message in messages
+    )
+    assert all("do-not-publish-this" not in message for message in messages)
+    assert all("summary" not in message for message in messages)
+
+
+def test_completion_diagnostic_identifies_credential_field_without_values(caplog):
+    caplog.set_level(logging.WARNING, logger="backend.security")
+    payload = json.dumps({"provider_api_key": "credential-value"}).encode("utf-8")
+
+    with pytest.raises(SecurityBoundaryError, match="credential-like content"):
+        reject_completion_content(payload)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "scanner=artifact-secret-scan-v3 rule=completion_metadata category=credential_field" in message
+        for message in messages
+    )
+    assert all("provider_api_key" not in message for message in messages)
+    assert all("credential-value" not in message for message in messages)
+
+
+def test_security_diagnostic_telemetry_is_bounded(monkeypatch, caplog):
+    import backend.security as security_module
+
+    monkeypatch.setattr(security_module, "_security_diagnostic_events", 0)
+    caplog.set_level(logging.WARNING, logger="backend.security")
+    for _ in range(MAX_SECURITY_DIAGNOSTIC_EVENTS + 3):
+        with pytest.raises(SecurityBoundaryError, match="credential-like content"):
+            reject_secret_content(b"token: bounded-test-value")
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "artifact security rejection" in record.getMessage()
+    ]
+    assert len(messages) == MAX_SECURITY_DIAGNOSTIC_EVENTS
+    assert all("bounded-test-value" not in message for message in messages)
 
 
 def test_worker_staging_cleanup_only_removes_stale_entries(tmp_path, monkeypatch):
