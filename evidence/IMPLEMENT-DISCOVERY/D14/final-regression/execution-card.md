@@ -4,6 +4,13 @@ Date: 2026-09-12 (Asia/Shanghai)
 Status: BLOCKED — the evaluated-match Artifact gate remains open; a
 controlled r6 public-data Task later passed the Claude/Artifact/download gate
 
+Latest state: the v4 canonicalizer repair is pushed as `3570170`; targeted
+artifact/runtime checks passed 36 tests and the full Python suite passed 389
+tests with 45 skipped. The uniquely tagged r7 image was verified locally, but
+private image transfer to the Windows host is pending explicit authorization.
+The Workers remain on r6 and no new live Task is authorized before deployment
+proof.
+
 All post-audit local code regressions, frontend checks, Worker dry-run checks,
 and the 15-test Playwright suite passed. Remote migrations 0025-0027 are
 applied, the final listing is clean, the pre-follow-up Edge version was

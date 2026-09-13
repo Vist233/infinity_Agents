@@ -48,6 +48,16 @@ Artifact at 9,625 bytes and SHA-256
 authenticated UI download independently matched both values. No further Task
 is created under the bounded stop rule.
 
+The follow-on v4 canonicalizer repair is pushed as commit `3570170`. Targeted
+artifact/runtime checks passed 36 tests and the full Python suite passed 389
+tests with 45 skipped. The uniquely tagged local image
+`infinity-agents-worker:2026.09.13-r7-canonical` was verified with digest
+`sha256:986de061fe184b6c05ddee096a830314cf731cb589d0a45d539bc9388d0b25b8`
+and scanner marker `artifact-secret-scan-v4`. Its private image transfer to
+the Windows host was stopped pending explicit authorization; neither Worker
+was recreated and no new live Task was created. The deployed Worker state
+therefore remains r6, and this repair does not close the evaluated-match gate.
+
 The preflight table below is historical: it was captured before these four
 selected matches were materialized. Their current `created_task_id` values are
 not null, and no further match is selected under the bounded stop rule.

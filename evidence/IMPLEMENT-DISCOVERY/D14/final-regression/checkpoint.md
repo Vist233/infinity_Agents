@@ -3,6 +3,13 @@ controlled r6 public-data Task later passed the Claude/Artifact/download gate.
 
 See `FINAL/` for the complete summary, deployment versions/digests, real-case
 IDs/hashes, known limitations, and rollback plan.
+
+Latest offline follow-on: commit `3570170` adds the v4 strict completion
+metadata canonicalizer and is pushed to `cf-deploy`. Targeted artifact/runtime
+checks passed 36 tests and the full Python suite passed 389 tests with 45
+skipped. The local r7 image was verified, but transfer of its private image
+payload to the Windows host is pending explicit authorization; the deployed
+Workers remain on r6 and no new live Task was created.
 The authorized live run materialized exactly one Task and exercised the
 Redis-only fallback; the Task exhausted three leases without a Claude terminal
 event or Artifact. See `gated-live-run-20260912.md` and

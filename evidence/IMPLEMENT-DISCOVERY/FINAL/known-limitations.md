@@ -58,3 +58,9 @@ Known limitations and deliberate gates:
    controlled public-data Task with a single Artifact and matching download;
    no further Task is created under the stop rule. See
    `D14/final-regression/artifact-scanner-repair-20260913.md`.
+10. The v4 completion-metadata canonicalizer is pushed as `3570170` and has
+    passed 389 Python tests (45 skipped), including targeted archive/runtime
+    coverage. A uniquely tagged r7 image was built and verified locally, but
+    its private image transfer to the Windows host is pending explicit
+    authorization. The deployed Workers therefore remain on r6, no new live
+    Task was created, and the evaluated-match gate remains open.

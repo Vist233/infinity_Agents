@@ -235,6 +235,26 @@ the failed evaluated-match Task or classify its deleted completion payload.
 No retry, duplicate Task, flag change, Literature Watcher round, Kimi call,
 or cleanup followed.
 
+## r7 v4 canonicalizer rollout preparation — not deployed
+
+Commit `3570170` is synchronized to `cf-deploy`. The Worker-side
+`agent_completion.json` path now uses a strict canonical metadata schema and
+the control-plane validator requires the uploaded file to match those
+canonical bytes. The targeted artifact/runtime checks passed 36 tests and the
+full Python suite passed 389 tests with 45 skipped. The local image
+`infinity-agents-worker:2026.09.13-r7-canonical` was built from the verified
+r6 base with digest
+`sha256:986de061fe184b6c05ddee096a830314cf731cb589d0a45d539bc9388d0b25b8`,
+revision `3570170`, and scanner marker `artifact-secret-scan-v4`. Bounded
+in-image verification matched the source hashes and passed the safe-versus-
+credential synthetic check.
+
+The private image transfer to the Windows staging directory was stopped by
+the external safety boundary because explicit authorization for that payload
+was required. The r7 image was not loaded remotely, neither Worker was
+recreated, and no evaluated-match Task was created. The live deployed image
+remains r6; this record does not claim a v4 live pass.
+
 ## Stop rule and no further reruns
 
 1. The synchronized r5 validation Task is terminally failed with no Artifact;

@@ -1,9 +1,10 @@
 # Artifact scanner repair — 2026-09-13
 
-Status: CONDITIONAL — the controlled r6 public-data validation passed the
-Claude/Artifact/download gate, but the earlier evaluated-match Task still has
-no Artifact and its exact completion payload was not retained. No further
-Discovery Task is authorized by this evidence record.
+Status: BLOCKED — the controlled r6 public-data validation passed the
+Claude/Artifact/download gate, but the evaluated-match Task still has no
+Artifact and its exact completion payload was not retained. The v4 repair is
+verified locally but not deployed; no further Discovery Task is authorized by
+this evidence record.
 
 ## Evidence boundary
 
@@ -194,3 +195,31 @@ not reinterpret either prior sanitized failure, recover their deleted
 payloads, or prove the evaluated-match Discovery result. The four selected
 Discovery Tasks and this one diagnostic Task are retained; no retry, duplicate
 Task, flag change, Literature Watcher round, Kimi call, or cleanup followed.
+
+## r7 v4 canonicalizer rollout preparation — not deployed
+
+Commit `3570170` adds a strict completion-metadata boundary. Claude receives a
+frozen top-level schema; the Worker parses and scans decoded JSON before
+archiving, drops only unknown fields and explicitly empty credential-labelled
+fields, rejects non-empty credential-labelled values, and writes deterministic
+canonical bytes. The control-plane archive validator requires uploaded
+`agent_completion.json` bytes to equal the same canonical form. Recognizable
+credential patterns remain rejected before filtering.
+
+Targeted artifact/runtime regressions passed 36 tests; the full Python suite
+passed 389 tests with 45 skipped; `py_compile` and `git diff --check` passed.
+The local image
+`infinity-agents-worker:2026.09.13-r7-canonical` has digest
+`sha256:986de061fe184b6c05ddee096a830314cf731cb589d0a45d539bc9388d0b25b8`,
+source revision `3570170`, scanner marker `artifact-secret-scan-v4`, and
+embedded security/runtime hashes
+`8304b9207b9813eab7d70b6332125bc4795a2c51318ba6e15fad6313919e529d` and
+`6a07d273a25f1f89d091704e2ec2af9c1cb68edb454a52c17e52abba1ed8201b`.
+An in-image synthetic check accepted the escaped non-secret placeholder and
+rejected a credential-like value without printing payloads.
+
+The image archive was saved and the private-host transfer was stopped by the
+external safety boundary requiring explicit authorization for that payload.
+The r7 image was not loaded on Windows, neither Worker was recreated, and no
+new live Task was created. The deployed state therefore remains the r6
+diagnostic image and the evaluated-match Claude/Artifact gate remains blocked.

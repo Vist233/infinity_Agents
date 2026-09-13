@@ -79,6 +79,15 @@ running with restart count 0 on the diagnostic r6 image digest
 The isolated Windows Discovery Processor is running with restart count 0 and digest
 `sha256:2bb2a1c1171e28e646006d185a2fc9bab3fb190b3aa1b0778e04194087147496`.
 
+The v4 canonicalizer repair is pushed as commit `3570170` and is verified
+locally by 389 passing Python tests (45 skipped), including 36 targeted
+artifact/runtime tests. A uniquely tagged local image
+`infinity-agents-worker:2026.09.13-r7-canonical` was built and verified with
+digest `sha256:986de061fe184b6c05ddee096a830314cf731cb589d0a45d539bc9388d0b25b8`
+and scanner marker `artifact-secret-scan-v4`. Transfer of that private image
+payload to the Windows host was stopped pending explicit authorization, so
+the r7 image is not deployed and the live Worker state remains r6.
+
 After the follow-up observation, an offline-only hardening pass added bounded
 auth behavior for D1 write failures and reinforced the Discovery evidence,
 task-read, immutable-source, and deletion gates. It passed the TypeScript
