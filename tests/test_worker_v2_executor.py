@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import asyncio
+import json
+import os
 from pathlib import Path
 
 import httpx
@@ -69,7 +71,8 @@ async def test_d1_executor_uploads_result_and_clears_attempt_directory(tmp_path:
     async def fake_runtime(*_args, output_dir, **_kwargs):
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=True)
-        (output / "report.md").write_text("Case 2 complete\n", encoding="utf-8")
+        (output / "report").mkdir()
+        (output / "report" / "summary.md").write_text("Case 2 complete\n", encoding="utf-8")
         yield {"type": "done", "output": "done"}
 
     monkeypatch.setattr(executor_v2, "run_claude_task", fake_runtime)
@@ -93,6 +96,82 @@ async def test_d1_executor_uploads_result_and_clears_attempt_directory(tmp_path:
     assert client.finished == []
     assert not (work_root / claim.task_id / claim.attempt_id).exists()
     assert archive is None
+
+
+def test_platform_completion_metadata_replaces_untrusted_agent_completion(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "report").mkdir()
+    (output / "report" / "summary.md").write_text("result\n", encoding="utf-8")
+    (output / "agent_completion.json").write_text('{"token":"unsafe"}', encoding="utf-8")
+    claim = ClaimedTask(
+        task_id="task-3", task_spec_id="spec-3", dataset_snapshot_id="dataset-3",
+        method_source_id=None, title="Case 3", attempt_id="attempt-3",
+        lease_token="lease-3", fencing_epoch=1, lease_expires_at=100,
+    )
+
+    executor_v2._write_platform_completion_metadata(output, claim)
+
+    assert json.loads((output / "agent_completion.json").read_text(encoding="utf-8")) == {
+        "dataset_snapshot_id": "dataset-3",
+        "outputs": {"report": "report/summary.md"},
+        "status": "completed",
+        "task_id": "task-3",
+        "task_spec_id": "spec-3",
+    }
+
+
+def test_platform_completion_metadata_requires_canonical_report(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    claim = ClaimedTask(
+        task_id="task-4", task_spec_id="spec-4", dataset_snapshot_id="dataset-4",
+        method_source_id=None, title="Case 4", attempt_id="attempt-4",
+        lease_token="lease-4", fencing_epoch=1, lease_expires_at=100,
+    )
+
+    with pytest.raises(executor_v2.SecurityBoundaryError, match="report/summary.md"):
+        executor_v2._write_platform_completion_metadata(output, claim)
+
+
+def test_platform_completion_metadata_does_not_follow_completion_symlink(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "report").mkdir()
+    (output / "report" / "summary.md").write_text("result\n", encoding="utf-8")
+    outside = tmp_path / "outside.json"
+    outside.write_text("preserve", encoding="utf-8")
+    (output / "agent_completion.json").symlink_to(outside)
+    claim = ClaimedTask(
+        task_id="task-5", task_spec_id="spec-5", dataset_snapshot_id="dataset-5",
+        method_source_id=None, title="Case 5", attempt_id="attempt-5",
+        lease_token="lease-5", fencing_epoch=1, lease_expires_at=100,
+    )
+
+    with pytest.raises(executor_v2.SecurityBoundaryError, match="must not be a link"):
+        executor_v2._write_platform_completion_metadata(output, claim)
+
+    assert outside.read_text(encoding="utf-8") == "preserve"
+
+
+def test_platform_completion_metadata_does_not_overwrite_hardlinked_completion(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "report").mkdir()
+    (output / "report" / "summary.md").write_text("result\n", encoding="utf-8")
+    outside = tmp_path / "outside.json"
+    outside.write_text("preserve", encoding="utf-8")
+    os.link(outside, output / "agent_completion.json")
+    claim = ClaimedTask(
+        task_id="task-6", task_spec_id="spec-6", dataset_snapshot_id="dataset-6",
+        method_source_id=None, title="Case 6", attempt_id="attempt-6",
+        lease_token="lease-6", fencing_epoch=1, lease_expires_at=100,
+    )
+
+    with pytest.raises(executor_v2.SecurityBoundaryError, match="must not be a link"):
+        executor_v2._write_platform_completion_metadata(output, claim)
+
+    assert outside.read_text(encoding="utf-8") == "preserve"
 
 
 @pytest.mark.asyncio

@@ -144,7 +144,8 @@ PHASE PROTOCOL
 5. Execute scripts and capture outputs.
 6. Check required output paths.
 7. Write {output_dir / 'report' / 'summary.md'}.
-8. Write {output_dir / 'agent_completion.json'}.
+8. Do not write {output_dir / 'agent_completion.json'}; the Worker creates its
+   completion record after it validates the required report.
 
 The completion JSON is a small metadata record, not a transcript. Keep it to
 task identifiers, status, relative output paths, and the scientific summary.

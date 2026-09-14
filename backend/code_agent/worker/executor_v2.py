@@ -9,9 +9,12 @@ client and no verifier stage.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import shutil
+import stat
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -59,6 +62,49 @@ def _timeout_seconds() -> float:
         return max(60.0, min(float(os.getenv("WORKER_TASK_TIMEOUT_SECONDS", str(12 * 60 * 60))), 24 * 60 * 60))
     except ValueError:
         return float(12 * 60 * 60)
+
+
+def _write_platform_completion_metadata(output_dir: Path, claim: ClaimedTask) -> None:
+    """Replace agent-authored completion metadata with a bounded platform record.
+
+    The runtime remains responsible for scientific deliverables.  Completion
+    metadata is control-plane data, however, so it must not contain an
+    agent-generated transcript or provider diagnostics.  ArtifactCollector
+    still scans every remaining output file before publication.
+    """
+    report = output_dir / "report" / "summary.md"
+    try:
+        report_status = report.lstat()
+    except FileNotFoundError as exc:
+        raise SecurityBoundaryError("required report/summary.md is missing") from exc
+    if not stat.S_ISREG(report_status.st_mode) or report_status.st_nlink != 1:
+        raise SecurityBoundaryError("required report/summary.md must be an unlinked regular file")
+
+    target = output_dir / "agent_completion.json"
+    try:
+        target_status = target.lstat()
+    except FileNotFoundError:
+        target_status = None
+    if target_status is not None and (
+        not stat.S_ISREG(target_status.st_mode) or target_status.st_nlink != 1
+    ):
+        raise SecurityBoundaryError("agent_completion.json must not be a link")
+    payload: dict[str, object] = {
+        "task_id": claim.task_id,
+        "task_spec_id": claim.task_spec_id,
+        "dataset_snapshot_id": claim.dataset_snapshot_id,
+        "status": "completed",
+        "outputs": {"report": "report/summary.md"},
+    }
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".agent-completion-", dir=output_dir)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+        temporary.replace(target)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _is_transient_lease_error(exc: BaseException) -> bool:
@@ -261,6 +307,8 @@ async def execute_claim(client: WorkerV2Client, claim: ClaimedTask) -> dict[str,
                 error_message=str(runtime_error.get("message") or "Claude Code execution failed"),
             )
             return {"success": False, "cancelled": cancelled, "error": runtime_error.get("message")}
+
+        _write_platform_completion_metadata(output_dir, claim)
 
         collector = ArtifactCollector(
             max_files=int(os.getenv("ARTIFACT_MAX_FILES", "5000")),
