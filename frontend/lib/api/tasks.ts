@@ -25,6 +25,7 @@ export interface TaskItem {
   status: TaskStatus;
   attempt_count: number;
   max_attempts: number;
+  can_retry?: boolean;
   error_message?: string | null;
   created_at: string;
 }
@@ -371,6 +372,10 @@ export async function listTasks(limit = 50): Promise<TaskItem[]> {
 
 export async function cancelTask(taskId: string): Promise<{ status: string }> {
   return requestJson(`${getApiBase()}/api/tasks/${taskId}/cancel`, { method: "POST" });
+}
+
+export async function retryTask(taskId: string): Promise<{ task_id: string; status: string; attempt_count: number; duplicate?: boolean }> {
+  return requestJson(`${getApiBase()}/api/tasks/${encodeURIComponent(taskId)}/retry`, { method: "POST" });
 }
 
 export function artifactDownloadUrl(artifactId: string): string {

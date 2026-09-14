@@ -11,7 +11,7 @@ import { ArrowLeft, RefreshCw, Download, PlayCircle, CheckCircle2, XCircle, Cloc
 import { useRouter, useParams } from "next/navigation";
 import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
 import { getCurrentUser } from "@/lib/api/auth";
-import { artifactDownloadUrl, getJson, cancelTask, listTasks, type TaskItem } from "@/lib/api/tasks";
+import { artifactDownloadUrl, getJson, cancelTask, retryTask, listTasks, type TaskItem } from "@/lib/api/tasks";
 
 type TaskStatus = "draft" | "queued" | "claimed" | "running" | "succeeded" | "failed" | "cancelled" | "timeout";
 
@@ -25,7 +25,8 @@ interface TaskDetail {
   lease_owner: string | null;
   lease_token: string | null;
   lease_expires_at: string | null;
-  active_attempt_id: number | null;
+  active_attempt_id?: string | null;
+  can_retry?: boolean;
   attempt_count: number;
   max_attempts: number;
   result_artifact_id: string | null;
@@ -127,6 +128,8 @@ export default function TaskDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [cancelSuccess, setCancelSuccess] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [retrySuccess, setRetrySuccess] = useState(false);
   const eventsEndRef = useRef<HTMLDivElement>(null);
   const [taskList, setTaskList] = useState<TaskItem[]>([]);
   const [eventsError, setEventsError] = useState<string | null>(null);
@@ -218,6 +221,7 @@ export default function TaskDetailPage() {
 
   useEffect(() => {
     setCancelSuccess(false);
+    setRetrySuccess(false);
   }, [taskId]);
 
   const currentTaskStatus = task?.status;
@@ -238,6 +242,14 @@ export default function TaskDetailPage() {
     };
   }, [authStatus, taskId, currentTaskStatus, loadDetail]);
 
+  const terminalStatuses = useMemo(() => ["succeeded", "failed", "cancelled", "timeout"], []);
+  const isTerminal = task ? terminalStatuses.includes(task.status) : true;
+  const canRetry = Boolean(
+    task?.can_retry === true
+      && ["failed", "timeout"].includes(task.status)
+      && task.attempt_count < task.max_attempts,
+  );
+
   const handleCancel = async () => {
     if (!task || !taskId) return;
     const confirmed = window.confirm(t("tasks.cancelConfirm"));
@@ -255,8 +267,20 @@ export default function TaskDetailPage() {
     }
   };
 
-  const terminalStatuses = useMemo(() => ["succeeded", "failed", "cancelled", "timeout"], []);
-  const isTerminal = task ? terminalStatuses.includes(task.status) : true;
+  const handleRetry = async () => {
+    if (!task || !taskId || !canRetry) return;
+    setRetrying(true);
+    setRetrySuccess(false);
+    try {
+      await retryTask(taskId);
+      setRetrySuccess(true);
+      void loadDetail(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   return (
     <div className="flex h-screen bg-transparent text-zinc-900 font-sans">
@@ -317,6 +341,12 @@ export default function TaskDetailPage() {
                 {t("tasks.cancel")}
               </Button>
             )}
+            {canRetry && (
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={handleRetry} disabled={retrying}>
+                <RefreshCw size={14} className={retrying ? "animate-spin" : ""} />
+                {t("tasks.retryTask")}
+              </Button>
+            )}
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { void loadDetail(); }} disabled={loading}>
               <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
               {t("composer.retry")}
@@ -342,10 +372,19 @@ export default function TaskDetailPage() {
               <p className="max-w-md text-sm text-red-600">{t("error.backendUnavailable")}: {authError}</p>
               <Button type="button" variant="outline" onClick={() => window.location.reload()}>{t("composer.retry")}</Button>
             </div>
-          ) : cancelSuccess && (
-            <div className="mx-4 mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-              {t("tasks.cancelSuccess")}
-            </div>
+          ) : (
+            <>
+              {cancelSuccess && (
+                <div className="mx-4 mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                  {t("tasks.cancelSuccess")}
+                </div>
+              )}
+              {retrySuccess && (
+                <div className="mx-4 mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                  {t("tasks.retrySuccess")}
+                </div>
+              )}
+            </>
           )}
 
           {loading && !task ? (

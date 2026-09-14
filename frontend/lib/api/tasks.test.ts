@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTask, getWorkerCredential, rotateWorkerCredential } from "./tasks";
+import { createTask, getWorkerCredential, retryTask, rotateWorkerCredential } from "./tasks";
 
 const input = {
   project_id: "project-1",
@@ -69,5 +69,22 @@ describe("createTask route selection", () => {
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/worker-enrollments/worker-1/credential");
     expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/worker-enrollments/worker-1/rotate");
+  });
+
+  it("uses the authenticated task retry endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ task_id: "task-failed", status: "queued", attempt_count: 1 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await retryTask("task/failed");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task%2Ffailed/retry",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 });

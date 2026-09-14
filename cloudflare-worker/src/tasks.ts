@@ -45,7 +45,13 @@ interface TaskRow {
   finished_at: number | null;
   chat_confirmation_id: string | null;
   execution_pool_id?: string;
+  active_attempt_id?: string | null;
+  lease_worker_id?: string | null;
+  lease_token_hash?: string | null;
+  lease_expires_at?: number | null;
 }
+
+const RETRYABLE_TASK_STATUSES = new Set(["failed", "timeout"]);
 
 function iso(value: number | null | undefined): string | null {
   return value == null ? null : new Date(value * 1000).toISOString();
@@ -361,6 +367,7 @@ function publicTask(row: TaskRow): Record<string, unknown> {
     error_message: row.error_message,
     created_by: row.created_by,
     execution_pool_id: row.execution_pool_id ?? "public-default",
+    can_retry: taskCanRetry(row),
     created_at: iso(row.created_at),
     updated_at: iso(row.updated_at),
     finished_at: iso(row.finished_at),
@@ -372,9 +379,32 @@ async function loadTask(taskIdValue: string, env: Env, user: Pick<AuthedUser, "u
     `SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
             title, status, attempt_count, max_attempts, result_artifact_id,
             error_message, created_by, created_at, updated_at, finished_at,
-            chat_confirmation_id, execution_pool_id
+            chat_confirmation_id, execution_pool_id, active_attempt_id,
+            lease_worker_id, lease_token_hash, lease_expires_at
      FROM tasks WHERE task_id = ?1 AND created_by = ?2`
   ).bind(taskIdValue, user.userId).first<TaskRow>();
+}
+
+function taskCanRetry(row: Pick<TaskRow, "status" | "attempt_count" | "max_attempts" | "active_attempt_id" | "lease_worker_id" | "lease_token_hash" | "lease_expires_at">): boolean {
+  return RETRYABLE_TASK_STATUSES.has(row.status)
+    && Number(row.attempt_count) < Number(row.max_attempts)
+    && row.active_attempt_id == null
+    && row.lease_worker_id == null
+    && row.lease_token_hash == null
+    && row.lease_expires_at == null;
+}
+
+async function loadTaskForRetry(taskIdValue: string, env: Env, user: AuthedUser): Promise<TaskRow | null> {
+  const admin = isTaskAdminRole(user.role);
+  return env.DB.prepare(
+    `SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
+            title, status, attempt_count, max_attempts, result_artifact_id,
+            error_message, created_by, created_at, updated_at, finished_at,
+            chat_confirmation_id, execution_pool_id, active_attempt_id,
+            lease_worker_id, lease_token_hash, lease_expires_at
+     FROM tasks
+     WHERE task_id = ?1 AND (?2 = 1 OR created_by = ?3)`
+  ).bind(taskIdValue, admin ? 1 : 0, user.userId).first<TaskRow>();
 }
 
 export interface TrustedInternalTaskInput {
@@ -632,7 +662,8 @@ async function handleListTasks(request: Request, env: Env, user: AuthedUser): Pr
     `SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
             title, status, attempt_count, max_attempts, result_artifact_id,
             error_message, created_by, created_at, updated_at, finished_at,
-            chat_confirmation_id, execution_pool_id
+            chat_confirmation_id, execution_pool_id, active_attempt_id,
+            lease_worker_id, lease_token_hash, lease_expires_at
      FROM tasks WHERE created_by = ?1 ORDER BY created_at DESC LIMIT ?2`
   ).bind(user.userId, limit).all<TaskRow>();
   return json({ tasks: (result.results ?? []).map(publicTask) });
@@ -643,7 +674,8 @@ async function handleTaskByConfirmation(confirmationId: string, env: Env, user: 
     `SELECT task_id, task_spec_id, dataset_snapshot_id, project_id, method_source_id,
             title, status, attempt_count, max_attempts, result_artifact_id,
             error_message, created_by, created_at, updated_at, finished_at,
-            chat_confirmation_id, execution_pool_id
+            chat_confirmation_id, execution_pool_id, active_attempt_id,
+            lease_worker_id, lease_token_hash, lease_expires_at
      FROM tasks WHERE chat_confirmation_id = ?1 AND created_by = ?2`
   ).bind(confirmationId, user.userId).first<TaskRow>();
   return json({ task: task ? publicTask(task) : null });
@@ -726,6 +758,172 @@ async function handleCancelTask(task: TaskRow, env: Env): Promise<Response> {
   return json({ task_id: task.task_id, status: task.status, cancel_requested: true });
 }
 
+async function hasTaskRequeueMarker(env: Env, taskIdValue: string, attemptCount: number): Promise<boolean> {
+  const eventId = `task-requeued:${taskIdValue}:${attemptCount}`;
+  const result = await env.DB.prepare(
+    `SELECT task_event_id
+     FROM task_events
+     WHERE task_event_id = ?1 AND task_id = ?2 AND event_type = 'task_requeued'`,
+  ).bind(eventId, taskIdValue).first<{ task_event_id: string }>();
+  return Boolean(result);
+}
+
+async function duplicateRetryResponse(task: TaskRow, env: Env): Promise<Response | null> {
+  const currentAttemptCount = Number(task.attempt_count);
+  const markerAttemptCount = task.status === "queued"
+    ? currentAttemptCount
+    : ["claimed", "running"].includes(task.status)
+      ? currentAttemptCount - 1
+      : -1;
+  if (markerAttemptCount < 0 || !await hasTaskRequeueMarker(env, task.task_id, markerAttemptCount)) return null;
+  return json({
+    task_id: task.task_id,
+    status: task.status,
+    attempt_count: currentAttemptCount,
+    duplicate: true,
+  });
+}
+
+async function retryConflict(task: TaskRow, env: Env): Promise<Response> {
+  if (!RETRYABLE_TASK_STATUSES.has(task.status)) {
+    return errorJson(`Cannot retry task in status: ${task.status}`, 409, "TASK_NOT_RETRYABLE");
+  }
+  if (Number(task.attempt_count) >= Number(task.max_attempts)) {
+    return errorJson("Task has reached the maximum number of attempts", 409, "TASK_RETRY_LIMIT_REACHED");
+  }
+  const activeAttempt = !taskCanRetry(task) || Boolean(await env.DB.prepare(
+    `SELECT 1 AS active
+     FROM task_attempts
+     WHERE task_id = ?1 AND status IN ('claimed', 'running')
+     LIMIT 1`,
+  ).bind(task.task_id).first<{ active: number }>());
+  if (activeAttempt) {
+    return errorJson("Task still has an active Attempt or lease", 409, "TASK_RETRY_ACTIVE");
+  }
+  return errorJson("Task could not be requeued", 409, "TASK_RETRY_CONFLICT");
+}
+
+/** Requeue one terminal task without creating a new Task or deleting Attempts. */
+async function handleRetryTask(taskIdValue: string, env: Env, user: AuthedUser): Promise<Response> {
+  const task = await loadTaskForRetry(taskIdValue, env, user);
+  if (!task) return errorJson("Task not found", 404, "TASK_NOT_FOUND");
+  const duplicate = await duplicateRetryResponse(task, env);
+  if (duplicate) return duplicate;
+  if (!RETRYABLE_TASK_STATUSES.has(task.status)
+    || Number(task.attempt_count) >= Number(task.max_attempts)
+    || !taskCanRetry(task)) {
+    return retryConflict(task, env);
+  }
+
+  const now = nowSeconds();
+  const attemptCount = Number(task.attempt_count);
+  const eventId = `task-requeued:${task.task_id}:${attemptCount}`;
+  const outboxEventId = `task-queued:retry:${task.task_id}:${attemptCount}`;
+  const outboxIdempotencyKey = `task-queued:${task.task_id}:retry:${attemptCount}`;
+  const admin = isTaskAdminRole(user.role);
+  const payload = JSON.stringify({
+    task_id: task.task_id,
+    status: "queued",
+    previous_status: task.status,
+    attempt_count: attemptCount,
+    max_attempts: Number(task.max_attempts),
+    pool_id: task.execution_pool_id ?? "public-default",
+    reason: "manual_retry",
+  });
+
+  let results: unknown[];
+  try {
+    // D1 batches are atomic. Insert the deterministic lifecycle marker first,
+    // then make the conditional state transition, and finally enqueue the
+    // relay hint. There is no FOR UPDATE: SQLite's conditional write is the
+    // concurrency gate, while the unique event/outbox keys make a double
+    // click idempotent.
+    results = await env.DB.batch([
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO task_events
+          (task_event_id, task_id, event_type, event_data, created_at)
+         SELECT ?1, ?2, 'task_requeued', ?3, ?4
+         WHERE EXISTS (
+           SELECT 1 FROM tasks
+           WHERE task_id = ?2 AND (?6 = 1 OR created_by = ?7)
+             AND status IN ('failed', 'timeout')
+             AND attempt_count = ?5 AND attempt_count < max_attempts
+             AND active_attempt_id IS NULL
+             AND lease_worker_id IS NULL
+             AND lease_token_hash IS NULL
+             AND lease_expires_at IS NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM task_attempts a
+               WHERE a.task_id = tasks.task_id
+                 AND a.status IN ('claimed', 'running')
+             )
+         )`,
+      ).bind(eventId, task.task_id, payload, now, attemptCount, admin ? 1 : 0, user.userId),
+      env.DB.prepare(
+        `UPDATE tasks
+         SET status = 'queued', result_artifact_id = NULL, error_message = NULL,
+             finished_at = NULL, cancel_requested_at = NULL,
+             active_attempt_id = NULL, lease_worker_id = NULL,
+             lease_token_hash = NULL, lease_expires_at = NULL, updated_at = ?2
+         WHERE task_id = ?1 AND (?5 = 1 OR created_by = ?6)
+           AND status IN ('failed', 'timeout')
+           AND attempt_count = ?3 AND attempt_count < max_attempts
+           AND active_attempt_id IS NULL
+           AND lease_worker_id IS NULL
+           AND lease_token_hash IS NULL
+           AND lease_expires_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM task_attempts a
+             WHERE a.task_id = tasks.task_id
+               AND a.status IN ('claimed', 'running')
+           )
+           AND EXISTS (
+             SELECT 1 FROM task_events e
+             WHERE e.task_event_id = ?4 AND e.task_id = tasks.task_id
+               AND e.event_type = 'task_requeued'
+           )`,
+      ).bind(task.task_id, now, attemptCount, eventId, admin ? 1 : 0, user.userId),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO outbox_events
+          (event_id, idempotency_key, aggregate_type, aggregate_id, event_type,
+           payload_json, status, attempts, next_attempt_at, created_at)
+         SELECT ?1, ?2, 'task', ?3, 'task_queued', ?4, 'pending', 0, ?5, ?5
+         WHERE EXISTS (
+           SELECT 1 FROM tasks
+           WHERE task_id = ?3 AND (?7 = 1 OR created_by = ?8)
+             AND status = 'queued' AND attempt_count = ?6 AND updated_at = ?5
+         )
+           AND EXISTS (
+             SELECT 1 FROM task_events
+             WHERE task_event_id = ?9 AND task_id = ?3
+               AND event_type = 'task_requeued'
+           )`,
+      ).bind(outboxEventId, outboxIdempotencyKey, task.task_id, payload, now, attemptCount, admin ? 1 : 0, user.userId, eventId),
+    ]);
+  } catch {
+    return errorJson("Task retry could not be queued", 503, "TASK_RETRY_UNAVAILABLE");
+  }
+
+  const updated = Number((results[1] as { meta?: { changes?: number } } | undefined)?.meta?.changes ?? 0);
+  const eventInserted = Number((results[0] as { meta?: { changes?: number } } | undefined)?.meta?.changes ?? 0) === 1;
+  if (updated === 1) {
+    return json({
+      task_id: task.task_id,
+      status: "queued",
+      attempt_count: attemptCount,
+      duplicate: !eventInserted,
+    });
+  }
+
+  // A concurrent caller may have won the conditional update and the Worker
+  // may already have claimed the newly queued task. Recognize that exact
+  // retry marker, but never turn a later terminal failure into a duplicate.
+  const current = await loadTaskForRetry(task.task_id, env, user);
+  const currentDuplicate = current ? await duplicateRetryResponse(current, env) : null;
+  if (currentDuplicate) return currentDuplicate;
+  return current ? retryConflict(current, env) : errorJson("Task not found", 404, "TASK_NOT_FOUND");
+}
+
 async function handleArtifact(artifactId: string, env: Env, user: AuthedUser): Promise<Response> {
   const artifact = await env.DB.prepare(
     `SELECT a.name, a.content_type, a.object_key
@@ -749,9 +947,19 @@ const SUPERUSER_ROLES = new Set([
   "root",
 ]);
 
+const TASK_ADMIN_ROLES = new Set(["admin", "administrator"]);
+
+function normalizedRole(roleValue?: string | null): string {
+  return String(roleValue ?? "user").trim().toLowerCase().replace(/\s+/g, "_");
+}
+
 export function isSuperuserRole(roleValue?: string | null): boolean {
-  const role = String(roleValue ?? "user").trim().toLowerCase().replace(/\s+/g, "_");
-  return SUPERUSER_ROLES.has(role);
+  return SUPERUSER_ROLES.has(normalizedRole(roleValue));
+}
+
+export function isTaskAdminRole(roleValue?: string | null): boolean {
+  const role = normalizedRole(roleValue);
+  return isSuperuserRole(role) || TASK_ADMIN_ROLES.has(role);
 }
 
 export function taskSubmissionSourceError(
@@ -1025,11 +1233,17 @@ export async function handleTaskApi(request: Request, env: Env, user: AuthedUser
     return handleTaskByConfirmation(decodeURIComponent(confirmationTaskMatch[1]), env, user);
   }
 
-  const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(cancel|events|events\/stream|artifacts))?$/);
+  const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)(?:\/(cancel|retry|events|events\/stream|artifacts))?$/);
   if (taskMatch) {
-    const current = await loadTask(decodeURIComponent(taskMatch[1]), env, user);
-    if (!current) return errorJson("Task not found", 404, "TASK_NOT_FOUND");
+    const taskIdValue = decodeURIComponent(taskMatch[1]);
     const suffix = taskMatch[2];
+    if (suffix === "retry") {
+      return method === "POST"
+        ? handleRetryTask(taskIdValue, env, user)
+        : errorJson("Method not allowed", 405, "METHOD_NOT_ALLOWED");
+    }
+    const current = await loadTask(taskIdValue, env, user);
+    if (!current) return errorJson("Task not found", 404, "TASK_NOT_FOUND");
     if (!suffix && method === "GET") return json(publicTask(current));
     if (suffix === "cancel" && method === "POST") return handleCancelTask(current, env);
     if (suffix === "events" && method === "GET") return handleTaskEvents(current, env);

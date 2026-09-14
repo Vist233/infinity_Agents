@@ -72,6 +72,11 @@ export interface TaskRow {
   created_at?: number;
   dispatch_policy?: string;
   active_attempt_id?: string | null;
+  lease_worker_id?: string | null;
+  lease_token_hash?: string | null;
+  lease_expires_at?: number | null;
+  result_artifact_id?: string | null;
+  error_message?: string | null;
   cancel_requested_at?: number | null;
   updated_at?: number;
   finished_at?: number | null;
@@ -170,6 +175,13 @@ export interface OutboxEventRow {
   attempts: number;
   next_attempt_at: number;
   created_at: number;
+}
+
+export interface TaskAttemptRow {
+  attempt_id: string;
+  task_id: string;
+  status: "claimed" | "running" | "succeeded" | "failed" | "expired" | "cancelled";
+  lease_expires_at: number;
 }
 
 export interface PersistentWorkerRow {
@@ -320,6 +332,7 @@ export class FakeD1 {
   taskEvents = new Map<string, TaskEventRow>();
   outboxEvents = new Map<string, OutboxEventRow>();
   tasks = new Map<string, TaskRow>();
+  taskAttempts = new Map<string, TaskAttemptRow>();
   workerRegistrations = new Map<string, PersistentWorkerRow>();
   workers = new Map<string, CanonicalWorkerRow>();
   workerPoolPolicy = { pool_id: "public-default", namespace: "infinity-public", mode: "public" as const };
@@ -381,7 +394,25 @@ export class FakeD1 {
   }
 
   seedTask(taskId: string, userId: string, title = "Test task", status = "queued", chatConfirmationId: string | null = null): void {
-    this.tasks.set(taskId, { task_id: taskId, title, status, created_by: userId, chat_confirmation_id: chatConfirmationId, task_class: "owner_trusted", attempt_count: 0, max_attempts: 3, created_at: Math.floor(Date.now() / 1000), dispatch_policy: "owner_then_public" });
+    const now = Math.floor(Date.now() / 1000);
+    this.tasks.set(taskId, {
+      task_id: taskId,
+      title,
+      status,
+      created_by: userId,
+      chat_confirmation_id: chatConfirmationId,
+      task_class: "owner_trusted",
+      attempt_count: 0,
+      max_attempts: 3,
+      created_at: now,
+      updated_at: now,
+      dispatch_policy: "owner_then_public",
+      active_attempt_id: null,
+      lease_worker_id: null,
+      lease_token_hash: null,
+      lease_expires_at: null,
+      finished_at: null,
+    });
     if (chatConfirmationId) {
       const confirmation = this.chatTaskConfirmations.get(chatConfirmationId);
       if (confirmation) confirmation.task_id = taskId;
@@ -390,6 +421,10 @@ export class FakeD1 {
 
   seedWorkerAttempt(row: WorkerAttemptRow): void {
     this.workerAttempts.set(row.attempt_id, row);
+  }
+
+  seedTaskAttempt(row: TaskAttemptRow): void {
+    this.taskAttempts.set(row.attempt_id, row);
   }
 
   seedPersistentWorker(row: Omit<PersistentWorkerRow, "last_seen_at"> & { last_seen_at?: number | null }): void {
@@ -798,6 +833,22 @@ class FakeStatement {
     }
     if (sql.includes("SELECT status, cancel_requested_at FROM tasks")) {
       return (this.db.tasks.get(String(this.args[0])) as T) ?? null;
+    }
+    if (sql.includes("FROM tasks WHERE task_id = ?1 AND (?2 = 1 OR created_by = ?3)")) {
+      const [taskId, operator, userId] = this.args as [string, number, string];
+      const row = this.db.tasks.get(taskId);
+      return row && (operator === 1 || row.created_by === userId) ? (row as T) : null;
+    }
+    if (sql.includes("FROM task_events WHERE task_event_id = ?1")) {
+      const [eventId, taskId] = this.args as [string, string];
+      const row = this.db.taskEvents.get(eventId);
+      return row && row.task_id === taskId ? (row as T) : null;
+    }
+    if (sql.includes("FROM task_attempts") && sql.includes("status IN ('claimed', 'running')")) {
+      const [taskId] = this.args as [string];
+      return [...this.db.taskAttempts.values()].some((attempt) =>
+        attempt.task_id === taskId && ["claimed", "running"].includes(attempt.status),
+      ) ? ({ active: 1 } as T) : null;
     }
     if (sql.includes("FROM tasks WHERE task_id")) {
       const [taskId, userId] = this.args as [string, string];
@@ -1298,13 +1349,13 @@ class FakeStatement {
       this.db.taskIdempotency.set(idempotencyKey, { user_id: userId, idempotency_key: key, task_id: taskId, request_hash: requestHash, created_at: createdAt });
       return { meta: { changes: 1 } };
     }
-    if (sql.includes("INSERT OR IGNORE INTO task_events")) {
+    if (sql.includes("INSERT OR IGNORE INTO task_events") && !sql.includes("'task_requeued'")) {
       const [eventId, taskId, eventData, createdAt] = this.args as [string, string, string, number];
       if (this.db.taskEvents.has(eventId)) return { meta: { changes: 0 } };
       this.db.taskEvents.set(eventId, { task_event_id: eventId, task_id: taskId, event_type: "task_queued", event_data: eventData, created_at: createdAt });
       return { meta: { changes: 1 } };
     }
-    if (sql.includes("INSERT OR IGNORE INTO outbox_events")) {
+    if (sql.includes("INSERT OR IGNORE INTO outbox_events") && !sql.includes("task_requeued")) {
       const [eventId, idempotencyKey, aggregateId, payload, createdAt] = this.args as [string, string, string, string, number];
       if (this.db.outboxEvents.has(eventId) || [...this.db.outboxEvents.values()].some((row) => row.idempotency_key === idempotencyKey)) return { meta: { changes: 0 } };
       this.db.outboxEvents.set(eventId, { event_id: eventId, idempotency_key: idempotencyKey, aggregate_type: "task", aggregate_id: aggregateId, event_type: "task_queued", payload_json: payload, status: "pending", attempts: 0, next_attempt_at: createdAt, created_at: createdAt });
@@ -1861,6 +1912,81 @@ class FakeStatement {
       row.status = nextStatus;
       row.updated_at = now;
       if (nextStatus === "ready") row.ready_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT OR IGNORE INTO task_events") && sql.includes("'task_requeued'")) {
+      const [eventId, taskId, eventData, createdAt, attemptCount, operator, userId] = this.args as [string, string, string, number, number, number, string];
+      const task = this.db.tasks.get(taskId);
+      const activeAttempt = [...this.db.taskAttempts.values()].some((attempt) =>
+        attempt.task_id === taskId && ["claimed", "running"].includes(attempt.status),
+      );
+      const eligible = Boolean(task
+        && (operator === 1 || task.created_by === userId)
+        && ["failed", "timeout"].includes(task.status)
+        && Number(task.attempt_count) === attemptCount
+        && attemptCount < Number(task.max_attempts)
+        && task.active_attempt_id == null
+        && task.lease_worker_id == null
+        && task.lease_token_hash == null
+        && task.lease_expires_at == null
+        && !activeAttempt);
+      if (!eligible || this.db.taskEvents.has(eventId)) return { meta: { changes: 0 } };
+      this.db.taskEvents.set(eventId, { task_event_id: eventId, task_id: taskId, event_type: "task_requeued", event_data: eventData, created_at: createdAt });
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("UPDATE tasks SET status = 'queued'") && sql.includes("task_requeued")) {
+      const [taskId, now, attemptCount, eventId, operator, userId] = this.args as [string, number, number, string, number, string];
+      const task = this.db.tasks.get(taskId);
+      const activeAttempt = [...this.db.taskAttempts.values()].some((attempt) =>
+        attempt.task_id === taskId && ["claimed", "running"].includes(attempt.status),
+      );
+      const eligible = Boolean(task
+        && (operator === 1 || task.created_by === userId)
+        && ["failed", "timeout"].includes(task.status)
+        && Number(task.attempt_count) === attemptCount
+        && attemptCount < Number(task.max_attempts)
+        && task.active_attempt_id == null
+        && task.lease_worker_id == null
+        && task.lease_token_hash == null
+        && task.lease_expires_at == null
+        && !activeAttempt
+        && this.db.taskEvents.get(eventId)?.event_type === "task_requeued");
+      if (!eligible || !task) return { meta: { changes: 0 } };
+      task.status = "queued";
+      task.result_artifact_id = null;
+      task.error_message = null;
+      task.finished_at = null;
+      task.cancel_requested_at = null;
+      task.active_attempt_id = null;
+      task.lease_worker_id = null;
+      task.lease_token_hash = null;
+      task.lease_expires_at = null;
+      task.updated_at = now;
+      return { meta: { changes: 1 } };
+    }
+    if (sql.includes("INSERT OR IGNORE INTO outbox_events") && sql.includes("task_requeued")) {
+      const [eventId, idempotencyKey, taskId, payload, now, attemptCount, operator, userId, taskEventId] = this.args as [string, string, string, string, number, number, number, string, string];
+      const task = this.db.tasks.get(taskId);
+      if (!task || (operator !== 1 && task.created_by !== userId)
+        || task.status !== "queued" || Number(task.attempt_count) !== attemptCount
+        || task.updated_at !== now
+        || this.db.taskEvents.get(taskEventId)?.event_type !== "task_requeued"
+        || this.db.outboxEvents.has(eventId)
+        || [...this.db.outboxEvents.values()].some((event) => event.idempotency_key === idempotencyKey)) {
+        return { meta: { changes: 0 } };
+      }
+      this.db.outboxEvents.set(eventId, {
+        event_id: eventId,
+        idempotency_key: idempotencyKey,
+        aggregate_type: "task",
+        aggregate_id: taskId,
+        event_type: "task_queued",
+        payload_json: payload,
+        status: "pending",
+        attempts: 0,
+        next_attempt_at: now,
+        created_at: now,
+      });
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE tasks SET status = 'cancelled'")) {

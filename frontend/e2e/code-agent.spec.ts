@@ -68,6 +68,24 @@ const MOCK_ARTIFACTS = [
   },
 ];
 
+const MOCK_RETRYABLE_TASK = {
+  task_id: "task-retryable",
+  task_spec_id: "spec-retryable",
+  dataset_snapshot_id: "ds-retryable",
+  project_id: "proj-1",
+  title: "Retryable analysis",
+  status: "failed",
+  attempt_count: 1,
+  max_attempts: 3,
+  can_retry: true,
+  result_artifact_id: null,
+  error_message: "Worker failed",
+  created_by: "user-1",
+  created_at: "2026-08-07T03:00:00Z",
+  updated_at: "2026-08-07T03:05:00Z",
+  finished_at: "2026-08-07T03:05:00Z",
+};
+
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/me", async (route) => {
     await route.fulfill({
@@ -267,4 +285,36 @@ test("Task detail page shows task information correctly", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Biopython Sequence Analysis" })).toBeVisible();
   await expect(page.getByRole("main").getByText("运行中", { exact: true })).toBeVisible();
   await expect(page.getByText("1").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "重试任务", exact: true })).toHaveCount(0);
+});
+
+test("failed task shows retry action only when the server marks it retryable", async ({ page }) => {
+  let retryRequests = 0;
+  await page.route("**/api/tasks?limit=50", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify({ tasks: [MOCK_RETRYABLE_TASK] }), contentType: "application/json" });
+  });
+  await page.route("**/api/tasks/task-retryable", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify(MOCK_RETRYABLE_TASK), contentType: "application/json" });
+  });
+  await page.route("**/api/tasks/task-retryable/events", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify([]), contentType: "application/json" });
+  });
+  await page.route("**/api/tasks/task-retryable/artifacts", async (route) => {
+    await route.fulfill({ status: 200, body: JSON.stringify([]), contentType: "application/json" });
+  });
+  await page.route("**/api/tasks/task-retryable/retry", async (route) => {
+    retryRequests += 1;
+    await route.fulfill({
+      status: 200,
+      body: JSON.stringify({ ...MOCK_RETRYABLE_TASK, status: "queued", can_retry: false, duplicate: false }),
+      contentType: "application/json",
+    });
+  });
+
+  await page.goto("/task-center/tasks/task-retryable");
+  const retryButton = page.getByRole("button", { name: "重试任务", exact: true });
+  await expect(retryButton).toBeVisible();
+  await retryButton.click();
+  await expect(page.getByText("任务已重新排队。", { exact: true })).toBeVisible();
+  expect(retryRequests).toBe(1);
 });
