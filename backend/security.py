@@ -72,7 +72,9 @@ _SECRET_VALUE_PLACEHOLDER = (
 
 
 _SECRET_PATTERN_RULES = (
-    ("token_shape", re.compile(r"(?:sk|pk)-[A-Za-z0-9_-]{16,}")),
+    # Keep identifier suffixes such as ``task-...`` from matching the ``sk-``
+    # portion of the value while still recognizing standalone provider tokens.
+    ("token_shape", re.compile(r"(?<![A-Za-z0-9_])(?:sk|pk)-[A-Za-z0-9_-]{16,}")),
     ("provider_env_assignment", re.compile(
         rf"(?i)\b(?:anthropic|stepfun|openai|aws|github)_[A-Z0-9_]*\s*=\s*"
         rf"(?!{_SECRET_VALUE_PLACEHOLDER})[^\s]+"

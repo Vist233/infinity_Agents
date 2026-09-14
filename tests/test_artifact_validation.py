@@ -202,6 +202,37 @@ def test_completion_metadata_with_recognizable_credential_is_rejected_before_red
         ArtifactCollector().collect(output, tmp_path / "result.zip")
 
 
+def test_completion_metadata_allows_discovery_task_ids_without_token_shape_false_positive(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    payload = {
+        "task_id": "discovery-task-ab040aea-4ca5-4113-9c43-188a004b96dd",
+        "task_spec_id": "discovery-task-spec-ab040aea-4ca5-4113-9c43-188a004b96dd",
+        "dataset_snapshot_id": "discovery-dataset-snapshot-ab040aea-4ca5-4113-9c43-188a004b96dd",
+        "status": "completed",
+        "outputs": {"report": "report/summary.md"},
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    (output / "agent_completion.json").write_bytes(raw)
+
+    collected = ArtifactCollector().collect(output, tmp_path / "result.zip")
+
+    with zipfile.ZipFile(collected.archive_path) as archive:
+        assert json.loads(archive.read("agent_completion.json")) == payload
+
+
+def test_completion_metadata_still_rejects_standalone_token_shape(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "agent_completion.json").write_text(
+        json.dumps({"task_id": "sk-" + "a" * 20}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SecurityBoundaryError, match="credential-like content"):
+        ArtifactCollector().collect(output, tmp_path / "result.zip")
+
+
 def test_result_archive_rejects_noncanonical_completion_metadata(tmp_path):
     payload = json.dumps({"status": "done", "unknown": "field"}, indent=2).encode("utf-8")
     archive_path = tmp_path / "noncanonical.zip"
