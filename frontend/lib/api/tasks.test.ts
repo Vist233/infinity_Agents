@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  TASK_ACTION_TIMEOUT_MS,
   TASK_DETAIL_AUX_TIMEOUT_MS,
   createTask,
   getJsonWithTimeout,
@@ -116,5 +117,31 @@ describe("createTask route selection", () => {
 
     await rejection;
     expect(signal?.aborted).toBe(true);
+  });
+
+  it("aborts a stalled task retry POST at its bounded action timeout", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | null | undefined;
+    const fetchMock = vi.fn((_input: unknown, init?: RequestInit) => {
+      signal = init?.signal;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const request = retryTask("task-1");
+    const rejection = expect(request).rejects.toMatchObject({
+      name: "TaskRequestTimeoutError",
+      message: "Task retry request timed out",
+    });
+    await vi.advanceTimersByTimeAsync(TASK_ACTION_TIMEOUT_MS);
+
+    await rejection;
+    expect(signal?.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/retry",
+      expect.objectContaining({ method: "POST", signal: expect.any(AbortSignal) }),
+    );
   });
 });

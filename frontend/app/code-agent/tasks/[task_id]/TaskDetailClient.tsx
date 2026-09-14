@@ -94,6 +94,12 @@ const STATUS_LABELS: Record<TaskStatus, TranslationKey> = {
   timeout: "tasks.statusTimeout",
 };
 
+const TASK_STATUS_VALUES: TaskStatus[] = ["draft", "queued", "claimed", "running", "succeeded", "failed", "cancelled", "timeout"];
+
+function isTaskStatus(value: string): value is TaskStatus {
+  return TASK_STATUS_VALUES.includes(value as TaskStatus);
+}
+
 function formatDate(iso: string | null) {
   if (!iso) return "-";
   try { return new Date(iso).toLocaleString(); } catch { return iso; }
@@ -295,11 +301,22 @@ export default function TaskDetailPage() {
     setRetrying(true);
     setRetrySuccess(false);
     try {
-      await retryTask(taskId);
+      const retryResult = await retryTask(taskId);
+      const nextStatus = isTaskStatus(retryResult.status) ? retryResult.status : null;
+      if (retryResult.task_id === taskId && nextStatus) {
+        setTask((current) => current?.task_id === taskId ? {
+          ...current,
+          status: nextStatus,
+          attempt_count: Number.isFinite(retryResult.attempt_count) ? retryResult.attempt_count : current.attempt_count,
+          can_retry: false,
+        } : current);
+      }
       setRetrySuccess(true);
       void loadDetail(true, true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(isTaskRequestTimeoutError(err)
+        ? t("tasks.retryRequestTimeout")
+        : t("tasks.retryRequestFailed", { message: err instanceof Error ? err.message : String(err) }));
     } finally {
       setRetrying(false);
     }
@@ -424,6 +441,11 @@ export default function TaskDetailPage() {
             </div>
           ) : task ? (
             <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-6">
+              {error && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+                  {error}
+                </div>
+              )}
               <section className="rounded-2xl border border-[var(--hairline)] bg-white/80 p-5 space-y-4">
                 <div className="flex items-center gap-2">
                   {STATUS_ICONS[task.status]}

@@ -148,6 +148,78 @@ describe("Task detail downloads", () => {
     await waitFor(() => expect(getJson).toHaveBeenCalledTimes(2));
   });
 
+  it("shows the retry response status before a follow-up detail request completes", async () => {
+    const retryableTask = {
+      task_id: "task-1",
+      title: "Case 2",
+      status: "failed",
+      can_retry: true,
+      attempt_count: 1,
+      max_attempts: 3,
+      created_at: "2026-08-10T00:00:00Z",
+    };
+    let detailReads = 0;
+    (getJson as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      detailReads += 1;
+      return detailReads === 1 ? Promise.resolve(retryableTask) : new Promise<never>(() => undefined);
+    });
+    (retryTask as ReturnType<typeof vi.fn>).mockResolvedValue({ task_id: "task-1", status: "queued" });
+
+    await act(async () => {
+      render(<LanguageProvider><TaskDetailPage /></LanguageProvider>);
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "重试任务" }));
+    await waitFor(() => expect(retryTask).toHaveBeenCalledWith("task-1"));
+    expect(await screen.findByText("排队中")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "重试任务" })).toBeNull();
+  });
+
+  it("shows a retry failure on the task detail instead of hiding it in state", async () => {
+    const retryableTask = {
+      task_id: "task-1",
+      title: "Case 2",
+      status: "failed",
+      can_retry: true,
+      attempt_count: 1,
+      max_attempts: 3,
+      created_at: "2026-08-10T00:00:00Z",
+    };
+    (getJson as ReturnType<typeof vi.fn>).mockResolvedValue(retryableTask);
+    (retryTask as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("worker unavailable"));
+
+    await act(async () => {
+      render(<LanguageProvider><TaskDetailPage /></LanguageProvider>);
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "重试任务" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("任务重试失败：worker unavailable");
+    expect(screen.getByRole("button", { name: "重试任务" })).toBeDefined();
+  });
+
+  it("shows a recoverable message when the retry POST times out", async () => {
+    const retryableTask = {
+      task_id: "task-1",
+      title: "Case 2",
+      status: "failed",
+      can_retry: true,
+      attempt_count: 1,
+      max_attempts: 3,
+      created_at: "2026-08-10T00:00:00Z",
+    };
+    const timeoutError = new Error("Task retry request timed out");
+    timeoutError.name = "TaskRequestTimeoutError";
+    (getJson as ReturnType<typeof vi.fn>).mockResolvedValue(retryableTask);
+    (retryTask as ReturnType<typeof vi.fn>).mockRejectedValue(timeoutError);
+
+    await act(async () => {
+      render(<LanguageProvider><TaskDetailPage /></LanguageProvider>);
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "重试任务" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("重试请求超时，任务状态可能尚未更新，请刷新后再试。");
+  });
+
   it("shows auxiliary failures in their own panels", async () => {
     const timeoutError = new Error("Task detail auxiliary request timed out");
     timeoutError.name = "TaskRequestTimeoutError";

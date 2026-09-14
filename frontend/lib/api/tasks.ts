@@ -173,10 +173,11 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
 
 /** Bound non-critical task-detail requests so one stalled endpoint cannot hold the page hostage. */
 export const TASK_DETAIL_AUX_TIMEOUT_MS = 8_000;
+export const TASK_ACTION_TIMEOUT_MS = 15_000;
 
 export class TaskRequestTimeoutError extends Error {
-  constructor() {
-    super("Task detail auxiliary request timed out");
+  constructor(message = "Task detail auxiliary request timed out") {
+    super(message);
     this.name = "TaskRequestTimeoutError";
   }
 }
@@ -185,11 +186,15 @@ export function isTaskRequestTimeoutError(error: unknown): error is TaskRequestT
   return error instanceof Error && error.name === "TaskRequestTimeoutError";
 }
 
-async function requestJsonWithTimeout<T>(input: string, timeoutMs: number): Promise<T> {
+async function requestJsonWithTimeout<T>(
+  input: string,
+  timeoutMs: number,
+  init: RequestInit = {},
+  timeoutError = new TaskRequestTimeoutError(),
+): Promise<T> {
   const controller = new AbortController();
   let timedOut = false;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeoutError = new TaskRequestTimeoutError();
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
       timedOut = true;
@@ -200,7 +205,7 @@ async function requestJsonWithTimeout<T>(input: string, timeoutMs: number): Prom
 
   try {
     return await Promise.race([
-      requestJson<T>(input, { signal: controller.signal }),
+      requestJson<T>(input, { ...init, signal: controller.signal }),
       timeout,
     ]).catch((error) => {
       if (timedOut) throw timeoutError;
@@ -425,7 +430,12 @@ export async function cancelTask(taskId: string): Promise<{ status: string }> {
 }
 
 export async function retryTask(taskId: string): Promise<{ task_id: string; status: string; attempt_count: number; duplicate?: boolean }> {
-  return requestJson(`${getApiBase()}/api/tasks/${encodeURIComponent(taskId)}/retry`, { method: "POST" });
+  return requestJsonWithTimeout(
+    `${getApiBase()}/api/tasks/${encodeURIComponent(taskId)}/retry`,
+    TASK_ACTION_TIMEOUT_MS,
+    { method: "POST" },
+    new TaskRequestTimeoutError("Task retry request timed out"),
+  );
 }
 
 export function artifactDownloadUrl(artifactId: string): string {
