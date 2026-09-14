@@ -148,6 +148,39 @@ describe("Task detail downloads", () => {
     await waitFor(() => expect(getJson).toHaveBeenCalledTimes(2));
   });
 
+  it("invokes retryTask from the hydrated retry button and exposes the pending state", async () => {
+    const retryableTask = {
+      task_id: "task-1",
+      title: "Case 2",
+      status: "failed",
+      can_retry: true,
+      attempt_count: 1,
+      max_attempts: 3,
+      created_at: "2026-08-10T00:00:00Z",
+    };
+    let resolveRetry!: (value: { task_id: string; status: string; attempt_count: number }) => void;
+    const pendingRetry = new Promise<{ task_id: string; status: string; attempt_count: number }>((resolve) => {
+      resolveRetry = resolve;
+    });
+    (getJson as ReturnType<typeof vi.fn>).mockResolvedValue(retryableTask);
+    (retryTask as ReturnType<typeof vi.fn>).mockReturnValue(pendingRetry);
+
+    await act(async () => {
+      render(<LanguageProvider><TaskDetailPage /></LanguageProvider>);
+    });
+
+    const retryButton = await screen.findByTestId("task-retry-button");
+    expect(retryButton).toHaveAttribute("type", "button");
+    fireEvent.click(retryButton);
+
+    await waitFor(() => expect(retryTask).toHaveBeenCalledWith("task-1"));
+    expect(retryButton).toHaveAttribute("aria-busy", "true");
+    expect(await screen.findByText("重试中…")).toBeDefined();
+
+    resolveRetry({ task_id: "task-1", status: "queued", attempt_count: 2 });
+    await waitFor(() => expect(screen.queryByText("重试中…")).toBeNull());
+  });
+
   it("shows the retry response status before a follow-up detail request completes", async () => {
     const retryableTask = {
       task_id: "task-1",

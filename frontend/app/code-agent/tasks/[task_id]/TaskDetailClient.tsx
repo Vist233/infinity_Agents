@@ -382,9 +382,21 @@ export default function TaskDetailPage() {
               </Button>
             )}
             {canRetry && (
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={handleRetry} disabled={retrying}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                data-testid="task-retry-button"
+                aria-busy={retrying}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void handleRetry();
+                }}
+                disabled={retrying}
+              >
                 <RefreshCw size={14} className={retrying ? "animate-spin" : ""} />
-                {t("tasks.retryTask")}
+                {retrying ? t("tasks.retryingTask") : t("tasks.retryTask")}
               </Button>
             )}
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { void loadDetail(); }} disabled={loading}>
