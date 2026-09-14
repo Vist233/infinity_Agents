@@ -1,6 +1,13 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
-import { verifyAccessToken, verifyIdToken } from "../src/jwt";
+import {
+  JWKS_FETCH_TIMEOUT_MS,
+  JWKS_REFRESH_RETRY_DELAY_MS,
+  JWKS_STALE_IF_ERROR_MS,
+  JWKS_TTL_MS,
+  verifyAccessToken,
+  verifyIdToken,
+} from "../src/jwt";
 
 const ACCESS_KID = "paper-test-access-key";
 const ENV = {
@@ -12,7 +19,7 @@ const ENV = {
 
 let privateKey: CryptoKey;
 let publicJwk: JsonWebKey & { kid: string };
-const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: { keys: [publicJwk] } }), {
+const fetchMock = vi.fn(async (_input: unknown, _init?: RequestInit) => new Response(JSON.stringify({ data: { keys: [publicJwk] } }), {
   status: 200,
   headers: { "content-type": "application/json" },
 }));
@@ -76,6 +83,10 @@ afterAll(() => {
   vi.unstubAllGlobals();
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("Access Token JWT header contract", () => {
   it("accepts a valid ES256 access token with the matching kid", async () => {
     const token = await makeToken();
@@ -131,5 +142,75 @@ describe("Access Token JWT header contract", () => {
   ])("rejects %s", async (_name, changes, message) => {
     await expect(verifyAccessToken(await makeToken({ ...defaultAccessPayload(), ...changes }), ENV))
       .rejects.toThrow(message);
+  });
+
+  it("aborts a stalled JWKS fetch and fails closed when there is no cache", async () => {
+    vi.useFakeTimers();
+    const timeoutEnv = {
+      ...ENV,
+      ZHANG_AUTH_JWKS_URL: "https://auth.test/jwks-timeout.json",
+    } as Env;
+    let signal: AbortSignal | null | undefined;
+    fetchMock.mockImplementationOnce((_input: unknown, init?: RequestInit) => {
+      signal = init?.signal;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      });
+    });
+    const token = await makeToken({
+      ...defaultAccessPayload(),
+      iss: timeoutEnv.ZHANG_AUTH_BASE_URL,
+      exp: Math.floor(Date.now() / 1000) + 3_600,
+    });
+
+    const verification = verifyAccessToken(token, timeoutEnv);
+    const rejection = expect(verification).rejects.toThrow("JWKS fetch timed out");
+    await vi.advanceTimersByTimeAsync(JWKS_FETCH_TIMEOUT_MS);
+
+    await rejection;
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("uses a bounded stale cache after refresh failure, then fails closed", async () => {
+    const baseTime = Date.now();
+    vi.useFakeTimers({ now: baseTime });
+    const cacheEnv = {
+      ...ENV,
+      ZHANG_AUTH_JWKS_URL: "https://auth.test/jwks-stale-cache.json",
+    } as Env;
+    const token = await makeToken({
+      ...defaultAccessPayload(),
+      iss: cacheEnv.ZHANG_AUTH_BASE_URL,
+      exp: Math.floor(baseTime / 1000) + 3_600,
+    });
+
+    fetchMock.mockClear();
+    await expect(verifyAccessToken(token, cacheEnv)).resolves.toMatchObject({ sub: "user-1" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(baseTime + JWKS_TTL_MS + 1);
+    let refreshSignal: AbortSignal | null | undefined;
+    fetchMock.mockImplementationOnce((_input: unknown, init?: RequestInit) => {
+      refreshSignal = init?.signal;
+      return new Promise<Response>((_resolve, reject) => {
+        refreshSignal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      });
+    });
+    const staleVerification = verifyAccessToken(token, cacheEnv);
+    const staleResult = expect(staleVerification).resolves.toMatchObject({ sub: "user-1" });
+    await vi.advanceTimersByTimeAsync(JWKS_FETCH_TIMEOUT_MS);
+    await staleResult;
+
+    expect(refreshSignal?.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Memoize the failed refresh briefly so polling requests do not each wait
+    // for another upstream timeout while the bounded stale cache is usable.
+    await expect(verifyAccessToken(token, cacheEnv)).resolves.toMatchObject({ sub: "user-1" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    vi.setSystemTime(baseTime + JWKS_TTL_MS + JWKS_STALE_IF_ERROR_MS + JWKS_REFRESH_RETRY_DELAY_MS + 1);
+    fetchMock.mockImplementationOnce(async () => { throw new Error("auth unavailable"); });
+    await expect(verifyAccessToken(token, cacheEnv)).rejects.toThrow("auth unavailable");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

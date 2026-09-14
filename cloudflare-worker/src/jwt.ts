@@ -21,8 +21,16 @@ interface CachedJwks {
   fetchedAt: number;
 }
 
-let jwksCache: CachedJwks | null = null;
-const JWKS_TTL_MS = 10 * 60 * 1000;
+export const JWKS_TTL_MS = 10 * 60 * 1000;
+export const JWKS_FETCH_TIMEOUT_MS = 10 * 1000;
+export const JWKS_STALE_IF_ERROR_MS = 5 * 60 * 1000;
+export const JWKS_REFRESH_RETRY_DELAY_MS = 30 * 1000;
+
+// These maps are isolate-local caches, not request state. A URL key keeps test
+// environments and any future multi-issuer configuration from sharing keys.
+const jwksCache = new Map<string, CachedJwks>();
+const jwksRefreshes = new Map<string, Promise<JsonWebKey[]>>();
+const jwksRefreshFailures = new Map<string, { failedAt: number; error: unknown }>();
 
 function base64UrlToBytes(value: string): Uint8Array {
   const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
@@ -30,24 +38,92 @@ function base64UrlToBytes(value: string): Uint8Array {
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
+async function fetchJwks(env: Env): Promise<JsonWebKey[]> {
+  const controller = new AbortController();
+  let timedOut = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(new Error("JWKS fetch timed out"));
+    }, JWKS_FETCH_TIMEOUT_MS);
+  });
+
+  try {
+    const body = await Promise.race([
+      (async () => {
+        const res = await fetch(env.ZHANG_AUTH_JWKS_URL, {
+          signal: controller.signal,
+          cf: { cacheTtl: 300 },
+        });
+        if (!res.ok) {
+          throw new Error(`Failed to fetch JWKS: ${res.status}`);
+        }
+        // zhang-auth serves JWKS wrapped in its standard envelope: { ok, data: { keys } }.
+        // Accept both the enveloped shape and a bare { keys } for robustness.
+        return (await res.json()) as { keys?: JsonWebKey[]; data?: { keys?: JsonWebKey[] } };
+      })(),
+      timeout,
+    ]);
+    const keys = Array.isArray(body.keys)
+      ? body.keys
+      : Array.isArray(body.data?.keys)
+        ? body.data.keys
+        : [];
+    if (keys.length === 0) throw new Error("JWKS response did not contain keys");
+    return keys;
+  } catch (error) {
+    // Aborting the platform fetch can reject before the timeout promise wins
+    // the race. Normalize both paths to one bounded, observable failure.
+    if (timedOut) throw new Error("JWKS fetch timed out");
+    throw error;
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
+function staleJwksOrThrow(url: string, error: unknown): JsonWebKey[] {
+  const cached = jwksCache.get(url);
+  if (cached && Date.now() - cached.fetchedAt < JWKS_TTL_MS + JWKS_STALE_IF_ERROR_MS) {
+    // A short stale-if-error window avoids taking every authenticated API
+    // request through the same upstream outage, while the bound still fails
+    // closed after a key rotation could reasonably have propagated.
+    return cached.keys;
+  }
+  throw error;
+}
+
 async function loadJwks(env: Env): Promise<JsonWebKey[]> {
-  if (jwksCache && Date.now() - jwksCache.fetchedAt < JWKS_TTL_MS) {
-    return jwksCache.keys;
+  const url = env.ZHANG_AUTH_JWKS_URL;
+  const now = Date.now();
+  const cached = jwksCache.get(url);
+  if (cached && now - cached.fetchedAt < JWKS_TTL_MS) {
+    return cached.keys;
   }
-  const res = await fetch(env.ZHANG_AUTH_JWKS_URL, { cf: { cacheTtl: 300 } });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch JWKS: ${res.status}`);
+
+  const previousFailure = jwksRefreshFailures.get(url);
+  if (previousFailure && now - previousFailure.failedAt < JWKS_REFRESH_RETRY_DELAY_MS) {
+    return staleJwksOrThrow(url, previousFailure.error);
   }
-  // zhang-auth serves JWKS wrapped in its standard envelope: { ok, data: { keys } }.
-  // Accept both the enveloped shape and a bare { keys } for robustness.
-  const body = (await res.json()) as { keys?: JsonWebKey[]; data?: { keys?: JsonWebKey[] } };
-  const keys = Array.isArray(body.keys)
-    ? body.keys
-    : Array.isArray(body.data?.keys)
-      ? body.data.keys
-      : [];
-  jwksCache = { keys, fetchedAt: Date.now() };
-  return keys;
+
+  let refresh = jwksRefreshes.get(url);
+  if (!refresh) {
+    refresh = fetchJwks(env);
+    jwksRefreshes.set(url, refresh);
+  }
+
+  try {
+    const keys = await refresh;
+    jwksCache.set(url, { keys, fetchedAt: Date.now() });
+    jwksRefreshFailures.delete(url);
+    return keys;
+  } catch (error) {
+    jwksRefreshFailures.set(url, { failedAt: Date.now(), error });
+    return staleJwksOrThrow(url, error);
+  } finally {
+    if (jwksRefreshes.get(url) === refresh) jwksRefreshes.delete(url);
+  }
 }
 
 /**
