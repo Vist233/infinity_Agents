@@ -11,6 +11,7 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/lib/api/auth", () => ({
   getCurrentUser: vi.fn().mockResolvedValue({ id: "user-1", email: "tester@example.com", name: "Tester" }),
+  isAuthRequestTimeoutError: (error: unknown) => error instanceof Error && error.name === "AuthRequestTimeoutError",
   logout: vi.fn(),
 }));
 
@@ -95,6 +96,22 @@ describe("Task detail downloads", () => {
 
     expect(await screen.findByText(/后端服务不可用/)).toBeDefined();
     expect(screen.queryByRole("button", { name: "登录 / 注册" })).toBeNull();
+    expect(getJson).not.toHaveBeenCalled();
+  });
+
+  it("turns an authentication timeout into a recoverable error instead of infinite loading", async () => {
+    const timeoutError = new Error("Authentication request timed out");
+    timeoutError.name = "AuthRequestTimeoutError";
+    (getCurrentUser as ReturnType<typeof vi.fn>).mockRejectedValue(timeoutError);
+
+    await act(async () => {
+      render(<LanguageProvider><TaskDetailPage /></LanguageProvider>);
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("登录状态检查超时，请重试或重新登录。");
+    expect(screen.queryByText("处理中...")).toBeNull();
+    expect(screen.getByRole("button", { name: "重试" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "登录 / 注册" })).toBeDefined();
     expect(getJson).not.toHaveBeenCalled();
   });
 });

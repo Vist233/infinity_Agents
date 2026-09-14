@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { ArrowLeft, RefreshCw, Download, PlayCircle, CheckCircle2, XCircle, Clock, AlertTriangle, LogIn } from "lucide-react";
 import { useRouter, useParams } from "next/navigation";
 import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
-import { getCurrentUser } from "@/lib/api/auth";
+import { getCurrentUser, isAuthRequestTimeoutError } from "@/lib/api/auth";
 import { artifactDownloadUrl, getJson, cancelTask, retryTask, listTasks, type TaskItem } from "@/lib/api/tasks";
 
 type TaskStatus = "draft" | "queued" | "claimed" | "running" | "succeeded" | "failed" | "cancelled" | "timeout";
@@ -137,6 +137,7 @@ export default function TaskDetailPage() {
   const [taskListError, setTaskListError] = useState<string | null>(null);
   const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated" | "error">("checking");
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authTimedOut, setAuthTimedOut] = useState(false);
   const detailRequestRef = useRef(0);
   const detailInFlightRef = useRef<{ taskId: string | null; promise: Promise<void> } | null>(null);
 
@@ -200,16 +201,20 @@ export default function TaskDetailPage() {
         if (!user) {
           setAuthStatus("unauthenticated");
           setAuthError(null);
+          setAuthTimedOut(false);
           setLoading(false);
           return;
         }
         setAuthStatus("authenticated");
         setAuthError(null);
+        setAuthTimedOut(false);
       })
       .catch((err) => {
         if (cancelled) return;
         setAuthStatus("error");
-        setAuthError(err instanceof Error ? err.message : t("error.backendUnavailable"));
+        const timedOut = isAuthRequestTimeoutError(err);
+        setAuthTimedOut(timedOut);
+        setAuthError(timedOut ? t("auth.requestTimeout") : err instanceof Error ? err.message : t("error.backendUnavailable"));
         setLoading(false);
       });
     return () => { cancelled = true; };
@@ -368,9 +373,15 @@ export default function TaskDetailPage() {
               </Button>
             </div>
           ) : authStatus === "error" ? (
-            <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-6 text-center">
-              <p className="max-w-md text-sm text-red-600">{t("error.backendUnavailable")}: {authError}</p>
-              <Button type="button" variant="outline" onClick={() => window.location.reload()}>{t("composer.retry")}</Button>
+            <div role="alert" className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-6 text-center">
+              <p className="max-w-md text-sm text-red-600">{authTimedOut ? authError : `${t("error.backendUnavailable")}: ${authError}`}</p>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button type="button" variant="outline" onClick={() => window.location.reload()}>{t("composer.retry")}</Button>
+                {authTimedOut && <Button type="button" className="gap-2" onClick={redirectToLogin}>
+                  <LogIn size={15} />
+                  {t("auth.signIn")}
+                </Button>}
+              </div>
             </div>
           ) : (
             <>
