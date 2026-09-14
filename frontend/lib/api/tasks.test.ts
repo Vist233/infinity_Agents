@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTask, getWorkerCredential, retryTask, rotateWorkerCredential } from "./tasks";
+import {
+  TASK_DETAIL_AUX_TIMEOUT_MS,
+  createTask,
+  getJsonWithTimeout,
+  getWorkerCredential,
+  retryTask,
+  rotateWorkerCredential,
+} from "./tasks";
 
 const input = {
   project_id: "project-1",
@@ -12,6 +19,7 @@ const input = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("createTask route selection", () => {
@@ -86,5 +94,27 @@ describe("createTask route selection", () => {
       "/api/tasks/task%2Ffailed/retry",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("aborts a stalled auxiliary task request at its bounded timeout", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | null | undefined;
+    const fetchMock = vi.fn((_input: unknown, init?: RequestInit) => {
+      signal = init?.signal;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const request = getJsonWithTimeout("/api/tasks/task-1/events");
+    const rejection = expect(request).rejects.toMatchObject({
+      name: "TaskRequestTimeoutError",
+      message: "Task detail auxiliary request timed out",
+    });
+    await vi.advanceTimersByTimeAsync(TASK_DETAIL_AUX_TIMEOUT_MS);
+
+    await rejection;
+    expect(signal?.aborted).toBe(true);
   });
 });

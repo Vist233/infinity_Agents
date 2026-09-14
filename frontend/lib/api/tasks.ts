@@ -171,9 +171,54 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/** Bound non-critical task-detail requests so one stalled endpoint cannot hold the page hostage. */
+export const TASK_DETAIL_AUX_TIMEOUT_MS = 8_000;
+
+export class TaskRequestTimeoutError extends Error {
+  constructor() {
+    super("Task detail auxiliary request timed out");
+    this.name = "TaskRequestTimeoutError";
+  }
+}
+
+export function isTaskRequestTimeoutError(error: unknown): error is TaskRequestTimeoutError {
+  return error instanceof Error && error.name === "TaskRequestTimeoutError";
+}
+
+async function requestJsonWithTimeout<T>(input: string, timeoutMs: number): Promise<T> {
+  const controller = new AbortController();
+  let timedOut = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutError = new TaskRequestTimeoutError();
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(timeoutError);
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([
+      requestJson<T>(input, { signal: controller.signal }),
+      timeout,
+    ]).catch((error) => {
+      if (timedOut) throw timeoutError;
+      throw error;
+    });
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
 /** Generic authenticated GET against the Task API. */
 export function getJson<T>(url: string): Promise<T> {
   return requestJson<T>(url);
+}
+
+/** Authenticated GET for non-critical task-detail panels. */
+export function getJsonWithTimeout<T>(url: string, timeoutMs = TASK_DETAIL_AUX_TIMEOUT_MS): Promise<T> {
+  return requestJsonWithTimeout<T>(url, timeoutMs);
 }
 
 export async function getDefaultProject(): Promise<ProjectInfo> {
@@ -368,6 +413,11 @@ export async function confirmTaskDraft(input: {
 export async function listTasks(limit = 50): Promise<TaskItem[]> {
   const data = await requestJson<{ tasks: TaskItem[] }>(`${getApiBase()}/api/tasks?limit=${limit}`);
   return data.tasks || [];
+}
+
+export function listTasksWithTimeout(limit = 50, timeoutMs = TASK_DETAIL_AUX_TIMEOUT_MS): Promise<TaskItem[]> {
+  return requestJsonWithTimeout<{ tasks: TaskItem[] }>(`${getApiBase()}/api/tasks?limit=${limit}`, timeoutMs)
+    .then((data) => data.tasks || []);
 }
 
 export async function cancelTask(taskId: string): Promise<{ status: string }> {

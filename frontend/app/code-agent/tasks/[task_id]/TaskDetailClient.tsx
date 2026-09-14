@@ -11,7 +11,16 @@ import { ArrowLeft, RefreshCw, Download, PlayCircle, CheckCircle2, XCircle, Cloc
 import { useRouter, useParams } from "next/navigation";
 import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
 import { getCurrentUser, isAuthRequestTimeoutError } from "@/lib/api/auth";
-import { artifactDownloadUrl, getJson, cancelTask, retryTask, listTasks, type TaskItem } from "@/lib/api/tasks";
+import {
+  artifactDownloadUrl,
+  cancelTask,
+  getJson,
+  getJsonWithTimeout,
+  isTaskRequestTimeoutError,
+  listTasksWithTimeout,
+  retryTask,
+  type TaskItem,
+} from "@/lib/api/tasks";
 
 type TaskStatus = "draft" | "queued" | "claimed" | "running" | "succeeded" | "failed" | "cancelled" | "timeout";
 
@@ -99,6 +108,11 @@ function formatBytes(bytes: number | null) {
   return `${size.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
+function formatAuxiliaryError(reason: unknown, timeoutMessage: string): string {
+  if (isTaskRequestTimeoutError(reason)) return timeoutMessage;
+  return reason instanceof Error ? reason.message : String(reason);
+}
+
 function taskIdFromBrowserPath(pathname: string): string | null {
   const match = pathname.match(/^\/(?:code-agent|task-center)\/tasks\/([^/]+)\/?$/);
   if (!match) return null;
@@ -141,9 +155,9 @@ export default function TaskDetailPage() {
   const detailRequestRef = useRef(0);
   const detailInFlightRef = useRef<{ taskId: string | null; promise: Promise<void> } | null>(null);
 
-  const loadDetail = useCallback((silent = false): Promise<void> => {
+  const loadDetail = useCallback((silent = false, force = false): Promise<void> => {
     const current = detailInFlightRef.current;
-    if (current?.taskId === taskId) return current.promise;
+    if (!force && current?.taskId === taskId) return current.promise;
     const requestId = ++detailRequestRef.current;
     if (!silent) setLoading(true);
     setError(null);
@@ -152,33 +166,37 @@ export default function TaskDetailPage() {
     setTaskListError(null);
     const promise = (async () => {
       try {
-      const taskData = await getJson<TaskDetail>(`${getApiBase()}/api/tasks/${taskId}`);
-      const [eventsResult, artifactsResult, taskListResult] = await Promise.allSettled([
-        getJson<TaskEvent[] | { events?: TaskEvent[] }>(`${getApiBase()}/api/tasks/${taskId}/events`),
-        getJson<Artifact[]>(`${getApiBase()}/api/tasks/${taskId}/artifacts`),
-        listTasks(50),
-      ]);
-      if (requestId !== detailRequestRef.current) return;
-      setTask(taskData);
-      if (eventsResult.status === "fulfilled") {
-        const evtList = Array.isArray(eventsResult.value) ? eventsResult.value : (eventsResult.value?.events ?? []);
-        setEvents(Array.isArray(evtList) ? evtList : []);
-      } else {
-        setEvents([]);
-        setEventsError(eventsResult.reason instanceof Error ? eventsResult.reason.message : String(eventsResult.reason));
-      }
-      if (artifactsResult.status === "fulfilled") {
-        setArtifacts(Array.isArray(artifactsResult.value) ? artifactsResult.value : []);
-      } else {
-        setArtifacts([]);
-        setArtifactsError(artifactsResult.reason instanceof Error ? artifactsResult.reason.message : String(artifactsResult.reason));
-      }
-      if (taskListResult.status === "fulfilled") {
-        setTaskList(taskListResult.value);
-      } else {
-        setTaskList([]);
-        setTaskListError(taskListResult.reason instanceof Error ? taskListResult.reason.message : String(taskListResult.reason));
-      }
+        const taskData = await getJson<TaskDetail>(`${getApiBase()}/api/tasks/${taskId}`);
+        if (requestId !== detailRequestRef.current) return;
+        // Render the primary record before waiting on optional panels. A
+        // stalled events/artifacts/list request must not hide the task or its
+        // retry action.
+        setTask(taskData);
+        const [eventsResult, artifactsResult, taskListResult] = await Promise.allSettled([
+          getJsonWithTimeout<TaskEvent[] | { events?: TaskEvent[] }>(`${getApiBase()}/api/tasks/${taskId}/events`),
+          getJsonWithTimeout<Artifact[]>(`${getApiBase()}/api/tasks/${taskId}/artifacts`),
+          listTasksWithTimeout(50),
+        ]);
+        if (requestId !== detailRequestRef.current) return;
+        if (eventsResult.status === "fulfilled") {
+          const evtList = Array.isArray(eventsResult.value) ? eventsResult.value : (eventsResult.value?.events ?? []);
+          setEvents(Array.isArray(evtList) ? evtList : []);
+        } else {
+          setEvents([]);
+          setEventsError(formatAuxiliaryError(eventsResult.reason, t("tasks.auxRequestTimeout")));
+        }
+        if (artifactsResult.status === "fulfilled") {
+          setArtifacts(Array.isArray(artifactsResult.value) ? artifactsResult.value : []);
+        } else {
+          setArtifacts([]);
+          setArtifactsError(formatAuxiliaryError(artifactsResult.reason, t("tasks.auxRequestTimeout")));
+        }
+        if (taskListResult.status === "fulfilled") {
+          setTaskList(taskListResult.value);
+        } else {
+          setTaskList([]);
+          setTaskListError(formatAuxiliaryError(taskListResult.reason, t("tasks.auxRequestTimeout")));
+        }
       } catch (err) {
         if (requestId !== detailRequestRef.current) return;
         setError(err instanceof Error ? err.message : String(err));
@@ -191,7 +209,7 @@ export default function TaskDetailPage() {
       if (detailInFlightRef.current?.promise === promise) detailInFlightRef.current = null;
     });
     return promise;
-  }, [taskId]);
+  }, [t, taskId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -264,7 +282,7 @@ export default function TaskDetailPage() {
     try {
       await cancelTask(taskId);
       setCancelSuccess(true);
-      void loadDetail(true);
+      void loadDetail(true, true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -279,7 +297,7 @@ export default function TaskDetailPage() {
     try {
       await retryTask(taskId);
       setRetrySuccess(true);
-      void loadDetail(true);
+      void loadDetail(true, true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

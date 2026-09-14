@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LanguageProvider } from "@/lib/i18n";
 import TaskDetailPage from "../[task_id]/page";
@@ -19,12 +19,14 @@ vi.mock("@/lib/api/tasks", () => ({
   artifactDownloadUrl: (artifactId: string) => `/api/artifacts/${artifactId}`,
   cancelTask: vi.fn(),
   getJson: vi.fn(),
-  getTaskArtifacts: vi.fn(),
-  listTasks: vi.fn(),
+  getJsonWithTimeout: vi.fn(),
+  isTaskRequestTimeoutError: (error: unknown) => error instanceof Error && error.name === "TaskRequestTimeoutError",
+  listTasksWithTimeout: vi.fn(),
+  retryTask: vi.fn(),
 }));
 
 import { getCurrentUser } from "@/lib/api/auth";
-import { getJson, listTasks } from "@/lib/api/tasks";
+import { getJson, getJsonWithTimeout, listTasksWithTimeout, retryTask } from "@/lib/api/tasks";
 
 describe("Task detail downloads", () => {
   beforeEach(() => {
@@ -32,7 +34,7 @@ describe("Task detail downloads", () => {
     (getCurrentUser as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "user-1", email: "tester@example.com", name: "Tester" });
     window.localStorage.setItem("infinity-agents-language", "zh");
     window.history.replaceState({}, "", "/task-center/tasks/task-1/");
-    (listTasks as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (listTasksWithTimeout as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     const task = {
       task_id: "task-1",
       title: "Case 2",
@@ -50,10 +52,10 @@ describe("Task detail downloads", () => {
       checksum_sha256: "a".repeat(64),
       created_at: "2026-08-10T00:01:00Z",
     }];
-    (getJson as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+    (getJson as ReturnType<typeof vi.fn>).mockResolvedValue(task);
+    (getJsonWithTimeout as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
       if (url.endsWith("/events")) return Promise.resolve([]);
-      if (url.endsWith("/artifacts")) return Promise.resolve(artifacts);
-      return Promise.resolve(task);
+      return Promise.resolve(artifacts);
     });
   });
 
@@ -113,5 +115,55 @@ describe("Task detail downloads", () => {
     expect(screen.getByRole("button", { name: "重试" })).toBeDefined();
     expect(screen.getByRole("button", { name: "登录 / 注册" })).toBeDefined();
     expect(getJson).not.toHaveBeenCalled();
+  });
+
+  it("renders the main task and keeps retry available while auxiliary requests stall", async () => {
+    const pending = new Promise<never>(() => undefined);
+    const retryableTask = {
+      task_id: "task-1",
+      title: "Case 2",
+      status: "failed",
+      can_retry: true,
+      attempt_count: 1,
+      max_attempts: 3,
+      created_at: "2026-08-10T00:00:00Z",
+    };
+    (getJson as ReturnType<typeof vi.fn>).mockResolvedValue(retryableTask);
+    (getJsonWithTimeout as ReturnType<typeof vi.fn>).mockReturnValue(pending);
+    (listTasksWithTimeout as ReturnType<typeof vi.fn>).mockReturnValue(pending);
+    (retryTask as ReturnType<typeof vi.fn>).mockResolvedValue({ task_id: "task-1", status: "queued" });
+
+    await act(async () => {
+      render(<LanguageProvider><TaskDetailPage /></LanguageProvider>);
+    });
+
+    expect(await screen.findByRole("heading", { name: "Case 2" })).toBeDefined();
+    expect(screen.queryByText("处理中...")).toBeNull();
+    expect(screen.getByRole("button", { name: "重试任务" })).toBeDefined();
+    expect(getJsonWithTimeout).toHaveBeenCalledTimes(2);
+    expect(listTasksWithTimeout).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "重试任务" }));
+    await waitFor(() => expect(retryTask).toHaveBeenCalledWith("task-1"));
+    await waitFor(() => expect(getJson).toHaveBeenCalledTimes(2));
+  });
+
+  it("shows auxiliary failures in their own panels", async () => {
+    const timeoutError = new Error("Task detail auxiliary request timed out");
+    timeoutError.name = "TaskRequestTimeoutError";
+    (getJsonWithTimeout as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.endsWith("/events")) return Promise.reject(timeoutError);
+      return Promise.reject(new Error("artifact unavailable"));
+    });
+    (listTasksWithTimeout as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("list unavailable"));
+
+    await act(async () => {
+      render(<LanguageProvider><TaskDetailPage /></LanguageProvider>);
+    });
+
+    expect(await screen.findByText("加载事件失败：辅助请求超时，请稍后重试。")).toBeDefined();
+    expect(screen.getByText("加载产物失败：artifact unavailable")).toBeDefined();
+    expect(await screen.findByText(/list unavailable/)).toBeDefined();
+    expect(screen.getByRole("heading", { name: "Case 2" })).toBeDefined();
   });
 });
