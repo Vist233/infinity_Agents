@@ -171,7 +171,7 @@ describe("Access Token JWT header contract", () => {
     expect(signal?.aborted).toBe(true);
   });
 
-  it("uses a bounded stale cache after refresh failure, then fails closed", async () => {
+  it("serves stale keys while refreshing, then fails closed after the stale window", async () => {
     const baseTime = Date.now();
     vi.useFakeTimers({ now: baseTime });
     const cacheEnv = {
@@ -196,13 +196,24 @@ describe("Access Token JWT header contract", () => {
         refreshSignal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
       });
     });
-    const staleVerification = verifyAccessToken(token, cacheEnv);
-    const staleResult = expect(staleVerification).resolves.toMatchObject({ sub: "user-1" });
-    await vi.advanceTimersByTimeAsync(JWKS_FETCH_TIMEOUT_MS);
+    // The stale request must return without waiting for the 10-second refresh
+    // timeout, and concurrent stale requests must share one refresh.
+    const staleVerifications = Promise.all([
+      verifyAccessToken(token, cacheEnv),
+      verifyAccessToken(token, cacheEnv),
+    ]);
+    const staleResult = expect(staleVerifications).resolves.toEqual([
+      expect.objectContaining({ sub: "user-1" }),
+      expect.objectContaining({ sub: "user-1" }),
+    ]);
     await staleResult;
-
-    expect(refreshSignal?.aborted).toBe(true);
+    expect(refreshSignal?.aborted).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // Let the background refresh fail; its rejection is intentionally handled
+    // without delaying the stale verification above.
+    await vi.advanceTimersByTimeAsync(JWKS_FETCH_TIMEOUT_MS);
+    expect(refreshSignal?.aborted).toBe(true);
     // Memoize the failed refresh briefly so polling requests do not each wait
     // for another upstream timeout while the bounded stale cache is usable.
     await expect(verifyAccessToken(token, cacheEnv)).resolves.toMatchObject({ sub: "user-1" });

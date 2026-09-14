@@ -94,35 +94,68 @@ function staleJwksOrThrow(url: string, error: unknown): JsonWebKey[] {
   throw error;
 }
 
+function startJwksRefresh(env: Env): Promise<JsonWebKey[]> {
+  const url = env.ZHANG_AUTH_JWKS_URL;
+  const existing = jwksRefreshes.get(url);
+  if (existing) return existing;
+
+  const refresh = fetchJwks(env)
+    .then((keys) => {
+      jwksCache.set(url, { keys, fetchedAt: Date.now() });
+      jwksRefreshFailures.delete(url);
+      return keys;
+    })
+    .catch((error) => {
+      jwksRefreshFailures.set(url, { failedAt: Date.now(), error });
+      throw error;
+    });
+  jwksRefreshes.set(url, refresh);
+
+  // Use a rejection handler for the cleanup branch so a stale-while-
+  // revalidate refresh cannot create an unhandled rejection when it runs in
+  // the background. Callers that need the result still await `refresh`.
+  void refresh.then(
+    () => {
+      if (jwksRefreshes.get(url) === refresh) jwksRefreshes.delete(url);
+    },
+    () => {
+      if (jwksRefreshes.get(url) === refresh) jwksRefreshes.delete(url);
+    },
+  );
+  return refresh;
+}
+
 async function loadJwks(env: Env): Promise<JsonWebKey[]> {
   const url = env.ZHANG_AUTH_JWKS_URL;
   const now = Date.now();
   const cached = jwksCache.get(url);
-  if (cached && now - cached.fetchedAt < JWKS_TTL_MS) {
+  const cacheAge = cached ? now - cached.fetchedAt : null;
+  if (cached && cacheAge !== null && cacheAge < JWKS_TTL_MS) {
     return cached.keys;
   }
 
   const previousFailure = jwksRefreshFailures.get(url);
-  if (previousFailure && now - previousFailure.failedAt < JWKS_REFRESH_RETRY_DELAY_MS) {
+  const staleWindowAvailable = cached !== undefined
+    && cacheAge !== null
+    && cacheAge < JWKS_TTL_MS + JWKS_STALE_IF_ERROR_MS;
+  if (staleWindowAvailable && previousFailure && now - previousFailure.failedAt < JWKS_REFRESH_RETRY_DELAY_MS) {
     return staleJwksOrThrow(url, previousFailure.error);
   }
 
-  let refresh = jwksRefreshes.get(url);
-  if (!refresh) {
-    refresh = fetchJwks(env);
-    jwksRefreshes.set(url, refresh);
+  const refresh = startJwksRefresh(env);
+  if (staleWindowAvailable) {
+    // Stale-while-revalidate: the cached key set remains bounded by
+    // staleJwksOrThrow, while the refresh is deduplicated and observed in the
+    // background for subsequent requests.
+    void refresh.catch(() => undefined);
+    return cached.keys;
   }
 
   try {
-    const keys = await refresh;
-    jwksCache.set(url, { keys, fetchedAt: Date.now() });
-    jwksRefreshFailures.delete(url);
-    return keys;
+    return await refresh;
   } catch (error) {
     jwksRefreshFailures.set(url, { failedAt: Date.now(), error });
     return staleJwksOrThrow(url, error);
-  } finally {
-    if (jwksRefreshes.get(url) === refresh) jwksRefreshes.delete(url);
   }
 }
 
