@@ -1953,7 +1953,9 @@ class FakeStatement {
       const maxRetryOverrideMarker = task ? `task-requeued:${task.task_id}:${maxAttempts}` : "";
       const maxRetryOverrideUsed = Boolean(maxRetryOverrideMarker && this.db.taskEvents.get(maxRetryOverrideMarker)?.event_type === "task_requeued");
       const attemptAvailable = Boolean(task
-        && (attemptCountValue < maxAttempts || (attemptCountValue === maxAttempts && !maxRetryOverrideUsed)));
+        && (attemptCountValue < maxAttempts
+          || (attemptCountValue === maxAttempts
+            && (!maxRetryOverrideUsed || ["failed", "timeout"].includes(task.status)))));
       const eligible = Boolean(task
         && (operator === 1 || task.created_by === userId)
         && ["failed", "timeout"].includes(task.status)

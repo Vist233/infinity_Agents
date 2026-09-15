@@ -59,11 +59,17 @@ interface TaskRow {
 const RETRYABLE_TASK_STATUSES = new Set(["failed", "timeout"]);
 const TERMINAL_ATTEMPT_STATUSES = new Set(["succeeded", "failed", "expired", "cancelled"]);
 
-function taskRetryAttemptAvailable(row: Pick<TaskRow, "attempt_count" | "max_attempts" | "max_retry_override_used">): boolean {
+function taskRetryAttemptAvailable(row: Pick<TaskRow, "status" | "attempt_count" | "max_attempts" | "max_retry_override_used">): boolean {
   const attemptCount = Number(row.attempt_count);
   const maxAttempts = Number(row.max_attempts);
   return attemptCount < maxAttempts
-    || (attemptCount === maxAttempts && Number(row.max_retry_override_used ?? 0) === 0);
+    || (
+      attemptCount === maxAttempts
+      // A marker on a still-terminal task is an orphan from the old
+      // marker-first batch ordering. Let the formal retry endpoint finish
+      // that same transition; queued/claimed tasks remain one-shot.
+      && (Number(row.max_retry_override_used ?? 0) === 0 || RETRYABLE_TASK_STATUSES.has(row.status))
+    );
 }
 
 function iso(value: number | null | undefined): string | null {
@@ -893,6 +899,9 @@ async function handleRetryTask(taskIdValue: string, env: Env, user: AuthedUser):
   const now = nowSeconds();
   const attemptCount = Number(task.attempt_count);
   const maxAttemptOverride = attemptCount === Number(task.max_attempts);
+  const orphanedMaxRetryMarker = maxAttemptOverride
+    && Number(task.max_retry_override_used ?? 0) !== 0
+    && RETRYABLE_TASK_STATUSES.has(task.status);
   const eventId = `task-requeued:${task.task_id}:${attemptCount}`;
   const outboxEventId = `task-queued:retry:${task.task_id}:${attemptCount}`;
   const outboxIdempotencyKey = `task-queued:${task.task_id}:retry:${attemptCount}`;
@@ -974,11 +983,11 @@ async function handleRetryTask(taskIdValue: string, env: Env, user: AuthedUser):
              attempt_count < max_attempts
              OR (
                attempt_count = max_attempts
-               AND NOT EXISTS (
-                 SELECT 1 FROM task_events retry_override
-                 WHERE retry_override.task_id = tasks.task_id
-                   AND retry_override.task_event_id = 'task-requeued:' || tasks.task_id || ':' || tasks.max_attempts
-                   AND retry_override.event_type = 'task_requeued'
+               AND EXISTS (
+                 SELECT 1 FROM task_events retry_marker
+                 WHERE retry_marker.task_id = tasks.task_id
+                   AND retry_marker.task_event_id = ?4
+                   AND retry_marker.event_type = 'task_requeued'
                )
              )
            )
@@ -1040,7 +1049,7 @@ async function handleRetryTask(taskIdValue: string, env: Env, user: AuthedUser):
       task_id: task.task_id,
       status: "queued",
       attempt_count: attemptCount,
-      duplicate: !eventInserted,
+      duplicate: !eventInserted && !orphanedMaxRetryMarker,
     });
   }
 
