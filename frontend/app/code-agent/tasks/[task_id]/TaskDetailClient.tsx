@@ -20,6 +20,7 @@ import {
   listTasksWithTimeout,
   retryTask,
   type TaskItem,
+  type TaskRetryReason,
 } from "@/lib/api/tasks";
 
 type TaskStatus = "draft" | "queued" | "claimed" | "running" | "succeeded" | "failed" | "cancelled" | "timeout";
@@ -36,6 +37,7 @@ interface TaskDetail {
   lease_expires_at: string | null;
   active_attempt_id?: string | null;
   can_retry?: boolean;
+  retry_reason?: TaskRetryReason | null;
   attempt_count: number;
   max_attempts: number;
   result_artifact_id: string | null;

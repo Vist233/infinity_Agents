@@ -200,7 +200,7 @@ async def test_lease_renewal_retries_transient_transport_failure(monkeypatch: py
     claim = ClaimedTask(
         task_id="task-retry", task_spec_id="spec", dataset_snapshot_id="dataset",
         method_source_id=None, title="Retry", attempt_id="attempt",
-        lease_token="lease", fencing_epoch=1, lease_expires_at=100,
+        lease_token="lease", fencing_epoch=1, lease_expires_at=int(executor_v2.time.time()) + 90,
     )
     cancel = asyncio.Event()
 
@@ -209,6 +209,94 @@ async def test_lease_renewal_retries_transient_transport_failure(monkeypatch: py
     assert calls == 2
     assert sleeps == [executor_v2.RENEW_RETRY_INITIAL_SECONDS]
     assert not cancel.is_set()
+
+
+@pytest.mark.asyncio
+async def test_lease_renewal_uses_remaining_lease_budget_before_declaring_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [0.0]
+    sleeps: list[float] = []
+    calls = 0
+
+    monkeypatch.setattr(executor_v2.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(executor_v2.time, "time", lambda: 1_000.0)
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        clock[0] += delay
+
+    class DelayedRecoveryClient:
+        async def renew(self, _claim: ClaimedTask):
+            nonlocal calls
+            calls += 1
+            if calls <= 7:
+                raise httpx.ConnectError(
+                    "campus network reset",
+                    request=httpx.Request("POST", "https://infinity.test/api/worker/v2/tasks/task/renew"),
+                )
+            return {"status": "running", "lease_expires_at": 1_200}
+
+        async def spec(self, _claim: ClaimedTask):
+            return {"cancel_requested": False}
+
+    monkeypatch.setattr(executor_v2.asyncio, "sleep", fake_sleep)
+    claim = ClaimedTask(
+        task_id="task-campus-network", task_spec_id="spec", dataset_snapshot_id="dataset",
+        method_source_id=None, title="Campus network", attempt_id="attempt",
+        lease_token="lease", fencing_epoch=1, lease_expires_at=1_090,
+    )
+
+    renewed_expiry = await executor_v2._renew_with_retries(
+        DelayedRecoveryClient(),
+        claim,
+        asyncio.Event(),
+    )  # type: ignore[arg-type]
+
+    assert calls == 8
+    assert renewed_expiry == 1_200
+    assert sleeps == [2.0, 4.0, 8.0, 10.0, 10.0, 10.0, 10.0]
+    assert clock[0] == 54.0
+
+
+@pytest.mark.asyncio
+async def test_lease_renewal_stops_at_the_lease_safety_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = [0.0]
+    sleeps: list[float] = []
+    calls = 0
+
+    monkeypatch.setattr(executor_v2.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(executor_v2.time, "time", lambda: 1_000.0)
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        clock[0] += delay
+
+    class DisconnectedClient:
+        async def renew(self, _claim: ClaimedTask):
+            nonlocal calls
+            calls += 1
+            raise httpx.ConnectError(
+                "campus network unavailable",
+                request=httpx.Request("POST", "https://infinity.test/api/worker/v2/tasks/task/renew"),
+            )
+
+        async def spec(self, _claim: ClaimedTask):
+            raise AssertionError("spec must not run after a failed renewal")
+
+    monkeypatch.setattr(executor_v2.asyncio, "sleep", fake_sleep)
+    claim = ClaimedTask(
+        task_id="task-lease-boundary", task_spec_id="spec", dataset_snapshot_id="dataset",
+        method_source_id=None, title="Lease boundary", attempt_id="attempt",
+        lease_token="lease", fencing_epoch=1, lease_expires_at=1_070,
+    )
+
+    with pytest.raises(httpx.ConnectError):
+        await executor_v2._renew_with_retries(DisconnectedClient(), claim, asyncio.Event())  # type: ignore[arg-type]
+
+    assert calls == 8
+    assert clock[0] == executor_v2.RENEW_RETRY_MAX_SECONDS
+    assert sum(sleeps) == executor_v2.RENEW_RETRY_MAX_SECONDS
 
 
 @pytest.mark.asyncio

@@ -278,6 +278,104 @@ describe("task retry state machine", () => {
     expect(await exhausted?.json()).toMatchObject({ error: { code: "TASK_RETRY_LIMIT_REACHED" } });
   });
 
+  it("allows one audited lease-expiry recovery after the max override and rejects ordinary failures", async () => {
+    const { env, db } = makeEnv();
+    const taskId = "task-lease-expired-recovery";
+    db.seedTask(taskId, user.userId, "Lease-expiry recovery", "failed");
+    const task = db.tasks.get(taskId)!;
+    task.attempt_count = 4;
+    task.max_attempts = 3;
+    db.seedTaskAttempt({
+      attempt_id: "attempt-override-expired",
+      task_id: taskId,
+      status: "expired",
+      lease_expires_at: 1_800_000_000,
+      attempt_number: 4,
+      error_code: "lease_expired",
+    });
+    const maxOverrideEventId = `task-requeued:${taskId}:3`;
+    db.taskEvents.set(maxOverrideEventId, {
+      task_event_id: maxOverrideEventId,
+      task_id: taskId,
+      event_type: "task_requeued",
+      event_data: JSON.stringify({ retry_mode: "max_attempt_override" }),
+      created_at: 1_800_000_000,
+    });
+
+    const before = await handleTaskApi(new Request(`https://app.test/api/tasks/${taskId}`), env, user);
+    expect(before?.status).toBe(200);
+    expect(await before?.json()).toMatchObject({
+      status: "failed",
+      attempt_count: 4,
+      max_attempts: 3,
+      can_retry: true,
+      retry_reason: "lease_expired_recovery",
+    });
+
+    const response = await handleTaskApi(retryRequest(taskId), env, user);
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toMatchObject({
+      task_id: taskId,
+      status: "queued",
+      attempt_count: 4,
+      retry_mode: "lease_expired_recovery",
+      duplicate: false,
+    });
+    expect(task.status).toBe("queued");
+    const recoveryEventId = `task-requeued:lease-expired-recovery:${taskId}:4`;
+    expect(JSON.parse(db.taskEvents.get(recoveryEventId)!.event_data)).toMatchObject({
+      reason: "lease_expired",
+      retry_mode: "lease_expired_recovery",
+      recovery_of_attempt_id: "attempt-override-expired",
+      recovery_limit: 1,
+    });
+    expect(db.outboxEvents.get(`task-queued:retry:lease-expired-recovery:${taskId}:4`)).toBeDefined();
+
+    const duplicate = await handleTaskApi(retryRequest(taskId), env, user);
+    expect(duplicate?.status).toBe(200);
+    expect(await duplicate?.json()).toMatchObject({ task_id: taskId, status: "queued", duplicate: true });
+    expect([...db.taskEvents.values()].filter((event) => event.task_id === taskId && event.event_type === "task_requeued")).toHaveLength(2);
+
+    task.status = "failed";
+    task.attempt_count = 5;
+    db.seedTaskAttempt({
+      attempt_id: "attempt-after-recovery",
+      task_id: taskId,
+      status: "failed",
+      lease_expires_at: 1_800_000_000,
+      attempt_number: 5,
+      error_code: "execution_error",
+    });
+    const afterRecovery = await handleTaskApi(retryRequest(taskId), env, user);
+    expect(afterRecovery?.status).toBe(409);
+    expect(await afterRecovery?.json()).toMatchObject({ error: { code: "TASK_RETRY_LIMIT_REACHED" } });
+
+    const ordinary = makeEnv();
+    ordinary.db.seedTask("task-ordinary-after-override", user.userId, "Ordinary failure", "failed");
+    const ordinaryTask = ordinary.db.tasks.get("task-ordinary-after-override")!;
+    ordinaryTask.attempt_count = 4;
+    ordinaryTask.max_attempts = 3;
+    ordinary.db.seedTaskAttempt({
+      attempt_id: "attempt-ordinary-failed",
+      task_id: ordinaryTask.task_id,
+      status: "failed",
+      lease_expires_at: 1_800_000_000,
+      attempt_number: 4,
+      error_code: "execution_error",
+    });
+    const ordinaryMaxOverrideEventId = `task-requeued:${ordinaryTask.task_id}:3`;
+    ordinary.db.taskEvents.set(ordinaryMaxOverrideEventId, {
+      task_event_id: ordinaryMaxOverrideEventId,
+      task_id: ordinaryTask.task_id,
+      event_type: "task_requeued",
+      event_data: JSON.stringify({ retry_mode: "max_attempt_override" }),
+      created_at: 1_800_000_000,
+    });
+    const ordinaryResponse = await handleTaskApi(retryRequest(ordinaryTask.task_id), ordinary.env, user);
+    expect(ordinaryResponse?.status).toBe(409);
+    expect(await ordinaryResponse?.json()).toMatchObject({ error: { code: "TASK_RETRY_LIMIT_REACHED" } });
+  });
+
   it("allows an administrator to retry another user's task but not an ordinary user", async () => {
     const { env, db } = makeEnv();
     db.seedTask("task-owned-by-alice", "alice", "Alice's task", "failed");

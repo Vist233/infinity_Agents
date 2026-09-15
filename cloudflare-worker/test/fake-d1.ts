@@ -76,6 +76,11 @@ export interface TaskRow {
   active_attempt_status?: string | null;
   has_active_attempt?: number | boolean;
   max_retry_override_used?: number | boolean;
+  latest_attempt_id?: string | null;
+  latest_attempt_number?: number | null;
+  latest_attempt_status?: string | null;
+  latest_attempt_error_code?: string | null;
+  lease_expired_recovery_used?: number | boolean;
   lease_worker_id?: string | null;
   lease_token_hash?: string | null;
   lease_expires_at?: number | null;
@@ -188,6 +193,8 @@ export interface TaskAttemptRow {
   task_id: string;
   status: "claimed" | "running" | "succeeded" | "failed" | "expired" | "cancelled";
   lease_expires_at: number;
+  attempt_number?: number;
+  error_code?: string | null;
 }
 
 export interface PersistentWorkerRow {
@@ -438,16 +445,26 @@ export class FakeD1 {
 
   taskWithAttemptState(row: TaskRow): TaskRow {
     const activeAttempt = row.active_attempt_id ? this.taskAttempts.get(row.active_attempt_id) : undefined;
+    const latestAttempt = [...this.taskAttempts.values()]
+      .filter((attempt) => attempt.task_id === row.task_id && attempt.attempt_number != null)
+      .sort((left, right) => Number(right.attempt_number) - Number(left.attempt_number))[0];
     const hasActiveAttempt = [...this.taskAttempts.values()].some((attempt) =>
       attempt.task_id === row.task_id && ["claimed", "running"].includes(attempt.status),
     );
     const maxRetryOverrideMarker = `task-requeued:${row.task_id}:${Number(row.max_attempts ?? 0)}`;
     const maxRetryOverrideUsed = this.taskEvents.get(maxRetryOverrideMarker)?.event_type === "task_requeued";
+    const recoveryMarker = `task-requeued:lease-expired-recovery:${row.task_id}:${Number(row.attempt_count ?? 0)}`;
+    const recoveryMarkerUsed = this.taskEvents.get(recoveryMarker)?.event_type === "task_requeued";
     return {
       ...row,
       active_attempt_status: activeAttempt?.status ?? null,
       has_active_attempt: hasActiveAttempt ? 1 : 0,
       max_retry_override_used: maxRetryOverrideUsed ? 1 : 0,
+      latest_attempt_id: latestAttempt?.attempt_id ?? row.latest_attempt_id ?? null,
+      latest_attempt_number: latestAttempt?.attempt_number ?? row.latest_attempt_number ?? null,
+      latest_attempt_status: latestAttempt?.status ?? row.latest_attempt_status ?? null,
+      latest_attempt_error_code: latestAttempt?.error_code ?? row.latest_attempt_error_code ?? null,
+      lease_expired_recovery_used: recoveryMarkerUsed ? 1 : 0,
     };
   }
 
@@ -882,7 +899,7 @@ class FakeStatement {
     if (sql.includes("FROM tasks WHERE chat_confirmation_id = ?1")) {
       const [confirmationId, userId] = this.args as [string, string];
       const row = [...this.db.tasks.values()].find((task) => task.chat_confirmation_id === confirmationId && task.created_by === userId);
-      return (row as T) ?? null;
+      return row ? (this.db.taskWithAttemptState(row) as T) : null;
     }
     if (sql.includes("SELECT attempt_id FROM worker_attempts") && sql.includes("worker_id = ?1")) {
       const [workerId, now] = this.args as [string, number];
@@ -1940,7 +1957,7 @@ class FakeStatement {
       return { meta: { changes: 1 } };
     }
     if (sql.includes("INSERT OR IGNORE INTO task_events") && sql.includes("'task_requeued'")) {
-      const [eventId, taskId, eventData, createdAt, attemptCount, operator, userId] = this.args as [string, string, string, number, number, number, string];
+      const [eventId, taskId, eventData, createdAt, attemptCount, operator, userId, recoveryMode, latestAttemptId] = this.args as [string, string, string, number, number, number, string, number, string];
       const task = this.db.tasks.get(taskId);
       const activeAttempt = [...this.db.taskAttempts.values()].some((attempt) =>
         attempt.task_id === taskId && ["claimed", "running"].includes(attempt.status),
@@ -1952,10 +1969,19 @@ class FakeStatement {
       const maxAttempts = Number(task?.max_attempts ?? 0);
       const maxRetryOverrideMarker = task ? `task-requeued:${task.task_id}:${maxAttempts}` : "";
       const maxRetryOverrideUsed = Boolean(maxRetryOverrideMarker && this.db.taskEvents.get(maxRetryOverrideMarker)?.event_type === "task_requeued");
-      const attemptAvailable = Boolean(task
+      const recoveryAttempt = latestAttemptId ? this.db.taskAttempts.get(latestAttemptId) : undefined;
+      const recoveryAvailable = Boolean(task
+        && attemptCountValue === maxAttempts + 1
+        && maxRetryOverrideUsed
+        && recoveryAttempt?.task_id === taskId
+        && Number(recoveryAttempt.attempt_number) === attemptCountValue
+        && recoveryAttempt.status === "expired"
+        && recoveryAttempt.error_code === "lease_expired");
+      const normalAttemptAvailable = Boolean(task
         && (attemptCountValue < maxAttempts
           || (attemptCountValue === maxAttempts
             && (!maxRetryOverrideUsed || ["failed", "timeout"].includes(task.status)))));
+      const attemptAvailable = Number(recoveryMode) === 1 ? recoveryAvailable : normalAttemptAvailable;
       const eligible = Boolean(task
         && (operator === 1 || task.created_by === userId)
         && ["failed", "timeout"].includes(task.status)
@@ -1976,7 +2002,7 @@ class FakeStatement {
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE tasks SET status = 'queued'") && sql.includes("task_requeued")) {
-      const [taskId, now, attemptCount, eventId, operator, userId] = this.args as [string, number, number, string, number, string];
+      const [taskId, now, attemptCount, eventId, operator, userId, recoveryMode, latestAttemptId] = this.args as [string, number, number, string, number, string, number, string];
       const task = this.db.tasks.get(taskId);
       const activeAttempt = [...this.db.taskAttempts.values()].some((attempt) =>
         attempt.task_id === taskId && ["claimed", "running"].includes(attempt.status),
@@ -1988,9 +2014,20 @@ class FakeStatement {
       const maxAttempts = Number(task?.max_attempts ?? 0);
       const maxRetryOverrideMarker = task ? `task-requeued:${task.task_id}:${maxAttempts}` : "";
       const retryOverrideInserted = this.db.taskEvents.get(eventId)?.event_type === "task_requeued";
-      const attemptAvailable = Boolean(task
+      const recoveryAttempt = latestAttemptId ? this.db.taskAttempts.get(latestAttemptId) : undefined;
+      const recoveryAvailable = Boolean(task
+        && attemptCountValue === maxAttempts + 1
+        && this.db.taskEvents.get(maxRetryOverrideMarker)?.event_type === "task_requeued"
+        && recoveryAttempt?.task_id === taskId
+        && Number(recoveryAttempt.attempt_number) === attemptCountValue
+        && recoveryAttempt.status === "expired"
+        && recoveryAttempt.error_code === "lease_expired");
+      const normalAttemptAvailable = Boolean(task
         && (attemptCountValue < maxAttempts
           || (attemptCountValue === maxAttempts && eventId === maxRetryOverrideMarker && retryOverrideInserted)));
+      const attemptAvailable = Number(recoveryMode) === 1
+        ? recoveryAvailable && eventId === `task-requeued:lease-expired-recovery:${taskId}:${attemptCountValue}` && retryOverrideInserted
+        : normalAttemptAvailable;
       const eligible = Boolean(task
         && (operator === 1 || task.created_by === userId)
         && ["failed", "timeout"].includes(task.status)

@@ -28,7 +28,12 @@ from backend.security import ArtifactCollector, SecurityBoundaryError
 
 DISCOVERY_RUNTIME_GOAL = "Reproduce the validated scientific method against the frozen dataset input and produce auditable deliverables."
 RENEW_INTERVAL_SECONDS = 20.0
-RENEW_RETRY_MAX_SECONDS = 45.0
+# The control plane grants a 90-second attempt lease.  A renewal normally
+# starts 20 seconds after the previous successful renewal, so this bounded
+# window leaves a fixed safety margin instead of abandoning a still-live lease
+# at the old 20 + 45 second point.
+RENEW_RETRY_MAX_SECONDS = 60.0
+RENEW_RETRY_LEASE_SAFETY_SECONDS = 10.0
 RENEW_RETRY_INITIAL_SECONDS = 2.0
 RENEW_RETRY_MAX_DELAY_SECONDS = 10.0
 
@@ -114,18 +119,52 @@ def _is_transient_lease_error(exc: BaseException) -> bool:
     return isinstance(exc, (httpx.HTTPError, OSError, asyncio.TimeoutError))
 
 
+def _renew_deadline(lease_expires_at: int | None) -> float:
+    """Bound retries by both a fixed cap and the server lease safety margin."""
+    now = time.monotonic()
+    deadline = now + RENEW_RETRY_MAX_SECONDS
+    if lease_expires_at is None:
+        return deadline
+    remaining = float(lease_expires_at) - time.time() - RENEW_RETRY_LEASE_SAFETY_SECONDS
+    return min(deadline, now + max(0.0, remaining))
+
+
+def _renewed_lease_expiry(response: Mapping[str, Any], fallback: int | None) -> int | None:
+    """Keep the latest server lease expiry without accepting a stale value."""
+    raw = response.get("lease_expires_at")
+    try:
+        candidate = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    if candidate <= int(time.time()):
+        return fallback
+    return max(candidate, fallback or 0)
+
+
 async def _renew_with_retries(
     client: WorkerV2Client,
     claim: ClaimedTask,
     cancel: asyncio.Event,
-) -> None:
-    """Renew through a short control-plane interruption without abandoning the lease."""
-    deadline = time.monotonic() + RENEW_RETRY_MAX_SECONDS
+    *,
+    lease_expires_at: int | None = None,
+) -> int | None:
+    """Renew through a short outage without abandoning a still-live lease.
+
+    The response carries the new server-side expiry.  Keeping it locally is
+    important: every later retry budget must be measured from the last
+    successful renewal, while the fencing token and session remain unchanged.
+    """
+    current_lease_expires_at = lease_expires_at if lease_expires_at is not None else claim.lease_expires_at
+    deadline = _renew_deadline(current_lease_expires_at)
     delay = RENEW_RETRY_INITIAL_SECONDS
     failures = 0
+    last_error: BaseException | None = None
     while True:
+        if last_error is not None and time.monotonic() >= deadline:
+            raise last_error
         try:
-            await client.renew(claim)
+            renewal = await client.renew(claim)
+            current_lease_expires_at = _renewed_lease_expiry(renewal, current_lease_expires_at)
             try:
                 spec = await client.spec(claim)
             except Exception as exc:
@@ -136,15 +175,16 @@ async def _renew_with_retries(
                     claim.task_id,
                     type(exc).__name__,
                 )
-                return
+                return current_lease_expires_at
             if bool(spec.get("cancel_requested")):
                 cancel.set()
-            return
+            return current_lease_expires_at
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             if not _is_transient_lease_error(exc):
                 raise
+            last_error = exc
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise
@@ -166,6 +206,7 @@ async def _renew_until_cancelled(
     cancel: asyncio.Event,
     lost: asyncio.Event,
 ) -> None:
+    lease_expires_at: int | None = claim.lease_expires_at
     while not stop.is_set():
         try:
             await asyncio.wait_for(stop.wait(), timeout=RENEW_INTERVAL_SECONDS)
@@ -173,7 +214,12 @@ async def _renew_until_cancelled(
         except asyncio.TimeoutError:
             pass
         try:
-            await _renew_with_retries(client, claim, cancel)
+            lease_expires_at = await _renew_with_retries(
+                client,
+                claim,
+                cancel,
+                lease_expires_at=lease_expires_at,
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:

@@ -16,15 +16,17 @@ type Lease = {
   lease_namespace: string | null;
   lease_token_hash: string | null;
   attempt_status: string;
+  max_retry_override_used?: number | boolean;
 };
 
 class RecoveryFakeD1 {
   failBatch = false;
+  readonly eventPayloads: string[] = [];
 
   constructor(readonly lease: Lease) {}
 
   prepare(sql: string) {
-    return new RecoveryStatement(this.lease, sql);
+    return new RecoveryStatement(this.lease, sql, this.eventPayloads);
   }
 
   async batch(statements: RecoveryStatement[]) {
@@ -38,7 +40,11 @@ class RecoveryFakeD1 {
 class RecoveryStatement {
   private args: unknown[] = [];
 
-  constructor(private readonly lease: Lease, private readonly sql: string) {}
+  constructor(
+    private readonly lease: Lease,
+    private readonly sql: string,
+    private readonly eventPayloads: string[],
+  ) {}
 
   bind(...args: unknown[]) {
     this.args = args;
@@ -71,6 +77,10 @@ class RecoveryStatement {
         return { meta: { changes: 1 } };
       }
       return { meta: { changes: 0 } };
+    }
+    if (compact.includes("INSERT INTO task_events")) {
+      this.eventPayloads.push(String(this.args[3]));
+      return { meta: { changes: 1 } };
     }
     return { meta: { changes: 1 } };
   }
@@ -117,6 +127,28 @@ describe("D1 expired lease recovery", () => {
     expect(cancelled.lease.task_status).toBe("cancelled");
     expect(exhausted.lease).toMatchObject({ lease_worker_id: null, lease_claim_id: null, lease_namespace: null, lease_token_hash: null });
     expect(cancelled.lease).toMatchObject({ lease_worker_id: null, lease_claim_id: null, lease_namespace: null, lease_token_hash: null });
+  });
+
+  it("marks the one post-override lease-expiry recovery as available in the audit event", async () => {
+    const db = new RecoveryFakeD1({
+      task_id: "task-recovery-audit", active_attempt_id: "attempt-recovery-audit", worker_id: "worker-recovery",
+      fencing_epoch: 4, attempt_count: 4, max_attempts: 3, cancel_requested_at: null,
+      task_status: "running", task_lease_expires_at: 10, lease_worker_id: "worker-recovery",
+      lease_claim_id: "claim-recovery", lease_namespace: "infinity-public", lease_token_hash: "hash-recovery",
+      attempt_status: "running", max_retry_override_used: 1,
+    });
+
+    expect(await recoverExpiredLeases({ DB: db as never }, 20)).toBe(1);
+    expect(db.eventPayloads).toHaveLength(1);
+    expect(JSON.parse(db.eventPayloads[0])).toMatchObject({
+      reason: "lease_expired",
+      attempt_number: 4,
+      max_attempts: 3,
+      max_retry_override_used: true,
+      retry_mode: "lease_expired_recovery_available",
+      recovery_retry_available: true,
+      recovery_retry_limit: 1,
+    });
   });
 
   it("leaves an expired candidate fenced for the next scheduler tick when D1 is unavailable", async () => {

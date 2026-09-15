@@ -15,6 +15,8 @@ export type TaskStatus =
 /** Hard per-file input cap shared by direct Task Center and Agent confirmation. */
 export const MAX_TASK_INPUT_BYTES = 25 * 1024 * 1024;
 
+export type TaskRetryReason = "within_limit" | "max_attempt_override" | "lease_expired_recovery";
+
 export interface TaskItem {
   task_id: string;
   task_spec_id: string;
@@ -26,6 +28,7 @@ export interface TaskItem {
   attempt_count: number;
   max_attempts: number;
   can_retry?: boolean;
+  retry_reason?: TaskRetryReason | null;
   error_message?: string | null;
   created_at: string;
 }

@@ -1,4 +1,5 @@
 import type { Env } from "./env";
+import { LEASE_EXPIRED_RECOVERY_LIMIT } from "./task-retry-policy";
 
 const DEFAULT_BATCH_SIZE = 25;
 const MAX_ERROR_LENGTH = 240;
@@ -11,6 +12,7 @@ type ExpiredLeaseRow = {
   attempt_count: number;
   max_attempts: number;
   cancel_requested_at: number | null;
+  max_retry_override_used: number | boolean;
 };
 
 function changed(result: unknown): number {
@@ -32,7 +34,13 @@ function boundedError(value: string): string {
 export async function recoverExpiredLeases(env: Pick<Env, "DB">, now = Math.floor(Date.now() / 1000)): Promise<number> {
   const rows = await env.DB.prepare(
     `SELECT t.task_id, t.active_attempt_id, a.worker_id, a.fencing_epoch,
-            t.attempt_count, t.max_attempts, t.cancel_requested_at
+            t.attempt_count, t.max_attempts, t.cancel_requested_at,
+            EXISTS (
+              SELECT 1 FROM task_events retry_override
+              WHERE retry_override.task_id = t.task_id
+                AND retry_override.task_event_id = 'task-requeued:' || t.task_id || ':' || t.max_attempts
+                AND retry_override.event_type = 'task_requeued'
+            ) AS max_retry_override_used
      FROM tasks t
      JOIN task_attempts a ON a.attempt_id = t.active_attempt_id
      WHERE t.execution_pool_id = 'public-default'
@@ -56,11 +64,16 @@ export async function recoverExpiredLeases(env: Pick<Env, "DB">, now = Math.floo
     const retry = !cancelled && row.attempt_count < row.max_attempts;
     const nextStatus = cancelled ? "cancelled" : retry ? "queued" : "failed";
     const eventType = cancelled ? "task_cancelled" : retry ? "task_queued" : "task_failed";
+    const recoveryRetryAvailable = !cancelled
+      && Number(row.attempt_count) === Number(row.max_attempts) + LEASE_EXPIRED_RECOVERY_LIMIT
+      && Boolean(row.max_retry_override_used);
     const message = cancelled
       ? "Task cancelled after the Worker lease expired"
-      : retry
-        ? "Worker lease expired; task returned to the public queue"
-        : "Worker lease expired; maximum attempts reached";
+      : recoveryRetryAvailable
+        ? "Worker lease expired; one bounded recovery retry is available"
+        : retry
+          ? "Worker lease expired; task returned to the public queue"
+          : "Worker lease expired; maximum attempts reached";
     const payload = JSON.stringify({
       task_id: row.task_id,
       attempt_id: row.active_attempt_id,
@@ -69,6 +82,18 @@ export async function recoverExpiredLeases(env: Pick<Env, "DB">, now = Math.floo
       status: nextStatus,
       pool_id: "public-default",
       reason: "lease_expired",
+      attempt_number: row.attempt_count,
+      max_attempts: row.max_attempts,
+      max_retry_override_used: Boolean(row.max_retry_override_used),
+      retry_mode: cancelled
+        ? "cancelled"
+        : recoveryRetryAvailable
+          ? "lease_expired_recovery_available"
+          : retry
+            ? "within_limit"
+            : "terminal",
+      recovery_retry_available: recoveryRetryAvailable,
+      recovery_retry_limit: LEASE_EXPIRED_RECOVERY_LIMIT,
     });
     let results: unknown[];
     try {

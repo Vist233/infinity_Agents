@@ -1,6 +1,7 @@
 import type { Env } from "./env";
 import { errorJson, json, nowSeconds } from "./http";
 import { hashReadableStream, hashText, Sha256 } from "./sha256";
+import { LEASE_EXPIRED_RECOVERY_LIMIT } from "./task-retry-policy";
 
 const WORKER_V2_PREFIX = "/api/worker/v2";
 const PROTOCOL_VERSION = "2";
@@ -11,6 +12,47 @@ const MAX_PART_BYTES = 16 * 1024 * 1024;
 const MAX_ARTIFACT_MANIFEST_BYTES = 256 * 1024;
 const MAX_ERROR_LENGTH = 500;
 const WORKER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+// A queued task is claimable within its configured budget, after the one
+// audited max-attempt override, or once more only when the formal retry API
+// recorded the bounded lease-expiry recovery marker for the exact expired
+// attempt. The last branch is intentionally tied to the prior attempt row so
+// an arbitrary task event cannot create an extra retry.
+const TASK_ATTEMPT_AVAILABLE_SQL = `
+       (
+         attempt_count < max_attempts
+         OR (
+           attempt_count = max_attempts
+           AND EXISTS (
+             SELECT 1 FROM task_events retry_override
+             WHERE retry_override.task_id = tasks.task_id
+               AND retry_override.task_event_id = 'task-requeued:' || tasks.task_id || ':' || tasks.max_attempts
+               AND retry_override.event_type = 'task_requeued'
+           )
+         )
+         OR (
+           attempt_count = max_attempts + ${LEASE_EXPIRED_RECOVERY_LIMIT}
+           AND EXISTS (
+             SELECT 1 FROM task_events max_override
+             WHERE max_override.task_id = tasks.task_id
+               AND max_override.task_event_id = 'task-requeued:' || tasks.task_id || ':' || tasks.max_attempts
+               AND max_override.event_type = 'task_requeued'
+           )
+           AND EXISTS (
+             SELECT 1 FROM task_events lease_recovery
+             WHERE lease_recovery.task_id = tasks.task_id
+               AND lease_recovery.task_event_id = 'task-requeued:lease-expired-recovery:' || tasks.task_id || ':' || tasks.attempt_count
+               AND lease_recovery.event_type = 'task_requeued'
+           )
+           AND EXISTS (
+             SELECT 1 FROM task_attempts expired_attempt
+             WHERE expired_attempt.task_id = tasks.task_id
+               AND expired_attempt.attempt_number = tasks.attempt_count
+               AND expired_attempt.status = 'expired'
+               AND expired_attempt.error_code = 'lease_expired'
+           )
+         )
+       )`;
 
 type D1RunResult = { meta?: { changes?: number } };
 
@@ -435,18 +477,7 @@ async function pollTasks(request: Request, env: Env, context: WorkerContext): Pr
      FROM tasks
      WHERE status = 'queued' AND execution_pool_id = ?1
        AND cancel_requested_at IS NULL
-       AND (
-         attempt_count < max_attempts
-         OR (
-           attempt_count = max_attempts
-           AND EXISTS (
-             SELECT 1 FROM task_events retry_override
-             WHERE retry_override.task_id = tasks.task_id
-               AND retry_override.task_event_id = 'task-requeued:' || tasks.task_id || ':' || tasks.max_attempts
-               AND retry_override.event_type = 'task_requeued'
-           )
-         )
-       )
+       AND ${TASK_ATTEMPT_AVAILABLE_SQL}
      ORDER BY created_at ASC, task_id ASC LIMIT ?2`,
   ).bind(context.policy.pool_id, MAX_POLL_RESULTS).first<TaskQueueRow>();
   return json({
@@ -508,18 +539,7 @@ async function acceptTask(taskId: string, request: Request, env: Env, context: W
          WHERE task_id = ?1 AND status = 'queued'
            AND execution_pool_id = ?8 AND lease_epoch = ?9
            AND cancel_requested_at IS NULL
-           AND (
-             attempt_count < max_attempts
-             OR (
-               attempt_count = max_attempts
-               AND EXISTS (
-                 SELECT 1 FROM task_events retry_override
-                 WHERE retry_override.task_id = tasks.task_id
-                   AND retry_override.task_event_id = 'task-requeued:' || tasks.task_id || ':' || tasks.max_attempts
-                   AND retry_override.event_type = 'task_requeued'
-               )
-             )
-           )
+           AND ${TASK_ATTEMPT_AVAILABLE_SQL}
            AND EXISTS (
              SELECT 1 FROM worker_sessions_runtime s
              WHERE s.session_id = ?10 AND s.worker_id = ?3
