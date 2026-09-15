@@ -84,7 +84,8 @@ export async function recoverExpiredLeases(env: Pick<Env, "DB">, now = Math.floo
           `UPDATE tasks
            SET status = ?2, error_message = ?3,
                active_attempt_id = NULL, lease_worker_id = NULL,
-               lease_token_hash = NULL, lease_expires_at = NULL,
+               lease_expires_at = NULL, lease_claim_id = NULL,
+               lease_namespace = NULL, lease_token_hash = NULL,
                updated_at = ?4,
                finished_at = CASE WHEN ?2 IN ('queued') THEN NULL ELSE ?4 END
            WHERE task_id = ?1 AND active_attempt_id = ?5
@@ -99,7 +100,10 @@ export async function recoverExpiredLeases(env: Pick<Env, "DB">, now = Math.floo
            SELECT ?1, ?2, ?3, ?4, ?5
            WHERE EXISTS (
              SELECT 1 FROM tasks WHERE task_id = ?2 AND status = ?6
-               AND active_attempt_id IS NULL AND updated_at = ?5
+               AND active_attempt_id IS NULL AND lease_worker_id IS NULL
+               AND lease_expires_at IS NULL AND lease_claim_id IS NULL
+               AND lease_namespace IS NULL AND lease_token_hash IS NULL
+               AND updated_at = ?5
            )`,
         ).bind(crypto.randomUUID(), row.task_id, eventType, payload, now, nextStatus),
         env.DB.prepare(
@@ -109,7 +113,10 @@ export async function recoverExpiredLeases(env: Pick<Env, "DB">, now = Math.floo
            SELECT ?1, ?2, 'task', ?3, ?4, ?5, 'pending', 0, ?6, ?6
            WHERE EXISTS (
              SELECT 1 FROM tasks WHERE task_id = ?3 AND status = ?7
-               AND active_attempt_id IS NULL AND updated_at = ?6
+               AND active_attempt_id IS NULL AND lease_worker_id IS NULL
+               AND lease_expires_at IS NULL AND lease_claim_id IS NULL
+               AND lease_namespace IS NULL AND lease_token_hash IS NULL
+               AND updated_at = ?6
            )`,
         ).bind(crypto.randomUUID(), `task-lease-expired:${row.active_attempt_id}:${nextStatus}`, row.task_id, eventType, payload, now, nextStatus),
       ]);

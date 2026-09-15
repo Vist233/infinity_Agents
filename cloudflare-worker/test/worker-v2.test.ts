@@ -47,6 +47,8 @@ type Task = {
   lease_worker_id: string | null;
   lease_token_hash: string | null;
   lease_expires_at: number | null;
+  lease_claim_id?: string | null;
+  lease_namespace?: string | null;
   result_artifact_id?: string | null;
   cancel_requested_at?: number | null;
 };
@@ -315,6 +317,11 @@ class RuntimeFakeStatement {
       row.status = "cancelled";
       row.result_artifact_id = null;
       row.active_attempt_id = null;
+      row.lease_worker_id = null;
+      row.lease_expires_at = null;
+      row.lease_claim_id = null;
+      row.lease_namespace = null;
+      row.lease_token_hash = null;
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE artifact_uploads SET status = 'aborted'")) {
@@ -336,6 +343,12 @@ class RuntimeFakeStatement {
         || session.disconnected_at != null || session.lease_expires_at <= now) return { meta: { changes: 0 } };
       row.status = "succeeded";
       (row as any).result_artifact_id = artifactId;
+      row.active_attempt_id = null;
+      row.lease_worker_id = null;
+      row.lease_expires_at = null;
+      row.lease_claim_id = null;
+      row.lease_namespace = null;
+      row.lease_token_hash = null;
       return { meta: { changes: 1 } };
     }
     if (sql.includes("UPDATE tasks") && sql.includes("SET status = 'claimed'")) {
@@ -379,7 +392,12 @@ class RuntimeFakeStatement {
         || session.session_epoch !== sessionEpoch || session.instance_id !== instanceId
         || session.disconnected_at != null || session.lease_expires_at <= now) return { meta: { changes: 0 } };
       row.status = target;
-      row.lease_expires_at = now;
+      row.active_attempt_id = null;
+      row.lease_worker_id = null;
+      row.lease_expires_at = null;
+      row.lease_claim_id = null;
+      row.lease_namespace = null;
+      row.lease_token_hash = null;
       (row as any).error_message = errorMessage;
       (row as any).finished_at = now;
       return { meta: { changes: 1 } };
@@ -759,6 +777,9 @@ describe("Worker v2 control plane", () => {
       method: "POST", headers,
     }), envFor(db));
     const accepted = await acceptedResponse!.json() as { attempt_id: string; lease_token: string };
+    const failureTask = db.tasks.get("task-failure")!;
+    failureTask.lease_claim_id = "stale-claim";
+    failureTask.lease_namespace = "stale-namespace";
     const finishHeaders = new Headers(headers);
     finishHeaders.set("x-worker-attempt-id", accepted.attempt_id);
     finishHeaders.set("x-worker-lease-token", accepted.lease_token);
@@ -772,6 +793,15 @@ describe("Worker v2 control plane", () => {
     expect(finished?.status).toBe(200);
     expect(await finished?.json()).toMatchObject({ task_id: "task-failure", status: "failed" });
     expect(db.tasks.get("task-failure")?.status).toBe("failed");
+    expect(db.tasks.get("task-failure")).toMatchObject({
+      active_attempt_id: null,
+      lease_worker_id: null,
+      lease_expires_at: null,
+      lease_claim_id: null,
+      lease_namespace: null,
+      lease_token_hash: null,
+    });
+    expect(db.tasks.get("task-failure")?.lease_epoch).toBe(1);
     expect(db.attempts.get(accepted.attempt_id)?.status).toBe("failed");
     expect(db.events).toContain(`task-failed:${accepted.attempt_id}`);
     expect(db.outbox).toContain(`failed:${accepted.attempt_id}`);
@@ -885,6 +915,15 @@ describe("Worker v2 control plane", () => {
     expect(completed?.status).toBe(201);
     expect(await completed?.json()).toMatchObject({ artifact_id: "stable-artifact-id", status: "published", file_size_bytes: bytes.byteLength });
     expect(db.tasks.get("task-artifact")?.status).toBe("succeeded");
+    expect(db.tasks.get("task-artifact")).toMatchObject({
+      active_attempt_id: null,
+      lease_worker_id: null,
+      lease_expires_at: null,
+      lease_claim_id: null,
+      lease_namespace: null,
+      lease_token_hash: null,
+    });
+    expect(db.tasks.get("task-artifact")?.lease_epoch).toBe(1);
     expect(bucket.objects.size).toBe(1);
 
     const duplicate = await handleWorkerV2(new Request(`https://app.test/api/worker/v2/artifacts/${startedPayload.upload_id}/complete`, {
@@ -901,6 +940,7 @@ describe("Worker v2 control plane", () => {
     // reconcile instead of reporting a false duplicate or deleting R2.
     const taskRow = db.tasks.get("task-artifact")!;
     taskRow.status = "running";
+    taskRow.active_attempt_id = accepted.attempt_id;
     taskRow.result_artifact_id = null;
     db.events.length = 0;
     db.outbox.length = 0;
@@ -921,6 +961,8 @@ describe("Worker v2 control plane", () => {
     // second object.
     taskRow.status = "running";
     taskRow.active_attempt_id = accepted.attempt_id;
+    taskRow.lease_claim_id = "stale-claim";
+    taskRow.lease_namespace = "stale-namespace";
     taskRow.result_artifact_id = null;
     taskRow.cancel_requested_at = null;
     db.attempts.get(accepted.attempt_id)!.status = "running";
@@ -943,6 +985,14 @@ describe("Worker v2 control plane", () => {
     expect(cancelledAfterClaim?.status).toBe(409);
     expect(await cancelledAfterClaim?.json()).toMatchObject({ error: { code: "TASK_CANCELLED_DURING_FINALIZE" } });
     expect(taskRow.status).toBe("cancelled");
+    expect(taskRow).toMatchObject({
+      active_attempt_id: null,
+      lease_worker_id: null,
+      lease_expires_at: null,
+      lease_claim_id: null,
+      lease_namespace: null,
+      lease_token_hash: null,
+    });
     expect(db.artifactUploads.get(secondUpload.upload_id)?.status).toBe("aborted");
     expect(bucket.objects.size).toBe(1);
   });

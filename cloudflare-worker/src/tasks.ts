@@ -46,12 +46,17 @@ interface TaskRow {
   chat_confirmation_id: string | null;
   execution_pool_id?: string;
   active_attempt_id?: string | null;
+  active_attempt_status?: string | null;
+  has_active_attempt?: number | boolean;
   lease_worker_id?: string | null;
   lease_token_hash?: string | null;
   lease_expires_at?: number | null;
+  lease_claim_id?: string | null;
+  lease_namespace?: string | null;
 }
 
 const RETRYABLE_TASK_STATUSES = new Set(["failed", "timeout"]);
+const TERMINAL_ATTEMPT_STATUSES = new Set(["succeeded", "failed", "expired", "cancelled"]);
 
 function iso(value: number | null | undefined): string | null {
   return value == null ? null : new Date(value * 1000).toISOString();
@@ -380,18 +385,30 @@ async function loadTask(taskIdValue: string, env: Env, user: Pick<AuthedUser, "u
             title, status, attempt_count, max_attempts, result_artifact_id,
             error_message, created_by, created_at, updated_at, finished_at,
             chat_confirmation_id, execution_pool_id, active_attempt_id,
-            lease_worker_id, lease_token_hash, lease_expires_at
+            lease_worker_id, lease_token_hash, lease_expires_at,
+            lease_claim_id, lease_namespace,
+            (SELECT a.status FROM task_attempts a
+             WHERE a.task_id = tasks.task_id AND a.attempt_id = tasks.active_attempt_id) AS active_attempt_status,
+            EXISTS (SELECT 1 FROM task_attempts live
+                    WHERE live.task_id = tasks.task_id
+                      AND live.status IN ('claimed', 'running')) AS has_active_attempt
      FROM tasks WHERE task_id = ?1 AND created_by = ?2`
   ).bind(taskIdValue, user.userId).first<TaskRow>();
 }
 
-function taskCanRetry(row: Pick<TaskRow, "status" | "attempt_count" | "max_attempts" | "active_attempt_id" | "lease_worker_id" | "lease_token_hash" | "lease_expires_at">): boolean {
-  return RETRYABLE_TASK_STATUSES.has(row.status)
-    && Number(row.attempt_count) < Number(row.max_attempts)
-    && row.active_attempt_id == null
+function taskCanRetry(row: Pick<TaskRow, "status" | "attempt_count" | "max_attempts" | "active_attempt_id" | "active_attempt_status" | "has_active_attempt" | "lease_worker_id" | "lease_token_hash" | "lease_expires_at" | "lease_claim_id" | "lease_namespace">): boolean {
+  const leaseFree = row.active_attempt_id == null
     && row.lease_worker_id == null
     && row.lease_token_hash == null
-    && row.lease_expires_at == null;
+    && row.lease_expires_at == null
+    && row.lease_claim_id == null
+    && row.lease_namespace == null;
+  const terminalAttempt = row.active_attempt_id != null
+    && TERMINAL_ATTEMPT_STATUSES.has(row.active_attempt_status ?? "");
+  return RETRYABLE_TASK_STATUSES.has(row.status)
+    && Number(row.attempt_count) < Number(row.max_attempts)
+    && Number(row.has_active_attempt ?? 0) === 0
+    && (leaseFree || terminalAttempt);
 }
 
 async function loadTaskForRetry(taskIdValue: string, env: Env, user: AuthedUser): Promise<TaskRow | null> {
@@ -401,7 +418,13 @@ async function loadTaskForRetry(taskIdValue: string, env: Env, user: AuthedUser)
             title, status, attempt_count, max_attempts, result_artifact_id,
             error_message, created_by, created_at, updated_at, finished_at,
             chat_confirmation_id, execution_pool_id, active_attempt_id,
-            lease_worker_id, lease_token_hash, lease_expires_at
+            lease_worker_id, lease_token_hash, lease_expires_at,
+            lease_claim_id, lease_namespace,
+            (SELECT a.status FROM task_attempts a
+             WHERE a.task_id = tasks.task_id AND a.attempt_id = tasks.active_attempt_id) AS active_attempt_status,
+            EXISTS (SELECT 1 FROM task_attempts live
+                    WHERE live.task_id = tasks.task_id
+                      AND live.status IN ('claimed', 'running')) AS has_active_attempt
      FROM tasks
      WHERE task_id = ?1 AND (?2 = 1 OR created_by = ?3)`
   ).bind(taskIdValue, admin ? 1 : 0, user.userId).first<TaskRow>();
@@ -663,7 +686,13 @@ async function handleListTasks(request: Request, env: Env, user: AuthedUser): Pr
             title, status, attempt_count, max_attempts, result_artifact_id,
             error_message, created_by, created_at, updated_at, finished_at,
             chat_confirmation_id, execution_pool_id, active_attempt_id,
-            lease_worker_id, lease_token_hash, lease_expires_at
+            lease_worker_id, lease_token_hash, lease_expires_at,
+            lease_claim_id, lease_namespace,
+            (SELECT a.status FROM task_attempts a
+             WHERE a.task_id = tasks.task_id AND a.attempt_id = tasks.active_attempt_id) AS active_attempt_status,
+            EXISTS (SELECT 1 FROM task_attempts live
+                    WHERE live.task_id = tasks.task_id
+                      AND live.status IN ('claimed', 'running')) AS has_active_attempt
      FROM tasks WHERE created_by = ?1 ORDER BY created_at DESC LIMIT ?2`
   ).bind(user.userId, limit).all<TaskRow>();
   return json({ tasks: (result.results ?? []).map(publicTask) });
@@ -675,7 +704,13 @@ async function handleTaskByConfirmation(confirmationId: string, env: Env, user: 
             title, status, attempt_count, max_attempts, result_artifact_id,
             error_message, created_by, created_at, updated_at, finished_at,
             chat_confirmation_id, execution_pool_id, active_attempt_id,
-            lease_worker_id, lease_token_hash, lease_expires_at
+            lease_worker_id, lease_token_hash, lease_expires_at,
+            lease_claim_id, lease_namespace,
+            (SELECT a.status FROM task_attempts a
+             WHERE a.task_id = tasks.task_id AND a.attempt_id = tasks.active_attempt_id) AS active_attempt_status,
+            EXISTS (SELECT 1 FROM task_attempts live
+                    WHERE live.task_id = tasks.task_id
+                      AND live.status IN ('claimed', 'running')) AS has_active_attempt
      FROM tasks WHERE chat_confirmation_id = ?1 AND created_by = ?2`
   ).bind(confirmationId, user.userId).first<TaskRow>();
   return json({ task: task ? publicTask(task) : null });
@@ -715,20 +750,36 @@ async function handleCancelTask(task: TaskRow, env: Env): Promise<Response> {
     const payload = JSON.stringify({ task_id: task.task_id, status: "cancelled", pool_id: "public-default" });
     const results = await env.DB.batch([
       env.DB.prepare(
-        `UPDATE tasks SET status = 'cancelled', finished_at = ?2, updated_at = ?2
+        `UPDATE tasks SET status = 'cancelled',
+             active_attempt_id = NULL, lease_worker_id = NULL,
+             lease_expires_at = NULL, lease_claim_id = NULL,
+             lease_namespace = NULL, lease_token_hash = NULL,
+             finished_at = ?2, updated_at = ?2
          WHERE task_id = ?1 AND status = 'queued' AND active_attempt_id IS NULL`,
       ).bind(task.task_id, now),
       env.DB.prepare(
         `INSERT INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
          SELECT ?1, ?2, 'task_cancelled', ?3, ?4
-         WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND status = 'cancelled' AND updated_at = ?4)`,
+         WHERE EXISTS (
+           SELECT 1 FROM tasks
+           WHERE task_id = ?2 AND status = 'cancelled' AND updated_at = ?4
+             AND active_attempt_id IS NULL AND lease_worker_id IS NULL
+             AND lease_expires_at IS NULL AND lease_claim_id IS NULL
+             AND lease_namespace IS NULL AND lease_token_hash IS NULL
+         )`,
       ).bind(taskId(), task.task_id, payload, now),
       env.DB.prepare(
         `INSERT INTO outbox_events
           (event_id, idempotency_key, aggregate_type, aggregate_id, event_type,
            payload_json, status, attempts, next_attempt_at, created_at)
          SELECT ?1, ?2, 'task', ?3, 'task_cancelled', ?4, 'pending', 0, ?5, ?5
-         WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?3 AND status = 'cancelled' AND updated_at = ?5)`,
+         WHERE EXISTS (
+           SELECT 1 FROM tasks
+           WHERE task_id = ?3 AND status = 'cancelled' AND updated_at = ?5
+             AND active_attempt_id IS NULL AND lease_worker_id IS NULL
+             AND lease_expires_at IS NULL AND lease_claim_id IS NULL
+             AND lease_namespace IS NULL AND lease_token_hash IS NULL
+         )`,
       ).bind(crypto.randomUUID(), `task-cancelled:${task.task_id}`, task.task_id, payload, now),
     ]);
     if ((results[0].meta?.changes ?? 0) !== 1) return errorJson("Task could not be cancelled", 409, "TASK_NOT_CANCELLABLE");
@@ -848,14 +899,26 @@ async function handleRetryTask(taskIdValue: string, env: Env, user: AuthedUser):
            WHERE task_id = ?2 AND (?6 = 1 OR created_by = ?7)
              AND status IN ('failed', 'timeout')
              AND attempt_count = ?5 AND attempt_count < max_attempts
-             AND active_attempt_id IS NULL
-             AND lease_worker_id IS NULL
-             AND lease_token_hash IS NULL
-             AND lease_expires_at IS NULL
              AND NOT EXISTS (
                SELECT 1 FROM task_attempts a
                WHERE a.task_id = tasks.task_id
                  AND a.status IN ('claimed', 'running')
+             )
+             AND (
+               (
+                 active_attempt_id IS NULL
+                 AND lease_worker_id IS NULL
+                 AND lease_token_hash IS NULL
+                 AND lease_expires_at IS NULL
+                 AND lease_claim_id IS NULL
+                 AND lease_namespace IS NULL
+               )
+               OR EXISTS (
+                 SELECT 1 FROM task_attempts terminal_attempt
+                 WHERE terminal_attempt.task_id = tasks.task_id
+                   AND terminal_attempt.attempt_id = tasks.active_attempt_id
+                   AND terminal_attempt.status IN ('succeeded', 'failed', 'expired', 'cancelled')
+               )
              )
          )`,
       ).bind(eventId, task.task_id, payload, now, attemptCount, admin ? 1 : 0, user.userId),
@@ -864,18 +927,31 @@ async function handleRetryTask(taskIdValue: string, env: Env, user: AuthedUser):
          SET status = 'queued', result_artifact_id = NULL, error_message = NULL,
              finished_at = NULL, cancel_requested_at = NULL,
              active_attempt_id = NULL, lease_worker_id = NULL,
-             lease_token_hash = NULL, lease_expires_at = NULL, updated_at = ?2
+             lease_token_hash = NULL, lease_expires_at = NULL,
+             lease_claim_id = NULL, lease_namespace = NULL, updated_at = ?2
          WHERE task_id = ?1 AND (?5 = 1 OR created_by = ?6)
            AND status IN ('failed', 'timeout')
            AND attempt_count = ?3 AND attempt_count < max_attempts
-           AND active_attempt_id IS NULL
-           AND lease_worker_id IS NULL
-           AND lease_token_hash IS NULL
-           AND lease_expires_at IS NULL
            AND NOT EXISTS (
              SELECT 1 FROM task_attempts a
              WHERE a.task_id = tasks.task_id
                AND a.status IN ('claimed', 'running')
+           )
+           AND (
+             (
+               active_attempt_id IS NULL
+               AND lease_worker_id IS NULL
+               AND lease_token_hash IS NULL
+               AND lease_expires_at IS NULL
+               AND lease_claim_id IS NULL
+               AND lease_namespace IS NULL
+             )
+             OR EXISTS (
+               SELECT 1 FROM task_attempts terminal_attempt
+               WHERE terminal_attempt.task_id = tasks.task_id
+                 AND terminal_attempt.attempt_id = tasks.active_attempt_id
+                 AND terminal_attempt.status IN ('succeeded', 'failed', 'expired', 'cancelled')
+             )
            )
            AND EXISTS (
              SELECT 1 FROM task_events e
@@ -892,6 +968,9 @@ async function handleRetryTask(taskIdValue: string, env: Env, user: AuthedUser):
            SELECT 1 FROM tasks
            WHERE task_id = ?3 AND (?7 = 1 OR created_by = ?8)
              AND status = 'queued' AND attempt_count = ?6 AND updated_at = ?5
+             AND active_attempt_id IS NULL AND lease_worker_id IS NULL
+             AND lease_token_hash IS NULL AND lease_expires_at IS NULL
+             AND lease_claim_id IS NULL AND lease_namespace IS NULL
          )
            AND EXISTS (
              SELECT 1 FROM task_events

@@ -1036,7 +1036,10 @@ async function completeArtifact(uploadId: string, request: Request, env: Env, co
     await env.DB.batch([
       env.DB.prepare(
         `UPDATE tasks SET status = 'succeeded', result_artifact_id = ?2,
-             lease_expires_at = ?3, updated_at = ?3, finished_at = ?3,
+             active_attempt_id = NULL, lease_worker_id = NULL,
+             lease_expires_at = NULL, lease_claim_id = NULL,
+             lease_namespace = NULL, lease_token_hash = NULL,
+             updated_at = ?3, finished_at = ?3,
              error_message = NULL
          WHERE task_id = ?1 AND active_attempt_id = ?4
            AND lease_worker_id = ?5 AND lease_epoch = ?6
@@ -1079,14 +1082,26 @@ async function completeArtifact(uploadId: string, request: Request, env: Env, co
       env.DB.prepare(
         `INSERT OR IGNORE INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
          SELECT ?1, ?2, 'task_succeeded', ?3, ?4
-         WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND status = 'succeeded' AND result_artifact_id = ?5)`,
+         WHERE EXISTS (
+           SELECT 1 FROM tasks
+           WHERE task_id = ?2 AND status = 'succeeded' AND result_artifact_id = ?5
+             AND active_attempt_id IS NULL AND lease_worker_id IS NULL
+             AND lease_expires_at IS NULL AND lease_claim_id IS NULL
+             AND lease_namespace IS NULL AND lease_token_hash IS NULL
+         )`,
       ).bind(`task-succeeded:${upload.attempt_id}`, upload.task_id, payload, now, artifactId),
       env.DB.prepare(
         `INSERT OR IGNORE INTO outbox_events
           (event_id, idempotency_key, aggregate_type, aggregate_id, event_type,
            payload_json, status, attempts, next_attempt_at, created_at)
          SELECT ?1, ?2, 'task', ?3, 'task_succeeded', ?4, 'pending', 0, ?5, ?5
-         WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?3 AND status = 'succeeded' AND result_artifact_id = ?6)`,
+         WHERE EXISTS (
+           SELECT 1 FROM tasks
+           WHERE task_id = ?3 AND status = 'succeeded' AND result_artifact_id = ?6
+             AND active_attempt_id IS NULL AND lease_worker_id IS NULL
+             AND lease_expires_at IS NULL AND lease_claim_id IS NULL
+             AND lease_namespace IS NULL AND lease_token_hash IS NULL
+         )`,
       ).bind(crypto.randomUUID(), `task-succeeded:${upload.attempt_id}`, upload.task_id, payload, now, artifactId),
     ]);
     const reconciled = await env.DB.prepare(
@@ -1118,8 +1133,10 @@ async function completeArtifact(uploadId: string, request: Request, env: Env, co
           ).bind(upload.attempt_id, upload.task_id, context.worker.worker_id, context.session.session_id, auth.leaseTokenHash, now),
           env.DB.prepare(
             `UPDATE tasks SET status = 'cancelled', result_artifact_id = NULL,
-                 active_attempt_id = NULL, lease_worker_id = NULL, lease_token_hash = NULL,
-                 lease_expires_at = NULL, updated_at = ?3, finished_at = ?3
+                 active_attempt_id = NULL, lease_worker_id = NULL,
+                 lease_expires_at = NULL, lease_claim_id = NULL,
+                 lease_namespace = NULL, lease_token_hash = NULL,
+                 updated_at = ?3, finished_at = ?3
              WHERE task_id = ?1 AND active_attempt_id = ?2
                AND status IN ('claimed', 'running') AND cancel_requested_at IS NOT NULL`,
           ).bind(upload.task_id, upload.attempt_id, now),
@@ -1136,14 +1153,26 @@ async function completeArtifact(uploadId: string, request: Request, env: Env, co
           env.DB.prepare(
             `INSERT OR IGNORE INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
              SELECT ?1, ?2, 'task_cancelled', ?3, ?4
-             WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND status = 'cancelled')`,
+             WHERE EXISTS (
+               SELECT 1 FROM tasks
+               WHERE task_id = ?2 AND status = 'cancelled'
+                 AND active_attempt_id IS NULL AND lease_worker_id IS NULL
+                 AND lease_expires_at IS NULL AND lease_claim_id IS NULL
+                 AND lease_namespace IS NULL AND lease_token_hash IS NULL
+             )`,
           ).bind(`task-cancelled:${upload.attempt_id}`, upload.task_id, cancelledPayload, now),
           env.DB.prepare(
             `INSERT OR IGNORE INTO outbox_events
               (event_id, idempotency_key, aggregate_type, aggregate_id, event_type,
                payload_json, status, attempts, next_attempt_at, created_at)
              SELECT ?1, ?2, 'task', ?3, 'task_cancelled', ?4, 'pending', 0, ?5, ?5
-             WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?3 AND status = 'cancelled')`,
+             WHERE EXISTS (
+               SELECT 1 FROM tasks
+               WHERE task_id = ?3 AND status = 'cancelled'
+                 AND active_attempt_id IS NULL AND lease_worker_id IS NULL
+                 AND lease_expires_at IS NULL AND lease_claim_id IS NULL
+                 AND lease_namespace IS NULL AND lease_token_hash IS NULL
+             )`,
           ).bind(crypto.randomUUID(), `task-cancelled:${upload.attempt_id}`, upload.task_id, cancelledPayload, now),
         ]);
         const cancellationReconciled = await env.DB.prepare(
@@ -1218,7 +1247,10 @@ async function finishTask(taskId: string, request: Request, env: Env, context: W
         errorCode, errorText, target, now, auth.leaseTokenHash, context.session.session_epoch,
         context.session.instance_id),
       env.DB.prepare(
-        `UPDATE tasks SET status = ?5, error_message = ?6, lease_expires_at = ?7,
+        `UPDATE tasks SET status = ?5, error_message = ?6,
+            active_attempt_id = NULL, lease_worker_id = NULL,
+            lease_expires_at = NULL, lease_claim_id = NULL,
+            lease_namespace = NULL, lease_token_hash = NULL,
             updated_at = ?7, finished_at = ?7
          WHERE task_id = ?1 AND active_attempt_id = ?2 AND lease_worker_id = ?3
            AND lease_epoch = ?4 AND lease_token_hash = ?8
@@ -1235,14 +1267,26 @@ async function finishTask(taskId: string, request: Request, env: Env, context: W
       env.DB.prepare(
         `INSERT OR IGNORE INTO task_events (task_event_id, task_id, event_type, event_data, created_at)
          SELECT ?1, ?2, ?3, ?4, ?5
-         WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?2 AND status = ?6 AND active_attempt_id = ?7)`,
+         WHERE EXISTS (
+           SELECT 1 FROM tasks
+           WHERE task_id = ?2 AND status = ?6
+             AND active_attempt_id IS NULL AND lease_worker_id IS NULL
+             AND lease_expires_at IS NULL AND lease_claim_id IS NULL
+             AND lease_namespace IS NULL AND lease_token_hash IS NULL
+         )`,
       ).bind(eventId, taskId, eventType, payload, now, target, auth.attempt.attempt_id),
       env.DB.prepare(
         `INSERT OR IGNORE INTO outbox_events
           (event_id, idempotency_key, aggregate_type, aggregate_id, event_type,
            payload_json, status, attempts, next_attempt_at, created_at)
          SELECT ?1, ?2, 'task', ?3, ?4, ?5, 'pending', 0, ?6, ?6
-         WHERE EXISTS (SELECT 1 FROM tasks WHERE task_id = ?3 AND status = ?7 AND active_attempt_id = ?8)`,
+         WHERE EXISTS (
+           SELECT 1 FROM tasks
+           WHERE task_id = ?3 AND status = ?7
+             AND active_attempt_id IS NULL AND lease_worker_id IS NULL
+             AND lease_expires_at IS NULL AND lease_claim_id IS NULL
+             AND lease_namespace IS NULL AND lease_token_hash IS NULL
+         )`,
       ).bind(crypto.randomUUID(), idempotencyKey, taskId, eventType, payload, now, target, auth.attempt.attempt_id),
     ]);
   } catch (error) {

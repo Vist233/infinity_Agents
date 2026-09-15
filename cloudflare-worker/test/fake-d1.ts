@@ -69,12 +69,17 @@ export interface TaskRow {
   task_class?: string;
   attempt_count?: number;
   max_attempts?: number;
+  lease_epoch?: number;
   created_at?: number;
   dispatch_policy?: string;
   active_attempt_id?: string | null;
+  active_attempt_status?: string | null;
+  has_active_attempt?: number | boolean;
   lease_worker_id?: string | null;
   lease_token_hash?: string | null;
   lease_expires_at?: number | null;
+  lease_claim_id?: string | null;
+  lease_namespace?: string | null;
   result_artifact_id?: string | null;
   error_message?: string | null;
   cancel_requested_at?: number | null;
@@ -404,6 +409,7 @@ export class FakeD1 {
       task_class: "owner_trusted",
       attempt_count: 0,
       max_attempts: 3,
+      lease_epoch: 0,
       created_at: now,
       updated_at: now,
       dispatch_policy: "owner_then_public",
@@ -411,6 +417,8 @@ export class FakeD1 {
       lease_worker_id: null,
       lease_token_hash: null,
       lease_expires_at: null,
+      lease_claim_id: null,
+      lease_namespace: null,
       finished_at: null,
     });
     if (chatConfirmationId) {
@@ -425,6 +433,18 @@ export class FakeD1 {
 
   seedTaskAttempt(row: TaskAttemptRow): void {
     this.taskAttempts.set(row.attempt_id, row);
+  }
+
+  taskWithAttemptState(row: TaskRow): TaskRow {
+    const activeAttempt = row.active_attempt_id ? this.taskAttempts.get(row.active_attempt_id) : undefined;
+    const hasActiveAttempt = [...this.taskAttempts.values()].some((attempt) =>
+      attempt.task_id === row.task_id && ["claimed", "running"].includes(attempt.status),
+    );
+    return {
+      ...row,
+      active_attempt_status: activeAttempt?.status ?? null,
+      has_active_attempt: hasActiveAttempt ? 1 : 0,
+    };
   }
 
   seedPersistentWorker(row: Omit<PersistentWorkerRow, "last_seen_at"> & { last_seen_at?: number | null }): void {
@@ -837,14 +857,14 @@ class FakeStatement {
     if (sql.includes("FROM tasks WHERE task_id = ?1 AND (?2 = 1 OR created_by = ?3)")) {
       const [taskId, operator, userId] = this.args as [string, number, string];
       const row = this.db.tasks.get(taskId);
-      return row && (operator === 1 || row.created_by === userId) ? (row as T) : null;
+      return row && (operator === 1 || row.created_by === userId) ? (this.db.taskWithAttemptState(row) as T) : null;
     }
     if (sql.includes("FROM task_events WHERE task_event_id = ?1")) {
       const [eventId, taskId] = this.args as [string, string];
       const row = this.db.taskEvents.get(eventId);
       return row && row.task_id === taskId ? (row as T) : null;
     }
-    if (sql.includes("FROM task_attempts") && sql.includes("status IN ('claimed', 'running')")) {
+    if (sql.includes("SELECT 1 AS active") && sql.includes("FROM task_attempts") && sql.includes("status IN ('claimed', 'running')")) {
       const [taskId] = this.args as [string];
       return [...this.db.taskAttempts.values()].some((attempt) =>
         attempt.task_id === taskId && ["claimed", "running"].includes(attempt.status),
@@ -853,7 +873,7 @@ class FakeStatement {
     if (sql.includes("FROM tasks WHERE task_id")) {
       const [taskId, userId] = this.args as [string, string];
       const row = this.db.tasks.get(taskId);
-      return row && row.created_by === userId ? (row as T) : null;
+      return row && row.created_by === userId ? (this.db.taskWithAttemptState(row) as T) : null;
     }
     if (sql.includes("FROM tasks WHERE chat_confirmation_id = ?1")) {
       const [confirmationId, userId] = this.args as [string, string];
@@ -955,7 +975,8 @@ class FakeStatement {
       const rows = [...this.db.tasks.values()]
         .filter((task) => task.created_by === userId)
         .sort((left, right) => (right.created_at ?? 0) - (left.created_at ?? 0))
-        .slice(0, Number(limit));
+        .slice(0, Number(limit))
+        .map((task) => this.db.taskWithAttemptState(task));
       return { results: rows as T[] };
     }
     if (sql.includes("FROM task_events WHERE task_id = ?1")) {
@@ -1920,17 +1941,25 @@ class FakeStatement {
       const activeAttempt = [...this.db.taskAttempts.values()].some((attempt) =>
         attempt.task_id === taskId && ["claimed", "running"].includes(attempt.status),
       );
+      const terminalAttempt = task?.active_attempt_id
+        ? this.db.taskAttempts.get(task.active_attempt_id)
+        : undefined;
       const eligible = Boolean(task
         && (operator === 1 || task.created_by === userId)
         && ["failed", "timeout"].includes(task.status)
         && Number(task.attempt_count) === attemptCount
         && attemptCount < Number(task.max_attempts)
-        && task.active_attempt_id == null
-        && task.lease_worker_id == null
-        && task.lease_token_hash == null
-        && task.lease_expires_at == null
         && !activeAttempt);
-      if (!eligible || this.db.taskEvents.has(eventId)) return { meta: { changes: 0 } };
+      const leaseFree = task?.active_attempt_id == null
+        && task?.lease_worker_id == null
+        && task?.lease_token_hash == null
+        && task?.lease_expires_at == null
+        && task?.lease_claim_id == null
+        && task?.lease_namespace == null;
+      const terminalPointer = Boolean(terminalAttempt
+        && terminalAttempt.task_id === taskId
+        && ["succeeded", "failed", "expired", "cancelled"].includes(terminalAttempt.status));
+      if (!eligible || (!leaseFree && !terminalPointer) || this.db.taskEvents.has(eventId)) return { meta: { changes: 0 } };
       this.db.taskEvents.set(eventId, { task_event_id: eventId, task_id: taskId, event_type: "task_requeued", event_data: eventData, created_at: createdAt });
       return { meta: { changes: 1 } };
     }
@@ -1940,18 +1969,26 @@ class FakeStatement {
       const activeAttempt = [...this.db.taskAttempts.values()].some((attempt) =>
         attempt.task_id === taskId && ["claimed", "running"].includes(attempt.status),
       );
+      const terminalAttempt = task?.active_attempt_id
+        ? this.db.taskAttempts.get(task.active_attempt_id)
+        : undefined;
       const eligible = Boolean(task
         && (operator === 1 || task.created_by === userId)
         && ["failed", "timeout"].includes(task.status)
         && Number(task.attempt_count) === attemptCount
         && attemptCount < Number(task.max_attempts)
-        && task.active_attempt_id == null
-        && task.lease_worker_id == null
-        && task.lease_token_hash == null
-        && task.lease_expires_at == null
         && !activeAttempt
         && this.db.taskEvents.get(eventId)?.event_type === "task_requeued");
-      if (!eligible || !task) return { meta: { changes: 0 } };
+      const leaseFree = task?.active_attempt_id == null
+        && task?.lease_worker_id == null
+        && task?.lease_token_hash == null
+        && task?.lease_expires_at == null
+        && task?.lease_claim_id == null
+        && task?.lease_namespace == null;
+      const terminalPointer = Boolean(terminalAttempt
+        && terminalAttempt.task_id === taskId
+        && ["succeeded", "failed", "expired", "cancelled"].includes(terminalAttempt.status));
+      if (!eligible || !task || (!leaseFree && !terminalPointer)) return { meta: { changes: 0 } };
       task.status = "queued";
       task.result_artifact_id = null;
       task.error_message = null;
@@ -1961,6 +1998,8 @@ class FakeStatement {
       task.lease_worker_id = null;
       task.lease_token_hash = null;
       task.lease_expires_at = null;
+      task.lease_claim_id = null;
+      task.lease_namespace = null;
       task.updated_at = now;
       return { meta: { changes: 1 } };
     }
@@ -1994,6 +2033,12 @@ class FakeStatement {
       const row = this.db.tasks.get(taskId);
       if (!row || row.status !== "queued" || row.active_attempt_id) return { meta: { changes: 0 } };
       row.status = "cancelled";
+      row.active_attempt_id = null;
+      row.lease_worker_id = null;
+      row.lease_token_hash = null;
+      row.lease_expires_at = null;
+      row.lease_claim_id = null;
+      row.lease_namespace = null;
       row.updated_at = now;
       row.finished_at = now;
       return { meta: { changes: 1 } };

@@ -72,6 +72,12 @@ describe("task cancellation state machine", () => {
   it("cancels an unclaimed queued task immediately", async () => {
     const { env, db } = makeEnv();
     db.seedTask("task-queued", user.userId);
+    const queuedTask = db.tasks.get("task-queued")!;
+    queuedTask.lease_worker_id = "stale-worker";
+    queuedTask.lease_expires_at = 1_800_000_000;
+    queuedTask.lease_claim_id = "stale-claim";
+    queuedTask.lease_namespace = "stale-namespace";
+    queuedTask.lease_token_hash = "stale-token";
     const response = await handleTaskApi(
       new Request("https://app.test/api/tasks/task-queued/cancel", { method: "POST" }),
       env,
@@ -79,7 +85,15 @@ describe("task cancellation state machine", () => {
     );
     expect(response?.status).toBe(200);
     expect(await response?.json()).toMatchObject({ task_id: "task-queued", status: "cancelled" });
-    expect(db.tasks.get("task-queued")?.status).toBe("cancelled");
+    expect(db.tasks.get("task-queued")).toMatchObject({
+      status: "cancelled",
+      active_attempt_id: null,
+      lease_worker_id: null,
+      lease_expires_at: null,
+      lease_claim_id: null,
+      lease_namespace: null,
+      lease_token_hash: null,
+    });
     const duplicate = await handleTaskApi(
       new Request("https://app.test/api/tasks/task-queued/cancel", { method: "POST" }),
       env,
@@ -139,6 +153,53 @@ describe("task retry state machine", () => {
     const duplicate = await handleTaskApi(retryRequest(task.task_id), env, user);
     expect(duplicate?.status).toBe(200);
     expect(await duplicate?.json()).toMatchObject({ task_id: task.task_id, status: "queued", duplicate: true });
+    expect([...db.taskEvents.values()].filter((event) => event.task_id === task.task_id && event.event_type === "task_requeued")).toHaveLength(1);
+    expect([...db.outboxEvents.values()].filter((event) => event.aggregate_id === task.task_id && event.event_type === "task_queued")).toHaveLength(1);
+  });
+
+  it("repairs a failed production row with a terminal active Attempt and stale lease fields", async () => {
+    const { env, db } = makeEnv();
+    db.seedTask("discovery-task-ab040aea-4ca5-4113-9c43-188a004b96dd", user.userId, "Discovery task", "failed");
+    const task = db.tasks.get("discovery-task-ab040aea-4ca5-4113-9c43-188a004b96dd")!;
+    task.attempt_count = 1;
+    task.max_attempts = 3;
+    task.lease_epoch = 7;
+    task.active_attempt_id = "attempt-failed-production";
+    task.lease_worker_id = "worker-stale";
+    task.lease_expires_at = 1_800_000_999;
+    task.lease_claim_id = "claim-stale";
+    task.lease_namespace = "infinity-public";
+    task.lease_token_hash = "token-stale";
+    db.seedTaskAttempt({
+      attempt_id: task.active_attempt_id,
+      task_id: task.task_id,
+      status: "failed",
+      lease_expires_at: 1_800_000_999,
+    });
+
+    const before = await handleTaskApi(new Request(`https://app.test/api/tasks/${task.task_id}`), env, user);
+    expect(before?.status).toBe(200);
+    expect(await before?.json()).toMatchObject({ status: "failed", can_retry: true });
+
+    const response = await handleTaskApi(retryRequest(task.task_id), env, user);
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toMatchObject({
+      task_id: task.task_id,
+      status: "queued",
+      attempt_count: 1,
+      duplicate: false,
+    });
+    expect(task).toMatchObject({
+      status: "queued",
+      active_attempt_id: null,
+      lease_worker_id: null,
+      lease_expires_at: null,
+      lease_claim_id: null,
+      lease_namespace: null,
+      lease_token_hash: null,
+    });
+    expect(task.lease_epoch).toBe(7);
+    expect(db.taskAttempts.get("attempt-failed-production")?.status).toBe("failed");
     expect([...db.taskEvents.values()].filter((event) => event.task_id === task.task_id && event.event_type === "task_requeued")).toHaveLength(1);
     expect([...db.outboxEvents.values()].filter((event) => event.aggregate_id === task.task_id && event.event_type === "task_queued")).toHaveLength(1);
   });
