@@ -51,6 +51,16 @@ def _lease_request_timeout() -> float:
     return max(5.0, min(seconds, 30.0))
 
 
+def _trusted_worker_hosts() -> set[str]:
+    """Return operator-supplied public hostnames allowed through Fake-IP DNS."""
+
+    return {
+        item.strip().lower().rstrip(".")
+        for item in os.getenv("WORKER_TRUSTED_OUTBOUND_HOSTS", "").split(",")
+        if item.strip()
+    }
+
+
 def validated_control_plane_url(value: str) -> str:
     candidate = str(value or "").strip().rstrip("/")
     if not candidate:
@@ -61,7 +71,12 @@ def validated_control_plane_url(value: str) -> str:
         (parsed.hostname or "").lower() in local_hosts
         and os.getenv("APP_ENV", "production").lower() in {"development", "dev", "test", "acceptance"}
     )
-    return validate_outbound_url(candidate, allow_hosts=local_hosts, allow_http_local=allow_local_http).rstrip("/")
+    return validate_outbound_url(
+        candidate,
+        allow_hosts=local_hosts,
+        allow_resolved_hosts=_trusted_worker_hosts(),
+        allow_http_local=allow_local_http,
+    ).rstrip("/")
 
 
 def validated_relay_url(value: str) -> str:
@@ -74,7 +89,12 @@ def validated_relay_url(value: str) -> str:
         (parsed.hostname or "").lower() in local_hosts
         and os.getenv("APP_ENV", "production").lower() in {"development", "dev", "test", "acceptance"}
     )
-    return validate_outbound_url(candidate, allow_hosts=local_hosts, allow_http_local=allow_local_http).rstrip("/")
+    return validate_outbound_url(
+        candidate,
+        allow_hosts=local_hosts,
+        allow_resolved_hosts=_trusted_worker_hosts(),
+        allow_http_local=allow_local_http,
+    ).rstrip("/")
 
 
 class ControlPlaneError(RuntimeError):

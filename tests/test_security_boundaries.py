@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import backend.security as security_module
 from backend.auth import Principal, create_session_cookie, principal_from_session_cookie
 from backend.resource_broker import EgressDenied, ResourceBroker, ResourceForbidden
 from backend.security import (
@@ -38,6 +39,27 @@ def test_ssrf_policy_rejects_loopback_and_credentials():
         validate_outbound_url("http://127.0.0.1/private", allow_http_local=True)
     with pytest.raises(SecurityBoundaryError):
         validate_outbound_url("https://user:password@example.com/data")
+
+
+def test_explicit_fake_ip_host_keeps_url_transport_restrictions(monkeypatch):
+    monkeypatch.setattr(
+        security_module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(None, None, None, None, ("198.18.0.96", 0))],
+    )
+    with pytest.raises(SecurityBoundaryError):
+        validate_outbound_url("https://public.example")
+    assert validate_outbound_url(
+        "https://public.example", allow_resolved_hosts={"public.example"}
+    ) == "https://public.example"
+    with pytest.raises(SecurityBoundaryError):
+        validate_outbound_url(
+            "https://public.example:8443", allow_resolved_hosts={"public.example"}
+        )
+    with pytest.raises(SecurityBoundaryError):
+        validate_outbound_url(
+            "http://public.example", allow_resolved_hosts={"public.example"}
+        )
 
 
 def test_worker_control_plane_requires_https_outside_local_acceptance(monkeypatch):

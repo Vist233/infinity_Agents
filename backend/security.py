@@ -551,6 +551,7 @@ def validate_outbound_url(
     url: str,
     *,
     allow_hosts: Optional[Iterable[str]] = None,
+    allow_resolved_hosts: Optional[Iterable[str]] = None,
     allow_http_local: bool = False,
 ) -> str:
     """Validate a provider/paper URL against the SSRF policy.
@@ -570,10 +571,18 @@ def validate_outbound_url(
         raise SecurityBoundaryError("URL port is invalid") from exc
     hostname = parsed.hostname.rstrip(".").lower()
     allowed = {h.lower().strip() for h in (allow_hosts or ()) if h.strip()}
+    allowed_resolved = {
+        h.lower().strip().rstrip(".") for h in (allow_resolved_hosts or ()) if h.strip()
+    }
     allowed_local = allow_http_local and hostname in allowed
     if port not in (None, 80, 443) and not allowed_local:
         raise SecurityBoundaryError("non-standard URL ports require an explicit local allowlist")
     if hostname in allowed:
+        return parsed.geturl()
+    # Some network-security products return synthetic reserved addresses for
+    # selected public hosts. An explicit hostname may bypass only this address
+    # check; scheme, credential, and standard-port validation still applies.
+    if hostname in allowed_resolved:
         return parsed.geturl()
     for address in _resolved_addresses(hostname):
         if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved or address.is_multicast:
