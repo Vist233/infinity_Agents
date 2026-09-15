@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from backend.code_agent.worker.control_plane import ClaimedTask, WorkerV2Client
+from backend.code_agent.worker.control_plane import ClaimedTask, WorkerSession, WorkerV2Client
 
 
 @pytest.mark.asyncio
@@ -141,3 +141,54 @@ async def test_artifact_part_upload_can_be_cancelled_between_stream_chunks(tmp_p
         )
     assert checks == 2
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_worker_v2_client_bounds_lease_and_session_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WORKER_LEASE_REQUEST_TIMEOUT_SECONDS", "17")
+    observed: dict[str, dict[str, float]] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        timeout = request.extensions.get("timeout")
+        assert isinstance(timeout, dict)
+        observed[request.url.path] = timeout
+        if request.url.path.endswith("/heartbeat"):
+            return httpx.Response(200, json={"status": "ready"}, request=request)
+        if request.url.path.endswith("/renew"):
+            return httpx.Response(200, json={"status": "running"}, request=request)
+        if request.url.path.endswith("/spec"):
+            return httpx.Response(200, json={"cancel_requested": False}, request=request)
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    client = WorkerV2Client(
+        base_url="https://localhost",
+        worker_id="public-worker",
+        credential="persistent-worker-credential",
+        instance_id="windows-public-worker",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    client.session = WorkerSession(
+        session_id="session-1",
+        session_epoch=1,
+        pool_id="public-default",
+        namespace="infinity-public",
+        lease_expires_at=9999999999,
+    )
+    claim = ClaimedTask(
+        task_id="task-1", task_spec_id="spec-1", dataset_snapshot_id="dataset-1",
+        method_source_id=None, title="Long task", attempt_id="attempt-1",
+        lease_token="lease-1", fencing_epoch=1, lease_expires_at=9999999999,
+    )
+
+    await client.heartbeat()
+    await client.renew(claim)
+    await client.spec(claim)
+    await client.close()
+
+    assert set(observed) == {
+        "/api/worker/v2/heartbeat",
+        "/api/worker/v2/tasks/task-1/renew",
+        "/api/worker/v2/tasks/task-1/spec",
+    }
+    for timeout in observed.values():
+        assert timeout == {"connect": 17.0, "read": 17.0, "write": 17.0, "pool": 17.0}
