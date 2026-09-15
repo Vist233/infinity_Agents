@@ -48,6 +48,7 @@ interface TaskRow {
   active_attempt_id?: string | null;
   active_attempt_status?: string | null;
   has_active_attempt?: number | boolean;
+  max_retry_override_used?: number | boolean;
   lease_worker_id?: string | null;
   lease_token_hash?: string | null;
   lease_expires_at?: number | null;
@@ -57,6 +58,13 @@ interface TaskRow {
 
 const RETRYABLE_TASK_STATUSES = new Set(["failed", "timeout"]);
 const TERMINAL_ATTEMPT_STATUSES = new Set(["succeeded", "failed", "expired", "cancelled"]);
+
+function taskRetryAttemptAvailable(row: Pick<TaskRow, "attempt_count" | "max_attempts" | "max_retry_override_used">): boolean {
+  const attemptCount = Number(row.attempt_count);
+  const maxAttempts = Number(row.max_attempts);
+  return attemptCount < maxAttempts
+    || (attemptCount === maxAttempts && Number(row.max_retry_override_used ?? 0) === 0);
+}
 
 function iso(value: number | null | undefined): string | null {
   return value == null ? null : new Date(value * 1000).toISOString();
@@ -391,12 +399,16 @@ async function loadTask(taskIdValue: string, env: Env, user: Pick<AuthedUser, "u
              WHERE a.task_id = tasks.task_id AND a.attempt_id = tasks.active_attempt_id) AS active_attempt_status,
             EXISTS (SELECT 1 FROM task_attempts live
                     WHERE live.task_id = tasks.task_id
-                      AND live.status IN ('claimed', 'running')) AS has_active_attempt
+                      AND live.status IN ('claimed', 'running')) AS has_active_attempt,
+            EXISTS (SELECT 1 FROM task_events retry_override
+                    WHERE retry_override.task_id = tasks.task_id
+                      AND retry_override.task_event_id = 'task-requeued:' || tasks.task_id || ':' || tasks.max_attempts
+                      AND retry_override.event_type = 'task_requeued') AS max_retry_override_used
      FROM tasks WHERE task_id = ?1 AND created_by = ?2`
   ).bind(taskIdValue, user.userId).first<TaskRow>();
 }
 
-function taskCanRetry(row: Pick<TaskRow, "status" | "attempt_count" | "max_attempts" | "active_attempt_id" | "active_attempt_status" | "has_active_attempt" | "lease_worker_id" | "lease_token_hash" | "lease_expires_at" | "lease_claim_id" | "lease_namespace">): boolean {
+function taskCanRetry(row: Pick<TaskRow, "status" | "attempt_count" | "max_attempts" | "max_retry_override_used" | "active_attempt_id" | "active_attempt_status" | "has_active_attempt" | "lease_worker_id" | "lease_token_hash" | "lease_expires_at" | "lease_claim_id" | "lease_namespace">): boolean {
   const leaseFree = row.active_attempt_id == null
     && row.lease_worker_id == null
     && row.lease_token_hash == null
@@ -406,7 +418,7 @@ function taskCanRetry(row: Pick<TaskRow, "status" | "attempt_count" | "max_attem
   const terminalAttempt = row.active_attempt_id != null
     && TERMINAL_ATTEMPT_STATUSES.has(row.active_attempt_status ?? "");
   return RETRYABLE_TASK_STATUSES.has(row.status)
-    && Number(row.attempt_count) < Number(row.max_attempts)
+    && taskRetryAttemptAvailable(row)
     && Number(row.has_active_attempt ?? 0) === 0
     && (leaseFree || terminalAttempt);
 }
@@ -424,7 +436,11 @@ async function loadTaskForRetry(taskIdValue: string, env: Env, user: AuthedUser)
              WHERE a.task_id = tasks.task_id AND a.attempt_id = tasks.active_attempt_id) AS active_attempt_status,
             EXISTS (SELECT 1 FROM task_attempts live
                     WHERE live.task_id = tasks.task_id
-                      AND live.status IN ('claimed', 'running')) AS has_active_attempt
+                      AND live.status IN ('claimed', 'running')) AS has_active_attempt,
+            EXISTS (SELECT 1 FROM task_events retry_override
+                    WHERE retry_override.task_id = tasks.task_id
+                      AND retry_override.task_event_id = 'task-requeued:' || tasks.task_id || ':' || tasks.max_attempts
+                      AND retry_override.event_type = 'task_requeued') AS max_retry_override_used
      FROM tasks
      WHERE task_id = ?1 AND (?2 = 1 OR created_by = ?3)`
   ).bind(taskIdValue, admin ? 1 : 0, user.userId).first<TaskRow>();
@@ -692,7 +708,11 @@ async function handleListTasks(request: Request, env: Env, user: AuthedUser): Pr
              WHERE a.task_id = tasks.task_id AND a.attempt_id = tasks.active_attempt_id) AS active_attempt_status,
             EXISTS (SELECT 1 FROM task_attempts live
                     WHERE live.task_id = tasks.task_id
-                      AND live.status IN ('claimed', 'running')) AS has_active_attempt
+                      AND live.status IN ('claimed', 'running')) AS has_active_attempt,
+            EXISTS (SELECT 1 FROM task_events retry_override
+                    WHERE retry_override.task_id = tasks.task_id
+                      AND retry_override.task_event_id = 'task-requeued:' || tasks.task_id || ':' || tasks.max_attempts
+                      AND retry_override.event_type = 'task_requeued') AS max_retry_override_used
      FROM tasks WHERE created_by = ?1 ORDER BY created_at DESC LIMIT ?2`
   ).bind(user.userId, limit).all<TaskRow>();
   return json({ tasks: (result.results ?? []).map(publicTask) });
@@ -710,7 +730,11 @@ async function handleTaskByConfirmation(confirmationId: string, env: Env, user: 
              WHERE a.task_id = tasks.task_id AND a.attempt_id = tasks.active_attempt_id) AS active_attempt_status,
             EXISTS (SELECT 1 FROM task_attempts live
                     WHERE live.task_id = tasks.task_id
-                      AND live.status IN ('claimed', 'running')) AS has_active_attempt
+                      AND live.status IN ('claimed', 'running')) AS has_active_attempt,
+            EXISTS (SELECT 1 FROM task_events retry_override
+                    WHERE retry_override.task_id = tasks.task_id
+                      AND retry_override.task_event_id = 'task-requeued:' || tasks.task_id || ':' || tasks.max_attempts
+                      AND retry_override.event_type = 'task_requeued') AS max_retry_override_used
      FROM tasks WHERE chat_confirmation_id = ?1 AND created_by = ?2`
   ).bind(confirmationId, user.userId).first<TaskRow>();
   return json({ task: task ? publicTask(task) : null });
@@ -839,7 +863,7 @@ async function retryConflict(task: TaskRow, env: Env): Promise<Response> {
   if (!RETRYABLE_TASK_STATUSES.has(task.status)) {
     return errorJson(`Cannot retry task in status: ${task.status}`, 409, "TASK_NOT_RETRYABLE");
   }
-  if (Number(task.attempt_count) >= Number(task.max_attempts)) {
+  if (!taskRetryAttemptAvailable(task)) {
     return errorJson("Task has reached the maximum number of attempts", 409, "TASK_RETRY_LIMIT_REACHED");
   }
   const activeAttempt = !taskCanRetry(task) || Boolean(await env.DB.prepare(
@@ -861,13 +885,14 @@ async function handleRetryTask(taskIdValue: string, env: Env, user: AuthedUser):
   const duplicate = await duplicateRetryResponse(task, env);
   if (duplicate) return duplicate;
   if (!RETRYABLE_TASK_STATUSES.has(task.status)
-    || Number(task.attempt_count) >= Number(task.max_attempts)
+    || !taskRetryAttemptAvailable(task)
     || !taskCanRetry(task)) {
     return retryConflict(task, env);
   }
 
   const now = nowSeconds();
   const attemptCount = Number(task.attempt_count);
+  const maxAttemptOverride = attemptCount === Number(task.max_attempts);
   const eventId = `task-requeued:${task.task_id}:${attemptCount}`;
   const outboxEventId = `task-queued:retry:${task.task_id}:${attemptCount}`;
   const outboxIdempotencyKey = `task-queued:${task.task_id}:retry:${attemptCount}`;
@@ -880,6 +905,7 @@ async function handleRetryTask(taskIdValue: string, env: Env, user: AuthedUser):
     max_attempts: Number(task.max_attempts),
     pool_id: task.execution_pool_id ?? "public-default",
     reason: "manual_retry",
+    retry_mode: maxAttemptOverride ? "max_attempt_override" : "within_limit",
   });
 
   let results: unknown[];
@@ -894,11 +920,23 @@ async function handleRetryTask(taskIdValue: string, env: Env, user: AuthedUser):
         `INSERT OR IGNORE INTO task_events
           (task_event_id, task_id, event_type, event_data, created_at)
          SELECT ?1, ?2, 'task_requeued', ?3, ?4
-         WHERE EXISTS (
+           WHERE EXISTS (
            SELECT 1 FROM tasks
            WHERE task_id = ?2 AND (?6 = 1 OR created_by = ?7)
              AND status IN ('failed', 'timeout')
-             AND attempt_count = ?5 AND attempt_count < max_attempts
+             AND attempt_count = ?5
+             AND (
+               attempt_count < max_attempts
+               OR (
+                 attempt_count = max_attempts
+                 AND NOT EXISTS (
+                   SELECT 1 FROM task_events retry_override
+                   WHERE retry_override.task_id = tasks.task_id
+                     AND retry_override.task_event_id = 'task-requeued:' || tasks.task_id || ':' || tasks.max_attempts
+                     AND retry_override.event_type = 'task_requeued'
+                 )
+               )
+             )
              AND NOT EXISTS (
                SELECT 1 FROM task_attempts a
                WHERE a.task_id = tasks.task_id
@@ -931,7 +969,19 @@ async function handleRetryTask(taskIdValue: string, env: Env, user: AuthedUser):
              lease_claim_id = NULL, lease_namespace = NULL, updated_at = ?2
          WHERE task_id = ?1 AND (?5 = 1 OR created_by = ?6)
            AND status IN ('failed', 'timeout')
-           AND attempt_count = ?3 AND attempt_count < max_attempts
+           AND attempt_count = ?3
+           AND (
+             attempt_count < max_attempts
+             OR (
+               attempt_count = max_attempts
+               AND NOT EXISTS (
+                 SELECT 1 FROM task_events retry_override
+                 WHERE retry_override.task_id = tasks.task_id
+                   AND retry_override.task_event_id = 'task-requeued:' || tasks.task_id || ':' || tasks.max_attempts
+                   AND retry_override.event_type = 'task_requeued'
+               )
+             )
+           )
            AND NOT EXISTS (
              SELECT 1 FROM task_attempts a
              WHERE a.task_id = tasks.task_id

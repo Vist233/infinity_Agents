@@ -275,8 +275,7 @@ export default function TaskDetailPage() {
   const isTerminal = task ? terminalStatuses.includes(task.status) : true;
   const canRetry = Boolean(
     task?.can_retry === true
-      && ["failed", "timeout"].includes(task.status)
-      && task.attempt_count < task.max_attempts,
+      && ["failed", "timeout"].includes(task.status),
   );
 
   const handleCancel = async () => {

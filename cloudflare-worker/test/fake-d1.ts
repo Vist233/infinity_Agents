@@ -75,6 +75,7 @@ export interface TaskRow {
   active_attempt_id?: string | null;
   active_attempt_status?: string | null;
   has_active_attempt?: number | boolean;
+  max_retry_override_used?: number | boolean;
   lease_worker_id?: string | null;
   lease_token_hash?: string | null;
   lease_expires_at?: number | null;
@@ -440,10 +441,13 @@ export class FakeD1 {
     const hasActiveAttempt = [...this.taskAttempts.values()].some((attempt) =>
       attempt.task_id === row.task_id && ["claimed", "running"].includes(attempt.status),
     );
+    const maxRetryOverrideMarker = `task-requeued:${row.task_id}:${Number(row.max_attempts ?? 0)}`;
+    const maxRetryOverrideUsed = this.taskEvents.get(maxRetryOverrideMarker)?.event_type === "task_requeued";
     return {
       ...row,
       active_attempt_status: activeAttempt?.status ?? null,
       has_active_attempt: hasActiveAttempt ? 1 : 0,
+      max_retry_override_used: maxRetryOverrideUsed ? 1 : 0,
     };
   }
 
@@ -1944,11 +1948,17 @@ class FakeStatement {
       const terminalAttempt = task?.active_attempt_id
         ? this.db.taskAttempts.get(task.active_attempt_id)
         : undefined;
+      const attemptCountValue = Number(task?.attempt_count ?? 0);
+      const maxAttempts = Number(task?.max_attempts ?? 0);
+      const maxRetryOverrideMarker = task ? `task-requeued:${task.task_id}:${maxAttempts}` : "";
+      const maxRetryOverrideUsed = Boolean(maxRetryOverrideMarker && this.db.taskEvents.get(maxRetryOverrideMarker)?.event_type === "task_requeued");
+      const attemptAvailable = Boolean(task
+        && (attemptCountValue < maxAttempts || (attemptCountValue === maxAttempts && !maxRetryOverrideUsed)));
       const eligible = Boolean(task
         && (operator === 1 || task.created_by === userId)
         && ["failed", "timeout"].includes(task.status)
         && Number(task.attempt_count) === attemptCount
-        && attemptCount < Number(task.max_attempts)
+        && attemptAvailable
         && !activeAttempt);
       const leaseFree = task?.active_attempt_id == null
         && task?.lease_worker_id == null
@@ -1972,11 +1982,18 @@ class FakeStatement {
       const terminalAttempt = task?.active_attempt_id
         ? this.db.taskAttempts.get(task.active_attempt_id)
         : undefined;
+      const attemptCountValue = Number(task?.attempt_count ?? 0);
+      const maxAttempts = Number(task?.max_attempts ?? 0);
+      const maxRetryOverrideMarker = task ? `task-requeued:${task.task_id}:${maxAttempts}` : "";
+      const retryOverrideInserted = this.db.taskEvents.get(eventId)?.event_type === "task_requeued";
+      const attemptAvailable = Boolean(task
+        && (attemptCountValue < maxAttempts
+          || (attemptCountValue === maxAttempts && eventId === maxRetryOverrideMarker && retryOverrideInserted)));
       const eligible = Boolean(task
         && (operator === 1 || task.created_by === userId)
         && ["failed", "timeout"].includes(task.status)
         && Number(task.attempt_count) === attemptCount
-        && attemptCount < Number(task.max_attempts)
+        && attemptAvailable
         && !activeAttempt
         && this.db.taskEvents.get(eventId)?.event_type === "task_requeued");
       const leaseFree = task?.active_attempt_id == null

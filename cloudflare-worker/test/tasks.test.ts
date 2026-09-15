@@ -204,6 +204,80 @@ describe("task retry state machine", () => {
     expect([...db.outboxEvents.values()].filter((event) => event.aggregate_id === task.task_id && event.event_type === "task_queued")).toHaveLength(1);
   });
 
+  it("allows one audited retry for a maxed terminal production task", async () => {
+    const { env, db } = makeEnv();
+    const taskId = "discovery-task-ab040aea-4ca5-4113-9c43-188a004b96dd";
+    db.seedTask(taskId, user.userId, "Discovery task at retry limit", "failed");
+    const task = db.tasks.get(taskId)!;
+    task.attempt_count = 3;
+    task.max_attempts = 3;
+    task.lease_epoch = 11;
+    task.active_attempt_id = "attempt-failed-at-limit";
+    task.lease_worker_id = "worker-stale";
+    task.lease_expires_at = 1_800_001_111;
+    task.lease_claim_id = "claim-stale";
+    task.lease_namespace = "infinity-public";
+    task.lease_token_hash = "token-stale";
+    db.seedTaskAttempt({
+      attempt_id: task.active_attempt_id,
+      task_id: task.task_id,
+      status: "failed",
+      lease_expires_at: 1_800_001_111,
+    });
+
+    const before = await handleTaskApi(new Request(`https://app.test/api/tasks/${task.task_id}`), env, user);
+    expect(before?.status).toBe(200);
+    expect(await before?.json()).toMatchObject({ status: "failed", attempt_count: 3, max_attempts: 3, can_retry: true });
+
+    const response = await handleTaskApi(retryRequest(task.task_id), env, user);
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toMatchObject({
+      task_id: task.task_id,
+      status: "queued",
+      attempt_count: 3,
+      duplicate: false,
+    });
+    expect(db.tasks.size).toBe(1);
+    expect(task).toMatchObject({
+      status: "queued",
+      active_attempt_id: null,
+      lease_worker_id: null,
+      lease_expires_at: null,
+      lease_claim_id: null,
+      lease_namespace: null,
+      lease_token_hash: null,
+    });
+    expect(task.lease_epoch).toBe(11);
+    expect(db.taskAttempts.get("attempt-failed-at-limit")?.status).toBe("failed");
+
+    const eventId = `task-requeued:${task.task_id}:3`;
+    const event = db.taskEvents.get(eventId);
+    expect(event).toMatchObject({ task_event_id: eventId, task_id: task.task_id, event_type: "task_requeued" });
+    expect(JSON.parse(event!.event_data)).toMatchObject({
+      reason: "manual_retry",
+      retry_mode: "max_attempt_override",
+      attempt_count: 3,
+      max_attempts: 3,
+    });
+    const outbox = db.outboxEvents.get(`task-queued:retry:${task.task_id}:3`);
+    expect(outbox).toBeDefined();
+    expect(JSON.parse(outbox!.payload_json)).toMatchObject({ retry_mode: "max_attempt_override" });
+
+    const duplicate = await handleTaskApi(retryRequest(task.task_id), env, user);
+    expect(duplicate?.status).toBe(200);
+    expect(await duplicate?.json()).toMatchObject({ task_id: task.task_id, status: "queued", attempt_count: 3, duplicate: true });
+    expect([...db.taskEvents.values()].filter((event) => event.task_id === task.task_id && event.event_type === "task_requeued")).toHaveLength(1);
+    expect([...db.outboxEvents.values()].filter((event) => event.aggregate_id === task.task_id && event.event_type === "task_queued")).toHaveLength(1);
+
+    task.status = "failed";
+    task.attempt_count = 3;
+    task.active_attempt_id = "attempt-failed-after-override";
+    db.seedTaskAttempt({ attempt_id: task.active_attempt_id, task_id: task.task_id, status: "failed", lease_expires_at: 1_800_001_222 });
+    const exhausted = await handleTaskApi(retryRequest(task.task_id), env, user);
+    expect(exhausted?.status).toBe(409);
+    expect(await exhausted?.json()).toMatchObject({ error: { code: "TASK_RETRY_LIMIT_REACHED" } });
+  });
+
   it("allows an administrator to retry another user's task but not an ordinary user", async () => {
     const { env, db } = makeEnv();
     db.seedTask("task-owned-by-alice", "alice", "Alice's task", "failed");
@@ -265,17 +339,24 @@ describe("task retry state machine", () => {
     expect(await activeAttemptResponse?.json()).toMatchObject({ error: { code: "TASK_RETRY_ACTIVE" } });
   });
 
-  it("enforces the attempt limit without writing lifecycle records", async () => {
+  it("rejects a second max-attempt retry without writing lifecycle records", async () => {
     const { env, db } = makeEnv();
     db.seedTask("task-at-limit", user.userId, "At limit", "failed");
     const task = db.tasks.get("task-at-limit")!;
     task.attempt_count = 3;
     task.max_attempts = 3;
+    db.taskEvents.set("task-requeued:task-at-limit:3", {
+      task_event_id: "task-requeued:task-at-limit:3",
+      task_id: task.task_id,
+      event_type: "task_requeued",
+      event_data: JSON.stringify({ retry_mode: "max_attempt_override" }),
+      created_at: 1_800_000_000,
+    });
     const response = await handleTaskApi(retryRequest(task.task_id), env, user);
     expect(response?.status).toBe(409);
     expect(await response?.json()).toMatchObject({ error: { code: "TASK_RETRY_LIMIT_REACHED" } });
     expect(task.status).toBe("failed");
-    expect(db.taskEvents.size).toBe(0);
+    expect(db.taskEvents.size).toBe(1);
     expect(db.outboxEvents.size).toBe(0);
   });
 

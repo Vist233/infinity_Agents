@@ -435,6 +435,18 @@ async function pollTasks(request: Request, env: Env, context: WorkerContext): Pr
      FROM tasks
      WHERE status = 'queued' AND execution_pool_id = ?1
        AND cancel_requested_at IS NULL
+       AND (
+         attempt_count < max_attempts
+         OR (
+           attempt_count = max_attempts
+           AND EXISTS (
+             SELECT 1 FROM task_events retry_override
+             WHERE retry_override.task_id = tasks.task_id
+               AND retry_override.task_event_id = 'task-requeued:' || tasks.task_id || ':' || tasks.max_attempts
+               AND retry_override.event_type = 'task_requeued'
+           )
+         )
+       )
      ORDER BY created_at ASC, task_id ASC LIMIT ?2`,
   ).bind(context.policy.pool_id, MAX_POLL_RESULTS).first<TaskQueueRow>();
   return json({
@@ -496,6 +508,18 @@ async function acceptTask(taskId: string, request: Request, env: Env, context: W
          WHERE task_id = ?1 AND status = 'queued'
            AND execution_pool_id = ?8 AND lease_epoch = ?9
            AND cancel_requested_at IS NULL
+           AND (
+             attempt_count < max_attempts
+             OR (
+               attempt_count = max_attempts
+               AND EXISTS (
+                 SELECT 1 FROM task_events retry_override
+                 WHERE retry_override.task_id = tasks.task_id
+                   AND retry_override.task_event_id = 'task-requeued:' || tasks.task_id || ':' || tasks.max_attempts
+                   AND retry_override.event_type = 'task_requeued'
+               )
+             )
+           )
            AND EXISTS (
              SELECT 1 FROM worker_sessions_runtime s
              WHERE s.session_id = ?10 AND s.worker_id = ?3

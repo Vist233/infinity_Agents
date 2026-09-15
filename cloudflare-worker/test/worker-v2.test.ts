@@ -73,6 +73,7 @@ class RuntimeFakeD1 {
   readonly attempts = new Map<string, Attempt>();
   readonly events: string[] = [];
   readonly outbox: string[] = [];
+  readonly taskRequeueMarkers = new Set<string>();
   readonly artifactUploads = new Map<string, any>();
   readonly artifactParts = new Map<string, Map<number, any>>();
   readonly artifacts = new Map<string, any>();
@@ -182,7 +183,10 @@ class RuntimeFakeStatement {
     if (sql.includes("FROM tasks") && sql.includes("status = 'queued'")) {
       const [poolId] = this.args as [string, number];
       const row = [...this.db.tasks.values()].find((candidate) =>
-        candidate.status === "queued" && candidate.execution_pool_id === poolId);
+        candidate.status === "queued" && candidate.execution_pool_id === poolId
+          && (Number(candidate.attempt_count) < Number(candidate.max_attempts)
+            || (Number(candidate.attempt_count) === Number(candidate.max_attempts)
+              && this.db.taskRequeueMarkers.has(`task-requeued:${candidate.task_id}:${candidate.max_attempts}`))));
       return (row as T) ?? null;
     }
     return null;
@@ -355,7 +359,11 @@ class RuntimeFakeStatement {
       const [taskId, attemptId, workerId, epoch, tokenHash, lease, now, poolId, expectedEpoch, sessionId, sessionEpoch, instanceId] = this.args as [string, string, string, number, string, number, number, string, number, string, number, string];
       const row = this.db.tasks.get(taskId);
       const session = this.db.sessionHistory.get(sessionId);
+      const attemptAvailable = Number(row?.attempt_count ?? 0) < Number(row?.max_attempts ?? 0)
+        || (Number(row?.attempt_count ?? 0) === Number(row?.max_attempts ?? 0)
+          && this.db.taskRequeueMarkers.has(`task-requeued:${taskId}:${Number(row?.max_attempts ?? 0)}`));
       if (!row || row.status !== "queued" || row.execution_pool_id !== poolId || row.lease_epoch !== expectedEpoch
+        || !attemptAvailable
         || session?.worker_id !== workerId || session.session_epoch !== sessionEpoch || session.instance_id !== instanceId
         || session.disconnected_at != null || session.lease_expires_at <= now) return { meta: { changes: 0 } };
       row.status = "claimed";
@@ -712,6 +720,42 @@ describe("Worker v2 control plane", () => {
     const rejected = await handleWorkerV2(new Request("https://app.test/api/worker/v2/heartbeat", { method: "POST", headers: forgedPool }), envFor(db));
     expect(rejected?.status).toBe(403);
     expect(await rejected?.json()).toMatchObject({ error: { code: "WORKER_POOL_MISMATCH" } });
+  });
+
+  it("only offers and accepts a maxed task after the audited retry marker exists", async () => {
+    const db = new RuntimeFakeD1();
+    const credential = "wc_test-persistent-credential";
+    db.workers.set("worker-b", {
+      worker_id: "worker-b", pool_id: "public-default", namespace: "infinity-public", created_by: "worker-owner",
+      credential_hash: hashText(credential), status: "active", protocol_version: "2", runtime_capability: "goal-driven-claude-code", image_digest: null, last_seen_at: null,
+    });
+    db.tasks.set("task-maxed", {
+      task_id: "task-maxed", task_spec_id: "spec-maxed", dataset_snapshot_id: "dataset-maxed", method_source_id: null,
+      title: "Maxed retry task", attempt_count: 3, max_attempts: 3, lease_epoch: 0, status: "queued", execution_pool_id: "public-default",
+      active_attempt_id: null, lease_worker_id: null, lease_token_hash: null, lease_expires_at: null,
+    });
+    const connected = await connect(db, "worker-b", credential, "machine-a");
+    const headers = authHeaders("worker-b", credential, "machine-a", connected.session);
+
+    const unmarkedPoll = await handleWorkerV2(new Request("https://app.test/api/worker/v2/poll", { method: "POST", headers }), envFor(db));
+    expect(unmarkedPoll?.status).toBe(200);
+    expect(await unmarkedPoll!.json()).toMatchObject({ tasks: [] });
+
+    const unmarkedAccept = await handleWorkerV2(new Request("https://app.test/api/worker/v2/tasks/task-maxed/accept", { method: "POST", headers }), envFor(db));
+    expect(unmarkedAccept?.status).toBe(409);
+    expect(await unmarkedAccept?.json()).toMatchObject({ error: { code: "TASK_CLAIM_CONFLICT" } });
+    expect(db.tasks.get("task-maxed")?.status).toBe("queued");
+    expect(db.attempts.size).toBe(0);
+
+    db.taskRequeueMarkers.add("task-requeued:task-maxed:3");
+    const markedPoll = await handleWorkerV2(new Request("https://app.test/api/worker/v2/poll", { method: "POST", headers }), envFor(db));
+    expect(markedPoll?.status).toBe(200);
+    expect(await markedPoll!.json()).toMatchObject({ tasks: [{ task_id: "task-maxed", attempt_count: 3, max_attempts: 3 }] });
+
+    const markedAccept = await handleWorkerV2(new Request("https://app.test/api/worker/v2/tasks/task-maxed/accept", { method: "POST", headers }), envFor(db));
+    expect(markedAccept?.status).toBe(201);
+    expect(await markedAccept!.json()).toMatchObject({ task_id: "task-maxed", attempt_number: 4, status: "claimed" });
+    expect(db.tasks.get("task-maxed")).toMatchObject({ status: "claimed", attempt_count: 4 });
   });
 
   it("returns bounded availability errors when a session or task renewal batch is unavailable", async () => {

@@ -75,7 +75,7 @@ const MOCK_RETRYABLE_TASK = {
   project_id: "proj-1",
   title: "Retryable analysis",
   status: "failed",
-  attempt_count: 1,
+  attempt_count: 3,
   max_attempts: 3,
   can_retry: true,
   result_artifact_id: null,
@@ -288,7 +288,7 @@ test("Task detail page shows task information correctly", async ({ page }) => {
   await expect(page.getByRole("button", { name: "重试任务", exact: true })).toHaveCount(0);
 });
 
-test("failed task shows retry action only when the server marks it retryable", async ({ page }) => {
+test("maxed failed task shows retry action when the server authorizes the one-time override", async ({ page }) => {
   let retryRequests = 0;
   await page.route("**/api/tasks?limit=50", async (route) => {
     await route.fulfill({ status: 200, body: JSON.stringify({ tasks: [MOCK_RETRYABLE_TASK] }), contentType: "application/json" });
