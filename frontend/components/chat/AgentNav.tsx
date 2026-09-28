@@ -1,20 +1,20 @@
 "use client";
 
-import { BookOpenText, Database, FileText, ListTodo, Microscope } from "lucide-react";
+import { BookOpenText, ListTodo, Microscope } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 
 interface AgentNavProps {
   onNavigate: (path: string) => void;
+  // `analysis` and `collections` remain accepted for legacy detail shells;
+  // neither is exposed in the public cloud navigation.
   active: "analysis" | "tasks" | "traits" | "papers" | "collections";
 }
 
 export type WorkspaceSection = AgentNavProps["active"];
 
 const items = [
-  { id: "analysis", labelKey: "nav.analysis", path: "/", icon: FileText },
-  { id: "papers", labelKey: "nav.papers", path: "/papers/", icon: BookOpenText },
-  { id: "collections", labelKey: "nav.collections", path: "/data-collections/", icon: Database },
   { id: "tasks", labelKey: "nav.tasks", path: "/task-center/", icon: ListTodo },
+  { id: "papers", labelKey: "nav.papers", path: "/papers/", icon: BookOpenText },
   { id: "traits", labelKey: "nav.imageJudge", path: "/image-judge/", icon: Microscope },
 ] as const;
 

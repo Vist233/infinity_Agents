@@ -7,8 +7,9 @@ import { PaperCard, PaperStatusBadge } from "@/components/papers/PaperCard";
 import { Button } from "@/components/ui/button";
 import { getCurrentUser } from "@/lib/api/auth";
 import { listPapers, uploadPaper, type DiscoveryPaper } from "@/lib/api/discovery";
-import { redirectToLogin } from "@/lib/runtime-config";
+import { canUseBrowserApi, redirectToLogin } from "@/lib/runtime-config";
 import { useLanguage } from "@/lib/i18n";
+import { LocalRuntimeNotice } from "@/components/workspace/LocalRuntimeNotice";
 
 type AuthStatus = "checking" | "authenticated" | "unauthenticated" | "error";
 
@@ -58,6 +59,7 @@ export default function PapersWorkspace() {
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [authError, setAuthError] = useState<string | null>(null);
   const requestSequence = useRef(0);
+  const runtimeAvailable = canUseBrowserApi();
 
   const loadPapers = useCallback(async (silent = false) => {
     const requestId = ++requestSequence.current;
@@ -80,6 +82,10 @@ export default function PapersWorkspace() {
   }, []);
 
   useEffect(() => {
+    if (!runtimeAvailable) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     void getCurrentUser().then((user) => {
       if (cancelled) return;
@@ -93,13 +99,13 @@ export default function PapersWorkspace() {
       setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [loadPapers]);
+  }, [loadPapers, runtimeAvailable]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !papers.some((paper) => paper.status === "requested" || paper.status === "processing")) return;
+    if (!runtimeAvailable || authStatus !== "authenticated" || !papers.some((paper) => paper.status === "requested" || paper.status === "processing")) return;
     const timer = setInterval(() => { void loadPapers(true); }, 5000);
     return () => clearInterval(timer);
-  }, [authStatus, loadPapers, papers]);
+  }, [authStatus, loadPapers, papers, runtimeAvailable]);
 
   const chooseFile = (file: File | null) => {
     setSelectedFile(file);
@@ -129,7 +135,7 @@ export default function PapersWorkspace() {
 
   return (
     <DiscoveryChrome active="papers" title={t("papers.title")} icon={BookOpenText} sidebar={authStatus === "authenticated" ? <Sidebar papers={papers} onUpload={scrollToUpload} /> : undefined} actions={authStatus === "authenticated" ? <Button type="button" variant="outline" size="sm" className="gap-1.5 rounded-xl" onClick={() => { void loadPapers(true); }} disabled={refreshing}><RefreshCw className={refreshing ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />{t("tasks.refresh")}</Button> : null}>
-      {authStatus === "checking" ? <div className="flex min-h-[60vh] items-center justify-center text-sm text-zinc-500">{t("papers.loading")}</div> : authStatus === "unauthenticated" ? <AuthPrompt /> : authStatus === "error" ? <AuthPrompt error={authError} /> : (
+      {!runtimeAvailable ? <LocalRuntimeNotice /> : authStatus === "checking" ? <div className="flex min-h-[60vh] items-center justify-center text-sm text-zinc-500">{t("papers.loading")}</div> : authStatus === "unauthenticated" ? <AuthPrompt /> : authStatus === "error" ? <AuthPrompt error={authError} /> : (
         <div className="mx-auto max-w-6xl space-y-6 p-4 md:p-6">
           <div><h1 className="text-2xl font-semibold tracking-tight">{t("papers.title")}</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">{t("papers.subtitle")}</p></div>
           <section ref={uploadSectionRef} className="scroll-mt-20 rounded-3xl border border-blue-200 bg-blue-50/60 p-5 shadow-sm md:p-6">

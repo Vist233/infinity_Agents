@@ -15,7 +15,8 @@ import { ListTodo, LogIn } from "lucide-react";
 import { listTasks, type TaskItem, type TaskStatus } from "@/lib/api/tasks";
 import { WorkspaceUserFooter } from "@/components/chat/WorkspaceUserFooter";
 import { getCurrentUser } from "@/lib/api/auth";
-import { redirectToLogin } from "@/lib/runtime-config";
+import { canUseBrowserApi, redirectToLogin } from "@/lib/runtime-config";
+import { LocalRuntimeNotice } from "@/components/workspace/LocalRuntimeNotice";
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   draft: "tasks.statusDraft",
@@ -40,6 +41,7 @@ export default function CodeAgentPage() {
   const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "unauthenticated" | "error">("checking");
   const [authError, setAuthError] = useState<string | null>(null);
   const requestSequenceRef = useRef(0);
+  const runtimeAvailable = canUseBrowserApi();
 
   const loadTasks = useCallback(async () => {
     const requestId = ++requestSequenceRef.current;
@@ -57,6 +59,10 @@ export default function CodeAgentPage() {
   }, []);
 
   useEffect(() => {
+    if (!runtimeAvailable) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     void getCurrentUser()
       .then((user) => {
@@ -81,13 +87,13 @@ export default function CodeAgentPage() {
         }
       });
     return () => { cancelled = true; };
-  }, [loadTasks, t]);
+  }, [loadTasks, runtimeAvailable, t]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated") return;
+    if (!runtimeAvailable || authStatus !== "authenticated") return;
     const timer = setInterval(() => { void loadTasks(); }, 5000);
     return () => clearInterval(timer);
-  }, [authStatus, loadTasks]);
+  }, [authStatus, loadTasks, runtimeAvailable]);
 
   const formatDate = (iso: string) => {
     const date = new Date(iso);
@@ -150,7 +156,7 @@ export default function CodeAgentPage() {
 
         <ScrollArea className="flex-1">
           <div className="mx-auto max-w-6xl p-4 md:p-6">
-            {authStatus === "authenticated" ? <div className="space-y-6">
+            {!runtimeAvailable ? <LocalRuntimeNotice /> : authStatus === "authenticated" ? <div className="space-y-6">
               <TaskCreationCard resetKey={creationResetKey} onCreated={handleCreated} />
               <WorkerEnrollmentPanel />
               <PublicWorkerAdminPanel />

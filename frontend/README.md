@@ -1,32 +1,38 @@
 # Infinity Agents Frontend
 
-Next.js 16 + React 19 UI served at `https://infinity.zhangyvjing.com` as
-static assets by the companion Cloudflare Worker. It is not replaced by an
-inline Worker page.
+Next.js 16 + React 19 UI. The cloud build is a static browser shell with three
+entry points: Task Center, Papers, and ImageJudge/Trait Agent.
 
-## Authentication and chat
+Task execution and paper data stay in the local application. A static cloud
+page does not assume it can call a user's `localhost`: HTTPS mixed-content,
+Local Network Access, CORS, credential-cookie, and CSRF rules make that an
+explicit deployment contract rather than a reliable default. Without an
+explicit HTTPS API origin, the Task Center and Papers pages show instructions
+for opening the local runtime.
 
-The PaperAgent UI calls the same-origin session API:
+With no override, the notice opens `http://localhost:3000/task-center/`; set
+`NEXT_PUBLIC_LOCAL_APP_URL` when the local UI uses another address.
 
-- `GET /auth/login` starts first-party Zhang Auth login.
-- `GET /api/sessions` loads the authenticated user's recent activities.
-- `POST /api/sessions` creates a conversation.
-- `GET /api/sessions/:id/messages` loads conversation history.
-- `PATCH /api/sessions/:id/title` and `DELETE /api/sessions/:id` manage a
-  conversation.
-- `POST /api/chat` returns the authenticated Agent response as an SSE stream.
+## Local runtime APIs
 
-The Worker owns OIDC, the opaque session cookie, the Infinity D1 session data,
-and the upstream model key. The browser never receives provider secrets.
+The local application provides the authenticated task and paper APIs used by
+the corresponding workspaces. The old Paper Chat/SSE UI is not a public entry.
 
-## ImageJudge download page
+`NEXT_PUBLIC_API_BASE` may point at an explicitly provisioned API origin. In a
+static build, it must be HTTPS; otherwise browser API calls are disabled and
+the page remains an entry-point notice.
+
+For the local Next.js development server, `/api/*` and `/auth/*` proxy to the
+FastAPI runtime on `http://localhost:8008` by default. Set `API_PROXY_TARGET`
+when the local backend uses another address.
+
+## ImageJudge/Trait Agent download page
 
 `/image-judge` is the public product page for the desktop ImageJudge client.
 It explains the reference-guided visual classification workflow and links to
-the latest GitHub Release. The release workflow on `main` publishes a Windows
-archive containing `ImageJudge.exe` and a Linux `.deb` package; the page itself
-remains part of the `cloudflare-deploy` branch and is served by the Infinity
-Edge Worker.
+the existing GitHub Release assets. The current release provides the Windows
+ZIP and Linux amd64 DEB; it does not provide a macOS asset. The web page does
+not package a local desktop build.
 
 ## Commands
 
@@ -39,7 +45,7 @@ npm run test:e2e
 npm run build
 ```
 
-`CLOUDFLARE_EXPORT=1 npm run build` produces `out/` for the Cloudflare Worker.
+`CLOUDFLARE_EXPORT=1 npm run build` produces the static `out/` browser shell.
 The ordinary `npm run build` keeps Next's server mode for local/acceptance use.
 
 ## Test Strategy

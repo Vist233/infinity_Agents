@@ -1,3 +1,6 @@
-"use client";
+import { redirect } from "next/navigation";
 
-export { default } from "@/components/data-collections/CollectionsWorkspace";
+/** Data Collections is no longer a cloud product area; papers is the supported entry. */
+export default function DataCollectionsPage() {
+  redirect("/papers/");
+}

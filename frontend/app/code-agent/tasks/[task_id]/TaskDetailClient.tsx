@@ -9,7 +9,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, RefreshCw, Download, PlayCircle, CheckCircle2, XCircle, Clock, AlertTriangle, LogIn } from "lucide-react";
 import { useRouter, useParams } from "next/navigation";
-import { getApiBase, redirectToLogin } from "@/lib/runtime-config";
+import { canUseBrowserApi, getApiBase, redirectToLogin } from "@/lib/runtime-config";
+import { LocalRuntimeNotice } from "@/components/workspace/LocalRuntimeNotice";
 import { getCurrentUser, isAuthRequestTimeoutError } from "@/lib/api/auth";
 import {
   artifactDownloadUrl,
@@ -162,6 +163,7 @@ export default function TaskDetailPage() {
   const [authTimedOut, setAuthTimedOut] = useState(false);
   const detailRequestRef = useRef(0);
   const detailInFlightRef = useRef<{ taskId: string | null; promise: Promise<void> } | null>(null);
+  const runtimeAvailable = canUseBrowserApi();
 
   const loadDetail = useCallback((silent = false, force = false): Promise<void> => {
     const current = detailInFlightRef.current;
@@ -220,6 +222,10 @@ export default function TaskDetailPage() {
   }, [t, taskId]);
 
   useEffect(() => {
+    if (!runtimeAvailable) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     void getCurrentUser()
       .then((user) => {
@@ -244,11 +250,11 @@ export default function TaskDetailPage() {
         setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [t]);
+  }, [runtimeAvailable, t]);
 
   useEffect(() => {
-    if (authStatus === "authenticated" && taskId) void loadDetail();
-  }, [authStatus, taskId, loadDetail]);
+    if (runtimeAvailable && authStatus === "authenticated" && taskId) void loadDetail();
+  }, [authStatus, loadDetail, runtimeAvailable, taskId]);
 
   useEffect(() => {
     setCancelSuccess(false);
@@ -258,7 +264,7 @@ export default function TaskDetailPage() {
   const currentTaskStatus = task?.status;
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !taskId) return;
+    if (!runtimeAvailable || authStatus !== "authenticated" || !taskId) return;
     if (currentTaskStatus && ["succeeded", "failed", "cancelled", "timeout"].includes(currentTaskStatus)) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -271,7 +277,7 @@ export default function TaskDetailPage() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [authStatus, taskId, currentTaskStatus, loadDetail]);
+  }, [authStatus, currentTaskStatus, loadDetail, runtimeAvailable, taskId]);
 
   const terminalStatuses = useMemo(() => ["succeeded", "failed", "cancelled", "timeout"], []);
   const isTerminal = task ? terminalStatuses.includes(task.status) : true;
@@ -408,6 +414,7 @@ export default function TaskDetailPage() {
         </header>
 
         <ScrollArea className="flex-1">
+          {!runtimeAvailable ? <LocalRuntimeNotice /> : <>
           {authStatus === "unauthenticated" ? (
             <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-6 text-center">
               <div className="flex h-12 w-12 items-center justify-center rounded-full border border-zinc-200 bg-white shadow-sm"><LogIn size={20} className="text-zinc-500" /></div>
@@ -579,6 +586,7 @@ export default function TaskDetailPage() {
               </section>
             </div>
           ) : null}
+          </>}
         </ScrollArea>
       </main>
     </div>

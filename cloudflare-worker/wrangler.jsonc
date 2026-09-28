@@ -1,6 +1,6 @@
 {
-  // Infinity Agents edge Worker: static Analysis/Coding frontend and API,
-  // plus the isolated ImageJudge API namespace.
+  // Historical rollback configuration only. The cloudflare-deploy branch now
+  // ships a static frontend; no Cloudflare Worker deployment is enabled.
   "name": "infinity-agents-edge",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-24",

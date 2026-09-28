@@ -1,4 +1,6 @@
 {
+  // Historical desktop API configuration only. Deployment is disabled while
+  // the web product remains a static frontend with GitHub Release downloads.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "image-judge-api",
   "main": "src/index.ts",

@@ -1,5 +1,7 @@
 import { defineConfig } from "@playwright/test";
 
+const executablePath = process.env.PLAYWRIGHT_EXECUTABLE_PATH;
+
 export default defineConfig({
   testDir: "./e2e",
   timeout: 45_000,
@@ -9,6 +11,7 @@ export default defineConfig({
     baseURL: "http://127.0.0.1:3000",
     locale: "zh-CN",
     trace: "on-first-retry",
+    ...(executablePath ? { launchOptions: { executablePath } } : {}),
   },
   webServer: {
     command: "npm run dev -- --hostname 127.0.0.1 --port 3000",

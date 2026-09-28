@@ -8,8 +8,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 const WINDOWS_DOWNLOAD_URL = "https://github.com/Vist233/infinity_Agents/releases/latest/download/ImageJudge-windows-x64.zip";
-const MAC_DOWNLOAD_URL = "https://github.com/Vist233/infinity_Agents/releases/latest/download/ImageJudge-macos.zip";
-const LINUX_DOWNLOAD_URL = "https://github.com/Vist233/infinity_Agents/releases/latest/download/ImageJudge-linux-amd64.deb";
+const LINUX_DOWNLOAD_URL = "https://github.com/Vist233/infinity_Agents/releases/download/imagejudge-v0.2.0/ImageJudge_0.2.0_amd64.deb";
 
 function renderPage() {
   window.localStorage.setItem("infinity-agents-language", "zh");
@@ -38,12 +37,13 @@ describe("ImageJudge example workspace", () => {
 
   it("opens the ImageJudge download panel by default", () => {
     renderPage();
-    expect(screen.getByRole("link", { name: "macOS 下载" }).getAttribute("href")).toBe(MAC_DOWNLOAD_URL);
     const winLink = screen.getByRole("link", { name: "Windows 下载" });
     const linuxLink = screen.getByRole("link", { name: "Linux 下载" });
     expect(winLink.getAttribute("href")).toBe(WINDOWS_DOWNLOAD_URL);
     expect(linuxLink.getAttribute("href")).toBe(LINUX_DOWNLOAD_URL);
+    expect(screen.getByRole("link", { name: "打开 GitHub Release" }).getAttribute("href")).toBe("https://github.com/Vist233/infinity_Agents/releases/latest");
     expect(screen.getByRole("link", { name: "查看发行说明" }).getAttribute("href")).toBe("https://github.com/Vist233/infinity_Agents/releases/latest");
+    expect(screen.getByText("当前 Release 提供 Windows x64 ZIP 和 Linux amd64 DEB；暂未提供 macOS 资产。")).toBeDefined();
     expect(screen.getByText("ImageJudge 是 Infinity Agents 的本地图像数据工具：用参考图和自然语言规则批量整理目标图片，生成可复核的结构化分类结果，并将结果作为后续科研分析的数据输入。")).toBeDefined();
     expect(screen.queryByText("ImageJudge 桌面应用下载入口已收起到这里，不打断示例分析。")).toBeNull();
     expect(screen.queryByText("参考图片")).toBeNull();

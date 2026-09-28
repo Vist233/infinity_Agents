@@ -9,7 +9,8 @@ import { PaperStatusBadge } from "@/components/papers/PaperCard";
 import { Button } from "@/components/ui/button";
 import { getCurrentUser } from "@/lib/api/auth";
 import { deletePaper, getPaper, type DiscoveryPaper } from "@/lib/api/discovery";
-import { redirectToLogin } from "@/lib/runtime-config";
+import { canUseBrowserApi, redirectToLogin } from "@/lib/runtime-config";
+import { LocalRuntimeNotice } from "@/components/workspace/LocalRuntimeNotice";
 import { useLanguage } from "@/lib/i18n";
 
 function paperIdFromPath(pathname: string): string | null {
@@ -41,6 +42,7 @@ export default function PaperDetailClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const runtimeAvailable = canUseBrowserApi();
 
   const load = useCallback(async (silent = false) => {
     if (!paperId) { setLoading(false); return; }
@@ -57,6 +59,10 @@ export default function PaperDetailClient() {
   }, [paperId]);
 
   useEffect(() => {
+    if (!runtimeAvailable) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     void getCurrentUser().then((user) => {
       if (cancelled) return;
@@ -70,13 +76,13 @@ export default function PaperDetailClient() {
       setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [load]);
+  }, [load, runtimeAvailable]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated" || !paper || (paper.status !== "requested" && paper.status !== "processing")) return;
+    if (!runtimeAvailable || authStatus !== "authenticated" || !paper || (paper.status !== "requested" && paper.status !== "processing")) return;
     const timer = setInterval(() => { void load(true); }, 5000);
     return () => clearInterval(timer);
-  }, [authStatus, load, paper]);
+  }, [authStatus, load, paper, runtimeAvailable]);
 
   const handleDelete = async () => {
     if (!paper || paper.visibility !== "private" || !window.confirm(t("papers.deleteConfirm"))) return;
@@ -87,7 +93,7 @@ export default function PaperDetailClient() {
   const profile = paper?.profile;
   return (
     <DiscoveryChrome active="papers" title={t("papers.detailTitle")} icon={BookOpenText} actions={authStatus === "authenticated" ? <><Button type="button" variant="ghost" size="sm" className="gap-1.5 rounded-xl" onClick={() => router.push("/papers/")}><ArrowLeft className="h-3.5 w-3.5" />{t("papers.back")}</Button><Button type="button" variant="outline" size="sm" className="gap-1.5 rounded-xl" onClick={() => { void load(); }} disabled={loading}><RefreshCw className={loading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />{t("tasks.refresh")}</Button>{paper?.visibility === "private" ? <Button type="button" variant="ghost" size="sm" className="gap-1.5 rounded-xl text-red-600 hover:bg-red-50 hover:text-red-700" onClick={() => { void handleDelete(); }} disabled={deleting}><Trash2 className="h-3.5 w-3.5" />{t("papers.delete")}</Button> : null}</> : null}>
-      {authStatus === "checking" ? <div className="flex min-h-[60vh] items-center justify-center text-sm text-zinc-500">{t("papers.loading")}</div> : authStatus === "unauthenticated" ? <DetailAuth /> : authStatus === "error" ? <DetailAuth error={authError} /> : loading && !paper ? <div className="flex min-h-[60vh] items-center justify-center text-sm text-zinc-500">{t("papers.loading")}</div> : error && !paper ? <div className="mx-auto max-w-3xl p-6"><div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{t("papers.loadDetailFailed", { message: error })}</div></div> : paper ? (
+      {!runtimeAvailable ? <LocalRuntimeNotice /> : authStatus === "checking" ? <div className="flex min-h-[60vh] items-center justify-center text-sm text-zinc-500">{t("papers.loading")}</div> : authStatus === "unauthenticated" ? <DetailAuth /> : authStatus === "error" ? <DetailAuth error={authError} /> : loading && !paper ? <div className="flex min-h-[60vh] items-center justify-center text-sm text-zinc-500">{t("papers.loading")}</div> : error && !paper ? <div className="mx-auto max-w-3xl p-6"><div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{t("papers.loadDetailFailed", { message: error })}</div></div> : paper ? (
         <div className="mx-auto grid max-w-6xl gap-6 p-4 md:grid-cols-[210px_minmax(0,1fr)] md:p-6">
           <nav className="hidden h-fit space-y-1 rounded-2xl border border-zinc-200 bg-white/70 p-2 md:block" aria-label={t("papers.detailTitle")}>
             {["overview", "question", "data", "analysis", "results", "evidence"].map((id) => <a key={id} href={`#${id}`} className="block rounded-xl px-3 py-2 text-xs font-medium text-zinc-600 hover:bg-zinc-100">{t((id === "overview" ? "papers.overview" : id === "question" ? "papers.researchQuestion" : id === "data" ? "papers.dataRequirements" : id === "analysis" ? "papers.analysisModules" : id === "results" ? "papers.expectedResults" : "papers.evidence") as never)}</a>)}

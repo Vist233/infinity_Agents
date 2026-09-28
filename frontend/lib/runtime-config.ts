@@ -1,18 +1,43 @@
-// Runtime API base. The frontend is served by the same Cloudflare Worker that
-// exposes the API, so all requests are same-origin: we use relative URLs in the
-// browser (empty base) and only fall back to an absolute base during SSR/build.
+// Runtime API base. Local development uses relative URLs and Next rewrites;
+// static deployments may opt into an explicit public HTTPS API origin. A
+// static build without that origin must not pretend that its own asset host is
+// the local task/paper backend.
 const DEFAULT_API_BASE = "";
 
 const trimTrailingSlash = (value: string) => value.replace(/\/+$/, "");
 
 export function getApiBase(): string {
   const envBase = process.env.NEXT_PUBLIC_API_BASE?.trim();
-  if (envBase && typeof window === "undefined") {
+  if (envBase) {
     return trimTrailingSlash(envBase);
   }
-  // Same-origin: relative paths like `/api/...` resolve against the current
-  // document origin, so no host/port is needed.
+  // Relative paths like `/api/...` resolve against the current document origin.
   return DEFAULT_API_BASE;
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether browser API calls have a declared runtime behind them.
+ *
+ * The static cloud build has no API by itself. In local development the
+ * Next.js rewrites keep the browser same-origin with the local FastAPI
+ * process, so an empty base is valid there. An HTTP API base is accepted only
+ * for non-static local development; it must not be embedded behind HTTPS.
+ */
+export function canUseBrowserApi(): boolean {
+  const apiBase = getApiBase();
+  const staticDeployment = process.env.NEXT_PUBLIC_STATIC_FRONTEND === "1";
+  if (!apiBase) return !staticDeployment;
+  if (staticDeployment && !isHttpsUrl(apiBase)) return false;
+  if (typeof window !== "undefined" && window.location.protocol === "https:" && !isHttpsUrl(apiBase)) return false;
+  return true;
 }
 
 /** Return the readable nonce paired with the HttpOnly session cookie. */

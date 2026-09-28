@@ -6,7 +6,7 @@ import { UserFooter } from "@/components/workspace/UserFooter";
 
 /**
  * One desktop sidebar contract for every workspace. Keeping the width here
- * prevents Analysis, Task Center, and Image Judge from drifting apart again.
+ * keeps Task Center, Papers, and ImageJudge from drifting apart again.
  */
 export const WORKSPACE_SIDEBAR_CLASS =
   "hidden min-h-0 w-[320px] shrink-0 flex-col border-r border-[var(--hairline)] bg-[var(--surface-1)] p-3 backdrop-blur-xl md:flex print:hidden";

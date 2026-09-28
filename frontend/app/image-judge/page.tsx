@@ -10,9 +10,8 @@ import { useLanguage } from "@/lib/i18n";
 import { WorkspaceUserFooter } from "@/components/chat/WorkspaceUserFooter";
 
 const RELEASE_URL = "https://github.com/Vist233/infinity_Agents/releases/latest";
-const MAC_DOWNLOAD_URL = "https://github.com/Vist233/infinity_Agents/releases/latest/download/ImageJudge-macos.zip";
 const WINDOWS_DOWNLOAD_URL = "https://github.com/Vist233/infinity_Agents/releases/latest/download/ImageJudge-windows-x64.zip";
-const LINUX_DOWNLOAD_URL = "https://github.com/Vist233/infinity_Agents/releases/latest/download/ImageJudge-linux-amd64.deb";
+const LINUX_DOWNLOAD_URL = "https://github.com/Vist233/infinity_Agents/releases/download/imagejudge-v0.2.0/ImageJudge_0.2.0_amd64.deb";
 
 const examples = [
   {
@@ -138,10 +137,11 @@ export default function ImageJudgePage() {
                   <a href={RELEASE_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-800"><ExternalLink className="h-3.5 w-3.5" />{t("image.releaseNotes")}</a>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <Button asChild size="sm" className="rounded-xl"><a href={MAC_DOWNLOAD_URL}><ArrowDownToLine className="h-4 w-4" />{t("image.downloadMac")}</a></Button>
                   <Button asChild size="sm" className="rounded-xl"><a href={WINDOWS_DOWNLOAD_URL}><ArrowDownToLine className="h-4 w-4" />{t("image.downloadWindows")}</a></Button>
                   <Button asChild size="sm" variant="outline" className="rounded-xl"><a href={LINUX_DOWNLOAD_URL}><ArrowDownToLine className="h-4 w-4" />{t("image.downloadLinux")}</a></Button>
+                  <Button asChild size="sm" variant="outline" className="rounded-xl"><a href={RELEASE_URL} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4" />{t("image.openRelease")}</a></Button>
                 </div>
+                <p className="mt-3 text-xs text-zinc-500">{t("image.releaseAvailability")}</p>
               </section>
             )}
 
