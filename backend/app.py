@@ -5724,7 +5724,7 @@ def _direct_runtime_uuid(kind: str, value: str) -> uuid.UUID:
 
 def _direct_runtime_filename(value: Any, fallback: str) -> str:
     """Return a safe leaf name for a canonical object key."""
-    name = FilePath(str(value or fallback)).name.replace("\\", "_").strip()
+    name = FilePath(str(value or fallback)).name.replace("\\", "_").replace(":", "_").strip()
     if not name or name in {".", ".."} or len(name) > 240 or any(ord(char) < 32 for char in name):
         raise HTTPException(status_code=400, detail="Uploaded resource filename is invalid")
     return name
@@ -6122,6 +6122,7 @@ async def create_direct_task_endpoint(
             status_code=400,
             detail="Direct Task Center submissions require submission_source=task_center and agent_confirmation=false",
         )
+    _validate_task_submission_contract(request)
     return await _create_local_runtime_task_from_legacy_inputs(request, user)
 
 
