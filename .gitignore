@@ -59,8 +59,10 @@ htmlcov/
 .venv/
 env/
 
-# Runtime paper artifacts (generated locally)
-papers/
+# Runtime paper artifacts (generated locally).
+# Keep this root-anchored: an unanchored `papers/` also matches the
+# frontend/components/papers/ source directory.
+/papers/
 /workspace/
 
 # Cloudflare Worker deployment surfaces remain exclusive to cloudflare-deploy.
