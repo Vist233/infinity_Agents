@@ -389,6 +389,8 @@ const messages = {
     "collections.loadDetailFailed": "加载数据集合详情失败：{{message}}",
     "collections.matchCoverage": "覆盖率",
     "collections.matchStatus": "匹配状态",
+    "collections.evaluateMatch": "评估匹配",
+    "collections.evaluatingMatch": "评估中…",
     "collections.viewPaper": "查看论文",
   },
   en: {
@@ -775,6 +777,8 @@ const messages = {
     "collections.loadDetailFailed": "Failed to load collection details: {{message}}",
     "collections.matchCoverage": "Coverage",
     "collections.matchStatus": "Match status",
+    "collections.evaluateMatch": "Evaluate match",
+    "collections.evaluatingMatch": "Evaluating…",
     "collections.viewPaper": "View paper",
   },
 } as const;

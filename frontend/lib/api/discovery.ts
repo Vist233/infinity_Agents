@@ -136,6 +136,23 @@ export interface DiscoveryMatch {
   updated_at: number;
 }
 
+export interface MatchEvaluation {
+  evaluator_version: string;
+  hard_gate: HardGate;
+  coverage: {
+    supported_modules: number;
+    total_modules: number;
+    ratio: number;
+  };
+  execution_confidence: number;
+  scientific_fit: number;
+  missing_requirements: string[];
+  risks: string[];
+  recommended: boolean;
+  reason: string;
+  provenance: Record<string, unknown>;
+}
+
 export interface DiscoveryApiError extends Error {
   status?: number;
   code?: string;
@@ -238,7 +255,7 @@ export async function requestMatchEvaluation(matchId: string): Promise<{
   match_id: string;
   status: MatchStatus;
   queued: boolean;
-  evaluation: unknown;
+  evaluation: MatchEvaluation;
 }> {
   return requestJson(`/api/discovery/matches/${encodeURIComponent(matchId)}/evaluate`, { method: "POST" });
 }

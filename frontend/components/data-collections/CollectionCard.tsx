@@ -35,8 +35,8 @@ function formatDate(timestamp: number): string {
 
 function profileStats(collection: DiscoveryCollection): { files: number; samples: string; features: string } {
   const profile = collection.profile;
-  const sampleCount = profile?.capabilities.sample_count;
-  const featureCount = profile?.capabilities.feature_count;
+  const sampleCount = profile?.capabilities["dataset.sample_count"] ?? profile?.capabilities.sample_count;
+  const featureCount = profile?.capabilities["dataset.feature_count"] ?? profile?.capabilities.feature_count;
   return {
     files: profile?.files.length ?? 0,
     samples: typeof sampleCount === "number" ? sampleCount.toLocaleString() : "—",

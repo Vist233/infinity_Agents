@@ -87,7 +87,7 @@ async def test_discovery_lists_include_profiles_for_ready_rows_only(product_app)
             "missing_ratio": 0.0,
             "sample": [{"feature_a": 1, "feature_b": 2, "target": 3}],
         }],
-        "capabilities": {"sample_count": 4, "feature_count": 2, "tabular.numeric_features": True},
+        "capabilities": {"dataset.sample_count": 4, "dataset.feature_count": 2, "tabular.numeric_features": True},
         "semantic_fields": {"target": "target", "feature_names": ["feature_a", "feature_b"]},
         "display_tags": ["Tabular"],
     }
@@ -187,6 +187,8 @@ async def test_discovery_lists_include_profiles_for_ready_rows_only(product_app)
         assert ready["profile"]["profile_version"] == "dataset-profile-v1"
         assert ready["profile"]["files"][0]["rows"] == 4
         assert ready["profile"]["files"][0]["columns"] == 3
+        assert ready["profile"]["capabilities"]["dataset.sample_count"] == 4
+        assert ready["profile"]["capabilities"]["dataset.feature_count"] == 2
         assert ready["profile"]["semantic_fields"]["target"] == "target"
         assert collections[str(collection_ids[1])]["profile"] is None
         assert collections[str(collection_ids[2])]["profile"] is None
