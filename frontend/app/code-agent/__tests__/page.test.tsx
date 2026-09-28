@@ -31,7 +31,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
-import { listTasks } from "@/lib/api/tasks";
+import { getPublicWorkerPool, listTasks } from "@/lib/api/tasks";
 import { getCurrentUser } from "@/lib/api/auth";
 
 const MOCK_TASKS = [
@@ -82,6 +82,7 @@ describe("Task Center workspace", () => {
     });
     expect(document.querySelector("aside")?.textContent).toContain("DESeq2 Differential Expression");
     expect(screen.getByText("成功")).toBeDefined();
+    expect(getPublicWorkerPool).not.toHaveBeenCalled();
   });
 
   it("exposes the direct task creation form without submitting it automatically", async () => {

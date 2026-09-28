@@ -72,6 +72,30 @@ def test_cleanup_requires_a_marked_attempt_and_preserves_external_sentinel(tmp_p
         safe_remove_attempt(work_root, unmarked)
 
 
+def test_cleanup_restores_read_only_input_and_spec_directories(tmp_path, monkeypatch):
+    work_root = tmp_path / "worker-root"
+    monkeypatch.setenv("CLAUDE_CLI_PATH", sys.executable)
+    attempt = create_attempt_root(work_root, "task-readonly", "attempt-readonly")
+    input_dir = attempt / "input"
+    spec_dir = attempt / "spec"
+    nested_input = input_dir / "nested"
+    nested_spec = spec_dir / "method_sources"
+    nested_input.mkdir(parents=True)
+    nested_spec.mkdir(parents=True)
+    (nested_input / "method.md").write_text("method", encoding="utf-8")
+    (nested_spec / "task_spec.json").write_text("{}", encoding="utf-8")
+
+    if sys.platform != "win32":
+        for directory in (input_dir, nested_input, spec_dir, nested_spec):
+            directory.chmod(0o555)
+        for file_path in (nested_input / "method.md", nested_spec / "task_spec.json"):
+            file_path.chmod(0o444)
+
+    safe_remove_attempt(work_root, attempt)
+
+    assert not attempt.exists()
+
+
 def test_work_root_must_be_absolute_and_not_a_symlink(tmp_path):
     with pytest.raises(SecurityBoundaryError):
         ensure_work_root("relative-worker-root")

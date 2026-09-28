@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -59,7 +60,20 @@ async def test_d1_executor_uploads_result_and_clears_attempt_directory(tmp_path:
     monkeypatch.setenv("WORKER_WORK_ROOT", str(work_root))
     monkeypatch.setenv("WORKER_ARTIFACT_ROOT", str(artifact_root))
 
-    async def fake_runtime(*_args, output_dir, **_kwargs):
+    async def fake_runtime(*_args, case_dir, output_dir, **_kwargs):
+        input_dir = Path(case_dir)
+        spec_dir = input_dir.parent / "spec"
+        nested_input = input_dir / "nested"
+        nested_spec = spec_dir / "method_sources"
+        nested_input.mkdir(parents=True, exist_ok=True)
+        nested_spec.mkdir(parents=True, exist_ok=True)
+        (nested_input / "method.md").write_text("method", encoding="utf-8")
+        (nested_spec / "task_spec.json").write_text("{}", encoding="utf-8")
+        if os.name != "nt":
+            for directory in (input_dir, nested_input, spec_dir, nested_spec):
+                directory.chmod(0o555)
+            for file_path in (nested_input / "method.md", nested_spec / "task_spec.json"):
+                file_path.chmod(0o444)
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=True)
         (output / "report.md").write_text("Case 2 complete\n", encoding="utf-8")
@@ -79,13 +93,26 @@ async def test_d1_executor_uploads_result_and_clears_attempt_directory(tmp_path:
         lease_expires_at=100,
     )
     result = await executor_v2.execute_claim(client, claim)  # type: ignore[arg-type]
-    archive = next((path for path in work_root.rglob("*.zip")), None)
     assert result["success"] is True
     assert result["artifact_id"] == "artifact-1"
     assert client.uploaded
     assert client.finished == []
     assert not (work_root / claim.task_id / claim.attempt_id).exists()
-    assert archive is None
+
+    next_claim = ClaimedTask(
+        task_id="task-3",
+        task_spec_id="spec-3",
+        dataset_snapshot_id="dataset-3",
+        method_source_id="method-3",
+        title="Case 3",
+        attempt_id="attempt-3",
+        lease_token="lease-3",
+        fencing_epoch=1,
+        lease_expires_at=100,
+    )
+    next_result = await executor_v2.execute_claim(client, next_claim)  # type: ignore[arg-type]
+    assert next_result["success"] is True
+    assert not (work_root / next_claim.task_id / next_claim.attempt_id).exists()
 
 
 @pytest.mark.asyncio

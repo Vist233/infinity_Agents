@@ -253,3 +253,8 @@ async def execute_claim(client: WorkerV2Client, claim: ClaimedTask) -> dict[str,
             # an attempt behind is safer than risking deletion outside the
             # fixed Worker root and is surfaced for operator cleanup.
             logger.error("Refusing unsafe attempt cleanup for %s: %s", claim.attempt_id, exc)
+        except OSError as exc:
+            # A read-only input/spec tree is expected after Claude runs. A
+            # cleanup permission failure must not terminate the long-lived
+            # Worker or prevent it from claiming the next task.
+            logger.error("Could not clean attempt %s; Worker will continue: %s", claim.attempt_id, exc)

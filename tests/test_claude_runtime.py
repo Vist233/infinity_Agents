@@ -6,9 +6,7 @@ import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
-from backend.code_agent.worker.attempt_workspace import create_attempt_root
+from backend.code_agent.worker.attempt_workspace import create_attempt_root, safe_remove_attempt
 from backend.code_agent.worker.claude_runtime import run_claude_task
 
 
@@ -92,6 +90,8 @@ def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch)
     assert os.stat(input_dir).st_mode & 0o222 == 0
     assert os.stat(input_dir / "method.md").st_mode & 0o222 == 0
     assert events[-1]["type"] == "done"
+    safe_remove_attempt(_work_root, attempt_root)
+    assert not attempt_root.exists()
 
 
 def test_goal_driven_failure_marker_overrides_zero_exit(tmp_path, monkeypatch):

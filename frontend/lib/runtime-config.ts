@@ -15,6 +15,11 @@ export function getApiBase(): string {
   return DEFAULT_API_BASE;
 }
 
+/** The public-worker admin routes are optional and disabled in local mode. */
+export function isPublicWorkerAdminEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_ENABLE_PUBLIC_WORKER_ADMIN === "1";
+}
+
 /** Return the readable nonce paired with the HttpOnly session cookie. */
 export function getCsrfToken(): string | undefined {
   if (typeof document === "undefined") return undefined;

@@ -313,6 +313,42 @@ def safe_remove_attempt(work_root: str | Path, attempt_path: str | Path) -> None
     marker = _marker_path(resolved)
     if marker.is_symlink() or not marker.is_file():
         raise SecurityBoundaryError("refusing to remove an unmarked attempt directory")
+    # Claude deliberately receives read-only input/spec trees. On POSIX,
+    # removing a file requires write permission on its containing directory,
+    # so restore only directory owner permissions after the full attempt
+    # boundary has been checked. The traversal never follows child symlinks;
+    # ``rmtree`` will unlink such a child rather than traversing it.
+    directories = [resolved]
+    for current, child_names, _file_names in os.walk(resolved, topdown=True, followlinks=False):
+        current_path = Path(current)
+        for child_name in list(child_names):
+            child = current_path / child_name
+            try:
+                info = child.lstat()
+            except OSError as exc:
+                raise OSError(f"could not inspect attempt cleanup directory: {child}") from exc
+            if stat.S_ISLNK(info.st_mode):
+                child_names.remove(child_name)
+                continue
+            if not stat.S_ISDIR(info.st_mode):
+                child_names.remove(child_name)
+                continue
+            try:
+                child.relative_to(resolved)
+            except ValueError as exc:
+                raise SecurityBoundaryError("attempt cleanup directory escaped the attempt root") from exc
+            directories.append(child)
+    if os.name != "nt":
+        for directory in directories:
+            try:
+                info = directory.lstat()
+                if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                    raise SecurityBoundaryError("attempt cleanup directory changed during permission recovery")
+                os.chmod(directory, stat.S_IMODE(info.st_mode) | stat.S_IRWXU)
+            except SecurityBoundaryError:
+                raise
+            except OSError as exc:
+                raise OSError(f"could not make attempt cleanup directory writable: {directory}") from exc
     # shutil.rmtree does not follow child directory symlinks. The boundary is
     # rechecked immediately before deletion, but concurrent replacement cannot
     # be eliminated without an OS-level sandbox or descriptor-based removal.

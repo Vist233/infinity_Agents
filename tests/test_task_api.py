@@ -214,6 +214,30 @@ class TestTaskAPIEndpoints:
         )
         assert accepted.status_code in (200, 500)
 
+    def test_direct_task_center_route_requires_explicit_contract_and_valid_ids(self, client):
+        base = {
+            "project_id": "proj-123",
+            "task_spec_id": "s1",
+            "dataset_snapshot_id": "d1",
+            "title": "Direct Task Center test",
+        }
+        missing_marker = client.post("/api/tasks/direct", json=base)
+        assert missing_marker.status_code == 400
+        assert "submission_source=task_center" in missing_marker.json()["detail"]
+
+        accepted = client.post(
+            "/api/tasks/direct",
+            json={
+                **base,
+                "idempotency_key": "direct-task-center-test",
+                "submission_source": "task_center",
+                "agent_confirmation": False,
+                "chat_confirmation_id": False,
+            },
+        )
+        assert accepted.status_code == 400
+        assert "valid UUIDs" in accepted.json()["detail"]
+
     def test_get_task_not_found(self, client):
         assert client.get("/api/tasks/nonexistent").status_code == 404
 

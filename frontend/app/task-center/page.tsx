@@ -14,6 +14,9 @@ import { Button } from "@/components/ui/button";
 import { ListTodo } from "lucide-react";
 import { listTasks, type TaskItem, type TaskStatus } from "@/lib/api/tasks";
 import { WorkspaceUserFooter } from "@/components/workspace/WorkspaceUserFooter";
+import { isPublicWorkerAdminEnabled } from "@/lib/runtime-config";
+
+const PUBLIC_WORKER_ADMIN_ENABLED = isPublicWorkerAdminEnabled();
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   draft: "tasks.statusDraft",
@@ -124,7 +127,7 @@ export default function TaskCenterPage() {
             <div className="space-y-6">
               <TaskCreationCard resetKey={creationResetKey} onCreated={handleCreated} />
               <WorkerEnrollmentPanel />
-              <PublicWorkerAdminPanel />
+              {PUBLIC_WORKER_ADMIN_ENABLED && <PublicWorkerAdminPanel />}
             </div>
           </div>
         </ScrollArea>

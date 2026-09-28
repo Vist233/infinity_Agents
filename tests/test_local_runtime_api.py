@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import os
 import uuid
 import zipfile
@@ -19,7 +20,11 @@ import pytest
 
 from backend.code_agent.worker import consumer_v2, executor_v2
 from backend.code_agent.worker.control_plane import WorkerV2Client
+from backend.auth import Principal
+from backend.db import ensure_table
+from backend.local_runtime.api_repository import LocalRuntimeApiRepository
 from backend.local_runtime.migrations import apply_migrations
+from backend.local_runtime.object_store import LocalObjectStore
 from backend.local_runtime.worker_api import create_worker_v2_app
 
 
@@ -118,6 +123,186 @@ async def seed_task(runtime_app) -> tuple[uuid.UUID, bytes, str]:
         dataset_resource_id=resource_id,
     )
     return task_id, dataset, sha256
+
+
+async def test_task_center_direct_submission_is_canonical_and_worker_visible(client, runtime_app, tmp_path, monkeypatch):
+    """The browser's legacy preparation rows must produce a real Worker task."""
+    await ensure_table(runtime_app.state.runtime_pool)
+    pool = runtime_app.state.runtime_pool
+    project_id = uuid.uuid4()
+    task_spec_id = uuid.uuid4()
+    method_source_id = uuid.uuid4()
+    dataset_resource_id = uuid.uuid4()
+    dataset_snapshot_id = uuid.uuid4()
+    title = "Direct local numbers"
+    method_bytes = b"# Add the values in numbers.csv\n"
+    dataset_buffer = io.BytesIO()
+    with zipfile.ZipFile(dataset_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("numbers.csv", "value\n1\n2\n3\n")
+    dataset_bytes = dataset_buffer.getvalue()
+    method_root = tmp_path / "method-sources"
+    resource_root = tmp_path / "resources"
+    object_root = tmp_path / "objects"
+    method_path = method_root / "documents" / f"{method_source_id}-method.md"
+    dataset_path = resource_root / "datasets" / str(dataset_resource_id)
+    method_path.parent.mkdir(parents=True)
+    dataset_path.parent.mkdir(parents=True)
+    method_path.write_bytes(method_bytes)
+    dataset_path.write_bytes(dataset_bytes)
+    method_hash = hashlib.sha256(method_bytes).hexdigest()
+    dataset_hash = hashlib.sha256(dataset_bytes).hexdigest()
+
+    await pool.execute(
+        "INSERT INTO projects (project_id, name, created_by, owner_user_id) VALUES ($1, $2, 'alice', 'alice')",
+        project_id,
+        title,
+    )
+    await pool.execute(
+        "INSERT INTO project_members (project_id, user_id, role) VALUES ($1, 'alice', 'owner')",
+        project_id,
+    )
+    await pool.execute(
+        """
+        INSERT INTO task_specs
+            (task_spec_id, project_id, title, domain, analysis_type, research_question,
+             spec_json, schema_version, status, created_by, frozen_at)
+        VALUES ($1, $2, $3, 'bioinformatics', 'generic', 'Add the numbers',
+                '{"steps":["sum"]}'::jsonb, '1.0', 'active', 'alice', NOW())
+        """,
+        task_spec_id,
+        project_id,
+        title,
+    )
+    await pool.execute(
+        """
+        INSERT INTO method_sources
+            (method_source_id, project_id, task_spec_id, original_filename, stored_path,
+             content_type, file_size_bytes, file_hash_sha256)
+        VALUES ($1, $2, NULL, 'method.md', $3, 'text/markdown', $4, $5)
+        """,
+        method_source_id,
+        project_id,
+        str(method_path),
+        len(method_bytes),
+        method_hash,
+    )
+    await pool.execute(
+        """
+        INSERT INTO project_resources
+            (resource_id, project_id, owner_user_id, kind, logical_name, storage_key,
+             content_type, file_size_bytes, checksum_sha256, egress_policy, status)
+        VALUES ($1, $2, 'alice', 'dataset', 'numbers.zip', $3, 'application/zip', $4, $5,
+                'local_only', 'ready')
+        """,
+        dataset_resource_id,
+        project_id,
+        f"datasets/{dataset_resource_id}",
+        len(dataset_bytes),
+        dataset_hash,
+    )
+    await pool.execute(
+        """
+        INSERT INTO dataset_snapshots
+            (dataset_snapshot_id, task_spec_id, project_id, original_filename, stored_path,
+             file_size_bytes, file_hash_sha256, validation_result, validation_passed, version)
+        VALUES ($1, $2, $3, 'numbers.zip', $4, $5, $6,
+                '{"passed":true,"format":"zip"}'::jsonb, TRUE, 1)
+        """,
+        dataset_snapshot_id,
+        task_spec_id,
+        project_id,
+        str(dataset_path),
+        len(dataset_bytes),
+        dataset_hash,
+    )
+
+    monkeypatch.setenv("METHOD_SOURCE_UPLOAD_ROOT", str(method_root))
+    monkeypatch.setenv("RESOURCE_STORAGE_ROOT", str(resource_root))
+    import backend.app as backend_app_module
+
+    backend_app_module.app.state.db_pool = pool
+    backend_app_module.app.state.local_object_store = LocalObjectStore(object_root)
+    backend_app_module.app.state.local_runtime_repository = LocalRuntimeApiRepository(pool)
+    backend_app_module.app.dependency_overrides[backend_app_module._require_task_api_key] = lambda: Principal(user_id="alice")
+    direct_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=backend_app_module.app),
+        base_url="http://local-api.test",
+    )
+    payload = {
+        "project_id": str(project_id),
+        "task_spec_id": str(task_spec_id),
+        "dataset_snapshot_id": str(dataset_snapshot_id),
+        "title": title,
+        "method_source_id": str(method_source_id),
+        "idempotency_key": "browser-direct-canonical-test",
+        "chat_confirmation_id": False,
+        "submission_source": "task_center",
+        "agent_confirmation": False,
+    }
+    try:
+        created = await direct_client.post("/api/tasks/direct", json=payload)
+        assert created.status_code == 200, created.text
+        created_body = created.json()
+        assert created_body["runtime"] == "infinity_runtime"
+        assert created_body["duplicate"] is False
+        task_id = uuid.UUID(created_body["task_id"])
+
+        replay = await direct_client.post("/api/tasks/direct", json=payload)
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["task_id"] == str(task_id)
+        assert replay.json()["duplicate"] is True
+
+        invalid = await direct_client.post(
+            "/api/tasks/direct",
+            json={**payload, "dataset_snapshot_id": str(uuid.uuid4()), "idempotency_key": "invalid-direct-input"},
+        )
+        assert invalid.status_code == 404, invalid.text
+    finally:
+        await direct_client.aclose()
+        backend_app_module.app.dependency_overrides.pop(backend_app_module._require_task_api_key, None)
+
+    canonical = await pool.fetchrow(
+        "SELECT task_spec_id, created_by, title, status FROM infinity_runtime.tasks WHERE task_id = $1",
+        task_id,
+    )
+    assert canonical and canonical["created_by"] == "alice" and canonical["status"] == "queued"
+    assert await pool.fetchval("SELECT COUNT(*) FROM infinity_runtime.tasks") == 1
+    resource_rows = await pool.fetch(
+        """
+        SELECT kind, file_size_bytes, checksum_sha256, state
+        FROM infinity_runtime.resources r
+        JOIN infinity_runtime.task_specs s
+          ON r.resource_id IN (s.method_resource_id, s.dataset_resource_id)
+        WHERE s.task_spec_id = $1
+        ORDER BY kind
+        """,
+        canonical["task_spec_id"],
+    )
+    assert [(row["kind"], row["state"]) for row in resource_rows] == [("dataset", "ready"), ("method", "ready")]
+
+    repository = runtime_app.state.runtime_repository
+    await repository.issue_worker(worker_id=WORKER_ID, created_by="alice", credential=CREDENTIAL)
+    session = await connect_worker(client, instance_id="direct-browser")
+    headers = session_headers(session, instance_id="direct-browser")
+    poll = await client.post("/api/worker/v2/poll", headers=headers, json={})
+    assert poll.status_code == 200, poll.text
+    assert [item["task_id"] for item in poll.json()["tasks"]] == [str(task_id)]
+    accepted = await client.post(f"/api/worker/v2/tasks/{task_id}/accept", headers=headers, json={})
+    assert accepted.status_code == 201, accepted.text
+    claim = accepted.json()
+    attempt_headers = {
+        **headers,
+        "x-worker-attempt-id": claim["attempt_id"],
+        "x-worker-lease-token": claim["lease_token"],
+    }
+    spec = await client.get(f"/api/worker/v2/tasks/{task_id}/spec", headers=attempt_headers)
+    assert spec.status_code == 200, spec.text
+    assert spec.json()["inputs"]["method"]["logical_name"] == "method.md"
+    assert spec.json()["inputs"]["dataset"]["logical_name"] == "numbers.zip"
+    method_download = await client.get(f"/api/worker/v2/tasks/{task_id}/inputs/method", headers=attempt_headers)
+    dataset_download = await client.get(f"/api/worker/v2/tasks/{task_id}/inputs/dataset", headers=attempt_headers)
+    assert method_download.status_code == 200 and method_download.content == method_bytes
+    assert dataset_download.status_code == 200 and dataset_download.content == dataset_bytes
 
 
 async def test_full_task_lifecycle(client, runtime_app):

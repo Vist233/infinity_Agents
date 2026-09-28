@@ -15,7 +15,9 @@ import { ListTodo, LogIn } from "lucide-react";
 import { listTasks, type TaskItem, type TaskStatus } from "@/lib/api/tasks";
 import { WorkspaceUserFooter } from "@/components/chat/WorkspaceUserFooter";
 import { getCurrentUser } from "@/lib/api/auth";
-import { redirectToLogin } from "@/lib/runtime-config";
+import { isPublicWorkerAdminEnabled, redirectToLogin } from "@/lib/runtime-config";
+
+const PUBLIC_WORKER_ADMIN_ENABLED = isPublicWorkerAdminEnabled();
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   draft: "tasks.statusDraft",
@@ -153,7 +155,7 @@ export default function CodeAgentPage() {
             {authStatus === "authenticated" ? <div className="space-y-6">
               <TaskCreationCard resetKey={creationResetKey} onCreated={handleCreated} />
               <WorkerEnrollmentPanel />
-              <PublicWorkerAdminPanel />
+              {PUBLIC_WORKER_ADMIN_ENABLED && <PublicWorkerAdminPanel />}
             </div> : authStatus === "unauthenticated" ? <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 text-center">
               <div className="flex h-12 w-12 items-center justify-center rounded-full border border-zinc-200 bg-white shadow-sm"><LogIn size={20} className="text-zinc-500" /></div>
               <div className="space-y-2">

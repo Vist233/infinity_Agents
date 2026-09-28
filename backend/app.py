@@ -5714,6 +5714,417 @@ async def create_task_endpoint(
     }
 
 
+_DIRECT_RUNTIME_NAMESPACE = uuid.NAMESPACE_URL
+
+
+def _direct_runtime_uuid(kind: str, value: str) -> uuid.UUID:
+    """Derive stable canonical IDs for one legacy Task Center submission."""
+    return uuid.uuid5(_DIRECT_RUNTIME_NAMESPACE, f"infinity-agents:local-direct:{kind}:{value}")
+
+
+def _direct_runtime_filename(value: Any, fallback: str) -> str:
+    """Return a safe leaf name for a canonical object key."""
+    name = FilePath(str(value or fallback)).name.replace("\\", "_").strip()
+    if not name or name in {".", ".."} or len(name) > 240 or any(ord(char) < 32 for char in name):
+        raise HTTPException(status_code=400, detail="Uploaded resource filename is invalid")
+    return name
+
+
+def _read_verified_legacy_upload(
+    stored_path: Any,
+    allowed_root: FilePath,
+    *,
+    expected_size: Any,
+    expected_hash: Any,
+    label: str,
+) -> tuple[FilePath, bytes]:
+    """Read one old-schema upload only after rechecking its ownership boundary."""
+    raw = FilePath(str(stored_path or ""))
+    root = allowed_root.resolve()
+    if not raw.is_absolute() or any(part in {".", ".."} for part in raw.parts):
+        raise HTTPException(status_code=404, detail=f"{label} is not available")
+
+    # Check every existing component before resolving so a database path cannot
+    # smuggle a symlink into the local object-store import.
+    current = FilePath(raw.anchor)
+    for part in raw.parts:
+        if part == raw.anchor:
+            continue
+        current = current / part
+        try:
+            if current.is_symlink():
+                raise HTTPException(status_code=404, detail=f"{label} is not available")
+        except OSError as exc:
+            raise HTTPException(status_code=404, detail=f"{label} is not available") from exc
+
+    try:
+        resolved = raw.resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=f"{label} is not available") from exc
+    if raw.is_symlink() or not resolved.is_file() or resolved.is_symlink():
+        raise HTTPException(status_code=404, detail=f"{label} is not available")
+
+    try:
+        size = resolved.stat().st_size
+        if size < 0 or size > TASK_INPUT_MAX_BYTES:
+            raise HTTPException(status_code=413, detail=f"{label} exceeds the 25 MB limit")
+        data = resolved.read_bytes()
+    except HTTPException:
+        raise
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail=f"{label} is not available") from exc
+
+    expected_size_value = int(expected_size) if expected_size is not None else -1
+    expected_hash_value = str(expected_hash or "").strip().lower()
+    actual_hash = hashlib.sha256(data).hexdigest()
+    if len(data) != size or expected_size_value != len(data) or expected_hash_value != actual_hash:
+        raise HTTPException(status_code=409, detail=f"{label} metadata does not match its stored bytes")
+    return resolved, data
+
+
+def _write_direct_runtime_object(store: LocalObjectStore, object_key: str, data: bytes, expected_hash: str) -> None:
+    """Repair or create one deterministic local-runtime object without changing its key."""
+    try:
+        existing = store.read_path(object_key)
+        if existing.stat().st_size == len(data) and hashlib.sha256(existing.read_bytes()).hexdigest() == expected_hash:
+            return
+    except Exception:
+        # A missing object is normal on the first direct submission. The store
+        # still validates the key and root on the write below.
+        pass
+    store.write_bytes(object_key, data, max_bytes=TASK_INPUT_MAX_BYTES)
+
+
+async def _create_local_runtime_task_from_legacy_inputs(
+    request: CreateTaskRequest,
+    user: Optional[Principal],
+) -> Dict[str, Any]:
+    """Bridge the existing Task Center preparation endpoints into canonical state.
+
+    The browser currently prepares a frozen public ``task_specs`` row, a
+    ``method_sources`` row, and a ``dataset_snapshots`` row before submitting
+    the direct request. Those tables remain compatibility records; this
+    function verifies their ownership and bytes, copies the inputs into the
+    LocalObjectStore, and atomically creates the canonical Worker task/spec /
+    resource rows. It deliberately does not call the legacy ``POST /api/tasks``
+    implementation, because that queue is not polled by Worker v2.
+    """
+    if not request.idempotency_key or not request.idempotency_key.strip() or len(request.idempotency_key.strip()) > 255:
+        raise HTTPException(status_code=400, detail="idempotency_key is required for direct Task Center submissions")
+    try:
+        project_id = uuid.UUID(request.project_id)
+        task_spec_id = uuid.UUID(request.task_spec_id)
+        dataset_snapshot_id = uuid.UUID(request.dataset_snapshot_id)
+        method_source_id = uuid.UUID(request.method_source_id) if request.method_source_id else None
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail="Direct Task Center IDs must be valid UUIDs") from exc
+
+    title = request.title.strip()
+    if not title or len(title) > 255:
+        raise HTTPException(status_code=400, detail="A bounded task title is required")
+
+    pool = getattr(app.state, "db_pool", None)
+    store = getattr(app.state, "local_object_store", None)
+    if pool is None or store is None:
+        raise HTTPException(status_code=503, detail="Local runtime is not ready")
+    owner_id = user.user_id if user else "local-admin"
+    if user and not await user_can_access_project(pool, str(project_id), owner_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    async with pool.acquire() as conn:
+        spec_row = await conn.fetchrow(
+            """
+            SELECT task_spec_id, project_id, title, research_question, spec_json,
+                   status, created_by
+            FROM task_specs
+            WHERE task_spec_id = $1
+            """,
+            task_spec_id,
+        )
+        dataset_row = await conn.fetchrow(
+            """
+            SELECT dataset_snapshot_id, task_spec_id, project_id, original_filename,
+                   stored_path, file_size_bytes, file_hash_sha256,
+                   validation_result, validation_passed
+            FROM dataset_snapshots
+            WHERE dataset_snapshot_id = $1
+            """,
+            dataset_snapshot_id,
+        )
+        method_row = await conn.fetchrow(
+            """
+            SELECT method_source_id, project_id, task_spec_id, original_filename,
+                   stored_path, content_type, file_size_bytes, file_hash_sha256
+            FROM method_sources
+            WHERE method_source_id = $1
+            """,
+            method_source_id,
+        ) if method_source_id else None
+
+    if not spec_row or str(spec_row["project_id"]) != str(project_id):
+        raise HTTPException(status_code=404, detail="TaskSpec not found")
+    if str(spec_row["status"]) != "active":
+        raise HTTPException(status_code=409, detail="TaskSpec must be frozen before direct submission")
+    if user and str(spec_row["created_by"]) != owner_id:
+        raise HTTPException(status_code=404, detail="TaskSpec not found")
+    if str(spec_row["title"] or "").strip() != title:
+        raise HTTPException(status_code=409, detail="Task title does not match the frozen TaskSpec")
+
+    if not dataset_row or str(dataset_row["task_spec_id"]) != str(task_spec_id) or str(dataset_row["project_id"]) != str(project_id):
+        raise HTTPException(status_code=404, detail="Dataset snapshot is not linked to the TaskSpec")
+    if not bool(dataset_row["validation_passed"]):
+        raise HTTPException(status_code=400, detail="Dataset snapshot did not pass validation")
+    if not method_row or str(method_row["project_id"]) != str(project_id):
+        raise HTTPException(status_code=404, detail="Method source is not linked to the project")
+    if method_row["task_spec_id"] and str(method_row["task_spec_id"]) != str(task_spec_id):
+        raise HTTPException(status_code=409, detail="Method source is linked to a different TaskSpec")
+
+    method_root = FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", str(_PROJECT_ROOT / "local-data" / "method-sources"))).resolve()
+    resource_root = FilePath(os.getenv("RESOURCE_STORAGE_ROOT", str(_PROJECT_ROOT / "local-data" / "resources"))).resolve()
+    _method_path, method_bytes = _read_verified_legacy_upload(
+        method_row["stored_path"],
+        method_root,
+        expected_size=method_row["file_size_bytes"],
+        expected_hash=method_row["file_hash_sha256"],
+        label="Method source",
+    )
+    dataset_path, dataset_bytes = _read_verified_legacy_upload(
+        dataset_row["stored_path"],
+        resource_root,
+        expected_size=dataset_row["file_size_bytes"],
+        expected_hash=dataset_row["file_hash_sha256"],
+        label="Dataset snapshot",
+    )
+    validation = _validate_dataset_file(dataset_path, str(dataset_row["original_filename"] or dataset_path.name))
+    if not validation.get("passed"):
+        raise HTTPException(status_code=400, detail="Dataset snapshot no longer passes validation")
+    try:
+        dataset_storage_key = dataset_path.relative_to(resource_root).as_posix()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Dataset resource is outside local storage") from exc
+
+    async with pool.acquire() as conn:
+        dataset_resource_row = await conn.fetchrow(
+            """
+            SELECT resource_id, project_id, owner_user_id, kind, logical_name,
+                   storage_key, content_type, file_size_bytes, checksum_sha256, status
+            FROM project_resources
+            WHERE project_id = $1 AND storage_key = $2 AND kind = 'dataset' AND status = 'ready'
+            """,
+            project_id,
+            dataset_storage_key,
+        )
+    allowed_resource_owners = {owner_id}
+    if user is None:
+        allowed_resource_owners.add("local")
+    if (
+        not dataset_resource_row
+        or str(dataset_resource_row["owner_user_id"]) not in allowed_resource_owners
+        or int(dataset_resource_row["file_size_bytes"] or -1) != len(dataset_bytes)
+        or str(dataset_resource_row["checksum_sha256"] or "").strip().lower() != hashlib.sha256(dataset_bytes).hexdigest()
+        or str(dataset_resource_row["logical_name"] or "").strip() != str(dataset_row["original_filename"] or "").strip()
+    ):
+        raise HTTPException(status_code=409, detail="Dataset snapshot is not linked to its project resource")
+
+    method_name = _direct_runtime_filename(method_row["original_filename"], "method.bin")
+    dataset_name = _direct_runtime_filename(dataset_resource_row["logical_name"], "dataset.bin")
+    method_hash = hashlib.sha256(method_bytes).hexdigest()
+    dataset_hash = hashlib.sha256(dataset_bytes).hexdigest()
+    method_resource_id = _direct_runtime_uuid("method-resource", str(method_row["method_source_id"]))
+    dataset_resource_id = _direct_runtime_uuid("dataset-resource", str(dataset_resource_row["resource_id"]))
+    canonical_spec_id = _direct_runtime_uuid("task-spec", str(task_spec_id))
+    canonical_task_id = _direct_runtime_uuid(
+        "task",
+        f"{owner_id}:{project_id}:{request.idempotency_key.strip()}",
+    )
+    method_object_key = f"inputs/task-center/method/{method_row['method_source_id']}/{method_name}"
+    dataset_object_key = f"inputs/task-center/dataset/{dataset_resource_row['resource_id']}/{dataset_name}"
+    _write_direct_runtime_object(store, method_object_key, method_bytes, method_hash)
+    _write_direct_runtime_object(store, dataset_object_key, dataset_bytes, dataset_hash)
+
+    spec_json = spec_row["spec_json"] if isinstance(spec_row["spec_json"], dict) else {}
+    execution_document = {
+        "legacy_spec_json": spec_json,
+        "task_center_link": {
+            "project_id": str(project_id),
+            "legacy_task_spec_id": str(task_spec_id),
+            "legacy_dataset_snapshot_id": str(dataset_snapshot_id),
+            "legacy_method_source_id": str(method_source_id),
+            "legacy_dataset_resource_id": str(dataset_resource_row["resource_id"]),
+            "idempotency_key": request.idempotency_key.strip(),
+        },
+    }
+    goal = str(spec_row["research_question"] or "").strip() or title
+
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                existing_task = await conn.fetchrow(
+                    """
+                    SELECT task_id, task_spec_id, created_by, title, status, attempt_count, max_attempts
+                    FROM infinity_runtime.tasks
+                    WHERE task_id = $1
+                    FOR UPDATE
+                    """,
+                    canonical_task_id,
+                )
+                if existing_task:
+                    if (
+                        str(existing_task["task_spec_id"]) != str(canonical_spec_id)
+                        or str(existing_task["created_by"]) != owner_id
+                        or str(existing_task["title"]) != title
+                        or int(existing_task["max_attempts"]) != request.max_attempts
+                    ):
+                        raise HTTPException(status_code=409, detail="Idempotency key was reused with a different task")
+                    return {
+                        "task_id": str(existing_task["task_id"]),
+                        "status": existing_task["status"],
+                        "attempt_count": int(existing_task["attempt_count"] or 0),
+                        "duplicate": True,
+                        "runtime": "infinity_runtime",
+                    }
+
+                for resource_id, kind, logical_name, object_key, content_type, size, checksum in (
+                    (
+                        method_resource_id,
+                        "method",
+                        method_name,
+                        method_object_key,
+                        method_row["content_type"] or "application/octet-stream",
+                        len(method_bytes),
+                        method_hash,
+                    ),
+                    (
+                        dataset_resource_id,
+                        "dataset",
+                        dataset_name,
+                        dataset_object_key,
+                        dataset_resource_row["content_type"] or "application/octet-stream",
+                        len(dataset_bytes),
+                        dataset_hash,
+                    ),
+                ):
+                    existing_resource = await conn.fetchrow(
+                        "SELECT resource_id, owner_user_id, kind, logical_name, object_key, file_size_bytes, checksum_sha256, state FROM infinity_runtime.resources WHERE resource_id = $1 FOR UPDATE",
+                        resource_id,
+                    )
+                    if existing_resource and (
+                        str(existing_resource["owner_user_id"]) != owner_id
+                        or existing_resource["kind"] != kind
+                        or existing_resource["object_key"] != object_key
+                        or int(existing_resource["file_size_bytes"]) != size
+                        or str(existing_resource["checksum_sha256"]) != checksum
+                        or existing_resource["state"] != "ready"
+                    ):
+                        raise HTTPException(status_code=409, detail="Canonical input resource conflicts with an existing object")
+                    object_owner = await conn.fetchrow(
+                        "SELECT resource_id FROM infinity_runtime.resources WHERE object_key = $1 AND resource_id <> $2",
+                        object_key,
+                        resource_id,
+                    )
+                    if object_owner:
+                        raise HTTPException(status_code=409, detail="Canonical input object key is already in use")
+                    if not existing_resource:
+                        await conn.execute(
+                            """
+                            INSERT INTO infinity_runtime.resources
+                                (resource_id, owner_user_id, kind, logical_name, object_key,
+                                 content_type, file_size_bytes, checksum_sha256, state)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ready')
+                            """,
+                            resource_id, owner_id, kind, logical_name, object_key,
+                            content_type, size, checksum,
+                        )
+
+                existing_spec = await conn.fetchrow(
+                    "SELECT task_spec_id, created_by, title, goal, method_resource_id, dataset_resource_id FROM infinity_runtime.task_specs WHERE task_spec_id = $1 FOR UPDATE",
+                    canonical_spec_id,
+                )
+                if existing_spec and (
+                    str(existing_spec["created_by"]) != owner_id
+                    or existing_spec["title"] != title
+                    or existing_spec["goal"] != goal
+                    or existing_spec["method_resource_id"] != method_resource_id
+                    or existing_spec["dataset_resource_id"] != dataset_resource_id
+                ):
+                    raise HTTPException(status_code=409, detail="Canonical TaskSpec conflicts with an existing object")
+                if not existing_spec:
+                    await conn.execute(
+                        """
+                        INSERT INTO infinity_runtime.task_specs
+                            (task_spec_id, created_by, title, goal, execution_document,
+                             method_resource_id, dataset_resource_id)
+                        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+                        """,
+                        canonical_spec_id, owner_id, title, goal,
+                        json.dumps(execution_document, ensure_ascii=False),
+                        method_resource_id, dataset_resource_id,
+                    )
+
+                task_row = await conn.fetchrow(
+                    """
+                    INSERT INTO infinity_runtime.tasks
+                        (task_id, task_spec_id, created_by, title, max_attempts)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (task_id) DO NOTHING
+                    RETURNING task_id, status, attempt_count
+                    """,
+                    canonical_task_id, canonical_spec_id, owner_id, title, request.max_attempts,
+                )
+                if not task_row:
+                    task_row = await conn.fetchrow(
+                        "SELECT task_id, task_spec_id, created_by, title, status, attempt_count, max_attempts FROM infinity_runtime.tasks WHERE task_id = $1 FOR UPDATE",
+                        canonical_task_id,
+                    )
+                    if not task_row or str(task_row["task_spec_id"]) != str(canonical_spec_id):
+                        raise HTTPException(status_code=409, detail="Canonical task creation conflicted with another request")
+                    return {
+                        "task_id": str(task_row["task_id"]),
+                        "status": task_row["status"],
+                        "attempt_count": int(task_row["attempt_count"] or 0),
+                        "duplicate": True,
+                        "runtime": "infinity_runtime",
+                    }
+                await conn.execute(
+                    """
+                    INSERT INTO infinity_runtime.task_events
+                        (task_event_id, task_id, event_type, event_data, idempotency_key)
+                    VALUES ($1, $2, 'task_queued', $3::jsonb, $4)
+                    ON CONFLICT (idempotency_key) DO NOTHING
+                    """,
+                    uuid.uuid4(), canonical_task_id,
+                    json.dumps({"task_id": str(canonical_task_id), "source": "task_center"}),
+                    f"task-center-queued:{canonical_task_id}",
+                )
+    except HTTPException:
+        raise
+    except asyncpg.UniqueViolationError as exc:
+        raise HTTPException(status_code=409, detail="Canonical direct task conflicts with an existing resource") from exc
+
+    return {
+        "task_id": str(canonical_task_id),
+        "status": task_row["status"],
+        "attempt_count": int(task_row["attempt_count"] or 0),
+        "duplicate": False,
+        "runtime": "infinity_runtime",
+    }
+
+
+@app.post("/api/tasks/direct", response_model=Dict[str, Any])
+async def create_direct_task_endpoint(
+    request: CreateTaskRequest,
+    user: Optional[Principal] = Depends(_require_task_api_key),
+):
+    """Create a Task Center task in the canonical local Worker runtime."""
+    if request.submission_source != "task_center" or request.agent_confirmation is not False:
+        raise HTTPException(
+            status_code=400,
+            detail="Direct Task Center submissions require submission_source=task_center and agent_confirmation=false",
+        )
+    return await _create_local_runtime_task_from_legacy_inputs(request, user)
+
+
 @app.get("/api/tasks/{task_id}")
 async def get_task_endpoint(task_id: str, user: Optional[Principal] = Depends(_require_task_api_key)):
     """Get task details."""
