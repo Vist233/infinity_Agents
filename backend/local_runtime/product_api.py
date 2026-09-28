@@ -745,7 +745,10 @@ def create_product_router() -> APIRouter:
     @router.get("/api/discovery/papers")
     async def list_discovery_papers(request: Request, user: Principal = Depends(require_user)):
         rows = await _pool(request).fetch("SELECT * FROM infinity_runtime.paper_catalog WHERE owner_user_id = $1 AND status <> 'deleted' ORDER BY created_at DESC LIMIT 200", user.user_id)
-        return {"papers": [_public_paper(row) for row in rows]}
+        # Paper cards use the validated profile for the abstract and module
+        # count. Requested/failed rows still return ``profile: null`` because
+        # _public_paper only exposes a normalized profile when one exists.
+        return {"papers": [_public_paper(row, include_profile=True) for row in rows]}
 
     @router.post("/api/discovery/papers")
     async def upload_discovery_paper(request: Request, file: UploadFile = File(...), title: str | None = Form(None), user: Principal = Depends(require_user)):
@@ -816,7 +819,10 @@ def create_product_router() -> APIRouter:
     @router.get("/api/discovery/data-collections")
     async def list_discovery_collections(request: Request, user: Principal = Depends(require_user)):
         rows = await _pool(request).fetch("SELECT * FROM infinity_runtime.data_collections WHERE owner_user_id = $1 AND status <> 'deleted' ORDER BY created_at DESC LIMIT 200", user.user_id)
-        return {"collections": [_public_collection(row) for row in rows]}
+        # Ready collection cards need the validated profile for file/sample/
+        # feature summaries. Rows that are not ready still serialize a null
+        # profile through _public_collection, preserving their empty states.
+        return {"collections": [_public_collection(row, include_profile=True) for row in rows]}
 
     @router.post("/api/discovery/data-collections")
     async def upload_discovery_collection(request: Request, file: UploadFile = File(...), name: str | None = Form(None), user: Principal = Depends(require_user)):
