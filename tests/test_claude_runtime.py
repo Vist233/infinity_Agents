@@ -2,14 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
+from backend.code_agent.worker.attempt_workspace import create_attempt_root
 from backend.code_agent.worker.claude_runtime import run_claude_task
 
 
+def _attempt(tmp_path: Path, task_id: str, attempt_id: str) -> tuple[Path, Path, Path, Path]:
+    work_root = tmp_path / "worker-root"
+    attempt_root = create_attempt_root(work_root, task_id, attempt_id)
+    input_dir = attempt_root / "input"
+    output_dir = attempt_root / "output"
+    input_dir.mkdir()
+    return work_root, attempt_root, input_dir, output_dir
+
+
 def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch):
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
+    _work_root, attempt_root, input_dir, output_dir = _attempt(tmp_path, "task-local", "attempt-local")
+    monkeypatch.setenv("WORKER_WORK_ROOT", str(_work_root))
+    monkeypatch.setenv("CLAUDE_CLI_PATH", sys.executable)
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "long-lived-provider-token")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "long-lived-api-key")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "local-base")
@@ -46,9 +61,11 @@ def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch)
         events = asyncio.run(run())
 
     args, kwargs = start.call_args
-    assert args[0] == "claude"
+    assert args[0] == str(Path(sys.executable).resolve())
     assert "--print" in args
-    assert "--dangerously-skip-permissions" in args
+    assert "--dangerously-skip-permissions" not in args
+    assert "--permission-mode" in args
+    assert "--allowed-tools" in args
     assert f"--add-dir={input_dir.resolve()}" in args
     prompt = args[-1]
     assert str(input_dir.resolve()) in prompt
@@ -56,8 +73,8 @@ def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch)
     assert "PHASE PROTOCOL" in prompt
     assert "Maximum retries per command: 3." in prompt
     assert "completion message is not proof of success" in prompt
-    assert (input_dir.parent / "spec" / "task_spec.json").is_file()
-    assert '"goal": "Produce a reproducible result"' in (input_dir.parent / "spec" / "task_spec.json").read_text()
+    assert (attempt_root / "spec" / "task_spec.json").is_file()
+    assert '"goal": "Produce a reproducible result"' in (attempt_root / "spec" / "task_spec.json").read_text()
     assert "MISSION" in prompt
     assert "Save every deliverable" in prompt
     assert "attempt-token" not in args
@@ -67,20 +84,22 @@ def test_direct_claude_runtime_inherits_local_environment(tmp_path, monkeypatch)
     assert kwargs["env"]["ANTHROPIC_MODEL"] == "local-model"
     assert "WORKER_CREDENTIAL" not in kwargs["env"]
     assert "REDIS_URL" not in kwargs["env"]
-    assert kwargs["env"]["HOME"] == "/home/claude"
-    assert kwargs["user"] == 10001
-    assert kwargs["group"] == 10001
-    assert kwargs["cwd"] == str(input_dir.parent / "work")
+    assert kwargs["env"]["HOME"] == str(attempt_root / "home")
+    assert "user" not in kwargs
+    assert "group" not in kwargs
+    assert kwargs["cwd"] == str(attempt_root / "work")
+    assert kwargs["start_new_session"] is True
     assert os.stat(input_dir).st_mode & 0o222 == 0
     assert os.stat(input_dir / "method.md").st_mode & 0o222 == 0
     assert events[-1]["type"] == "done"
 
 
-def test_goal_driven_failure_marker_overrides_zero_exit(tmp_path):
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
-    logs_dir = input_dir.parent / "logs"
-    logs_dir.mkdir(parents=True)
+def test_goal_driven_failure_marker_overrides_zero_exit(tmp_path, monkeypatch):
+    work_root, attempt_root, input_dir, output_dir = _attempt(tmp_path, "task-marker", "attempt-marker")
+    monkeypatch.setenv("WORKER_WORK_ROOT", str(work_root))
+    monkeypatch.setenv("CLAUDE_CLI_PATH", sys.executable)
+    logs_dir = attempt_root / "logs"
+    logs_dir.mkdir()
     (logs_dir / "BLOCKED_INPUT").write_text("dataset is missing\n", encoding="utf-8")
     input_dir.mkdir(parents=True, exist_ok=True)
     process = AsyncMock()
@@ -113,9 +132,10 @@ def test_goal_driven_failure_marker_overrides_zero_exit(tmp_path):
     assert "dataset is missing" not in events[-1]["message"]
 
 
-def test_runtime_start_failure_has_explicit_failure_code(tmp_path):
-    input_dir = tmp_path / "input"
-    input_dir.mkdir(parents=True)
+def test_runtime_start_failure_has_explicit_failure_code(tmp_path, monkeypatch):
+    work_root, _attempt_root, input_dir, output_dir = _attempt(tmp_path, "task-start-failure", "attempt-start-failure")
+    monkeypatch.setenv("WORKER_WORK_ROOT", str(work_root))
+    monkeypatch.setenv("CLAUDE_CLI_PATH", sys.executable)
 
     async def run():
         return [
@@ -124,7 +144,7 @@ def test_runtime_start_failure_has_explicit_failure_code(tmp_path):
                 "spec-start-failure",
                 "dataset-start-failure",
                 case_dir=str(input_dir),
-                output_dir=str(tmp_path / "output"),
+                output_dir=str(output_dir),
                 attempt_gateway_url="https://gateway.example/attempt/task-start-failure",
                 attempt_gateway_token="attempt-token",
                 attempt_model_id="test-model",

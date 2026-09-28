@@ -1,230 +1,139 @@
 # 本地开发与部署
 
-> 最后更新：2026-09-28（本地 Paper / Discovery / Chat / Retry 产品运行时）
+> 最后更新：2026-09-28
 
-## 架构概览
+## 架构
 
 ```text
-浏览器 -> Next.js (port 3000) -> FastAPI (port 8008) -> PostgreSQL + Redis
-Worker  -> FastAPI control plane (/api/worker/v2/*)
+浏览器 -> Next.js (127.0.0.1:3000) -> FastAPI (127.0.0.1:8008) -> PostgreSQL
+                                                                    -> LOCAL_OBJECT_ROOT
+单个 Worker -> HTTP 轮询 /api/worker/v2/* --------------------------^
 ```
 
-- **PostgreSQL 16**：Session、Paper、Data Collection、Task、Attempt、Worker、Event、Artifact
-  元数据唯一事实源；`0002_product_workspace.sql` 是产品层迁移
-- **本地对象目录**：PDF、数据集、Method 和 Artifact 文件本体；数据库只保存受控 object key、大小和 hash
-- **Redis 7**：Outbox 通知、presence、实时事件（可重建，不保存持久业务事实）
-- **FastAPI**：唯一 HTTP API，提供 Analysis、Papers、Data Collections、Task Center、Worker 控制面
-- **Next.js**：前端，同源代理 API
-- **Worker**：独立进程，通过 HTTP 调用控制面，不直连数据库
+PostgreSQL 保存 Session、Paper、Data Collection、Task、Attempt、Worker、事件和 Artifact 元数据；本地对象目录保存 PDF、数据集、Method 与结果字节。SSE 直接从 PostgreSQL 事件表补读，Worker 通过定时 HTTP 轮询恢复待领任务、过期租约和重启后的状态。
 
-所有访问者共享 `local-admin` 用户，无需登录。
+本地运行不需要 Docker、Redis 或独立消息队列。PostgreSQL 必须由操作系统原生安装并启动；启动器不会安装、启动或停止 PostgreSQL 服务。
+
+### 平台范围
+
+Attempt 工作区的 Python 应用层路径校验、归属标记、临时目录和 Claude 子进程环境不依赖 macOS 专用沙箱，按 macOS、Linux 和 Windows 的 Python 语义实现；当前回归验证在 macOS/POSIX 主机完成。`scripts/start-local.sh`、`stop-local.sh`、`destroy-local.sh`、`backup-db.sh` 和 `restore-db.sh` 依赖 Bash、POSIX `ps`/`kill`/`tar`，只作为 macOS/Linux（或等效 POSIX 环境）脚本验证，不是原生 Windows 启停器。
+
+Windows 原生运行时需要手动完成等效流程：启动 PostgreSQL，设置 `.env.local` 中的连接、绝对 Windows 路径、`WORKER_CONTROL_PLANE_URL`、`WORKER_ID`、`WORKER_CREDENTIAL` 和 Claude provider 环境变量，然后运行：
+
+```powershell
+python -m backend.db_migrate
+python -m uvicorn backend.app:app --host 127.0.0.1 --port 8008
+# 另一个 PowerShell 窗口
+python -m backend.code_agent.worker.consumer_v2 $env:WORKER_ID
+```
+
+当前范围没有经过验证的原生 Windows PowerShell 启停、备份或恢复实现；可以在 WSL 等 POSIX 环境使用 Bash 脚本，但这不等同于原生 Windows 验证。
 
 ## 前置条件
 
-- Python 3.11+（推荐 `pyenv shell Agent`）
-- Node.js 22+
-- Docker Desktop（用于 PostgreSQL 和 Redis）
+- Python 3.12+，推荐 `pyenv shell Agent`
+- 本机 PostgreSQL，且 `pg_isready`、`psql`、`pg_dump` 在 PATH 中
+- Node.js/npm（要启动前端时）
+- Claude Code CLI（要执行任务时）
+- 模型/API 凭证，仅写入 Worker 配置
 
 ## 一键启动
 
-### 1. 配置环境
-
 ```bash
+pyenv shell Agent
+pip install -r requirements.txt
 cp .env.local.example .env.local
-```
-
-编辑 `.env.local`，至少修改以下密码：
-- `POSTGRES_PASSWORD`
-- `REDIS_PASSWORD`
-- `DATABASE_URL`（密码需与 `POSTGRES_PASSWORD` 一致）
-- `REDIS_URL`（密码需与 `REDIS_PASSWORD` 一致）
-
-### 2. 启动基础设施
-
-```bash
+# 修改 DATABASE_URL，或填写 PG_HOST/PG_PORT/POSTGRES_*；确认本地绝对路径
 bash scripts/start-local.sh
 ```
 
-脚本会：
-1. 启动 PostgreSQL + Redis（Docker named volume 持久化）
-2. 等待健康检查通过
-3. 自动运行数据库迁移（幂等）
-4. 创建存储目录
-5. 输出后续启动命令
+`scripts/start-local.sh` 会：
 
-### 3. 启动 API
+1. 检查 `pg_isready`、数据库连接和迁移；
+2. 只为不存在且随后确认为空的 `LOCAL_DATA_ROOT`、`WORKER_WORK_ROOT` 创建归属标记，并检查 `LOCAL_OBJECT_ROOT`；已有 data/work 根必须有匹配标记，启动器不会接管或盖章已有数据，根之间不得互相嵌套；
+3. 用 `pyenv shell Agent` 对应的 Python 运行 `backend.db_migrate`；
+4. 启动 loopback API，若 `frontend/node_modules` 存在则启动前端；
+5. 只有配置 `WORKER_1_ID` 与 `WORKER_1_CREDENTIAL` 时才启动唯一 Worker。
+
+API、前端和 Worker 的 PID/log 文件在 `LOCAL_DATA_ROOT/.runtime/`。停止时：
 
 ```bash
-source .env.local
-uvicorn backend.app:app --host 0.0.0.0 --port 8008 --reload
+bash scripts/stop-local.sh
 ```
 
-### 4. 启动前端
+停止脚本只停止本地 API、前端和 Worker，保留 PostgreSQL 与文件数据。
+
+## Worker 注册与配置
+
+API 启动后执行：
 
 ```bash
-cd frontend
-npm install
-npm run dev
-```
-
-打开 `http://localhost:3000`。
-
-首次启动会应用 `backend/local_runtime/sql/0001_canonical_runtime.sql` 和
-`0002_product_workspace.sql`。`0002` 将 Paper、Discovery、聊天事件和本地任务重试合同纳入
-PostgreSQL；迁移带校验和，已应用的文件不能被静默改写。
-
-浏览器入口为 `/`（Analysis）、`/papers`、`/data-collections` 和 `/task-center`。论文和数据集
-处理在本地 API 内执行，失败会保留安全错误码和进度记录；没有远程 Cloudflare Processor 或远程
-对象存储依赖。独立 Processor 协议默认不启用，只有在补齐显式的 session/attempt/fencing
-凭证边界后才可接入。
-
-### 5. 注册并启动 Worker（可选）
-
-```bash
-# 注册 Worker（API 必须先启动）
 bash scripts/enroll-worker.sh
-
-# 将输出的 WORKER_ID 和 WORKER_CREDENTIAL 填入 .env.local
-# 然后：
-source .env.local
-pyenv shell Agent
-ANTHROPIC_API_KEY=sk-ant-your-key python -m backend.code_agent.worker.consumer_v2 "$WORKER_1_ID"
 ```
 
-**注意**：`ANTHROPIC_API_KEY` 只在 Worker 进程中设置，不要写入 `.env.local` 的 API 配置段。
+把返回值写入 `.env.local`：
 
-### Deploying Workers on Windows
-
-Workers can run on Windows machines that connect to the API server over the
-local network. Each Windows Worker is a standalone Python process that polls
-the control plane for work.
-
-**Prerequisites on Windows**:
-- Python 3.11+ installed and on PATH
-- Claude Code CLI installed: `npm install -g @anthropic-ai/claude-code`
-- Repository cloned locally (or at least the `backend/` package)
-
-**Step 1 — Install Worker dependencies** (only `httpx` is needed):
-
-```powershell
-pip install httpx
+```dotenv
+WORKER_1_ID=public-worker-...
+WORKER_1_CREDENTIAL=...
+ANTHROPIC_API_KEY=...
+ANTHROPIC_BASE_URL=https://api.anthropic.com
+ANTHROPIC_MODEL=...
 ```
 
-**Step 2 — Register the Worker** (from the server where the API runs):
+Worker 只访问 `WORKER_CONTROL_PLANE_URL`，不接触 PostgreSQL 连接串。没有 Relay、6379 服务或内存队列时，轮询、claim、租约续期、Artifact 分片上传和恢复仍由 PostgreSQL-backed API 完成。
 
-```powershell
-# On the server machine (or from any machine with network access):
-.\scripts\enroll-worker.ps1 http://<server-ip>:8008
-```
+## Attempt 工作区与执行安全
 
-This outputs `WORKER_ID` and `WORKER_CREDENTIAL`. Save them.
+`WORKER_WORK_ROOT` 必须是明确的绝对目录。每个服务端生成的 `attempt_id` 只映射到一个直接子目录；Worker 创建归属标记以及 `input/`、`output/`、`spec/`、`work/`、`logs/`、`home/`、`tmp/`。应用自己的路径策略会拒绝相对穿越、绝对输入、非法组件和已存在的符号链接，并在 Artifact 收集和清理前再次检查边界。根目录外哨兵不应被这些应用操作删除。
 
-**Step 3 — Configure and start the Worker**:
+Claude 直接以 `work/` 为 cwd，HOME、缓存、临时目录指向 attempt 内目录；Worker 不把控制面 credential、数据库连接串或 Relay 配置传给 Claude。Claude 通过 `--permission-mode`、`--tools`、`--allowed-tools` 使用自身权限机制，默认不传 `--dangerously-skip-permissions`。默认 `Bash(*)` 是可信本机科学任务执行所需的显式 allow-list，可通过 `CLAUDE_ALLOWED_TOOLS` 收窄。
 
-```powershell
-# Set environment variables for this session:
-$env:WORKER_CONTROL_PLANE_URL = "http://<server-ip>:8008"
-$env:WORKER_ID = "public-worker-xxxx"
-$env:WORKER_CREDENTIAL = "xxxx"
-$env:ANTHROPIC_API_KEY = "sk-ant-your-key"
-$env:ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
-$env:ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+重要限制：这不是 OS 级沙箱。Claude、Shell 或其子进程以当前用户权限运行，仍可能直接读取/修改 attempt 外的用户可访问路径；cwd、环境、提示词、路径检查和外部哨兵测试都不能证明恶意命令被系统拒绝，也不能完全消除符号链接竞态。当前范围不实现 macOS `sandbox-exec`、Docker、Windows Job Object、Linux namespace 或虚拟机隔离。不可信任务必须另行设计隔离方案。
 
-# Start the Worker:
-python -m backend.code_agent.worker.consumer_v2 $env:WORKER_ID
-```
+## 备份与恢复
 
-**Step 4 — Deploy a second Worker**:
-
-Run the enrollment script again to get a second credential, then start
-a second process with a different `WORKER_ID`:
-
-```powershell
-.\scripts\enroll-worker.ps1 http://<server-ip>:8008
-# (save the new credentials)
-$env:WORKER_ID = "public-worker-yyyy"
-$env:WORKER_CREDENTIAL = "yyyy"
-python -m backend.code_agent.worker.consumer_v2 $env:WORKER_ID
-```
-
-**Important**: The API server's `.env.local` must contain
-`REDIS_NAMESPACE=infinity_local` (or `WORKER_PUBLIC_NAMESPACE`) for
-Worker enrollment to work.
-
-### Deleting All Workers
-
-To revoke all Worker enrollments (e.g., before decommissioning or resetting):
-
-```powershell
-# PowerShell — revokes every registered Worker
-.\scripts\delete-all-workers.ps1 http://<server-ip>:8008
-
-# Bash equivalent:
-bash scripts/delete-all-workers.sh http://<server-ip>:8008
-```
-
-This calls `POST /api/worker-enrollments/{worker_id}/revoke` for each
-active Worker. Revoked Workers lose their next poll/heartbeat and disconnect.
-
----
-
-## 日常操作
-
-| 操作 | 命令 |
-|---|---|
-| 启动基础设施 | `bash scripts/start-local.sh` |
-| 停止（保留数据） | `bash scripts/stop-local.sh` |
-| 销毁（删除数据） | `bash scripts/destroy-local.sh` |
-| 备份数据库 | `bash scripts/backup-db.sh` |
-| 恢复数据库 | `bash scripts/restore-db.sh backups/pg-xxx.sql.gz` |
-| 健康检查 | `curl http://localhost:8008/health` |
-| 注册 Worker | `bash scripts/enroll-worker.sh` |
-
-## 端口说明
-
-| 服务 | 默认端口 | 环境变量 |
-|---|---|---|
-| PostgreSQL | 5432 | `PG_PORT` |
-| Redis | 6379 | `REDIS_PORT` |
-| FastAPI | 8008 | `API_PORT` |
-| Next.js | 3000 | — |
-
-如果本机已有 PostgreSQL 或 Redis 占用端口，修改 `.env.local` 中的端口变量和对应的 `DATABASE_URL` / `REDIS_URL`。
-
-## 数据持久化
-
-- PostgreSQL 数据存储在 Docker named volume `pg_data` 中
-- Redis 数据存储在 Docker named volume `redis_data` 中
-- `docker compose down` 保留数据；`docker compose down -v` 删除数据
-- 定期使用 `scripts/backup-db.sh` 创建备份
-
-## 测试
+必须同时备份 PostgreSQL 和对象目录，不能只备份其中一项：
 
 ```bash
-# 后端测试（不需要 Docker；使用仓库要求的 Agent Python 环境）
-eval "$(pyenv init - zsh)"; pyenv shell Agent
-pytest tests/ -q --timeout=30
+bash scripts/backup-db.sh
+bash scripts/restore-db.sh \
+  backups/pg-<timestamp>.sql.gz \
+  backups/objects-<timestamp>.tar.gz
+```
 
-# 需要 PostgreSQL 的集成测试
-# 先启动基础设施，然后：
+备份只接受带归属标记的 data 根及其直接 `objects/` 子目录，备份输出不能落在 data 根内。恢复前停止 API 和 Worker；恢复会预检完整的 PostgreSQL gzip、对象归档成员、路径穿越/符号链接/特殊文件，并先把 SQL 和对象归档解压到 data 根内的受控临时目录。数据库应用 schema 的重建和 dump 导入在同一事务中执行并启用 `ON_ERROR_STOP`；只有数据库恢复成功后才替换对象目录，因此数据库导入失败时会保留原数据库和原对象目录。数据库与文件目录不具备跨系统单一原子提交：若数据库已提交而对象目录替换或回滚失败，脚本会报错并尽可能保留旧目录，旧目录可能位于 `.restore-old-objects.*`；此时必须保持服务停止，人工核对并完成恢复/对账后再启动。恢复后先检查任务与 Artifact 数量，再重新启动服务。`scripts/destroy-local.sh` 会在二次确认后删除配置数据库和本地数据目录，PostgreSQL 服务本身不受影响。
+
+## 健康检查与故障排查
+
+```bash
+curl http://127.0.0.1:8008/health
+curl http://127.0.0.1:8008/api/health/local-runtime
+```
+
+`/health` 只反映 PostgreSQL 和本地对象目录；`/api/worker/health` 读取 PostgreSQL 中的 active Worker session。数据库不可用时启动器失败并给出连接错误，不会回退到远程服务或其他数据库。
+
+| 问题 | 检查 |
+|---|---|
+| PostgreSQL 未就绪 | `pg_isready -h 127.0.0.1 -p 5432`，再核对 `DATABASE_URL` 或 `PG_*` |
+| 迁移失败 | 查看数据库权限与 `infinity_runtime.schema_migrations` 校验和 |
+| Worker 未领取任务 | 检查 `/api/worker/health`、`WORKER_CONTROL_PLANE_URL`、credential 和 Worker log |
+| Claude 无法执行工具 | 检查 `CLAUDE_PERMISSION_MODE` 与 `CLAUDE_ALLOWED_TOOLS`；确认任务是可信本机代码 |
+| 文件路径被拒绝 | 使用 attempt 内相对 object key；不要提交 `..`、绝对路径或符号链接 |
+
+## 本地测试
+
+```bash
+eval "$(pyenv init - zsh)"
+pyenv shell Agent
+pytest -q
+
+# 有真实 PostgreSQL 时运行 Worker v2 API/控制流集成验收；不需要 Claude 或模型密钥
+LOCAL_RUNTIME_TEST_DATABASE_URL=postgresql://127.0.0.1:5432/infinity_local \
+  pytest -q tests/test_local_runtime_api.py
+
+# 其他真实 PostgreSQL 集成组；跳过不计入验收
 pytest tests/test_local_runtime_pg.py tests/test_task_integration_pg.py -v
 
-# 前端单元测试
-cd frontend && npx vitest run
-
-# 前端构建
-cd frontend && npm run build
+cd frontend && npm run lint && npm run typecheck && npm run build
 ```
-
-## 故障排查
-
-| 问题 | 解决 |
-|---|---|
-| Docker 连接失败 | 启动 Docker Desktop |
-| 端口被占用 | 修改 `.env.local` 中的端口 |
-| 迁移失败 | 检查 `DATABASE_URL` 密码是否正确 |
-| Redis 连接失败 | 检查 `REDIS_URL` 密码是否正确 |
-| Worker 连接失败 | 确认 API 已启动，检查 `WORKER_CONTROL_PLANE_URL` |
-| 论文或数据集页面显示失败 | 查看 `/api/paper/resources/{id}/progress` 或 `/api/discovery/...` 的安全错误码；原始文件和失败状态会保留在 PostgreSQL/本地对象目录中 |
-| 重试按钮不可用 | 只有 `failed` / `timeout` 任务可重试；达到 `max_attempts` 后，用户重试会消耗一次明确 override，并写入任务事件 |
-| Worker 重启后任务不再被领取 | API 启动和每次 poll 都会回收过期 lease；确认 PostgreSQL 可用，再检查 `/api/health/local-runtime` |

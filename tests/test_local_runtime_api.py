@@ -5,14 +5,20 @@ Set LOCAL_RUNTIME_TEST_DATABASE_URL to enable; the suite skips otherwise.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import uuid
+import zipfile
+from io import BytesIO
+from pathlib import Path
 
 import asyncpg
 import httpx
 import pytest
 
+from backend.code_agent.worker import consumer_v2, executor_v2
+from backend.code_agent.worker.control_plane import WorkerV2Client
 from backend.local_runtime.migrations import apply_migrations
 from backend.local_runtime.worker_api import create_worker_v2_app
 
@@ -208,6 +214,81 @@ async def test_full_task_lifecycle(client, runtime_app):
         "SELECT COUNT(*) FROM infinity_runtime.outbox_events WHERE aggregate_id = $1 AND event_type = 'task_succeeded'",
         task_id,
     ) == 1
+
+
+async def test_real_worker_control_loop_completes_a_local_task_without_claude(
+    runtime_app, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    """Run the actual poll/claim/download/upload loop against real PostgreSQL and the API app."""
+
+    task_id, dataset, _dataset_sha = await seed_task(runtime_app)
+    work_root = tmp_path / "worker-work"
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("WORKER_CONTROL_PLANE_URL", "http://127.0.0.1")
+    monkeypatch.setenv("WORKER_CREDENTIAL", CREDENTIAL)
+    monkeypatch.setenv("WORKER_INSTANCE_ID", "local-integration")
+    monkeypatch.setenv("WORKER_WORK_ROOT", str(work_root))
+
+    observed: dict[str, bytes] = {}
+
+    async def fake_claude_runtime(**kwargs):
+        input_path = Path(str(kwargs["case_dir"])) / "data.bin"
+        observed["downloaded_input"] = input_path.read_bytes()
+        output_dir = Path(str(kwargs["output_dir"]))
+        (output_dir / "result.txt").write_text("local worker integration result\n", encoding="utf-8")
+        yield {"type": "done", "output": "stub runtime"}
+
+    monkeypatch.setattr(executor_v2, "run_claude_task", fake_claude_runtime)
+
+    transport = httpx.ASGITransport(app=runtime_app)
+    api_client = httpx.AsyncClient(
+        transport=transport,
+        base_url="http://127.0.0.1",
+        follow_redirects=False,
+    )
+
+    class StopAfterOneTaskClient(WorkerV2Client):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs, http_client=api_client)
+            self.poll_count = 0
+
+        async def poll(self):
+            self.poll_count += 1
+            if self.poll_count > 1:
+                raise asyncio.CancelledError()
+            return await super().poll()
+
+        async def close(self):
+            await super().close()
+            await api_client.aclose()
+
+    monkeypatch.setattr(consumer_v2, "WorkerV2Client", StopAfterOneTaskClient)
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer_v2.run_worker(WORKER_ID)
+
+    assert observed["downloaded_input"] == dataset
+    pool = runtime_app.state.runtime_pool
+    task = await pool.fetchrow(
+        "SELECT status, active_attempt_id FROM infinity_runtime.tasks WHERE task_id = $1",
+        task_id,
+    )
+    assert task["status"] == "succeeded"
+    artifact = await pool.fetchrow(
+        "SELECT object_key, file_size_bytes FROM infinity_runtime.artifacts WHERE task_id = $1",
+        task_id,
+    )
+    assert artifact is not None
+    archive = runtime_app.state.runtime_store.read_path(artifact["object_key"]).read_bytes()
+    assert len(archive) == artifact["file_size_bytes"]
+    with zipfile.ZipFile(BytesIO(archive)) as result_zip:
+        assert result_zip.read("result.txt") == b"local worker integration result\n"
+    attempt = await pool.fetchrow(
+        "SELECT status FROM infinity_runtime.task_attempts WHERE attempt_id = $1",
+        task["active_attempt_id"],
+    )
+    assert attempt["status"] == "succeeded"
+    assert list(work_root.iterdir()) == []
 
 
 async def test_superseded_session_is_rejected(client, runtime_app):

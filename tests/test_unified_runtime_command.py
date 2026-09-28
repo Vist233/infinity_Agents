@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import inspect
 
-from backend.code_agent.worker.claude_runtime import _claude_child_environment, run_claude_task
+from backend.code_agent.worker.claude_runtime import (
+    _claude_child_environment,
+    run_claude_task,
+)
 
 
 def test_claude_runtime_has_no_nested_docker_command():
@@ -10,7 +13,7 @@ def test_claude_runtime_has_no_nested_docker_command():
     assert '"docker"' not in source
     assert "docker run" not in source
     assert "create_subprocess_exec" in source
-    assert '"claude"' in source
+    assert "workspace.claude_path" in source
 
 
 def test_child_environment_excludes_worker_and_redis_secrets_but_keeps_provider_config(monkeypatch):

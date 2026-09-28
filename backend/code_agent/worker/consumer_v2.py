@@ -1,13 +1,9 @@
-"""Long-lived Worker v2 process.
+"""Long-lived local Worker v2 process.
 
-The process owns one persistent Worker credential. It connects to the
-control plane API, optionally reads wake-up hints from a Redis Relay,
-claims work with fencing, runs direct non-root Claude Code, uploads the
-result, and then clears the attempt directory.
-
-When WORKER_RELAY_URL is not set the Worker relies solely on control-plane
-polling for task discovery (hints are advisory and their absence does not
-affect correctness).
+The process owns one persistent Worker credential, polls the local HTTP API,
+claims work with fencing, runs Claude in the application-managed attempt
+workspace, uploads the result, and clears that attempt directory. PostgreSQL
+is the durable source of task state; there is no Redis hint or queue path.
 """
 
 from __future__ import annotations
@@ -20,8 +16,9 @@ from typing import Any
 
 import httpx
 
-from backend.code_agent.worker.control_plane import ControlPlaneError, RedisHintClient, WorkerV2Client
+from backend.code_agent.worker.control_plane import ControlPlaneError, WorkerV2Client
 from backend.code_agent.worker.executor_v2 import execute_claim
+from backend.code_agent.worker.attempt_workspace import ensure_work_root
 
 logger = logging.getLogger(__name__)
 
@@ -98,21 +95,14 @@ async def _heartbeat(client: WorkerV2Client, stop: asyncio.Event) -> None:
             logger.warning("Worker heartbeat failed: %s", type(exc).__name__)
 
 
-def _build_relay() -> RedisHintClient | None:
-    """Create a RedisHintClient if relay env vars are configured, else None."""
-    relay_url = os.getenv("WORKER_RELAY_URL", "").strip()
-    relay_token = os.getenv("WORKER_RELAY_HINT_TOKEN", "").strip()
-    if not relay_url or not relay_token:
-        logger.info("WORKER_RELAY_URL not set; Worker will poll control plane only")
-        return None
-    try:
-        return RedisHintClient(base_url=relay_url, token=relay_token)
-    except Exception as exc:
-        logger.warning("RedisHintClient init failed; falling back to poll-only: %s", exc)
-        return None
-
-
 async def run_worker(worker_id: str) -> None:
+    work_root = os.getenv("WORKER_WORK_ROOT", "").strip()
+    if not work_root:
+        raise SystemExit("WORKER_WORK_ROOT is required; refusing unisolated Worker execution")
+    try:
+        ensure_work_root(work_root)
+    except Exception as exc:
+        raise SystemExit(f"Worker work root is unavailable: {exc}") from exc
     control_plane_url = _required("WORKER_CONTROL_PLANE_URL")
     credential = _required("WORKER_CREDENTIAL")
     instance_id = os.getenv("WORKER_INSTANCE_ID", "").strip() or f"local-{worker_id}"
@@ -124,25 +114,12 @@ async def run_worker(worker_id: str) -> None:
         instance_id=instance_id,
         image_digest=image_digest,
     )
-    relay = _build_relay()
     stop = asyncio.Event()
     heartbeat_task: asyncio.Task[Any] | None = None
     try:
         await _connect_until_ready(client, worker_id)
         heartbeat_task = asyncio.create_task(_heartbeat(client, stop))
         while not stop.is_set():
-            hints: list[dict[str, Any]] = []
-            if relay is not None:
-                try:
-                    # Hints are advisory only. Control-plane poll/claim is
-                    # authoritative, so a Relay outage cannot lose or
-                    # duplicate a task.
-                    hints = await relay.read(limit=20)
-                    if hints:
-                        logger.info("Worker %s received %d task hint(s)", worker_id, len(hints))
-                except Exception as exc:
-                    logger.warning("Redis Relay hint read failed: %s", type(exc).__name__)
-
             try:
                 tasks, next_poll_seconds = await client.poll()
             except ControlPlaneError as exc:
@@ -164,7 +141,7 @@ async def run_worker(worker_id: str) -> None:
                 continue
 
             if not tasks:
-                await asyncio.sleep(0 if hints else next_poll_seconds)
+                await asyncio.sleep(next_poll_seconds)
                 continue
             for task in tasks:
                 try:
@@ -186,8 +163,6 @@ async def run_worker(worker_id: str) -> None:
                 await heartbeat_task
             except asyncio.CancelledError:
                 pass
-        if relay is not None:
-            await relay.close()
         await client.close()
 
 

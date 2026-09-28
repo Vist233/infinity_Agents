@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -11,6 +12,7 @@ from fastapi.testclient import TestClient
 
 import backend.app as backend_app_module
 from backend.code_agent.worker.consumer import _process_next_task
+from backend.code_agent.worker.attempt_workspace import create_attempt_root
 from backend.code_agent.worker.claude_runtime import run_claude_task
 
 
@@ -167,7 +169,7 @@ class TestCancelEndpoint:
 
 class TestClaudeRuntimeCancellation:
     @pytest.mark.asyncio
-    async def test_run_claude_task_stops_on_cancel_event(self, tmp_path):
+    async def test_run_claude_task_stops_on_cancel_event(self, tmp_path, monkeypatch):
         cancel_event = asyncio.Event()
 
         proc_mock = AsyncMock()
@@ -177,8 +179,13 @@ class TestClaudeRuntimeCancellation:
         proc_mock.terminate = Mock()
         proc_mock.kill = Mock()
 
-        input_dir = tmp_path / "input"
-        output_dir = tmp_path / "output"
+        work_root = tmp_path / "worker-root"
+        attempt_root = create_attempt_root(work_root, "task-1", "attempt-1")
+        input_dir = attempt_root / "input"
+        output_dir = attempt_root / "output"
+        input_dir.mkdir()
+        monkeypatch.setenv("WORKER_WORK_ROOT", str(work_root))
+        monkeypatch.setenv("CLAUDE_CLI_PATH", sys.executable)
         with patch("backend.code_agent.worker.claude_runtime.asyncio.create_subprocess_exec", AsyncMock(return_value=proc_mock)):
             events = []
             async for event in run_claude_task(

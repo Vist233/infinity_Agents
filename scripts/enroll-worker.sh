@@ -25,7 +25,7 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
-API_URL="${WORKER_CONTROL_PLANE_URL:-http://localhost:${API_PORT:-8008}}"
+API_URL="${WORKER_CONTROL_PLANE_URL:-http://127.0.0.1:${API_PORT:-8008}}"
 
 echo "==> Registering a new Worker at $API_URL ..."
 RESPONSE=$(curl -sS -X POST "$API_URL/api/worker-enrollments" \
@@ -35,7 +35,7 @@ RESPONSE=$(curl -sS -X POST "$API_URL/api/worker-enrollments" \
     echo "$RESPONSE"
     echo ""
     echo "Make sure the API is running:"
-    echo "  source .env.local && uvicorn backend.app:app --host 0.0.0.0 --port ${API_PORT:-8008}"
+    echo "  bash scripts/start-local.sh"
     exit 1
   }
 

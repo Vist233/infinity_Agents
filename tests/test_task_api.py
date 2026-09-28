@@ -231,9 +231,9 @@ class TestTaskAPIEndpoints:
         r = client.get("/api/worker/health")
         assert r.status_code == 200
         d = r.json()
-        assert d["status"] == "degraded"
-        assert d["ready"] is False
-        assert "redis_connected" in d
+        assert d["status"] == "ready"
+        assert d["ready"] is True
+        assert d["postgres"] is True
 
     def test_worker_poll(self, client):
         r = client.post("/api/worker/poll")
@@ -241,9 +241,7 @@ class TestTaskAPIEndpoints:
 
     def test_outbox_publish(self, client):
         r = client.post("/api/outbox/publish")
-        # 503 is expected when Redis is unavailable: events must never be
-        # marked published without being delivered.
-        assert r.status_code in (200, 500, 503)
+        assert r.status_code in (200, 500)
 
 
 class TestSubmitBundleCleanup:

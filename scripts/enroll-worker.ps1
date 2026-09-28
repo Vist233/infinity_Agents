@@ -1,13 +1,13 @@
 # Register a new Worker on the Infinity Agents control plane.
 #
 # Usage:
-#   .\scripts\enroll-worker.ps1                     # default http://localhost:8008
+#   .\scripts\enroll-worker.ps1                     # default http://127.0.0.1:8008
 #   .\scripts\enroll-worker.ps1 http://10.0.0.5:8008
 #
 # Output: WORKER_ID and WORKER_CREDENTIAL to add to your worker's .env
 
 param(
-    [string]$ServerUrl = "http://localhost:8008"
+    [string]$ServerUrl = "http://127.0.0.1:8008"
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,7 +22,7 @@ try {
     Write-Host $_.Exception.Message
     Write-Host ""
     Write-Host "Make sure the API is running on the server:"
-    Write-Host "  source .env.local && uvicorn backend.app:app --host 0.0.0.0 --port 8008"
+    Write-Host "  bash scripts/start-local.sh"
     exit 1
 }
 

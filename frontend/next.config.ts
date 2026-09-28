@@ -27,7 +27,7 @@ const nextConfig: NextConfig = {
   // instead of guessing a Docker-only hostname.
   async rewrites() {
     const backend = process.env.API_PROXY_TARGET || (
-      process.env.NODE_ENV === "production" ? "" : "http://localhost:8000"
+      process.env.NODE_ENV === "production" ? "" : "http://localhost:8008"
     );
     // A production deployment without an explicit backend is expected to use
     // same-origin routing from its reverse proxy. Never bake a Docker service

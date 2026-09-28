@@ -69,4 +69,5 @@ def test_health_endpoint_returns_status():
         data = resp.json()
         assert "status" in data
         assert "postgres" in data
-        assert "redis" in data
+        assert "object_store" in data
+        assert "redis" not in data

@@ -161,7 +161,9 @@ async def lifespan(app):
         await app.state.local_runtime_repository.recover_expired_leases()
     except Exception as exc:
         logger.warning("Local runtime lease recovery did not run at startup: %s", exc)
-    _cleanup_worker_staging(FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", "/workspace/task-outputs")))
+    _cleanup_worker_staging(
+        FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", str(_PROJECT_ROOT / "local-data" / "task-outputs")))
+    )
     app.state.worker_gateway_pool = None
     app.state.trust_issuer_pool = None
     gateway_dsn = os.getenv("WORKER_GATEWAY_DATABASE_URL", "").strip()
@@ -222,53 +224,9 @@ async def lifespan(app):
     app.state.session_meta = {}
     app.state.oauth_states = {}
 
-    # The API may host the publisher in a small local development setup, but
-    # acceptance/production can run it as a separate service with a login that
-    # cannot be assumed by the API process. Keep that topology explicit.
-    app.state.outbox_publisher = None
-    app.state.redis_client = None
-    global _redis_client
-    if _env_flag("ENABLE_OUTBOX_PUBLISHER", not rls_enabled_from_env()):
-        try:
-            from backend.code_agent.outbox import OutboxPublisher
-            from backend.code_agent.redis_client import RedisClient
-            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-            redis_client = RedisClient(redis_url)
-            await redis_client.connect()
-            app.state.redis_client = redis_client
-            _redis_client = redis_client
-            if redis_client.is_connected:
-                app.state.outbox_publisher = OutboxPublisher(
-                    app.state.db_pool, redis_client, poll_interval=1.0
-                )
-                await app.state.outbox_publisher.start()
-                logger.info("Outbox Publisher started")
-        except Exception as exc:
-            logger.warning("Outbox Publisher not started: %s", exc)
-    else:
-        try:
-            from backend.code_agent.redis_client import RedisClient
-            redis_client = RedisClient(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
-            await redis_client.connect()
-            app.state.redis_client = redis_client
-            _redis_client = redis_client
-            logger.info("Outbox Publisher disabled; Redis client kept for API/SSE/health")
-        except Exception as exc:
-            logger.warning("API Redis client not connected: %s", exc)
-
     yield
 
     # Cleanup
-    if hasattr(app.state, "outbox_publisher") and app.state.outbox_publisher:
-        try:
-            await app.state.outbox_publisher.stop()
-        except Exception:
-            pass
-    if hasattr(app.state, "redis_client") and app.state.redis_client:
-        try:
-            await app.state.redis_client.disconnect()
-        except Exception:
-            pass
     gateway_pool = getattr(app.state, "worker_gateway_pool", None)
     if gateway_pool:
         await gateway_pool.close()
@@ -1332,7 +1290,7 @@ async def _persist_task_draft_tool_result(
         if resource and resource.get("kind") == "dataset" and int(resource.get("file_size_bytes") or 0) <= TASK_INPUT_MAX_BYTES:
             try:
                 resource_path = _safe_storage_path(
-                    FilePath(os.getenv("RESOURCE_STORAGE_ROOT", "/workspace/resources")),
+                    FilePath(os.getenv("RESOURCE_STORAGE_ROOT", str(_PROJECT_ROOT / "local-data" / "resources"))),
                     str(resource["storage_key"]),
                 )
                 if resource_path.is_file() and not resource_path.is_symlink():
@@ -2199,7 +2157,7 @@ if __name__ == "__main__":
     import uvicorn
     if not (os.getenv("ANALYSIS_PROVIDER_API_KEY") or os.getenv("STEPFUN_API_KEY")):
         print("Warning: no Analysis Provider key configured; local fallback mode is active.")
-    uvicorn.run(app, host="0.0.0.0", port=8008)
+    uvicorn.run(app, host=os.getenv("API_HOST", "127.0.0.1"), port=int(os.getenv("API_PORT", "8008")))
 
 
 # ============================================================================
@@ -2480,7 +2438,6 @@ from backend.code_agent.task_service import (
     MethodSource,
     Task,
 )
-from backend.code_agent.redis_client import RedisClient
 
 
 # ---- Pydantic models ----
@@ -2611,20 +2568,11 @@ class WorkerEnrollmentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-# ---- Redis client singleton ----
+# ---- Legacy compatibility hook ----
 
-_redis_client: Optional[RedisClient] = None
-
-
-def get_redis_client() -> Optional[RedisClient]:
-    global _redis_client
-    state_client = getattr(app.state, "redis_client", None)
-    if state_client is not None:
-        return state_client
-    if _redis_client is None:
-        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-        _redis_client = RedisClient(redis_url)
-    return _redis_client
+def get_redis_client() -> None:
+    """Retained for old test/import callers; the local API has no Redis client."""
+    return None
 
 
 def _worker_database_pool():
@@ -2666,13 +2614,7 @@ def _worker_enrollment_issue_allowed(user: Principal) -> bool:
 
 def _public_worker_namespace() -> str:
     """Return the only Namespace served by this control plane."""
-    namespace = (
-        os.getenv("WORKER_PUBLIC_NAMESPACE", "").strip()
-        or os.getenv("REDIS_NAMESPACE", "").strip().strip(":")
-    )
-    if not namespace:
-        raise HTTPException(status_code=503, detail="Public Worker Namespace is not configured")
-    return namespace
+    return os.getenv("WORKER_PUBLIC_NAMESPACE", "local").strip() or "local"
 
 
 @app.post("/api/worker-enrollments")
@@ -3283,8 +3225,8 @@ async def _worker_task_input(task_id: str, worker: Dict[str, str], kind: str) ->
         raise HTTPException(status_code=404, detail="Worker input not found")
     path = FilePath(str(raw_path)).resolve()
     allowed_roots = [
-        FilePath(os.getenv("RESOURCE_STORAGE_ROOT", "/workspace/resources")).resolve(),
-        FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", "/tmp/uploaded-method-sources")).resolve(),
+        FilePath(os.getenv("RESOURCE_STORAGE_ROOT", str(_PROJECT_ROOT / "local-data" / "resources"))).resolve(),
+        FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", str(_PROJECT_ROOT / "local-data" / "method-sources"))).resolve(),
     ]
     if not any(path.is_relative_to(root) for root in allowed_roots) or path.is_symlink() or not path.is_file():
         raise HTTPException(status_code=404, detail="Worker input not found")
@@ -3500,7 +3442,7 @@ async def upload_worker_artifact_endpoint(
         raise HTTPException(status_code=400, detail="Invalid artifact ID")
     if not await _worker_artifact_upload_allowed(task_id, worker, attempt_id):
         raise HTTPException(status_code=409, detail="Worker lease is no longer active")
-    upload_root = FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", "/workspace/task-outputs")).resolve()
+    upload_root = FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", str(_PROJECT_ROOT / "local-data" / "task-outputs"))).resolve()
     staging_root = upload_root / ".worker-staging"
     max_bytes = int(os.getenv("ARTIFACT_UPLOAD_MAX_BYTES", str(3 * 1024**3)))
     upload = await _stream_request_body_to_disk(request, staging_root, max_bytes, filename="result.zip")
@@ -3574,7 +3516,7 @@ def _multipart_limits() -> Tuple[int, int, int, int]:
 
 def _worker_upload_staging_root() -> FilePath:
     """Return the dedicated staging root without following a root symlink."""
-    root = FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", "/workspace/task-outputs")).resolve()
+    root = FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", str(_PROJECT_ROOT / "local-data" / "task-outputs"))).resolve()
     staging_root = root / ".worker-staging"
     if staging_root.is_symlink():
         raise HTTPException(status_code=503, detail="Artifact staging root is not safe")
@@ -3590,7 +3532,7 @@ def _worker_artifact_destination(task_id: str, artifact_id: str) -> FilePath:
         safe_task_id = str(uuid.UUID(task_id))
     except (ValueError, AttributeError) as exc:
         raise HTTPException(status_code=400, detail="Invalid task ID") from exc
-    root = FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", "/workspace/task-outputs")).resolve()
+    root = FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", str(_PROJECT_ROOT / "local-data" / "task-outputs"))).resolve()
     remote_root = root / "remote"
     if remote_root.is_symlink():
         raise HTTPException(status_code=503, detail="Artifact destination root is not safe")
@@ -4195,7 +4137,7 @@ async def delete_worker_artifact_endpoint(task_id: str, artifact_id: str, reques
     if not deleted:
         raise HTTPException(status_code=404, detail="Artifact not found")
     storage_path = FilePath(str(deleted.get("storage_path") or ""))
-    root = FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", "/workspace/task-outputs")).resolve()
+    root = FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", str(_PROJECT_ROOT / "local-data" / "task-outputs"))).resolve()
     try:
         resolved = storage_path.resolve(strict=False)
         if resolved.is_relative_to(root) and not storage_path.is_symlink():
@@ -4306,18 +4248,38 @@ def _rate_limit_settings() -> tuple[int, int]:
     return limit, window
 
 
+# A single local API process is the only rate-limit coordinator in the pure
+# local deployment. It is intentionally process-local and non-authoritative;
+# restarting the API resets the throttle, while PostgreSQL remains the source
+# of all business state.
+_local_rate_limit_state: Dict[tuple[str, str], tuple[float, int]] = {}
+
+
 async def _check_user_rate_limit(user_id: str, action: str) -> tuple[bool, int]:
-    """Fixed-window per-user rate limit with a fail-closed deployed default."""
-    redis = get_redis_client()
-    if not redis or not redis.is_connected:
-        if os.getenv("APP_ENV", "development").lower() in {"acceptance", "production", "prod"}:
-            raise HTTPException(status_code=503, detail="Rate limit service is unavailable")
-        return True, -1
+    """Fixed-window per-user rate limit without an external coordinator."""
     limit, window = _rate_limit_settings()
-    allowed, remaining = await redis.check_rate_limit(user_id, limit, window, action=action)
-    if remaining < 0:
-        raise HTTPException(status_code=503, detail="Rate limit service is unavailable")
-    return allowed, remaining
+    # Test/legacy callers may inject a compatible limiter. The production
+    # singleton deliberately returns None, so the local API never requires it.
+    legacy_limiter = get_redis_client()
+    legacy_check = getattr(legacy_limiter, "check_rate_limit", None)
+    if legacy_limiter is not None and getattr(legacy_limiter, "is_connected", False) and legacy_check:
+        allowed, remaining = await legacy_check(user_id, limit, window, action=action)
+        return bool(allowed), int(remaining)
+    now = time.monotonic()
+    key = (str(user_id), str(action))
+    started, count = _local_rate_limit_state.get(key, (now, 0))
+    if now - started >= window:
+        started, count = now, 0
+    count += 1
+    _local_rate_limit_state[key] = (started, count)
+    # Bound stale state opportunistically; this is a local guard, not a queue.
+    if len(_local_rate_limit_state) > 10_000:
+        cutoff = now - window
+        for stale_key, (stale_started, _stale_count) in list(_local_rate_limit_state.items()):
+            if stale_started < cutoff:
+                _local_rate_limit_state.pop(stale_key, None)
+    remaining = max(0, limit - count)
+    return count <= limit, remaining
 
 
 async def _stream_upload_to_disk(file: UploadFile, dest_dir: FilePath, max_bytes: int) -> Dict[str, Any]:
@@ -4557,7 +4519,7 @@ async def upload_resource_endpoint(
         if not await get_session(pool, session_id, user.user_id):
             raise HTTPException(status_code=404, detail="Session not found")
     resource_id = str(uuid.uuid4())
-    root = FilePath(os.getenv("RESOURCE_STORAGE_ROOT", "/workspace/resources")).resolve()
+    root = FilePath(os.getenv("RESOURCE_STORAGE_ROOT", str(_PROJECT_ROOT / "local-data" / "resources"))).resolve()
     root.mkdir(parents=True, exist_ok=True)
     temporary = await _stream_upload_to_disk(file, root / ".staging", MAX_DATASET_UPLOAD_BYTES)
     source = FilePath(temporary["stored_path"])
@@ -4643,7 +4605,7 @@ async def download_resource_endpoint(resource_id: str, user: Principal = Depends
     resource = await _get_project_resource(app.state.db_pool, resource_id, user.user_id)
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
-    root = FilePath(os.getenv("RESOURCE_STORAGE_ROOT", "/workspace/resources"))
+    root = FilePath(os.getenv("RESOURCE_STORAGE_ROOT", str(_PROJECT_ROOT / "local-data" / "resources")))
     try:
         path = _safe_storage_path(root, resource["storage_key"])
     except HTTPException:
@@ -4874,7 +4836,7 @@ async def upload_method_source_endpoint(
             detail=f"Unsupported method source type; allowed: {', '.join(sorted(_METHOD_SOURCE_EXTENSIONS))}",
         )
 
-    upload_root = FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", "/tmp/uploaded-method-sources"))
+    upload_root = FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", str(_PROJECT_ROOT / "local-data" / "method-sources")))
     upload = await _stream_upload_to_disk(file, upload_root, MAX_METHOD_SOURCE_BYTES)
 
     pool = app.state.db_pool
@@ -4975,7 +4937,7 @@ async def upload_dataset_endpoint(
             raise HTTPException(status_code=400, detail="Invalid session ID") from exc
         if not await get_session(pool, session_id, user.user_id):
             raise HTTPException(status_code=404, detail="Session not found")
-    upload_root = FilePath(os.getenv("RESOURCE_STORAGE_ROOT", "/workspace/resources")).resolve()
+    upload_root = FilePath(os.getenv("RESOURCE_STORAGE_ROOT", str(_PROJECT_ROOT / "local-data" / "resources"))).resolve()
     resource_id = str(uuid.uuid4())
     staging_root = upload_root / ".staging"
     resource_root = upload_root / "datasets"
@@ -5066,7 +5028,7 @@ async def create_dataset_endpoint(
         resource = await _get_project_resource(pool, request.resource_id, user.user_id)
         if not resource or resource["project_id"] != request.project_id or resource["kind"] != "dataset":
             raise HTTPException(status_code=404, detail="Dataset resource not found")
-        resource_root = FilePath(os.getenv("RESOURCE_STORAGE_ROOT", "/workspace/resources"))
+        resource_root = FilePath(os.getenv("RESOURCE_STORAGE_ROOT", str(_PROJECT_ROOT / "local-data" / "resources")))
         resolved = _safe_storage_path(resource_root, resource["storage_key"])
         stored_path = str(resolved)
         logical_dataset_name = FilePath(resource["logical_name"]).name
@@ -5077,8 +5039,8 @@ async def create_dataset_endpoint(
         if not request.stored_path:
             raise HTTPException(status_code=400, detail="stored_path is required in legacy mode")
         allowed_roots = [
-            FilePath(os.getenv("DATASET_UPLOAD_ROOT", "/tmp/uploaded-datasets")).resolve(),
-            FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", "/tmp/uploaded-method-sources")).resolve(),
+            FilePath(os.getenv("DATASET_UPLOAD_ROOT", str(_PROJECT_ROOT / "local-data" / "datasets"))).resolve(),
+            FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", str(_PROJECT_ROOT / "local-data" / "method-sources"))).resolve(),
         ]
         resolved = FilePath(request.stored_path).resolve()
         if not any(resolved.is_relative_to(root) for root in allowed_roots):
@@ -5151,8 +5113,8 @@ async def submit_task_bundle_endpoint(
         selected_project_id = str(project["project_id"])
 
     bundle_id = uuid.uuid4().hex
-    method_root = FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", "/tmp/uploaded-method-sources")).resolve()
-    resource_root = FilePath(os.getenv("RESOURCE_STORAGE_ROOT", "/workspace/resources")).resolve()
+    method_root = FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", str(_PROJECT_ROOT / "local-data" / "method-sources"))).resolve()
+    resource_root = FilePath(os.getenv("RESOURCE_STORAGE_ROOT", str(_PROJECT_ROOT / "local-data" / "resources"))).resolve()
     staging_root = method_root / ".task-bundles" / bundle_id
     method_staging = staging_root / "method"
     dataset_staging = staging_root / "dataset"
@@ -5491,7 +5453,7 @@ async def confirm_task_draft_endpoint(
     if int(resource.get("file_size_bytes") or 0) > TASK_INPUT_MAX_BYTES:
         raise HTTPException(status_code=413, detail="Dataset exceeds the 25 MB limit")
     resource_path = _safe_storage_path(
-        FilePath(os.getenv("RESOURCE_STORAGE_ROOT", "/workspace/resources")),
+        FilePath(os.getenv("RESOURCE_STORAGE_ROOT", str(_PROJECT_ROOT / "local-data" / "resources"))),
         str(resource["storage_key"]),
     )
     if not resource_path.is_file() or resource_path.is_symlink():
@@ -5521,7 +5483,7 @@ async def confirm_task_draft_endpoint(
     method_source_id = str(uuid.uuid4())
     dataset_snapshot_id = str(uuid.uuid4())
     task_id = str(uuid.uuid4())
-    method_upload_root = FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", "/tmp/uploaded-method-sources")).resolve()
+    method_upload_root = FilePath(os.getenv("METHOD_SOURCE_UPLOAD_ROOT", str(_PROJECT_ROOT / "local-data" / "method-sources"))).resolve()
     method_final_path = method_upload_root / "documents" / f"{draft_id}-{FilePath(method_filename).name}"
     method_final_created = False
 
@@ -5795,7 +5757,7 @@ def _validate_artifact_path(storage_path: str) -> FilePath:
 
     Rejects symlinks, path traversal, and paths outside the allowed root.
     """
-    allowed_root = FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", "/workspace/task-outputs")).resolve()
+    allowed_root = FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", str(_PROJECT_ROOT / "local-data" / "task-outputs"))).resolve()
     original = FilePath(storage_path)
     if not original.is_absolute():
         raise HTTPException(status_code=403, detail="Artifact path must be absolute")
@@ -5917,14 +5879,18 @@ async def list_tasks_endpoint(
 
 
 def _decode_sse_resume_cursor(value: Optional[str]) -> tuple[Optional[str], Optional[int]]:
-    """Split the Redis cursor from the durable DB event ID when available."""
+    """Decode old composite cursors while preferring the durable DB ID."""
     raw = str(value or "").strip()
     if not raw:
         return None, None
-    match = re.fullmatch(r"(.+)\|db:(\d+)", raw)
+    match = re.fullmatch(r"(?:.+\|)?db:(\d+)", raw)
     if match:
-        return match.group(1), int(match.group(2))
-    return raw, None
+        prefix = raw[: raw.rfind("|db:")] if "|db:" in raw else None
+        return prefix, int(match.group(1))
+    try:
+        return raw, None
+    except ValueError:
+        return raw, None
 
 @app.get("/api/tasks/{task_id}/events/stream")
 async def task_events_sse_endpoint(
@@ -5933,7 +5899,7 @@ async def task_events_sse_endpoint(
     last_event_id: Optional[str] = None,
     user: Optional[Principal] = Depends(_require_task_api_key),
 ):
-    """SSE endpoint for real-time task events."""
+    """SSE endpoint backed solely by the durable PostgreSQL event log."""
     async def event_generator():
         pool = app.state.db_pool
         task = await get_task(pool, task_id)
@@ -5943,8 +5909,11 @@ async def task_events_sse_endpoint(
         # query parameter for explicit clients, but prefer the browser header
         # when it is present.
         resume_event_id = last_event_id or (request.headers.get("last-event-id") if request else None)
-        redis_resume_cursor, db_resume_id = _decode_sse_resume_cursor(resume_event_id)
-        redis = get_redis_client()
+        resume_cursor, durable_resume_id = _decode_sse_resume_cursor(resume_event_id)
+        try:
+            last_id = max(0, int(durable_resume_id if durable_resume_id is not None else (resume_cursor or "0")))
+        except ValueError:
+            last_id = 0
 
         # Heartbeat: yield a ": keep-alive" comment every 15s so proxies and
         # browsers don't time out idle connections. Close the stream after a
@@ -5970,124 +5939,32 @@ async def task_events_sse_endpoint(
             }),
         }
 
-        # If Redis is available, stream from there
-        if redis and redis.is_connected:
-            # Keep the request argument immutable inside the async generator.
-            # Assigning to ``last_event_id`` here would make it a local
-            # closure variable and crash before the first Redis read.
-            event_cursor = redis_resume_cursor
-            seen_ids = set()
-            emitted_durable_ids: set[int] = set()
-            if event_cursor:
-                seen_ids.add(event_cursor)
+        while True:
+            events = await get_task_events(pool, task_id, limit=50, after_id=last_id)
+            for event in events:
+                eid = int(event.get("task_event_id", 0) or 0)
+                if eid <= last_id:
+                    continue
+                last_id = eid
+                yield {
+                    "event": event.get("event_type", "update"),
+                    "id": str(eid),
+                    "data": json.dumps(event),
+                }
 
-            while True:
-                events = await redis.read_task_events(task_id, last_event_id=event_cursor, count=20)
-                for event in events:
-                    cursor_only = event.get("_cursor_only")
-                    if cursor_only:
-                        event_cursor = str(cursor_only)
-                        continue
-                    msg_id = event.get("_message_id", "")
-                    if msg_id in seen_ids:
-                        continue
-                    seen_ids.add(msg_id)
-                    event_cursor = str(event.get("_stream_cursor") or msg_id)
-
-                    durable_event_id = event.get("task_event_id")
-                    if durable_event_id is None and isinstance(event.get("data"), dict):
-                        durable_event_id = event["data"].get("task_event_id")
-                    sse_id = msg_id
-                    if durable_event_id is not None:
-                        try:
-                            durable_event_id = int(durable_event_id)
-                            emitted_durable_ids.add(durable_event_id)
-                            sse_id = f"{msg_id}|db:{durable_event_id}"
-                        except (TypeError, ValueError):
-                            pass
-
-                    yield {
-                        "event": event.get("event_type", "update"),
-                        "id": sse_id,
-                        "data": json.dumps(event),
-                    }
-
-                # Check if task is terminal
-                if task["status"] in ("succeeded", "failed", "cancelled", "timeout"):
-                    # Redis is a fan-out cache, not the source of truth.  A
-                    # bounded scan of a shared stream can advance past this
-                    # task's final event, so reconcile the durable DB event
-                    # log before closing the terminal SSE response.
-                    try:
-                        durable_after = max(
-                            int(db_resume_id or 0),
-                            max(emitted_durable_ids, default=0),
-                        )
-                        durable_events = await get_task_events(
-                            pool, task_id, limit=500, after_id=durable_after
-                        )
-                        for durable_event in durable_events:
-                            durable_id = int(durable_event["task_event_id"])
-                            if durable_id in emitted_durable_ids:
-                                continue
-                            emitted_durable_ids.add(durable_id)
-                            yield {
-                                "event": durable_event["event_type"],
-                                "id": f"db:{durable_id}",
-                                "data": json.dumps(durable_event),
-                            }
-                    except Exception:
-                        logger.exception("Failed to reconcile terminal task events for %s", task_id)
+            task = await get_task(pool, task_id)
+            if not task or task["status"] in ("succeeded", "failed", "cancelled", "timeout"):
+                if task:
                     yield {"event": "task_terminal", "data": json.dumps({"status": task["status"]})}
-                    break
-
-                if time.monotonic() - started_at >= max_connection_seconds:
-                    break
-                if events:
-                    last_activity = time.monotonic()
-                elif time.monotonic() - last_activity >= keepalive_seconds:
-                    yield {"comment": "keep-alive"}
-                    last_activity = time.monotonic()
-
-                await asyncio.sleep(0.5)
-                # Refresh task status
-                task = await get_task(pool, task_id)
-                if not task:
-                    break
-        else:
-            # Fallback: poll database events
-            try:
-                last_id = max(0, db_resume_id if db_resume_id is not None else int(resume_event_id or "0"))
-            except (TypeError, ValueError):
-                # Older Redis messages may not carry a durable DB event ID.
-                # There is no safe numeric translation for those legacy
-                # cursors, so retain the conservative replay behavior. New
-                # outbox messages use the composite id above and resume
-                # without replaying persisted events.
-                last_id = 0
-            while True:
-                events = await get_task_events(pool, task_id, limit=50, after_id=last_id)
-                for event in events:
-                    eid = event.get("task_event_id", 0)
-                    if eid > last_id:
-                        last_id = eid
-                        yield {
-                            "event": event.get("event_type", "update"),
-                            "id": str(eid),
-                            "data": json.dumps(event),
-                        }
-
-                task = await get_task(pool, task_id)
-                if not task or task["status"] in ("succeeded", "failed", "cancelled", "timeout"):
-                    break
-                if time.monotonic() - started_at >= max_connection_seconds:
-                    break
-                if events:
-                    last_activity = time.monotonic()
-                elif time.monotonic() - last_activity >= keepalive_seconds:
-                    yield {"comment": "keep-alive"}
-                    last_activity = time.monotonic()
-                await asyncio.sleep(1)
+                break
+            if time.monotonic() - started_at >= max_connection_seconds:
+                break
+            if events:
+                last_activity = time.monotonic()
+            elif time.monotonic() - last_activity >= keepalive_seconds:
+                yield {"comment": "keep-alive"}
+                last_activity = time.monotonic()
+            await asyncio.sleep(1)
 
     return EventSourceResponse(event_generator())
 
@@ -6098,12 +5975,12 @@ async def task_events_sse_endpoint(
 async def worker_poll_endpoint(request: Request, _: Optional[Principal] = Depends(_require_task_api_key)):
     """Development-only compatibility poll endpoint.
 
-    Deployed Workers consume the authenticated Redis stream.  Keeping a
-    public SQL poller enabled in acceptance/production would allow any
-    session or leaked legacy API key to enumerate other users' queued tasks.
+    The local Worker v2 client uses the authenticated PostgreSQL-backed
+    ``/api/worker/v2/poll`` route. This legacy route remains closed outside
+    explicit local development mode.
     """
     if os.getenv("APP_ENV", "development").lower() not in {"development", "dev", "test"} or not _env_flag("LOCAL_DEV_OPEN_TASK_API", False):
-        raise HTTPException(status_code=404, detail="Worker SQL polling is disabled; use the Redis Worker stream")
+        raise HTTPException(status_code=404, detail="Legacy polling is disabled; use the local Worker v2 route")
     pool = app.state.db_pool
     query = """
         SELECT task_id, title, status, task_spec_id, dataset_snapshot_id, project_id
@@ -6130,11 +6007,10 @@ async def worker_poll_endpoint(request: Request, _: Optional[Principal] = Depend
 
 @app.post("/api/outbox/publish")
 async def publish_outbox_endpoint(user: Optional[Principal] = Depends(_require_task_api_key)):
-    """Manually trigger outbox publishing.
+    """Compatibility endpoint for the retired external notification publisher.
 
-    Requires a connected Redis: events are only marked published after they
-    are actually delivered to the stream. When Redis is down the request is
-    rejected (503) — silently marking events published would lose them.
+    Local clients read task events directly from PostgreSQL, so no publisher
+    is needed and pending outbox rows are retained as durable audit records.
     """
     if not user and not (
         os.getenv("APP_ENV", "development").lower() in {"development", "dev", "test"}
@@ -6143,40 +6019,35 @@ async def publish_outbox_endpoint(user: Optional[Principal] = Depends(_require_t
         raise HTTPException(status_code=403, detail="Operator permission required")
     if user and not _worker_enrollment_admin_allowed(user):
         raise HTTPException(status_code=403, detail="Operator permission required")
-    redis = get_redis_client()
-    if not redis or not redis.is_connected:
-        raise HTTPException(
-            status_code=503,
-            detail="Redis unavailable; outbox events are kept pending for automatic recovery",
-        )
-    pool = app.state.db_pool
-    publisher = getattr(app.state, "outbox_publisher", None)
-    if publisher is not None:
-        processed = await publisher._publish_batch()
-    else:
-        # No in-process publisher (e.g. tests) — run one ad-hoc batch.
-        from backend.code_agent.outbox import OutboxPublisher
-        processed = await OutboxPublisher(pool, redis)._publish_batch()
-    return {"processed": processed, "mode": "redis"}
+    return {"processed": 0, "mode": "postgresql", "detail": "Task events are read from PostgreSQL"}
+
+
+def _pool_is_open(pool: Any) -> bool:
+    if pool is None:
+        return False
+    checker = getattr(pool, "is_closing", None)
+    return not bool(checker()) if callable(checker) else True
 
 
 
 @app.get("/health")
 async def public_health():
-    """Public health check — no auth required. Returns PG/Redis status."""
+    """Public health check — PostgreSQL and local object storage only."""
     pool = getattr(app.state, "db_pool", None)
     pg_ok = False
-    if pool is not None and not pool.is_closing():
+    pool_open = _pool_is_open(pool)
+    if pool_open:
         try:
             async with pool.acquire() as conn:
                 await conn.fetchval("SELECT 1")
             pg_ok = True
         except Exception:
             pass
-    redis = get_redis_client()
-    redis_ok = bool(redis and redis.is_connected)
-    status = "ready" if pg_ok and redis_ok else ("degraded" if pg_ok else "unavailable")
-    return {"status": status, "postgres": pg_ok, "redis": redis_ok}
+    object_store = getattr(app.state, "local_object_store", None)
+    object_root = getattr(object_store, "root", None)
+    object_ok = bool(object_root and FilePath(object_root).is_dir())
+    status = "ready" if pg_ok and object_ok else ("degraded" if pg_ok else "unavailable")
+    return {"status": status, "postgres": pg_ok, "object_store": object_ok}
 
 
 @app.get("/api/worker/health")
@@ -6189,18 +6060,36 @@ async def worker_health_endpoint(user: Optional[Principal] = Depends(_require_ta
         raise HTTPException(status_code=403, detail="Operator permission required")
     if user and not _worker_enrollment_admin_allowed(user):
         raise HTTPException(status_code=403, detail="Operator permission required")
-    redis = get_redis_client()
     workers = []
-    if redis and redis.is_connected:
-        workers = await redis.get_alive_workers()
-    redis_connected = bool(redis and redis.is_connected)
+    pool = getattr(app.state, "db_pool", None)
+    pool_open = _pool_is_open(pool)
+    if pool_open:
+        try:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT worker_id, instance_id, last_seen_at, lease_expires_at
+                    FROM infinity_runtime.worker_sessions
+                    WHERE disconnected_at IS NULL AND lease_expires_at > NOW()
+                    ORDER BY last_seen_at DESC
+                    """
+                )
+            workers = [
+                {
+                    "worker_id": str(row["worker_id"]),
+                    "instance_id": str(row["instance_id"]),
+                    "last_seen_at": row["last_seen_at"].isoformat() if row["last_seen_at"] else None,
+                    "lease_expires_at": row["lease_expires_at"].isoformat() if row["lease_expires_at"] else None,
+                }
+                for row in rows
+            ]
+        except Exception:
+            logger.exception("Failed to read local Worker sessions")
+    postgres_ok = pool_open
     return {
-        # A Worker control-plane health response must not claim readiness when
-        # Redis dispatch is unavailable. PostgreSQL remains the source of truth
-        # and pending Outbox rows will recover after Redis reconnects.
-        "status": "ready" if redis_connected else "degraded",
-        "ready": redis_connected,
-        "redis_connected": redis_connected,
+        "status": "ready" if postgres_ok else "degraded",
+        "ready": postgres_ok,
+        "postgres": postgres_ok,
         "active_workers": workers,
     }
 

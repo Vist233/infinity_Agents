@@ -1,8 +1,8 @@
 """Direct Claude Code runtime for a user-owned local Worker.
 
-The Worker container already contains the Claude Code CLI. A task is executed
-in that same container, so there is no Docker socket, nested Docker daemon, or
-child executor container involved.
+The Worker runs as a host process, starts the configured Claude CLI directly,
+and keeps its normal application-managed files under one attempt workspace.
+This module does not provide operating-system isolation for Claude commands.
 """
 
 from __future__ import annotations
@@ -11,8 +11,19 @@ import asyncio
 import json
 import logging
 import os
+import re
+import signal
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
+
+from backend.code_agent.worker.attempt_workspace import (
+    WorkerRuntimeUnavailableError,
+    prepare_attempt_workspace,
+    validate_claude_command,
+)
+from backend.security import SecurityBoundaryError
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +34,7 @@ _FAILURE_MARKERS = (
 
 
 def _runtime_identity() -> tuple[int, int, str, str]:
-    """Return the non-root Claude identity used by Dockerfile.worker."""
+    """Return legacy identity settings for compatibility with old callers."""
     try:
         uid = int(os.getenv("CLAUDE_RUNTIME_UID", "10001"))
     except ValueError:
@@ -37,27 +48,97 @@ def _runtime_identity() -> tuple[int, int, str, str]:
     return uid, gid, home, username
 
 
-def _grant_task_tree_to_claude(path: Path) -> None:
-    """Make the task tree writable by the non-root Claude user."""
-    uid, gid, _, _ = _runtime_identity()
-    for item in (path, *path.rglob("*")):
+def _workspace_error(message: str, failure_code: str = "workspace_boundary_invalid") -> dict[str, str]:
+    return {
+        "type": "error",
+        "message": message,
+        "failure_code": failure_code,
+    }
+
+
+async def _terminate_process_tree(proc: Any, *, grace_seconds: float = 30.0) -> None:
+    """Terminate Claude and its descendants using the platform's process API."""
+
+    pid = getattr(proc, "pid", None)
+    sent_group_signal = False
+    if isinstance(pid, int) and pid > 0:
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=5,
+                )
+                sent_group_signal = True
+            except (OSError, subprocess.SubprocessError):
+                pass
+        else:
+            killpg = getattr(os, "killpg", None)
+            if killpg is not None:
+                try:
+                    killpg(pid, signal.SIGTERM)
+                    sent_group_signal = True
+                except (OSError, ProcessLookupError):
+                    pass
+    if not sent_group_signal:
         try:
-            os.chown(item, uid, gid)
-        except (FileNotFoundError, PermissionError, OSError):
-            # A non-root development process may already own the tree. The
-            # subprocess user below remains the final permission boundary.
+            proc.terminate()
+        except Exception:
             pass
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=grace_seconds)
+        return
+    except asyncio.TimeoutError:
+        pass
+    except Exception:
+        return
+    if isinstance(pid, int) and pid > 0:
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=5,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
+        else:
+            killpg = getattr(os, "killpg", None)
+            if killpg is not None:
+                try:
+                    killpg(pid, signal.SIGKILL)
+                except (OSError, ProcessLookupError):
+                    pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        await proc.wait()
+    except Exception:
+        pass
+
+
+def _grant_task_tree_to_claude(path: Path) -> None:
+    """Keep the current-user local runtime able to write its managed tree."""
+    path.mkdir(parents=True, exist_ok=True)
 
 
 def _lock_input_tree(path: Path) -> None:
-    """Make downloaded task inputs readable but not writable by Claude."""
+    """Best-effort read-only mode for inputs on platforms that support it."""
     for item in (path, *path.rglob("*")):
         try:
-            os.chmod(item, 0o555 if item.is_dir() else 0o444)
+            if os.name != "nt":
+                os.chmod(item, 0o555 if item.is_dir() else 0o444)
         except (FileNotFoundError, PermissionError, OSError):
-            # The download directory is controlled by the Worker. If a host
-            # filesystem refuses a mode change, the container/user boundary
-            # still applies and the runtime will fail closed on write attempts.
+            # This mode change is not an OS security boundary. Application
+            # collectors still validate the output tree independently.
             pass
 
 
@@ -93,6 +174,33 @@ def _claude_child_environment() -> dict[str, str]:
         if value:
             environment[key] = value
     return environment
+
+
+def _claude_permission_args() -> list[str]:
+    """Return explicit Claude tool/permission settings for local execution.
+
+    The old runtime bypassed every Claude permission check.  The local runtime
+    now uses Claude's normal permission machinery, with a small explicit tool
+    set.  Bash remains opt-in through the default ``Bash(*)`` allow-list
+    because scientific tasks must run their generated scripts; this is still
+    trusted current-user execution, not a filesystem security boundary.
+    """
+
+    mode = os.getenv("CLAUDE_PERMISSION_MODE", "acceptEdits").strip() or "acceptEdits"
+    if mode == "bypassPermissions" and os.getenv("CLAUDE_ALLOW_BYPASS_PERMISSIONS") != "1":
+        mode = "acceptEdits"
+    if mode not in {"acceptEdits", "auto", "manual", "dontAsk", "plan"}:
+        mode = "acceptEdits"
+    raw_tools = os.getenv("CLAUDE_ALLOWED_TOOLS", "Read,Write,Edit,Glob,Grep,Bash(*)")
+    allowed = [item.strip() for item in re.split(r"[,\n]+", raw_tools) if item.strip()]
+    if not allowed:
+        allowed = ["Read", "Write", "Edit", "Glob", "Grep"]
+    tool_names = []
+    for item in allowed:
+        name = item.split("(", 1)[0].strip()
+        if name and name not in tool_names:
+            tool_names.append(name)
+    return ["--permission-mode", mode, "--tools", *tool_names, "--allowed-tools", *allowed]
 
 
 def _goal_driven_prompt(
@@ -205,19 +313,32 @@ async def run_claude_task(
     attempt_gateway_token: Optional[str] = None,
     attempt_model_id: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
-    """Run one frozen task with the Claude Code CLI in this Worker container."""
-    input_dir = Path(case_dir or f"/tmp/task-workdirs/{task_id}/input").resolve()
-    out_dir = Path(output_dir or f"/tmp/task-outputs/{task_id}").resolve()
-    attempt_root = input_dir.parent
-    spec_dir = attempt_root / "spec"
-    agent_work_dir = attempt_root / "work"
-    logs_dir = attempt_root / "logs"
-    input_dir.mkdir(parents=True, exist_ok=True)
-    spec_dir.mkdir(parents=True, exist_ok=True)
+    """Run one frozen task in the fixed application-managed attempt workspace."""
+    if not case_dir or not output_dir:
+        yield _workspace_error("Worker attempt paths are required")
+        return
+    work_root = os.getenv("WORKER_WORK_ROOT", "").strip()
+    if not work_root:
+        yield _workspace_error("WORKER_WORK_ROOT is not configured")
+        return
+    try:
+        workspace = prepare_attempt_workspace(work_root, case_dir, output_dir)
+    except WorkerRuntimeUnavailableError as exc:
+        logger.error("Refusing task %s because the local runtime is unavailable: %s", task_id, exc)
+        yield _workspace_error("The configured Claude Code runtime is unavailable", "runtime_unavailable")
+        return
+    except Exception as exc:
+        logger.error("Refusing task %s because its attempt boundary is invalid: %s", task_id, exc)
+        yield _workspace_error("The Worker attempt directory is invalid; execution was refused")
+        return
+
+    input_dir = workspace.input_dir
+    out_dir = workspace.output_dir
+    attempt_root = workspace.attempt_root
+    spec_dir = workspace.spec_dir
+    agent_work_dir = workspace.work_dir
+    logs_dir = workspace.logs_dir
     (spec_dir / "method_sources").mkdir(parents=True, exist_ok=True)
-    agent_work_dir.mkdir(parents=True, exist_ok=True)
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    out_dir.mkdir(parents=True, exist_ok=True)
     effective_goal = (goal or "").strip()
     task_spec = {
         "task_id": task_id,
@@ -249,12 +370,23 @@ async def run_claude_task(
     # out of the Claude process environment. The provider settings are the
     # only credentials intentionally exposed to the non-root CLI.
     runtime_env = _claude_child_environment()
-    claude_uid, claude_gid, claude_home, claude_user = _runtime_identity()
-    runtime_env["HOME"] = claude_home
-    runtime_env["USER"] = claude_user
-    runtime_env["LOGNAME"] = claude_user
-    runtime_env.setdefault("XDG_CONFIG_HOME", f"{claude_home}/.config")
-    runtime_env.setdefault("XDG_CACHE_HOME", f"{claude_home}/.cache")
+    # The CLI gets an attempt-local home/cache/temp directory and no Worker or
+    # database credentials. These settings constrain the normal application
+    # flow but do not restrict arbitrary child processes at the OS level.
+    runtime_user = os.getenv("USER", "").strip() or os.getenv("USERNAME", "").strip() or "local-worker"
+    runtime_env["HOME"] = str(workspace.home_dir)
+    runtime_env["USER"] = runtime_user
+    runtime_env["LOGNAME"] = runtime_user
+    runtime_env["TMPDIR"] = str(workspace.tmp_dir)
+    runtime_env["XDG_CONFIG_HOME"] = str(workspace.home_dir / ".config")
+    runtime_env["XDG_CACHE_HOME"] = str(workspace.home_dir / ".cache")
+    runtime_env["PATH"] = os.pathsep.join(
+        (
+            str(workspace.claude_path.parent),
+            str(Path(sys.executable).resolve().parent),
+            os.environ.get("PATH", ""),
+        )
+    )
     # A legacy Attempt gateway may override the provider values. In the D1
     # Worker v2 path the provider values come from the explicit Worker env;
     # Worker control-plane and Relay credentials never enter Claude's env.
@@ -281,10 +413,10 @@ async def run_claude_task(
     runtime_env.update({key: str(value).strip() for key, value in attempt_env.items() if str(value).strip()})
 
     cmd = [
-        "claude",
+        str(workspace.claude_path),
         "--print",
         "--no-session-persistence",
-        "--dangerously-skip-permissions",
+        *_claude_permission_args(),
         f"--add-dir={attempt_root}",
         f"--add-dir={input_dir}",
         prompt,
@@ -292,21 +424,29 @@ async def run_claude_task(
     logger.info("Starting direct Claude Code task %s", task_id)
 
     try:
+        try:
+            launch_cmd = validate_claude_command(workspace, cmd)
+        except SecurityBoundaryError as exc:
+            yield _workspace_error(str(exc))
+            return
+        spawn_kwargs: dict[str, Any] = {
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.STDOUT,
+            "env": runtime_env,
+            "cwd": str(workspace.cwd),
+        }
+        if os.name == "nt":
+            spawn_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            # A dedicated process group lets cancellation stop the normal
+            # Claude descendant tree on POSIX. Windows uses taskkill /T.
+            spawn_kwargs["start_new_session"] = True
         proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=runtime_env,
-            cwd=str(agent_work_dir),
-            user=claude_uid,
-            group=claude_gid,
+            *launch_cmd,
+            **spawn_kwargs,
         )
     except FileNotFoundError:
-        yield {
-            "type": "error",
-            "message": "Claude Code CLI not found in the Worker image",
-            "failure_code": "runtime_unavailable",
-        }
+        yield _workspace_error("Claude Code CLI not found in the local Worker runtime", "runtime_unavailable")
         return
     except Exception as exc:
         yield {
@@ -326,18 +466,7 @@ async def run_claude_task(
         while True:
             if cancel_event and cancel_event.is_set():
                 logger.info("Cancellation requested for task %s", task_id)
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=30)
-                except asyncio.TimeoutError:
-                    try:
-                        proc.kill()
-                        await proc.wait()
-                    except Exception:
-                        pass
+                await _terminate_process_tree(proc)
                 yield {
                     "type": "cancelled",
                     "message": "Task cancelled by user",
@@ -347,18 +476,7 @@ async def run_claude_task(
 
             if deadline is not None and asyncio.get_running_loop().time() >= deadline:
                 logger.warning("Claude Code task %s exceeded its execution timeout", task_id)
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=30)
-                except asyncio.TimeoutError:
-                    try:
-                        proc.kill()
-                        await proc.wait()
-                    except Exception:
-                        pass
+                await _terminate_process_tree(proc)
                 yield {
                     "type": "error",
                     "message": "Claude Code task execution timed out",
@@ -377,11 +495,7 @@ async def run_claude_task(
             yield {"type": "chunk", "content": text}
         await proc.wait()
     except asyncio.CancelledError:
-        try:
-            proc.kill()
-            await proc.wait()
-        except Exception:
-            pass
+        await _terminate_process_tree(proc, grace_seconds=5.0)
         yield {"type": "error", "message": "Task cancelled", "failure_code": "cancelled"}
         return
     except Exception as exc:
@@ -389,11 +503,7 @@ async def run_claude_task(
         return
     finally:
         if proc.returncode is None:
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
+            await _terminate_process_tree(proc, grace_seconds=5.0)
 
     marker = _failure_marker(logs_dir)
     if marker:

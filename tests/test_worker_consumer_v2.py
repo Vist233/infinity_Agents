@@ -8,13 +8,12 @@ from backend.code_agent.worker.control_plane import ControlPlaneError
 
 
 @pytest.mark.asyncio
-async def test_worker_keeps_polling_when_relay_hints_are_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_worker_keeps_polling_without_a_relay(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     required = {
         "WORKER_CONTROL_PLANE_URL": "https://infinity.test",
-        "WORKER_RELAY_URL": "https://relay.test",
         "WORKER_CREDENTIAL": "credential-value-123456",
         "WORKER_INSTANCE_ID": "instance-test",
-        "WORKER_RELAY_HINT_TOKEN": "hint-token-123456",
+        "WORKER_WORK_ROOT": str(tmp_path / "worker-root"),
     }
     for name, value in required.items():
         monkeypatch.setenv(name, value)
@@ -38,19 +37,7 @@ async def test_worker_keeps_polling_when_relay_hints_are_unavailable(monkeypatch
         async def close(self) -> None:
             return None
 
-    class FailingRelay:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
-
-        async def read(self, limit: int = 20) -> list[dict[str, object]]:
-            del limit
-            raise RuntimeError("relay unavailable")
-
-        async def close(self) -> None:
-            return None
-
     monkeypatch.setattr(consumer_v2, "WorkerV2Client", FakeClient)
-    monkeypatch.setattr(consumer_v2, "RedisHintClient", FailingRelay)
 
     with pytest.raises(ControlPlaneError, match="stop after fallback poll"):
         await consumer_v2.run_worker("test-worker")
@@ -59,13 +46,14 @@ async def test_worker_keeps_polling_when_relay_hints_are_unavailable(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_worker_reconnects_after_transient_control_plane_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_worker_reconnects_after_transient_control_plane_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     required = {
         "WORKER_CONTROL_PLANE_URL": "https://infinity.test",
-        "WORKER_RELAY_URL": "https://relay.test",
         "WORKER_CREDENTIAL": "credential-value-123456",
         "WORKER_INSTANCE_ID": "instance-test",
-        "WORKER_RELAY_HINT_TOKEN": "hint-token-123456",
+        "WORKER_WORK_ROOT": str(tmp_path / "worker-root"),
         "WORKER_RETRY_DELAY_SECONDS": "0",
     }
     for name, value in required.items():
@@ -99,19 +87,7 @@ async def test_worker_reconnects_after_transient_control_plane_failure(monkeypat
         async def close(self) -> None:
             return None
 
-    class HealthyRelay:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
-
-        async def read(self, limit: int = 20) -> list[dict[str, object]]:
-            del limit
-            return []
-
-        async def close(self) -> None:
-            return None
-
     monkeypatch.setattr(consumer_v2, "WorkerV2Client", FakeClient)
-    monkeypatch.setattr(consumer_v2, "RedisHintClient", HealthyRelay)
 
     with pytest.raises(ControlPlaneError, match="stop after reconnect"):
         await consumer_v2.run_worker("test-worker")

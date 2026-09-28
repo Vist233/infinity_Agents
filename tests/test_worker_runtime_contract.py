@@ -20,18 +20,24 @@ def test_only_unified_worker_runtime_and_image_are_production_entries():
         assert not removed.exists(), f"legacy production entry remains: {removed}"
 
 
-def test_infra_compose_is_lightweight():
-    # L5: docker-compose.infra.yml only contains PG + Redis.
-    compose = (ROOT / "docker-compose.infra.yml").read_text(encoding="utf-8")
-    assert "postgres" in compose
-    assert "redis" in compose
-    # No Worker, API, or frontend in infra compose.
-    assert "Dockerfile.worker" not in compose
-    assert "Dockerfile.api" not in compose
-    assert "node:" not in compose
+def test_local_startup_is_native_postgres_only():
+    assert not (ROOT / "docker-compose.infra.yml").exists()
+    start = (ROOT / "scripts" / "start-local.sh").read_text(encoding="utf-8")
+    env = (ROOT / ".env.local.example").read_text(encoding="utf-8")
+    assert "pg_isready" in start
+    assert "docker" not in start.lower()
+    assert "redis" not in start.lower()
+    assert "API_PROXY_TARGET" in start
+    assert "http://${API_HOST}:${API_PORT}" in start
+    assert "REDIS_URL" not in env
+
+    next_config = (ROOT / "frontend" / "next.config.ts").read_text(encoding="utf-8")
+    assert "http://localhost:8008" in next_config
 
 
 def test_worker_runtime_does_not_construct_a_child_docker_command():
     source = (ROOT / "backend" / "code_agent" / "worker" / "claude_runtime.py").read_text(encoding="utf-8")
     assert '"docker"' not in source
     assert "docker run" not in source
+    assert "dangerously-skip-permissions" not in source
+    assert "validate_claude_command" in source

@@ -11,12 +11,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shutil
 from pathlib import Path
 from typing import Any, Mapping
 
 from backend.code_agent.worker.claude_runtime import run_claude_task
 from backend.code_agent.worker.control_plane import ClaimedTask, ControlPlaneError, WorkerV2Client
+from backend.code_agent.worker.attempt_workspace import (
+    create_attempt_root,
+    ensure_work_root,
+    safe_remove_attempt,
+)
 from backend.security import ArtifactCollector, SecurityBoundaryError
 
 logger = logging.getLogger(__name__)
@@ -34,7 +38,10 @@ def _safe_name(value: Any, fallback: str) -> str:
 
 
 def _workspace_root() -> Path:
-    return Path(os.getenv("WORKER_WORK_ROOT", "/workspace/task-workdirs")).resolve()
+    configured = os.getenv("WORKER_WORK_ROOT", "").strip()
+    if not configured:
+        raise SecurityBoundaryError("WORKER_WORK_ROOT is required; refusing unisolated execution")
+    return ensure_work_root(configured)
 
 
 def _timeout_seconds() -> float:
@@ -152,9 +159,8 @@ async def _upload_result(
 
 
 async def execute_claim(client: WorkerV2Client, claim: ClaimedTask) -> dict[str, Any]:
-    root = (_workspace_root() / claim.task_id / claim.attempt_id).resolve()
-    if not root.is_relative_to(_workspace_root()):
-        raise SecurityBoundaryError("Worker task path escaped the configured workspace")
+    work_root = _workspace_root()
+    root = create_attempt_root(work_root, claim.task_id, claim.attempt_id)
     input_dir = root / "input"
     output_dir = root / "output"
     archive = root / "result.zip"
@@ -240,4 +246,10 @@ async def execute_claim(client: WorkerV2Client, claim: ClaimedTask) -> dict[str,
             await renew_task
         except asyncio.CancelledError:
             pass
-        shutil.rmtree(root, ignore_errors=True)
+        try:
+            safe_remove_attempt(work_root, root)
+        except SecurityBoundaryError as exc:
+            # Never broaden cleanup to recover from an invalid path. Leaving
+            # an attempt behind is safer than risking deletion outside the
+            # fixed Worker root and is surfaced for operator cleanup.
+            logger.error("Refusing unsafe attempt cleanup for %s: %s", claim.attempt_id, exc)

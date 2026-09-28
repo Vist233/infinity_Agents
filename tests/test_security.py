@@ -48,13 +48,14 @@ class TestUploadSizeLimit:
 
 
 class TestWorkerImageSecurity:
-    def test_claude_runtime_uses_non_root_identity(self):
+    def test_claude_runtime_uses_application_workspace_permissions(self):
         from backend.code_agent.worker.claude_runtime import run_claude_task
         import inspect
 
         source = inspect.getsource(run_claude_task)
-        assert "CLAUDE_RUNTIME_UID" in source or "_runtime_identity" in source
-        assert '"claude"' in source
+        assert "validate_claude_command" in source
+        assert "dangerously-skip-permissions" not in source
+        assert "cwd" in source
 
     def test_worker_image_has_no_docker_runtime_or_socket(self):
         from pathlib import Path
