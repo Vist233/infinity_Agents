@@ -745,6 +745,129 @@ def create_worker_v2_app(database_url: str, object_root: str, redis_url: str | N
     return app
 
 
+def register_worker_v2_routes(app: FastAPI) -> None:
+    """Register Worker v2 routes on an already-running local FastAPI app.
+
+    The standalone ``create_worker_v2_app`` remains useful for a dedicated
+    process, while the one-click local stack mounts the exact same handlers on
+    the primary API port and shares its PostgreSQL pool/object store.
+    """
+    def api(request: Request) -> WorkerV2Api:
+        return request.app.state.worker_v2
+
+    def parse_task_id(value: str) -> uuid.UUID | None:
+        try:
+            return uuid.UUID(value)
+        except ValueError:
+            return None
+
+    def parse_upload_id(value: str) -> uuid.UUID | None:
+        try:
+            return uuid.UUID(value)
+        except ValueError:
+            return None
+
+    @app.post("/api/worker/v2/connect")
+    async def _worker_v2_connect(request: Request):
+        return await api(request).connect(request)
+
+    @app.post("/api/worker/v2/heartbeat")
+    async def _worker_v2_heartbeat(request: Request):
+        auth = await api(request).authenticate_session(request)
+        if isinstance(auth, JSONResponse):
+            return auth
+        return await api(request).heartbeat(auth, request)
+
+    @app.post("/api/worker/v2/poll")
+    async def _worker_v2_poll(request: Request):
+        auth = await api(request).authenticate_session(request)
+        if isinstance(auth, JSONResponse):
+            return auth
+        return await api(request).poll(auth, request)
+
+    @app.post("/api/worker/v2/tasks/{task_id}/accept")
+    async def _worker_v2_accept(task_id: str, request: Request):
+        auth = await api(request).authenticate_session(request)
+        if isinstance(auth, JSONResponse):
+            return auth
+        parsed = parse_task_id(task_id)
+        if parsed is None:
+            return error_json("Invalid task ID", 400, "INVALID_TASK_ID")
+        return await api(request).accept(auth, parsed, request)
+
+    @app.post("/api/worker/v2/tasks/{task_id}/renew")
+    async def _worker_v2_renew(task_id: str, request: Request):
+        auth = await api(request).authenticate_session(request)
+        if isinstance(auth, JSONResponse):
+            return auth
+        parsed = parse_task_id(task_id)
+        if parsed is None:
+            return error_json("Invalid task ID", 400, "INVALID_TASK_ID")
+        return await api(request).renew(auth, parsed, request)
+
+    @app.get("/api/worker/v2/tasks/{task_id}/spec")
+    async def _worker_v2_spec(task_id: str, request: Request):
+        auth = await api(request).authenticate_session(request)
+        if isinstance(auth, JSONResponse):
+            return auth
+        parsed = parse_task_id(task_id)
+        if parsed is None:
+            return error_json("Invalid task ID", 400, "INVALID_TASK_ID")
+        return await api(request).spec(auth, parsed, request)
+
+    @app.get("/api/worker/v2/tasks/{task_id}/inputs/{kind}")
+    async def _worker_v2_input(task_id: str, kind: str, request: Request):
+        auth = await api(request).authenticate_session(request)
+        if isinstance(auth, JSONResponse):
+            return auth
+        parsed = parse_task_id(task_id)
+        if parsed is None or kind not in {"method", "dataset"}:
+            return error_json("Unknown task input", 404, "TASK_INPUT_NOT_FOUND")
+        return await api(request).input_stream(auth, parsed, kind, request)
+
+    @app.post("/api/worker/v2/tasks/{task_id}/artifacts/start")
+    async def _worker_v2_start_artifact(task_id: str, request: Request):
+        auth = await api(request).authenticate_session(request)
+        if isinstance(auth, JSONResponse):
+            return auth
+        parsed = parse_task_id(task_id)
+        if parsed is None:
+            return error_json("Invalid task ID", 400, "INVALID_TASK_ID")
+        return await api(request).start_artifact(auth, parsed, request)
+
+    @app.post("/api/worker/v2/tasks/{task_id}/{target}")
+    async def _worker_v2_finish(task_id: str, target: str, request: Request):
+        if target not in {"fail", "cancelled"}:
+            return error_json("Not found", 404, "NOT_FOUND")
+        auth = await api(request).authenticate_session(request)
+        if isinstance(auth, JSONResponse):
+            return auth
+        parsed = parse_task_id(task_id)
+        if parsed is None:
+            return error_json("Invalid task ID", 400, "INVALID_TASK_ID")
+        return await api(request).finish_task(auth, parsed, request, "cancelled" if target == "cancelled" else "failed")
+
+    @app.put("/api/worker/v2/artifacts/{upload_id}/parts/{part_number}")
+    async def _worker_v2_artifact_part(upload_id: str, part_number: str, request: Request):
+        auth = await api(request).authenticate_session(request)
+        if isinstance(auth, JSONResponse):
+            return auth
+        parsed = parse_upload_id(upload_id)
+        if parsed is None or not part_number.isdigit():
+            return error_json("Invalid artifact part number", 400, "INVALID_ARTIFACT_PART")
+        return await api(request).artifact_part(auth, parsed, int(part_number), request)
+
+    @app.post("/api/worker/v2/artifacts/{upload_id}/complete")
+    async def _worker_v2_complete_artifact(upload_id: str, request: Request):
+        auth = await api(request).authenticate_session(request)
+        if isinstance(auth, JSONResponse):
+            return auth
+        parsed = parse_upload_id(upload_id)
+        if parsed is None:
+            return error_json("Artifact upload not found", 404, "ARTIFACT_UPLOAD_NOT_FOUND")
+        return await api(request).complete_artifact(auth, parsed, request)
+
+
 def main() -> None:
     import uvicorn
 
@@ -763,4 +886,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

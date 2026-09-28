@@ -1,6 +1,3 @@
-// Local shared-user authentication.
-// On the pure-local main branch every request is treated as the same shared
-// user.  There is no login flow, no session cookie, and no OIDC dance.
 export interface CurrentUser {
   id: string;
   email: string | null;
@@ -12,6 +9,17 @@ const SHARED_USER: CurrentUser = {
   email: null,
   name: "Local Admin",
 };
+
+export const AUTH_REQUEST_TIMEOUT_MS = 10_000;
+export class AuthRequestTimeoutError extends Error {
+  constructor() {
+    super("Authentication request timed out");
+    this.name = "AuthRequestTimeoutError";
+  }
+}
+export function isAuthRequestTimeoutError(error: unknown): error is AuthRequestTimeoutError {
+  return error instanceof AuthRequestTimeoutError;
+}
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
   return SHARED_USER;

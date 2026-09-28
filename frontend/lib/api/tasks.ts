@@ -15,6 +15,8 @@ export type TaskStatus =
 /** Hard per-file input cap shared by direct Task Center and Agent confirmation. */
 export const MAX_TASK_INPUT_BYTES = 25 * 1024 * 1024;
 
+export type TaskRetryReason = "within_limit" | "max_attempt_override" | "lease_expired_recovery";
+
 export interface TaskItem {
   task_id: string;
   task_spec_id: string;
@@ -25,6 +27,8 @@ export interface TaskItem {
   status: TaskStatus;
   attempt_count: number;
   max_attempts: number;
+  can_retry?: boolean;
+  retry_reason?: TaskRetryReason | null;
   error_message?: string | null;
   created_at: string;
 }
@@ -170,9 +174,59 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/** Bound non-critical task-detail requests so one stalled endpoint cannot hold the page hostage. */
+export const TASK_DETAIL_AUX_TIMEOUT_MS = 8_000;
+export const TASK_ACTION_TIMEOUT_MS = 15_000;
+
+export class TaskRequestTimeoutError extends Error {
+  constructor(message = "Task detail auxiliary request timed out") {
+    super(message);
+    this.name = "TaskRequestTimeoutError";
+  }
+}
+
+export function isTaskRequestTimeoutError(error: unknown): error is TaskRequestTimeoutError {
+  return error instanceof Error && error.name === "TaskRequestTimeoutError";
+}
+
+async function requestJsonWithTimeout<T>(
+  input: string,
+  timeoutMs: number,
+  init: RequestInit = {},
+  timeoutError = new TaskRequestTimeoutError(),
+): Promise<T> {
+  const controller = new AbortController();
+  let timedOut = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(timeoutError);
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([
+      requestJson<T>(input, { ...init, signal: controller.signal }),
+      timeout,
+    ]).catch((error) => {
+      if (timedOut) throw timeoutError;
+      throw error;
+    });
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
 /** Generic authenticated GET against the Task API. */
 export function getJson<T>(url: string): Promise<T> {
   return requestJson<T>(url);
+}
+
+/** Authenticated GET for non-critical task-detail panels. */
+export function getJsonWithTimeout<T>(url: string, timeoutMs = TASK_DETAIL_AUX_TIMEOUT_MS): Promise<T> {
+  return requestJsonWithTimeout<T>(url, timeoutMs);
 }
 
 export async function getDefaultProject(): Promise<ProjectInfo> {
@@ -369,8 +423,22 @@ export async function listTasks(limit = 50): Promise<TaskItem[]> {
   return data.tasks || [];
 }
 
+export function listTasksWithTimeout(limit = 50, timeoutMs = TASK_DETAIL_AUX_TIMEOUT_MS): Promise<TaskItem[]> {
+  return requestJsonWithTimeout<{ tasks: TaskItem[] }>(`${getApiBase()}/api/tasks?limit=${limit}`, timeoutMs)
+    .then((data) => data.tasks || []);
+}
+
 export async function cancelTask(taskId: string): Promise<{ status: string }> {
   return requestJson(`${getApiBase()}/api/tasks/${taskId}/cancel`, { method: "POST" });
+}
+
+export async function retryTask(taskId: string): Promise<{ task_id: string; status: string; attempt_count: number; duplicate?: boolean }> {
+  return requestJsonWithTimeout(
+    `${getApiBase()}/api/tasks/${encodeURIComponent(taskId)}/retry`,
+    TASK_ACTION_TIMEOUT_MS,
+    { method: "POST" },
+    new TaskRequestTimeoutError("Task retry request timed out"),
+  );
 }
 
 export function artifactDownloadUrl(artifactId: string): string {

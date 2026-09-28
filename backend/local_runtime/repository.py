@@ -239,6 +239,7 @@ class LocalRuntimeRepository:
             FROM infinity_runtime.tasks t
             WHERE t.status = 'queued' AND t.execution_pool_id = $1
               AND t.cancel_requested_at IS NULL
+              AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= NOW())
               AND EXISTS (
                 SELECT 1 FROM infinity_runtime.worker_sessions s
                 WHERE s.session_id = $2 AND s.worker_id = $3
@@ -275,7 +276,12 @@ class LocalRuntimeRepository:
                 )
                 if not task:
                     raise RuntimeNotFound("TASK_NOT_FOUND")
-                if task["status"] != "queued" or task["execution_pool_id"] != session.pool_id or task["cancel_requested_at"]:
+                if (
+                    task["status"] != "queued"
+                    or task["execution_pool_id"] != session.pool_id
+                    or task["cancel_requested_at"]
+                    or (task["next_attempt_at"] is not None and task["next_attempt_at"] > await connection.fetchval("SELECT NOW()"))
+                ):
                     raise RuntimeConflict("TASK_NOT_AVAILABLE")
                 attempt_id = uuid.uuid4()
                 lease_token = f"lease_{secrets.token_urlsafe(32)}"
@@ -303,6 +309,7 @@ class LocalRuntimeRepository:
                         lease_expires_at = $6, updated_at = $7
                     WHERE task_id = $1 AND status = 'queued' AND lease_epoch = $8
                       AND execution_pool_id = $9 AND cancel_requested_at IS NULL
+                      AND (next_attempt_at IS NULL OR next_attempt_at <= $13)
                       AND EXISTS (
                         SELECT 1 FROM infinity_runtime.worker_sessions s
                         WHERE s.session_id = $10 AND s.worker_id = $3
@@ -313,6 +320,7 @@ class LocalRuntimeRepository:
                     task_id, attempt_id, session.worker_id, fencing_epoch, lease_hash,
                     lease_expires_at, database_now, task["lease_epoch"], session.pool_id,
                     session.session_id, session.session_epoch, session.instance_id,
+                    database_now,
                 )
                 if result != "UPDATE 1":
                     raise RuntimeConflict("TASK_CLAIM_CONFLICT")
@@ -393,3 +401,136 @@ class LocalRuntimeRepository:
             task_id,
             user_id,
         )
+
+    async def retry_task_for_user(self, task_id: uuid.UUID, user_id: str) -> asyncpg.Record:
+        """Queue one safe retry, including the single max-attempt override."""
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                task = await connection.fetchrow(
+                    "SELECT * FROM infinity_runtime.tasks WHERE task_id = $1 AND created_by = $2 FOR UPDATE",
+                    task_id,
+                    user_id,
+                )
+                if not task:
+                    raise RuntimeNotFound("TASK_NOT_FOUND")
+                if task["status"] not in {"failed", "timeout"}:
+                    raise RuntimeConflict("TASK_NOT_RETRYABLE")
+                attempt_count = int(task["attempt_count"])
+                override_used = bool(task["retry_override_used"])
+                if attempt_count >= int(task["max_attempts"]) and override_used:
+                    raise RuntimeConflict("TASK_RETRY_LIMIT_REACHED")
+                reason = "within_limit" if attempt_count < int(task["max_attempts"]) else "max_attempt_override"
+                now = await connection.fetchval("SELECT NOW()")
+                await connection.execute(
+                    """
+                    UPDATE infinity_runtime.tasks
+                    SET status = 'queued', next_attempt_at = $2,
+                        retry_override_used = retry_override_used OR $3,
+                        retry_reason = $4, retry_requested_at = $2,
+                        active_attempt_id = NULL, lease_worker_id = NULL,
+                        lease_token_hash = NULL, lease_expires_at = NULL,
+                        cancel_requested_at = NULL, error_code = NULL,
+                        error_detail = NULL, finished_at = NULL, updated_at = $2
+                    WHERE task_id = $1 AND status IN ('failed', 'timeout')
+                    """,
+                    task_id, now, reason == "max_attempt_override", reason,
+                )
+                payload = json.dumps({"task_id": str(task_id), "status": "queued", "reason": reason})
+                await connection.execute(
+                    """
+                    INSERT INTO infinity_runtime.task_events
+                        (task_event_id, task_id, event_type, event_data, idempotency_key)
+                    VALUES ($1, $2, 'task_retried', $3::jsonb, $4)
+                    ON CONFLICT (idempotency_key) DO NOTHING
+                    """,
+                    uuid.uuid4(), task_id, payload,
+                    f"task-retry:{task_id}:{attempt_count + 1}",
+                )
+                await connection.execute(
+                    """
+                    INSERT INTO infinity_runtime.outbox_events
+                        (event_id, idempotency_key, aggregate_id, event_type, payload_json)
+                    VALUES ($1, $2, $3, 'task_queued', $4::jsonb)
+                    ON CONFLICT (idempotency_key) DO NOTHING
+                    """,
+                    uuid.uuid4(), f"task-retry:{task_id}:{attempt_count + 1}", task_id, payload,
+                )
+                return await connection.fetchrow(
+                    "SELECT * FROM infinity_runtime.tasks WHERE task_id = $1",
+                    task_id,
+                )
+
+    async def recover_expired_leases(self, *, limit: int = 100) -> int:
+        """Fence expired attempts and return eligible tasks to the queue."""
+        recovered = 0
+        async with self.pool.acquire() as connection:
+            async with connection.transaction():
+                rows = await connection.fetch(
+                    """
+                    SELECT * FROM infinity_runtime.tasks
+                    WHERE status IN ('claimed', 'running')
+                      AND lease_expires_at IS NOT NULL AND lease_expires_at <= NOW()
+                    ORDER BY lease_expires_at, task_id
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT $1
+                    """,
+                    max(1, min(int(limit), 500)),
+                )
+                for task in rows:
+                    now = await connection.fetchval("SELECT NOW()")
+                    attempt_status = await connection.execute(
+                        """
+                        UPDATE infinity_runtime.task_attempts
+                        SET status = 'lost', failure_code = 'LEASE_EXPIRED',
+                            failure_detail = 'Worker lease expired', finished_at = $2, updated_at = $2
+                        WHERE attempt_id = $1 AND status IN ('claimed', 'running')
+                        """,
+                        task["active_attempt_id"], now,
+                    )
+                    if attempt_status != "UPDATE 1":
+                        continue
+                    count = int(task["attempt_count"])
+                    max_attempts = int(task["max_attempts"])
+                    override_used = bool(task["retry_override_used"])
+                    if count < max_attempts:
+                        status, reason = "queued", "lease_expired_recovery"
+                    elif not override_used:
+                        status, reason = "queued", "max_attempt_override"
+                    else:
+                        status, reason = "failed", "retry_limit_reached"
+                    await connection.execute(
+                        """
+                        UPDATE infinity_runtime.tasks
+                        SET status = $2, next_attempt_at = CASE WHEN $2 = 'queued' THEN $3 ELSE NULL END,
+                            retry_override_used = retry_override_used OR ($4 = 'max_attempt_override'),
+                            retry_reason = $4, active_attempt_id = NULL,
+                            lease_worker_id = NULL, lease_token_hash = NULL,
+                            lease_expires_at = NULL, error_code = CASE WHEN $2 = 'failed' THEN 'LEASE_EXPIRED' ELSE NULL END,
+                            error_detail = CASE WHEN $2 = 'failed' THEN 'Worker lease expired after retry budget was exhausted' ELSE NULL END,
+                            finished_at = CASE WHEN $2 = 'failed' THEN $3 ELSE NULL END, updated_at = $3
+                        WHERE task_id = $1
+                        """,
+                        task["task_id"], status, now, reason,
+                    )
+                    payload = json.dumps({"task_id": str(task["task_id"]), "status": status, "reason": reason})
+                    key = f"task-recovery:{task['task_id']}:{count}:{reason}"
+                    await connection.execute(
+                        """
+                        INSERT INTO infinity_runtime.task_events
+                            (task_event_id, task_id, attempt_id, event_type, event_data, idempotency_key)
+                        VALUES ($1, $2, $3, 'task_lease_recovered', $4::jsonb, $5)
+                        ON CONFLICT (idempotency_key) DO NOTHING
+                        """,
+                        uuid.uuid4(), task["task_id"], task["active_attempt_id"], payload, key,
+                    )
+                    await connection.execute(
+                        """
+                        INSERT INTO infinity_runtime.outbox_events
+                            (event_id, idempotency_key, aggregate_id, event_type, payload_json)
+                        VALUES ($1, $2, $3, 'task_queued', $4::jsonb)
+                        ON CONFLICT (idempotency_key) DO NOTHING
+                        """,
+                        uuid.uuid4(), key, task["task_id"], payload,
+                    )
+                    recovered += 1
+        return recovered

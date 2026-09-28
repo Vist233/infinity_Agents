@@ -84,6 +84,9 @@ class LocalRuntimeApiRepository(LocalRuntimeRepository):
                 return session_result == "UPDATE 1" and worker_result == "UPDATE 1"
 
     async def poll_queued_tasks(self, session: SessionContext, limit: int = 1) -> list[asyncpg.Record]:
+        # PostgreSQL remains authoritative; Redis hints never bypass lease
+        # recovery or the retry backoff gate.
+        await self.recover_expired_leases()
         return await self.pool.fetch(
             """
             SELECT t.task_id, t.task_spec_id, t.title, t.attempt_count, t.max_attempts,
@@ -92,6 +95,7 @@ class LocalRuntimeApiRepository(LocalRuntimeRepository):
             JOIN infinity_runtime.task_specs s ON s.task_spec_id = t.task_spec_id
             WHERE t.status = 'queued' AND t.execution_pool_id = $1
               AND t.cancel_requested_at IS NULL
+              AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= NOW())
               AND EXISTS (
                 SELECT 1 FROM infinity_runtime.worker_sessions s2
                 WHERE s2.session_id = $2 AND s2.worker_id = $3

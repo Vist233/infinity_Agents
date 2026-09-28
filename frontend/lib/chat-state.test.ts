@@ -1,0 +1,125 @@
+import {
+  chatReducer,
+  DEFAULT_RUN_STATE,
+  INITIAL_CHAT_STATE,
+  deriveSessionTitle,
+  getMessagesForSession,
+  getPaperTasksForSession,
+  getToolTimelineForSession,
+  isDefaultSessionTitle,
+} from "@/lib/chat-state";
+import { describe, expect, it } from "vitest";
+import type { PaperTaskCandidate } from "@/lib/paper-task";
+
+describe("chatReducer", () => {
+  it("sets input text", () => {
+    const state = chatReducer(INITIAL_CHAT_STATE, { type: "set_input", input: "hello" });
+    expect(state.input).toBe("hello");
+  });
+
+  it("upserts session to top", () => {
+    const next = chatReducer(INITIAL_CHAT_STATE, {
+      type: "upsert_session",
+      toTop: true,
+      session: { session_id: "s1", title: "A", created_at: "", updated_at: "" },
+    });
+    expect(next.sessions[0]?.session_id).toBe("s1");
+  });
+
+  it("updates assistant content in message map", () => {
+    const state1 = chatReducer(INITIAL_CHAT_STATE, {
+      type: "set_session_messages",
+      sessionId: "s1",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    const state2 = chatReducer(state1, {
+      type: "update_session_messages",
+      sessionId: "s1",
+      updater: (prev) => [...prev, { role: "assistant", content: "hello" }],
+    });
+    expect(getMessagesForSession(state2, "s1")).toHaveLength(2);
+    expect(getMessagesForSession(state2, "s1")[1].role).toBe("assistant");
+  });
+
+  it("patches run state with defaults", () => {
+    const state = chatReducer(INITIAL_CHAT_STATE, {
+      type: "patch_session_run_state",
+      sessionId: "s1",
+      patch: { running: true, phase: "thinking" },
+    });
+    expect(state.sessionRunMap.s1.running).toBe(true);
+    expect(state.sessionRunMap.s1.attempt).toBe(DEFAULT_RUN_STATE.attempt);
+  });
+
+  it("removes session related state", () => {
+    const withSession = {
+      ...INITIAL_CHAT_STATE,
+      sessionId: "s1",
+      sessions: [{ session_id: "s1", title: "T", created_at: "", updated_at: "" }],
+      sessionMessagesMap: { s1: [{ role: "user" as const, content: "x" }] },
+      sessionRunMap: { s1: DEFAULT_RUN_STATE },
+      sessionToolTimelineMap: {
+        s1: [{ correlationId: "turn-1", toolCallId: "call-1", toolName: "read_paper", status: "pending" as const, summary: "" }],
+      },
+      sessionLegacyHistoryMap: { s1: false },
+    };
+    const next = chatReducer(withSession, { type: "remove_session", sessionId: "s1" });
+    expect(next.sessions).toHaveLength(0);
+    expect(next.sessionMessagesMap.s1).toBeUndefined();
+    expect(next.sessionRunMap.s1).toBeUndefined();
+    expect(next.sessionToolTimelineMap.s1).toBeUndefined();
+    expect(next.sessionLegacyHistoryMap.s1).toBeUndefined();
+    expect(next.sessionId).toBeNull();
+  });
+
+  it("hydrates and updates a bounded tool timeline", () => {
+    const hydrated = chatReducer(INITIAL_CHAT_STATE, {
+      type: "set_session_tool_timeline",
+      sessionId: "s1",
+      timeline: [{ correlationId: "turn-1", toolCallId: "call-1", toolName: "read_paper", status: "pending", summary: "" }],
+      legacyTextOnly: false,
+    });
+    const updated = chatReducer(hydrated, {
+      type: "update_session_tool_timeline",
+      sessionId: "s1",
+      toolCallId: "call-1",
+      patch: { status: "succeeded", summary: "ready" },
+    });
+    expect(getToolTimelineForSession(updated, "s1")[0]).toMatchObject({ status: "succeeded", summary: "ready" });
+    expect(updated.sessionLegacyHistoryMap.s1).toBe(false);
+  });
+
+  it("keeps server-projected Paper task identities separate from chat prose", () => {
+    const task: PaperTaskCandidate = {
+      resourceId: "resource-1",
+      continuationId: "continuation-1",
+      correlationId: "turn-1",
+      toolCallId: "call-1",
+      materializeStatus: "succeeded",
+      readiness: "unknown",
+    };
+    const projected = chatReducer(INITIAL_CHAT_STATE, {
+      type: "set_session_paper_tasks",
+      sessionId: "s1",
+      tasks: [task],
+    });
+    const replaced = chatReducer(projected, {
+      type: "upsert_session_paper_task",
+      sessionId: "s1",
+      task: { ...task, continuationId: "continuation-2" },
+    });
+    expect(getPaperTasksForSession(replaced, "s1")).toEqual([{ ...task, continuationId: "continuation-2" }]);
+  });
+});
+
+describe("title helpers", () => {
+  it("derives bounded session title", () => {
+    const long = "a".repeat(40);
+    expect(deriveSessionTitle(long)).toHaveLength(35);
+  });
+
+  it("detects default titles", () => {
+    expect(isDefaultSessionTitle("new chat")).toBe(true);
+    expect(isDefaultSessionTitle("custom title")).toBe(false);
+  });
+});

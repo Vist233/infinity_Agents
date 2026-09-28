@@ -11,7 +11,7 @@
 
 | 组件 | 处理 | 纯本地目标 |
 |---|---|---|
-| `frontend/` | keep + port config | 保留 Analysis、Task Center、ImageJudge；同源调用本地 FastAPI；无 Chat Agent |
+| `frontend/` | keep + port config | 保留 Analysis/Chat、Papers、Data Collections、Task Center、ImageJudge；同源调用本地 FastAPI |
 | `agent/` | keep | Analysis 检索、论文阅读和执行文档整理 |
 | `image-judge/apps/desktop/` | keep + port auth/config | 保留本地图像数据生产；删除 Cloudflare 专用登录依赖后使用本地服务配置 |
 | `backend/app.py` | port | 唯一本地 HTTP API；保留 Analysis，新增等价 Worker v2 控制/数据面 |
@@ -33,7 +33,7 @@
 
 1. PostgreSQL 是 Task、Attempt、Worker、Session、Event、Outbox、Artifact 元数据唯一事实源。
 2. Redis 可清空、可停机，不得保存 Method、Dataset、Artifact、用户正文或 Secret。
-3. 浏览器按 `created_by` 隔离；公共 Worker 跨用户领取，不按创建者过滤。
+3. 浏览器按 `created_by`/`user_id` 隔离；公共 Worker 跨用户领取，不按创建者过滤。
 4. 一个持久 credential 对应最多一个 active instance；过期重连创建不可变新 Session。
 5. 所有状态写入都用事务和精确 Session/Attempt/lease/fencing 条件再次校验。
 6. Method 与 Dataset 各 25 MiB；大 Artifact 分片上传，最终校验整体大小、SHA-256、manifest 和 ZIP。
@@ -41,4 +41,4 @@
 
 ## 实施顺序
 
-`L1 PostgreSQL schema/state machine → L2 FastAPI Worker v2 + local object store → L3 Redis Outbox → L4 frontend/auth → L5 one-command Compose → L6 Case 2/negative tests → L7 final review and main publish`。
+`L1 PostgreSQL schema/state machine → L2 FastAPI Worker v2 + local object store → L3 Redis Outbox → L4 frontend/auth → L5 one-command Compose → L6 Paper/Discovery/Chat/Task negative tests → L7 final review and main publish`。

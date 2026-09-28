@@ -69,6 +69,10 @@ from backend.db_rls import (
     set_rls_worker,
     wrap_runtime_pool,
 )
+from backend.local_runtime.object_store import LocalObjectStore
+from backend.local_runtime.api_repository import LocalRuntimeApiRepository
+from backend.local_runtime.worker_api import WorkerV2Api, register_worker_v2_routes
+from backend.local_runtime.product_api import create_product_router
 
 logging.basicConfig(level=logging.INFO)
 
@@ -143,6 +147,20 @@ TOOL_KEEP_RECENT = max(1, _env_int("PAPER_AGENT_TOOL_KEEP_RECENT", 3))
 @asynccontextmanager
 async def lifespan(app):
     await init_db(app)
+    # One local API owns the canonical runtime pool, object store, and Worker
+    # v2 handlers.  A separate 8090 process remains optional for compatibility
+    # but is no longer required by the one-click startup path.
+    app.state.local_runtime_repository = LocalRuntimeApiRepository(app.state.db_pool)
+    object_root = os.getenv(
+        "LOCAL_OBJECT_ROOT",
+        os.getenv("ARTIFACT_STORAGE_ROOT", str(_PROJECT_ROOT / "local-data" / "objects")),
+    )
+    app.state.local_object_store = LocalObjectStore(object_root)
+    app.state.worker_v2 = WorkerV2Api(app.state.local_runtime_repository, app.state.local_object_store)
+    try:
+        await app.state.local_runtime_repository.recover_expired_leases()
+    except Exception as exc:
+        logger.warning("Local runtime lease recovery did not run at startup: %s", exc)
     _cleanup_worker_staging(FilePath(os.getenv("ARTIFACT_DOWNLOAD_ROOT", "/workspace/task-outputs")))
     app.state.worker_gateway_pool = None
     app.state.trust_issuer_pool = None
@@ -260,6 +278,8 @@ async def lifespan(app):
     await close_db(app)
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(create_product_router())
+register_worker_v2_routes(app)
 
 
 # ---------------------------------------------------------------------------
@@ -1484,6 +1504,21 @@ async def create_session(user: Principal = Depends(require_user)):
     try:
         pool = app.state.db_pool
         await insert_session(pool, session_id, user.user_id, storage_mode="sandboxed")
+        try:
+            await pool.execute(
+                """
+                INSERT INTO infinity_runtime.chat_sessions(session_id, user_id, title)
+                VALUES ($1, $2, 'New chat')
+                ON CONFLICT (session_id) DO NOTHING
+                """,
+                uuid.UUID(session_id), user.user_id,
+            )
+        except Exception:
+            # The old compatibility API can still create a session when an
+            # operator has explicitly disabled product migrations. New local
+            # deployments apply 0002 at startup, so this is only a safe
+            # downgrade path for legacy/test databases.
+            logger.warning("Canonical chat session insert was unavailable", exc_info=True)
         await _get_or_create_session_agent(session_id)
     except Exception:
         logging.exception("Failed to create session")
@@ -1855,8 +1890,12 @@ async def chat_ws_endpoint(websocket: WebSocket):
             return
         app.state.session_meta[session_id] = meta
         should_insert_user_message = request.retry_attempt <= 0
+        turn_id = str(request.client_request_id or uuid.uuid4().hex)[:255]
         if should_insert_user_message:
             await insert_message(pool, session_id, "user", user_query)
+            await _record_chat_event(
+                pool, session_id, turn_id, "user_message", "user", content=user_query,
+            )
         session_agent = await _get_or_create_session_agent(session_id)
         prompt, context_info = await _prepare_prompt_with_context_management(
             pool=pool,
@@ -1868,6 +1907,8 @@ async def chat_ws_endpoint(websocket: WebSocket):
         prompt_tokens = int(context_info.get("estimated_prompt_tokens") or 0)
         emitted_tools: set[str] = set()
         persisted_tool_exec_keys: set[str] = set()
+        tool_call_ids: dict[str, str] = {}
+        recorded_tool_call_ids: set[str] = set()
 
         response_text = ""
         did_auto_retry = False
@@ -1941,6 +1982,22 @@ async def chat_ws_endpoint(websocket: WebSocket):
                 for tool_name in _extract_tool_names(chunk):
                     has_tool_call = True
                     last_tool_name = tool_name
+                    tool_call_id = tool_call_ids.setdefault(
+                        tool_name,
+                        _chat_tool_call_id(turn_id, len(tool_call_ids), tool_name),
+                    )
+                    if tool_call_id not in recorded_tool_call_ids:
+                        recorded_tool_call_ids.add(tool_call_id)
+                        await _record_chat_event(
+                            pool,
+                            session_id,
+                            turn_id,
+                            "tool_call",
+                            "assistant",
+                            tool_call_id=tool_call_id,
+                            tool_name=tool_name,
+                            status="started",
+                        )
                     if tool_name not in emitted_tools:
                         emitted_tools.add(tool_name)
                         await websocket.send_json({"type": "tool_call", "tool_name": tool_name})
@@ -1963,6 +2020,24 @@ async def chat_ws_endpoint(websocket: WebSocket):
                         tool_result=_truncate_text(result_text, 50000),
                         tool_result_summary=_summarize_tool_result(result_text, max_chars=500),
                         retrieval_records=retrieval_records,
+                    )
+                    tool_name = str(tool_exec.get("tool_name") or "unknown_tool")
+                    tool_call_id = str(tool_exec.get("tool_call_id") or "").strip()
+                    if not tool_call_id:
+                        tool_call_id = tool_call_ids.setdefault(
+                            tool_name,
+                            _chat_tool_call_id(turn_id, len(tool_call_ids), tool_name),
+                        )
+                    await _record_chat_event(
+                        pool,
+                        session_id,
+                        turn_id,
+                        "tool_result",
+                        "tool",
+                        tool_call_id=tool_call_id,
+                        tool_name=tool_name,
+                        result_summary=_summarize_tool_result(result_text, max_chars=4000),
+                        status="succeeded",
                     )
                     task_draft = await _persist_task_draft_tool_event(
                         pool=pool,
@@ -1998,10 +2073,17 @@ async def chat_ws_endpoint(websocket: WebSocket):
             message = "The model returned no response content."
             if did_auto_retry:
                 message = "The model returned no response within 8 seconds. One retry also produced no usable output."
+            await _record_chat_event(
+                pool, session_id, turn_id, "error", "system", content=message, status="failed",
+            )
             await websocket.send_json({"type": "error", "message": message})
             return
 
         await insert_message(pool, session_id, "assistant", response_text)
+        await _record_chat_event(
+            pool, session_id, turn_id, "assistant_message", "assistant", content=response_text,
+            status="completed",
+        )
         assistant_persisted = True
 
         response_tokens = estimate_tokens(response_text)
@@ -2025,6 +2107,15 @@ async def chat_ws_endpoint(websocket: WebSocket):
         if streamed_response_text and not assistant_persisted:
             try:
                 await insert_message(app.state.db_pool, session_id, "assistant", streamed_response_text)
+                await _record_chat_event(
+                    app.state.db_pool,
+                    session_id,
+                    str(request.client_request_id or uuid.uuid4().hex)[:255],
+                    "assistant_message",
+                    "assistant",
+                    content=streamed_response_text,
+                    status="partial",
+                )
                 assistant_persisted = True
             except Exception:
                 logging.exception("Failed to persist partial assistant response")
@@ -2035,9 +2126,30 @@ async def chat_ws_endpoint(websocket: WebSocket):
         if streamed_response_text and not assistant_persisted:
             try:
                 await insert_message(app.state.db_pool, session_id, "assistant", streamed_response_text)
+                await _record_chat_event(
+                    app.state.db_pool,
+                    session_id,
+                    str(request.client_request_id or uuid.uuid4().hex)[:255],
+                    "assistant_message",
+                    "assistant",
+                    content=streamed_response_text,
+                    status="partial",
+                )
                 assistant_persisted = True
             except Exception:
                 logging.exception("Failed to persist partial assistant response")
+        try:
+            await _record_chat_event(
+                app.state.db_pool,
+                session_id,
+                str(request.client_request_id or uuid.uuid4().hex)[:255],
+                "error",
+                "system",
+                content=redact_secrets(e),
+                status="failed",
+            )
+        except Exception:
+            pass
         logging.exception("Error in websocket chat endpoint")
         try:
             await websocket.send_json({
@@ -2105,6 +2217,56 @@ class HttpChatRequest(BaseModel):
     client_request_id: Optional[str] = None
 
 
+async def _record_chat_event(
+    pool: Any,
+    session_id: str,
+    turn_id: str,
+    event_type: str,
+    role: str,
+    *,
+    content: Optional[str] = None,
+    tool_call_id: Optional[str] = None,
+    tool_name: Optional[str] = None,
+    tool_arguments_json: Optional[str] = None,
+    result_summary: Optional[str] = None,
+    status: Optional[str] = None,
+) -> None:
+    """Best-effort append to the canonical local chat event log.
+
+    The legacy ``messages`` and ``session_tool_calls`` tables remain the
+    compatibility read/write path for the existing Agent.  This compact
+    event record makes the new local product history durable without letting
+    an audit-write failure interrupt an otherwise successful chat stream.
+    """
+    try:
+        await pool.execute(
+            """
+            INSERT INTO infinity_runtime.chat_events(
+                session_id, turn_id, event_type, role, content, tool_call_id,
+                tool_name, tool_arguments_json, result_summary, status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            """,
+            uuid.UUID(session_id),
+            str(turn_id or uuid.uuid4().hex)[:255],
+            str(event_type),
+            str(role),
+            str(content)[:32768] if content is not None else None,
+            str(tool_call_id)[:255] if tool_call_id else None,
+            str(tool_name)[:128] if tool_name else None,
+            str(tool_arguments_json)[:16384] if tool_arguments_json else None,
+            str(result_summary)[:4096] if result_summary else None,
+            str(status)[:32] if status else None,
+        )
+    except Exception:
+        logger.warning("Failed to append canonical chat event", exc_info=True)
+
+
+def _chat_tool_call_id(turn_id: str, index: int, tool_name: str) -> str:
+    safe_name = re.sub(r"[^A-Za-z0-9_.:-]", "_", str(tool_name or "tool"))[:80]
+    return f"{str(turn_id)[:150]}:tool:{index}:{safe_name}"[:255]
+
+
 @app.post("/api/chat")
 async def chat_http_endpoint(payload: HttpChatRequest, request: Request, user: Principal = Depends(require_user)):
     """Cookie-authenticated chat stream used by the browser client.
@@ -2135,6 +2297,9 @@ async def chat_http_endpoint(payload: HttpChatRequest, request: Request, user: P
         session_id = payload.session_id
         assistant_text = ""
         persisted_tool_exec_keys: set[str] = set()
+        turn_id = str(payload.client_request_id or uuid.uuid4().hex)[:255]
+        tool_call_ids: dict[str, str] = {}
+        recorded_tool_call_ids: set[str] = set()
         try:
             meta = await get_session(pool, session_id, user.user_id)
             if not meta:
@@ -2143,6 +2308,9 @@ async def chat_http_endpoint(payload: HttpChatRequest, request: Request, user: P
             app.state.session_meta[session_id] = meta
             if payload.retry_attempt <= 0:
                 await insert_message(pool, session_id, "user", user_query)
+                await _record_chat_event(
+                    pool, session_id, turn_id, "user_message", "user", content=user_query,
+                )
             session_agent = await _get_or_create_session_agent(session_id)
             prompt, context_info = await _prepare_prompt_with_context_management(
                 pool=pool,
@@ -2176,12 +2344,61 @@ async def chat_http_endpoint(payload: HttpChatRequest, request: Request, user: P
                 if kind != "item":
                     continue
                 for tool_name in _extract_tool_names(item):
+                    tool_call_id = tool_call_ids.setdefault(
+                        tool_name,
+                        _chat_tool_call_id(turn_id, len(tool_call_ids), tool_name),
+                    )
+                    if tool_call_id not in recorded_tool_call_ids:
+                        recorded_tool_call_ids.add(tool_call_id)
+                        await _record_chat_event(
+                            pool,
+                            session_id,
+                            turn_id,
+                            "tool_call",
+                            "assistant",
+                            tool_call_id=tool_call_id,
+                            tool_name=tool_name,
+                            status="started",
+                        )
                     yield {"data": json.dumps({"type": "tool_call", "tool_name": tool_name})}
                 for tool_exec in _extract_completed_tool_executions(item):
                     exec_key = _tool_execution_identity_key(tool_exec)
                     if exec_key in persisted_tool_exec_keys:
                         continue
                     persisted_tool_exec_keys.add(exec_key)
+                    result_text = str(tool_exec.get("result") or "")
+                    tool_name = str(tool_exec.get("tool_name") or "unknown_tool")
+                    tool_call_id = str(tool_exec.get("tool_call_id") or "").strip()
+                    if not tool_call_id:
+                        tool_call_id = tool_call_ids.setdefault(
+                            tool_name,
+                            _chat_tool_call_id(turn_id, len(tool_call_ids), tool_name),
+                        )
+                    retrieval_records = _extract_retrieval_records_from_tool_result(
+                        tool_name=tool_name,
+                        tool_result=result_text,
+                    )
+                    await insert_session_tool_call(
+                        pool=pool,
+                        session_id=session_id,
+                        tool_call_id=tool_exec.get("tool_call_id") or tool_call_id,
+                        tool_name=tool_name,
+                        tool_args=tool_exec.get("tool_args") if isinstance(tool_exec.get("tool_args"), dict) else {},
+                        tool_result=_truncate_text(result_text, 50000),
+                        tool_result_summary=_summarize_tool_result(result_text, max_chars=500),
+                        retrieval_records=retrieval_records,
+                    )
+                    await _record_chat_event(
+                        pool,
+                        session_id,
+                        turn_id,
+                        "tool_result",
+                        "tool",
+                        tool_call_id=tool_call_id,
+                        tool_name=tool_name,
+                        result_summary=_summarize_tool_result(result_text, max_chars=4000),
+                        status="succeeded",
+                    )
                     task_draft = await _persist_task_draft_tool_event(
                         pool=pool,
                         session_id=session_id,
@@ -2199,9 +2416,17 @@ async def chat_http_endpoint(payload: HttpChatRequest, request: Request, user: P
                     assistant_text += content
                     yield {"data": json.dumps({"type": "chunk", "content": content})}
             if not assistant_text:
+                await _record_chat_event(
+                    pool, session_id, turn_id, "error", "system",
+                    content="The model returned no response content.", status="failed",
+                )
                 yield {"data": json.dumps({"type": "error", "message": "The model returned no response content."})}
                 return
             await insert_message(pool, session_id, "assistant", assistant_text)
+            await _record_chat_event(
+                pool, session_id, turn_id, "assistant_message", "assistant",
+                content=assistant_text, status="completed",
+            )
             response_tokens = estimate_tokens(assistant_text)
             yield {"data": json.dumps({"type": "done", "token_info": {"prompt": int(context_info.get("estimated_prompt_tokens") or 0), "response": response_tokens, "total": int(context_info.get("estimated_prompt_tokens") or 0) + response_tokens}, "context_info": context_info})}
         except asyncio.CancelledError:
@@ -2211,8 +2436,21 @@ async def chat_http_endpoint(payload: HttpChatRequest, request: Request, user: P
             if assistant_text:
                 try:
                     await insert_message(pool, session_id, "assistant", assistant_text)
+                    await _record_chat_event(
+                        pool, session_id, turn_id, "assistant_message", "assistant",
+                        content=assistant_text, status="partial",
+                    )
                 except Exception:
                     logger.exception("Failed to persist partial HTTP chat response")
+            await _record_chat_event(
+                pool,
+                session_id,
+                turn_id,
+                "error",
+                "system",
+                content="The literature search encountered an error.",
+                status="failed",
+            )
             yield {"data": json.dumps({"type": "error", "message": "The literature search encountered an error."})}
 
     return EventSourceResponse(event_generator())
@@ -2462,6 +2700,24 @@ async def issue_worker_enrollment_endpoint(
                 owner_user_id=user.user_id,
                 trust_issuer_pool=getattr(app.state, "trust_issuer_pool", None),
             )
+            # Mirror the issued credential into the canonical pure-local
+            # runtime table.  The legacy enrollment tables remain for UI
+            # compatibility, but Worker v2 authenticates only against this
+            # PostgreSQL state machine.
+            await app.state.db_pool.execute(
+                """
+                INSERT INTO infinity_runtime.workers
+                    (worker_id, created_by, credential_hash)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (worker_id) DO UPDATE SET
+                    created_by = EXCLUDED.created_by,
+                    credential_hash = EXCLUDED.credential_hash,
+                    status = 'active', updated_at = NOW()
+                """,
+                worker_id,
+                user.user_id,
+                hashlib.sha256(credential.credential.encode("utf-8")).hexdigest(),
+            )
     except Exception as exc:
         logger.exception("Worker enrollment issuance failed for user=%s", user.user_id)
         raise HTTPException(status_code=400, detail="Worker enrollment request is invalid") from exc
@@ -2469,6 +2725,7 @@ async def issue_worker_enrollment_endpoint(
         "worker_id": credential.worker_id,
         "namespace": credential.namespace,
         "worker_credential": credential.credential,
+        "credential": credential.credential,
         "execution_pool": credential.execution_pool,
         "credential_expires_at": None,
         "persistent": True,
@@ -2585,6 +2842,10 @@ async def revoke_worker_enrollment_endpoint(
     )
     if not revoked:
         raise HTTPException(status_code=404, detail="Active Worker enrollment not found")
+    await app.state.db_pool.execute(
+        "UPDATE infinity_runtime.workers SET status = 'revoked', updated_at = NOW() WHERE worker_id = $1",
+        worker_id,
+    )
     return {"worker_id": worker_id, "namespace": namespace, "status": "revoked"}
 
 

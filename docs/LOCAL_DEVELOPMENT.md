@@ -1,6 +1,6 @@
 # 本地开发与部署
 
-> 最后更新：2026-08-22（L5 一键本地部署）
+> 最后更新：2026-09-28（本地 Paper / Discovery / Chat / Retry 产品运行时）
 
 ## 架构概览
 
@@ -9,9 +9,11 @@
 Worker  -> FastAPI control plane (/api/worker/v2/*)
 ```
 
-- **PostgreSQL 16**：Task、Attempt、Worker、Session、Event、Artifact 元数据唯一事实源
-- **Redis 7**：通知、presence、实时事件（可重建，不保存持久数据）
-- **FastAPI**：唯一 HTTP API，提供 Analysis、Task Center、Worker 控制面
+- **PostgreSQL 16**：Session、Paper、Data Collection、Task、Attempt、Worker、Event、Artifact
+  元数据唯一事实源；`0002_product_workspace.sql` 是产品层迁移
+- **本地对象目录**：PDF、数据集、Method 和 Artifact 文件本体；数据库只保存受控 object key、大小和 hash
+- **Redis 7**：Outbox 通知、presence、实时事件（可重建，不保存持久业务事实）
+- **FastAPI**：唯一 HTTP API，提供 Analysis、Papers、Data Collections、Task Center、Worker 控制面
 - **Next.js**：前端，同源代理 API
 - **Worker**：独立进程，通过 HTTP 调用控制面，不直连数据库
 
@@ -67,6 +69,15 @@ npm run dev
 
 打开 `http://localhost:3000`。
 
+首次启动会应用 `backend/local_runtime/sql/0001_canonical_runtime.sql` 和
+`0002_product_workspace.sql`。`0002` 将 Paper、Discovery、聊天事件和本地任务重试合同纳入
+PostgreSQL；迁移带校验和，已应用的文件不能被静默改写。
+
+浏览器入口为 `/`（Analysis）、`/papers`、`/data-collections` 和 `/task-center`。论文和数据集
+处理在本地 API 内执行，失败会保留安全错误码和进度记录；没有远程 Cloudflare Processor 或远程
+对象存储依赖。独立 Processor 协议默认不启用，只有在补齐显式的 session/attempt/fencing
+凭证边界后才可接入。
+
 ### 5. 注册并启动 Worker（可选）
 
 ```bash
@@ -76,6 +87,7 @@ bash scripts/enroll-worker.sh
 # 将输出的 WORKER_ID 和 WORKER_CREDENTIAL 填入 .env.local
 # 然后：
 source .env.local
+pyenv shell Agent
 ANTHROPIC_API_KEY=sk-ant-your-key python -m backend.code_agent.worker.consumer_v2 "$WORKER_1_ID"
 ```
 
@@ -189,12 +201,13 @@ active Worker. Revoked Workers lose their next poll/heartbeat and disconnect.
 ## 测试
 
 ```bash
-# 后端测试（不需要 Docker）
-python -m pytest tests/ -q --timeout=30
+# 后端测试（不需要 Docker；使用仓库要求的 Agent Python 环境）
+eval "$(pyenv init - zsh)"; pyenv shell Agent
+pytest tests/ -q --timeout=30
 
 # 需要 PostgreSQL 的集成测试
 # 先启动基础设施，然后：
-python -m pytest tests/test_local_runtime_pg.py tests/test_task_integration_pg.py -v
+pytest tests/test_local_runtime_pg.py tests/test_task_integration_pg.py -v
 
 # 前端单元测试
 cd frontend && npx vitest run
@@ -212,3 +225,6 @@ cd frontend && npm run build
 | 迁移失败 | 检查 `DATABASE_URL` 密码是否正确 |
 | Redis 连接失败 | 检查 `REDIS_URL` 密码是否正确 |
 | Worker 连接失败 | 确认 API 已启动，检查 `WORKER_CONTROL_PLANE_URL` |
+| 论文或数据集页面显示失败 | 查看 `/api/paper/resources/{id}/progress` 或 `/api/discovery/...` 的安全错误码；原始文件和失败状态会保留在 PostgreSQL/本地对象目录中 |
+| 重试按钮不可用 | 只有 `failed` / `timeout` 任务可重试；达到 `max_attempts` 后，用户重试会消耗一次明确 override，并写入任务事件 |
+| Worker 重启后任务不再被领取 | API 启动和每次 poll 都会回收过期 lease；确认 PostgreSQL 可用，再检查 `/api/health/local-runtime` |

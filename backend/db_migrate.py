@@ -8,6 +8,7 @@ import os
 import asyncpg
 
 from backend.db import ensure_table
+from backend.local_runtime.migrations import apply_migrations
 
 
 async def main() -> None:
@@ -19,6 +20,8 @@ async def main() -> None:
         await ensure_table(pool)
     finally:
         await pool.close()
+    for migration in await apply_migrations(database_url):
+        print(f"applied {migration}")
 
 
 if __name__ == "__main__":

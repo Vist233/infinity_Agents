@@ -714,6 +714,11 @@ async def init_db(app) -> None:
     }
     if migrations_enabled:
         await ensure_table(raw_pool)
+        # The pure-local runtime is the canonical task/worker and product
+        # state machine.  Apply its checksum-verified migrations on the same
+        # operator bootstrap path as the legacy compatibility tables.
+        from backend.local_runtime.migrations import apply_migrations
+        await apply_migrations(settings.database_url)
     app.state.db_pool = wrap_runtime_pool(raw_pool) if rls_enabled_from_env() else raw_pool
 
 

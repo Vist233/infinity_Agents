@@ -4,6 +4,13 @@
 # API and Frontend are started manually on the host.
 set -euo pipefail
 
+# The repository's supported Python runtime is the Agent pyenv environment.
+# Keep every Python invocation in this script on that interpreter.
+if command -v pyenv >/dev/null 2>&1; then
+  eval "$(pyenv init - bash)"
+  pyenv shell Agent
+fi
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -32,8 +39,8 @@ docker compose -f docker-compose.infra.yml --env-file "$ENV_FILE" up -d
 # 4. Wait for health checks
 echo "==> Waiting for services to be healthy ..."
 for i in $(seq 1 60); do
-  pg_status=$(docker compose -f docker-compose.infra.yml ps --format json postgres 2>/dev/null | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print((d[0] if isinstance(d,list) else d).get('Health','unknown'))" 2>/dev/null || echo "checking")
-  redis_status=$(docker compose -f docker-compose.infra.yml ps --format json redis 2>/dev/null | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print((d[0] if isinstance(d,list) else d).get('Health','unknown'))" 2>/dev/null || echo "checking")
+  pg_status=$(docker compose -f docker-compose.infra.yml ps --format json postgres 2>/dev/null | python -c "import sys,json; d=json.loads(sys.stdin.read()); print((d[0] if isinstance(d,list) else d).get('Health','unknown'))" 2>/dev/null || echo "checking")
+  redis_status=$(docker compose -f docker-compose.infra.yml ps --format json redis 2>/dev/null | python -c "import sys,json; d=json.loads(sys.stdin.read()); print((d[0] if isinstance(d,list) else d).get('Health','unknown'))" 2>/dev/null || echo "checking")
   if [ "$pg_status" = "healthy" ] && [ "$redis_status" = "healthy" ]; then
     echo "    PostgreSQL: healthy"
     echo "    Redis:      healthy"
@@ -51,11 +58,16 @@ done
 # 5. Run migrations
 echo "==> Running database migrations ..."
 export DATABASE_URL="${DATABASE_URL:-postgresql://${POSTGRES_USER:-infinity}:${POSTGRES_PASSWORD}@localhost:${PG_PORT:-5432}/${POSTGRES_DB:-infinity_local}}"
-python3 -m backend.db_migrate
+python -m backend.db_migrate
 echo "    Migrations complete."
 
 # 6. Create storage directories
-for dir in "$ARTIFACT_STORAGE_ROOT" "$ARTIFACT_DOWNLOAD_ROOT" "$METHOD_SOURCE_UPLOAD_ROOT" "$DATASET_UPLOAD_ROOT"; do
+: "${ARTIFACT_STORAGE_ROOT:=./local-data/task-outputs}"
+: "${ARTIFACT_DOWNLOAD_ROOT:=./local-data/task-downloads}"
+: "${METHOD_SOURCE_UPLOAD_ROOT:=./local-data/method-sources}"
+: "${DATASET_UPLOAD_ROOT:=./local-data/datasets}"
+: "${LOCAL_OBJECT_ROOT:=./local-data/objects}"
+for dir in "$ARTIFACT_STORAGE_ROOT" "$ARTIFACT_DOWNLOAD_ROOT" "$METHOD_SOURCE_UPLOAD_ROOT" "$DATASET_UPLOAD_ROOT" "$LOCAL_OBJECT_ROOT"; do
   mkdir -p "$dir" 2>/dev/null || true
 done
 
@@ -75,7 +87,7 @@ echo " Register a Worker (after API is running):"
 echo "   bash scripts/enroll-worker.sh"
 echo ""
 echo " Start a Worker:"
-echo "   source $ENV_FILE && python3 -m backend.code_agent.worker.consumer_v2 \"\$WORKER_1_ID\""
+echo "   source $ENV_FILE && pyenv shell Agent && python -m backend.code_agent.worker.consumer_v2 \"\$WORKER_1_ID\""
 echo ""
 echo " Health check:"
 echo "   curl http://localhost:${API_PORT:-8008}/health"

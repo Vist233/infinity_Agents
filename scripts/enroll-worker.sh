@@ -9,6 +9,11 @@
 #   #   WORKER_1_CREDENTIAL=xxxx
 set -euo pipefail
 
+if command -v pyenv >/dev/null 2>&1; then
+  eval "$(pyenv init - bash)"
+  pyenv shell Agent
+fi
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -35,8 +40,8 @@ RESPONSE=$(curl -sS -X POST "$API_URL/api/worker-enrollments" \
   }
 
 # Extract worker_id and credential
-WORKER_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('worker_id',''))" 2>/dev/null || echo "")
-CREDENTIAL=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('credential',''))" 2>/dev/null || echo "")
+WORKER_ID=$(echo "$RESPONSE" | python -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('worker_id',''))" 2>/dev/null || echo "")
+CREDENTIAL=$(echo "$RESPONSE" | python -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('credential',''))" 2>/dev/null || echo "")
 
 if [ -z "$WORKER_ID" ] || [ -z "$CREDENTIAL" ]; then
   echo "ERROR: Unexpected API response:"
@@ -56,5 +61,5 @@ echo "   WORKER_1_CREDENTIAL=$CREDENTIAL"
 echo ""
 echo " Then start the Worker:"
 echo ""
-echo "   source .env.local && python3 -m backend.code_agent.worker.consumer_v2 \"\$WORKER_1_ID\""
+echo "   source .env.local && pyenv shell Agent && python -m backend.code_agent.worker.consumer_v2 \"\$WORKER_1_ID\""
 echo ""

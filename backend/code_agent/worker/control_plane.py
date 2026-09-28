@@ -40,6 +40,26 @@ def _timeout() -> httpx.Timeout:
     return httpx.Timeout(connect=15.0, read=seconds, write=seconds, pool=15.0)
 
 
+def _lease_request_timeout() -> float:
+    """Keep lease/session control calls below the server-side lease TTL."""
+    try:
+        seconds = float(os.getenv("WORKER_LEASE_REQUEST_TIMEOUT_SECONDS", "15"))
+    except ValueError:
+        seconds = 15.0
+    if not seconds > 0:
+        seconds = 15.0
+    return max(5.0, min(seconds, 30.0))
+
+
+def _trusted_worker_hosts() -> set[str]:
+    """Return operator-approved hostnames for synthetic/private DNS setups."""
+    return {
+        item.strip().lower().rstrip(".")
+        for item in os.getenv("WORKER_TRUSTED_OUTBOUND_HOSTS", "").split(",")
+        if item.strip()
+    }
+
+
 def validated_control_plane_url(value: str) -> str:
     candidate = str(value or "").strip().rstrip("/")
     if not candidate:
@@ -50,7 +70,12 @@ def validated_control_plane_url(value: str) -> str:
         (parsed.hostname or "").lower() in local_hosts
         and os.getenv("APP_ENV", "production").lower() in {"development", "dev", "test", "acceptance"}
     )
-    return validate_outbound_url(candidate, allow_hosts=local_hosts, allow_http_local=allow_local_http).rstrip("/")
+    return validate_outbound_url(
+        candidate,
+        allow_hosts=local_hosts,
+        allow_resolved_hosts=_trusted_worker_hosts(),
+        allow_http_local=allow_local_http,
+    ).rstrip("/")
 
 
 def validated_relay_url(value: str) -> str:
@@ -63,7 +88,12 @@ def validated_relay_url(value: str) -> str:
         (parsed.hostname or "").lower() in local_hosts
         and os.getenv("APP_ENV", "production").lower() in {"development", "dev", "test", "acceptance"}
     )
-    return validate_outbound_url(candidate, allow_hosts=local_hosts, allow_http_local=allow_local_http).rstrip("/")
+    return validate_outbound_url(
+        candidate,
+        allow_hosts=local_hosts,
+        allow_resolved_hosts=_trusted_worker_hosts(),
+        allow_http_local=allow_local_http,
+    ).rstrip("/")
 
 
 class ControlPlaneError(RuntimeError):
@@ -211,7 +241,13 @@ class WorkerV2Client:
         return session
 
     async def heartbeat(self) -> dict[str, Any]:
-        response = await self._request("POST", "/api/worker/v2/heartbeat", headers=self._headers(), json={})
+        response = await self._request(
+            "POST",
+            "/api/worker/v2/heartbeat",
+            headers=self._headers(),
+            json={},
+            timeout=_lease_request_timeout(),
+        )
         return response.json()
 
     async def poll(self) -> tuple[list[dict[str, Any]], int]:
@@ -247,6 +283,7 @@ class WorkerV2Client:
             f"/api/worker/v2/tasks/{claim.task_id}/renew",
             headers=self._headers(attempt_id=claim.attempt_id, lease_token=claim.lease_token),
             json={},
+            timeout=_lease_request_timeout(),
         )
         return response.json()
 
@@ -255,6 +292,7 @@ class WorkerV2Client:
             "GET",
             f"/api/worker/v2/tasks/{claim.task_id}/spec",
             headers=self._headers(attempt_id=claim.attempt_id, lease_token=claim.lease_token),
+            timeout=_lease_request_timeout(),
         )
         return response.json()
 
