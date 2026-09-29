@@ -3,7 +3,7 @@
 Infinity Agents 是面向生命科学研究的 Method-to-Result 工作台。它不是多个并列聊天
 Agent，而是一条从研究问题、论文方法和数据到异步执行结果的完整链路。
 
-## 当前云端产品
+## 待发布的云端前端
 
 ```text
 云端静态前端
@@ -27,17 +27,19 @@ ImageJudge 当前是参考图分类工具，不宣称已经完成通用多性状
 本分支不启用 Cloudflare Worker 部署。历史 `cloudflare-worker/` 和 ImageJudge Worker
 配置仅为可回滚/审计材料；默认部署脚本已移除，线上资源不在本次变更中删除或修改。
 
-## 体验地址
+## 现有线上地址
 
 [打开 Infinity Agents](https://infinity.zhangyvjing.com)
 
+本分支的静态前端改动目前仅保存在本地，尚未推送或部署；上述现有站点不代表本分支的验收结果。
+
 ## 当前文档
 
-- [当前 D1 + Redis Worker 架构决议](docs/ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md)
-- [当前续作实施计划](docs/D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md)
-- [续作 Goal-Driven Prompt](docs/D1_REDIS_WORKER_GOAL_DRIVEN_PROMPT_2026-08-20.md)
+- [历史 D1 + Redis Worker 架构决议](docs/ADR_D1_REDIS_WORKER_RUNTIME_2026-08-20.md)
+- [历史续作实施计划](docs/D1_REDIS_WORKER_CONTINUATION_PLAN_2026-08-20.md)
+- [历史 Goal-Driven Prompt](docs/D1_REDIS_WORKER_GOAL_DRIVEN_PROMPT_2026-08-20.md)
 - [旧 PostgreSQL Worker 架构（已被替代）](docs/ADR_UNIFIED_WORKER_RUNTIME_2026-08-19.md)
-- [Worker 当前差距详细报告](docs/WORKER_ARCHITECTURE_GAP_REPORT_2026-08-19.md)
+- [历史 Worker 差距报告](docs/WORKER_ARCHITECTURE_GAP_REPORT_2026-08-19.md)
 - [Worker 接入目标说明](docs/WORKER_ONBOARDING.md)
 - [本地开发](docs/LOCAL_DEVELOPMENT.md)
 - [ImageJudge 桌面端](image-judge/README.md)
