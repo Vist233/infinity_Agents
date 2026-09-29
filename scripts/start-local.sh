@@ -3,11 +3,6 @@
 # PostgreSQL service. This script only starts the local application processes.
 set -euo pipefail
 
-if command -v pyenv >/dev/null 2>&1; then
-  eval "$(pyenv init - bash)"
-  pyenv shell Agent
-fi
-
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$REPO_ROOT"
 ENV_FILE="${ENV_FILE:-.env.local}"

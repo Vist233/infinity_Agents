@@ -31,7 +31,7 @@ python -m backend.code_agent.worker.consumer_v2 $env:WORKER_ID
 
 ## 前置条件
 
-- Python 3.12+，推荐 `pyenv shell Agent`
+- Python 3.12+；可使用虚拟环境，项目开发者也可使用 `pyenv shell Agent`
 - 本机 PostgreSQL，且 `pg_isready`、`psql`、`pg_dump` 在 PATH 中
 - Node.js/npm（要启动前端时）
 - Claude Code CLI（要执行任务时）
@@ -40,8 +40,10 @@ python -m backend.code_agent.worker.consumer_v2 $env:WORKER_ID
 ## 一键启动
 
 ```bash
-pyenv shell Agent
-pip install -r requirements.txt
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+cd frontend && npm ci && cd ..
 cp .env.local.example .env.local
 # 修改 DATABASE_URL，或填写 PG_HOST/PG_PORT/POSTGRES_*；确认本地绝对路径
 bash scripts/start-local.sh
@@ -51,7 +53,7 @@ bash scripts/start-local.sh
 
 1. 检查 `pg_isready`、数据库连接和迁移；
 2. 只为不存在且随后确认为空的 `LOCAL_DATA_ROOT`、`WORKER_WORK_ROOT` 创建归属标记，并检查 `LOCAL_OBJECT_ROOT`；已有 data/work 根必须有匹配标记，启动器不会接管或盖章已有数据，根之间不得互相嵌套；
-3. 用 `pyenv shell Agent` 对应的 Python 运行 `backend.db_migrate`；
+3. 用当前已激活的 Python 运行 `backend.db_migrate`；
 4. 启动 loopback API，若 `frontend/node_modules` 存在则启动前端；
 5. 只有配置 `WORKER_1_ID` 与 `WORKER_1_CREDENTIAL` 时才启动唯一 Worker。
 

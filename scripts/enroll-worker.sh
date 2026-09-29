@@ -9,11 +9,6 @@
 #   #   WORKER_1_CREDENTIAL=xxxx
 set -euo pipefail
 
-if command -v pyenv >/dev/null 2>&1; then
-  eval "$(pyenv init - bash)"
-  pyenv shell Agent
-fi
-
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -61,5 +56,6 @@ echo "   WORKER_1_CREDENTIAL=$CREDENTIAL"
 echo ""
 echo " Then start the Worker:"
 echo ""
-echo "   source .env.local && pyenv shell Agent && python -m backend.code_agent.worker.consumer_v2 \"\$WORKER_1_ID\""
+echo "   Activate the Python environment used to install requirements, then run:"
+echo "   source .env.local && python -m backend.code_agent.worker.consumer_v2 \"\$WORKER_1_ID\""
 echo ""

@@ -20,11 +20,13 @@ Infinity Agents 是面向生命科学研究的 Method-to-Result 工作台：从�
 
 ## 快速开始
 
-前置条件：本机已安装并启动 PostgreSQL、Python（推荐 `pyenv shell Agent`）、Node.js、Claude Code CLI 和模型凭证。
+前置条件：本机已安装并启动 PostgreSQL，且 `pg_isready`、`psql` 可从 PATH 调用；安装 Python 3.12+、Node.js/npm、Claude Code CLI，并准备模型凭证。macOS/Linux 的 Bash 启停脚本使用当前已激活的 Python 环境。
 
 ```bash
-pyenv shell Agent
-pip install -r requirements.txt
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+cd frontend && npm ci && cd ..
 cp .env.local.example .env.local
 # 编辑 .env.local；DATABASE_URL 可直接填写，也可使用 PG_* 字段生成
 bash scripts/start-local.sh
@@ -67,4 +69,4 @@ Claude 使用 attempt 作为 cwd，获得最小化环境和明确的任务提示
 
 - PostgreSQL 是唯一持久状态源；任务通知和 SSE 直接读取 PostgreSQL 事件表。
 - 不运行 GitHub Actions，不推送远端，除非用户另行授权。
-- 运行 Python 前先执行 `pyenv shell Agent`。
+- 项目开发者可使用 `pyenv shell Agent`；普通用户按上面的虚拟环境步骤安装。启动脚本使用当前已激活的 Python，不强制依赖名为 `Agent` 的 pyenv 环境。
