@@ -1,0 +1,113 @@
+{
+  "name": "infinity-agents-edge",
+  "main": "src/frontend-edge.ts",
+  "compatibility_date": "2026-07-24",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "triggers": {
+    "crons": []
+  },
+  "routes": [
+    {
+      "pattern": "infinity.zhangyvjing.com",
+      "custom_domain": true
+    }
+  ],
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "../frontend/out",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "r2_buckets": [
+    {
+      "binding": "RESOURCE_BUCKET",
+      "bucket_name": "infinity-agents-resources"
+    }
+  ],
+  "vars": {
+    "STEPFUN_BASE_URL": "https://api.stepfun.com/step_plan/v1",
+    "STEPFUN_MODEL": "step-3.5-flash",
+    "MODEL_BASE_URL": "https://api.moonshot.cn/v1",
+    "MODEL_ID": "kimi-k2.6",
+    "APP_BASE_URL": "https://infinity.zhangyvjing.com",
+    "ZHANG_AUTH_BASE_URL": "https://auth.zhangyvjing.com",
+    "ZHANG_AUTH_JWKS_URL": "https://auth.zhangyvjing.com/.well-known/jwks.json",
+    "ZHANG_AUTH_CLIENT_ID": "infinity-agents",
+    "ZHANG_AUTH_AUD": "infinity-agents",
+    "DAILY_QUOTA": "20",
+    "IMAGE_JUDGE_ZHANG_AUTH_ISSUER": "https://auth.zhangyvjing.com",
+    "IMAGE_JUDGE_OIDC_CLIENT_ID": "image-judge-desktop",
+    "IMAGE_JUDGE_OIDC_REDIRECT_URI": "https://infinity.zhangyvjing.com/image-judge/auth/callback",
+    "IMAGE_JUDGE_DASHSCOPE_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "IMAGE_JUDGE_MODEL_ID": "qwen3-vl-235b-a22b-instruct",
+    "IMAGE_JUDGE_DAILY_QUOTA": "30",
+    "IMAGE_JUDGE_ACCESS_TOKEN_TTL_SECONDS": "900",
+    "IMAGE_JUDGE_REFRESH_TOKEN_TTL_SECONDS": "2592000",
+    "IMAGE_JUDGE_MAX_IMAGE_BYTES": "10485760",
+    "TASK_UPLOAD_MAX_BYTES": "26214400",
+    "TASK_ARTIFACT_MAX_BYTES": "2147483648",
+    "OUTBOX_RELAY_BATCH_SIZE": "25",
+    "PAPER_PROCESSOR_ID": "paper-processor-zhangbot-v1",
+    "PAPER_PROCESSOR_SOURCE_IP": "39.105.204.121",
+    "DISCOVERY_PROCESSOR_ID": "discovery-processor-windows-v1",
+    "DISCOVERY_AUTO_EXECUTE": "false",
+    "DISCOVERY_LITERATURE_ENABLED": "false",
+    "DISCOVERY_LITERATURE_SOURCES": "arxiv,europe_pmc",
+    "DISCOVERY_LITERATURE_MAX_PER_RUN": "10",
+    "DISCOVERY_LITERATURE_MAX_PER_DAY": "100"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "infinity-agents-db",
+      "database_id": "9ee9ec94-cb42-40b5-8372-681c7b57c105",
+      "migrations_dir": "migrations-infinity"
+    },
+    {
+      "binding": "IMAGE_JUDGE_DB",
+      "database_name": "image-judge-db",
+      "database_id": "fc8f0491-3d57-48d8-bae8-96f633d7dc8d",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "IMAGE_JUDGE_KV",
+      "id": "fe1f3e47f5a94e4ca2b375ff3f9b2c79"
+    }
+  ],
+  "unsafe": {
+    "bindings": [
+      {
+        "name": "CHAT_RATE_LIMITER",
+        "type": "ratelimit",
+        "namespace_id": "1001",
+        "simple": {
+          "limit": 5,
+          "period": 60
+        }
+      }
+    ]
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "IMAGE_JUDGE_USER_LOCK",
+        "class_name": "ImageJudgeUserConcurrencyLock"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v2-image-judge",
+      "new_sqlite_classes": [
+        "ImageJudgeUserConcurrencyLock"
+      ]
+    }
+  ]
+}

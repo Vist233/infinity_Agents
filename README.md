@@ -3,7 +3,7 @@
 Infinity Agents 是面向生命科学研究的 Method-to-Result 工作台。它不是多个并列聊天
 Agent，而是一条从研究问题、论文方法和数据到异步执行结果的完整链路。
 
-## 待发布的云端前端
+## 云端前端与本地业务运行时
 
 ```text
 云端静态前端
@@ -24,14 +24,13 @@ Agent，而是一条从研究问题、论文方法和数据到异步执行结果
 
 ImageJudge 当前是参考图分类工具，不宣称已经完成通用多性状数值提取、物理量标定或科学准确性证明。
 
-本分支不启用 Cloudflare Worker 部署。历史 `cloudflare-worker/` 和 ImageJudge Worker
-配置仅为可回滚/审计材料；默认部署脚本已移除，线上资源不在本次变更中删除或修改。
+云端前端发布到 Cloudflare Pages；原域名保留精简的 `infinity-agents-edge`，仅服务静态资产、ImageJudge 桌面兼容接口与现有认证回调。任务、论文和聊天云端 API 返回 410 / LOCAL_RUNTIME_REQUIRED；不运行 cron。历史后端源码和旧 Wrangler 配置保留用于回退，D1/R2/KV/DO 数据未删除。
 
 ## 现有线上地址
 
 [打开 Infinity Agents](https://infinity.zhangyvjing.com)
 
-本分支的静态前端改动目前仅保存在本地，尚未推送或部署；上述现有站点不代表本分支的验收结果。
+静态前端另有 [Pages 地址](https://infinity-frontend-98x.pages.dev/)。2026-10-03 经用户授权发布；源码仍只提交在本地，未推送或触发 GitHub CI。部署方式及回退见 [运行手册](docs/CLOUDFLARE_DEPLOYMENT_RUNBOOK.md)。
 
 ## 当前文档
 
