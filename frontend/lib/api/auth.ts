@@ -1,4 +1,4 @@
-import { getApiBase, withCsrfHeader } from "@/lib/runtime-config";
+import { getApiBase, IS_STATIC_FRONTEND, withCsrfHeader } from "@/lib/runtime-config";
 
 /** Keep authentication checks from leaving a page in an unbounded loading state. */
 export const AUTH_REQUEST_TIMEOUT_MS = 10_000;
@@ -49,6 +49,9 @@ export interface CurrentUser {
 }
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
+  // The static cloud export has no account backend. Never send an /api/me or
+  // /auth/me probe from the browser.
+  if (IS_STATIC_FRONTEND) return null;
   const { response, payload } = await fetchAuthResponse(`${getApiBase()}/api/me`);
   if (response.status === 401) return null;
   if (response.status === 404) {
@@ -67,6 +70,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 }
 
 export async function logout(): Promise<void> {
+  if (IS_STATIC_FRONTEND) return;
   const response = await fetch(`${getApiBase()}/auth/logout`, {
     method: "POST",
     credentials: "include",

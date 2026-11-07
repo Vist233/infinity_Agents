@@ -4,6 +4,9 @@
 // the local task/paper backend.
 const DEFAULT_API_BASE = "";
 
+/** True for the cloud static export. No browser API calls are allowed there. */
+export const IS_STATIC_FRONTEND = process.env.NEXT_PUBLIC_STATIC_FRONTEND === "1";
+
 const trimTrailingSlash = (value: string) => value.replace(/\/+$/, "");
 
 export function getApiBase(): string {
@@ -33,9 +36,8 @@ function isHttpsUrl(value: string): boolean {
  */
 export function canUseBrowserApi(): boolean {
   const apiBase = getApiBase();
-  const staticDeployment = process.env.NEXT_PUBLIC_STATIC_FRONTEND === "1";
-  if (!apiBase) return !staticDeployment;
-  if (staticDeployment && !isHttpsUrl(apiBase)) return false;
+  if (!apiBase) return !IS_STATIC_FRONTEND;
+  if (IS_STATIC_FRONTEND && !isHttpsUrl(apiBase)) return false;
   if (typeof window !== "undefined" && window.location.protocol === "https:" && !isHttpsUrl(apiBase)) return false;
   return true;
 }

@@ -3,6 +3,7 @@
 import { LogOut } from "lucide-react";
 import { useEffect, useState } from "react";
 import { getCurrentUser, logout as logoutCurrentUser, type CurrentUser } from "@/lib/api/auth";
+import { IS_STATIC_FRONTEND } from "@/lib/runtime-config";
 import { useLanguage } from "@/lib/i18n";
 
 /** Shared account strip for every desktop/mobile workspace drawer. */
@@ -12,6 +13,10 @@ export function WorkspaceUserFooter() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
+    if (IS_STATIC_FRONTEND) {
+      setLoaded(true);
+      return;
+    }
     let cancelled = false;
     getCurrentUser()
       .then((nextUser) => {
@@ -25,6 +30,20 @@ export function WorkspaceUserFooter() {
       });
     return () => { cancelled = true; };
   }, []);
+
+  if (IS_STATIC_FRONTEND) {
+    return (
+      <a
+        href="https://github.com/Vist233/infinity_Agents"
+        target="_blank"
+        rel="noreferrer"
+        className="flex items-center justify-between gap-2 rounded-xl border border-[var(--hairline)] bg-white/60 px-2.5 py-2 text-xs font-medium text-zinc-600 hover:text-zinc-900"
+      >
+        <span className="min-w-0 truncate">静态展示 · 后端已下线</span>
+        <span className="shrink-0">GitHub ↗</span>
+      </a>
+    );
+  }
 
   if (!loaded || !user) return null;
 

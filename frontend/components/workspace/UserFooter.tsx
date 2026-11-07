@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { LogOut, UserCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getCurrentUser, logout } from "@/lib/api/auth";
-import { redirectToLogin } from "@/lib/runtime-config";
+import { IS_STATIC_FRONTEND, redirectToLogin } from "@/lib/runtime-config";
 import { useLanguage } from "@/lib/i18n";
 
 interface UserFooterProps {
@@ -26,6 +26,10 @@ export function UserFooter({ compact = false }: UserFooterProps) {
   const [logoutError, setLogoutError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (IS_STATIC_FRONTEND) {
+      setLoading(false);
+      return;
+    }
     let mounted = true;
     void getCurrentUser()
       .then((user) => {
@@ -58,6 +62,21 @@ export function UserFooter({ compact = false }: UserFooterProps) {
   }
 
   const canLogout = Boolean(email || name || userId);
+  if (IS_STATIC_FRONTEND) {
+    return (
+      <div className="border-t border-[var(--hairline)] px-1 pt-3">
+        <a
+          href="https://github.com/Vist233/infinity_Agents"
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center justify-between gap-2 rounded-lg px-1.5 py-1 text-xs text-zinc-600 hover:bg-zinc-100/80 hover:text-zinc-900"
+        >
+          <span className="truncate">静态展示</span>
+          <span className="shrink-0">GitHub ↗</span>
+        </a>
+      </div>
+    );
+  }
   // Keep the signed-out sidebar completely empty. In particular, do not show
   // an account placeholder while /api/me is still resolving or unavailable.
   if (loading || !canLogout) return null;
