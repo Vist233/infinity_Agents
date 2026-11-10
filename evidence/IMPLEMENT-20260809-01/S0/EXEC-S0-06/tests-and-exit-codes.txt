@@ -1,3 +1,0 @@
-  bash -n scripts/acceptance_preflight.sh                 exit 0
-  missing-env negative check                              exit 2 (expected)
-  positive preflight                                       not run: no .env.local/acceptance stack was started

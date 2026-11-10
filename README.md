@@ -1,72 +1,58 @@
-# Infinity Agents
+# infinity-agent (math mode)
 
-Infinity Agents 是面向生命科学研究的 Method-to-Result 工作台：从研究问题、论文方法和数据集，到可追溯的异步任务、Artifact 与 Task Center 结果。
+Run many agents (up to 100) in parallel on one task and rank what they produce. Built on the Sakura agent framework. A task is defined by a piece of TypeScript code; a thin command line only runs it. It runs on the machine where it is started; for a remote machine, install and run it there.
 
-## 本地架构
+Status: math mode is built and tested with scripted components and with real Lean and a real model on small statements. Code and machine-learning tasks are planned, not built.
 
-```text
-浏览器 -> Next.js -> FastAPI -> PostgreSQL
-                         |          （状态、元数据、事件）
-                         -> 本地对象目录（PDF、数据集、结果）
+Math mode needs a local Lean 4 (installed with `elan`). The program checks `lean --version` and `lake --version` at start and stops with the install command if they are missing; Mathlib is optional and is checked at start when a task asks for it.
 
-单个本机 Worker --HTTP 轮询--> FastAPI
+## Architecture in one picture
+
+```
+ task.ts (run with: node task.ts)
+   defineTask({ prompt, agents, mode | tools, review, evaluate?, hidden?, tokens?, stop })
+ runTask: one Node process, on the machine where it was started
+   Ladder   how many agents live: 1, 2, 4 ... 64, 100 (advance after 3 replies each without throttling; drop one rung on throttling)
+   Gate     one shared brake in front of every model request; pauses everybody on a throttling answer; stops everything when the quota is used up
+   Budget   counts tokens (cache reads in full); soft stop when  used + inflight x mean request >= budget
+   Rescue   a stuck agent is restarted with a message, at most 3 times, then stopped and replaced
+   Pools    Lean = CPU cores (a small fair queue)
+   Planner  one call at the start: a different strategy hint for every agent
+   Verifier "proved" = compiles, no sorry, only the standard axioms, type is exactly Statement.Goal
+   Ledger   ledger.jsonl -> leaderboard.csv, report.html
+   Agents   1..N: Git work dir (commit every turn), session file outside it, tools read / write / lean, confined, a Goal
 ```
 
-本地版的业务事实源只有 PostgreSQL；文件本体位于配置的本地对象目录。运行时不要求 Docker、Redis、Cloudflare、D1、R2 或独立消息队列。API、前端和 Worker 默认只监听回环地址。
+Every agent is started with a **Goal** (the framework's `goal`), otherwise it would stop on its own after a while. For math the goal's check is `test -f ../proved`, a marker that only the orchestrator writes (outside the agent's confined work directory) when the verifier has accepted a proof.
 
-平台边界：`backend/code_agent/worker/attempt_workspace.py` 的 Attempt 路径与进程环境策略按 macOS、Linux 和 Windows 的 Python 应用层语义编写；当前验证是在 macOS/POSIX 主机完成的。`scripts/*.sh` 是 Bash 启停、备份和恢复脚本，只支持 macOS/Linux（或等效 POSIX 环境），不是原生 Windows 启动器。
+A task is **started by code**: `node task.ts`. There is no command line in version 1.
 
-产品区域包括 Analysis、Papers、Data Collections、Task Center 和独立的 ImageJudge 桌面应用。
+Dependency: `sakura-agent` 0.1.1.
 
-## 快速开始
+## Run a task (math mode)
 
-前置条件：本机已安装并启动 PostgreSQL，且 `pg_isready`、`psql` 可从 PATH 调用；安装 Python 3.12+、Node.js/npm、Claude Code CLI，并准备模型凭证。macOS/Linux 的 Bash 启停脚本使用当前已激活的 Python 环境。
+A task is TypeScript code (`defineTask` plus `runTask`); there is no command line in version 1. See `examples/prove.ts`:
 
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-cd frontend && npm ci && cd ..
-cp .env.local.example .env.local
-# 编辑 .env.local；DATABASE_URL 可直接填写，也可使用 PG_* 字段生成
-bash scripts/start-local.sh
+```sh
+npm install                       # first time
+export OPENCODE_API_KEY=...       # the model key; it is only read, never printed or stored
+node examples/prove.ts parity 3   # 3 agents, ceiling of the ladder
+node examples/prove.ts odd-sum 10 # a statement that needs induction
 ```
 
-启动器会检查原生 PostgreSQL、迁移数据库，只为不存在且随后确认为空的数据/工作根创建归属标记，并启动 API；已有目录必须带匹配标记，启动器不会接管或盖章已有数据。若已安装前端依赖则启动 Next.js；若 `.env.local` 已配置 `WORKER_1_ID` 和 `WORKER_1_CREDENTIAL`，再启动唯一 Worker。
+Each run writes `runs/<task>-<time>/`: `ledger.jsonl`, `events.jsonl`, `state.json`, `report/report.html`, `report/leaderboard.csv`, `lean/`, and per agent `agents/NNN/{work/, session.jsonl, proved}`. `work/` is a Git repository with a commit after every turn. A stopped or killed run continues with `runTask(task, { runDir, resume: true })`.
 
-首次运行若尚未有 Worker：
+Tests: `npm test` (about 2 minutes; uses real Lean when it is installed), `npm run check` (types, lint, format, tests), `npm run coverage`.
 
-```bash
-bash scripts/enroll-worker.sh
-# 将返回的 WORKER_ID/CREDENTIAL 写入 .env.local 的 WORKER_1_ID/WORKER_1_CREDENTIAL
-bash scripts/start-local.sh
-```
+### Lean and the sandbox
+- The program needs `lean` and `lake` on the PATH (install: `curl https://elan.lean-lang.org/elan-init.sh -sSf | sh`) and stops with that command if they are missing. Mathlib is not needed.
+- **Without the sandbox, a proof file is a program that runs with your rights.** Lean runs code at compile time (`#eval`, macros, `initialize`), so a file written by an agent could read or write anything your user can, and use the network. There is no sandbox by default. What is done instead: the Lean process gets a clean environment (only PATH, HOME, LEAN_PATH; no keys), the agents have no shell and their file tools are confined to their work directory, and a deny-list rejects `#eval`, macros, `elab`, `initialize`, `unsafe`, `extern` and other imports at `submit` (it is not a boundary; `check` is not filtered).
+- The switch is kept: `sandbox: true` in the task confines every Lean process on macOS with `sandbox-exec` (writes only to its scratch directory, no network, no reading of the home directory except the Lean toolchain). There is no sandbox on Linux in this version.
+- The official check (`submit`) accepts a proof only if it compiles, has no `sorry`, depends only on `propext`, `Classical.choice`, `Quot.sound`, and `theorem main` (at the top level) has exactly the type `Statement.Goal`.
 
-Windows 原生环境请手动执行等效步骤：先启动本机 PostgreSQL，设置 `DATABASE_URL`、`LOCAL_DATA_ROOT`、`WORKER_WORK_ROOT`、`LOCAL_OBJECT_ROOT`、`WORKER_CONTROL_PLANE_URL`、`WORKER_ID`、`WORKER_CREDENTIAL` 和 Claude provider 环境变量，再运行 `python -m backend.db_migrate`、`python -m uvicorn backend.app:app --host 127.0.0.1 --port 8008`，另一个 PowerShell 窗口运行 `python -m backend.code_agent.worker.consumer_v2 $env:WORKER_ID`。当前仓库没有经过验证的原生 Windows PowerShell 启停/备份/恢复脚本；不要把 Bash 脚本的验证结果当作 Windows 原生启动验证。
-
-常用操作：
-
-```bash
-bash scripts/stop-local.sh
-bash scripts/backup-db.sh
-bash scripts/restore-db.sh backups/pg-<timestamp>.sql.gz backups/objects-<timestamp>.tar.gz
-bash scripts/destroy-local.sh   # 明确确认后才会删除数据库和本地文件
-```
-
-备份要求 `LOCAL_DATA_ROOT/.infinity-agents-root` 与 `LOCAL_DATA_ROOT/objects` 处于受控路径；恢复会先验证完整的 PostgreSQL gzip、拒绝对象归档中的路径穿越、符号链接和特殊成员，再在受控临时目录验证后替换对象目录。数据库重建和 dump 导入在同一事务中执行并启用 `ON_ERROR_STOP`，只有数据库恢复成功后才替换对象目录。数据库和文件目录不是单一跨系统原子提交：若数据库已恢复但对象目录替换或回滚失败，脚本会报错并尽可能保留旧对象目录（可能位于 data 根下的 `.restore-old-objects.*`），必须停留在停机状态人工核对和恢复后再启动服务。
-
-详细配置、迁移和验收命令见 [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md)。
-
-## Worker 执行边界
-
-Worker 为每个服务端生成的 Attempt 在 `WORKER_WORK_ROOT/<attempt-id>/` 下创建 `input/`、`output/`、`spec/`、`work/`、`logs/`、`home/` 和 `tmp/`。应用管理的下载、对象键、Artifact 收集和清理会规范化路径、拒绝 `..`/绝对路径/符号链接逃逸，并使用归属标记核对清理目标。
-
-Claude 使用 attempt 作为 cwd，获得最小化环境和明确的任务提示；默认不使用 `--dangerously-skip-permissions`，而是使用 Claude 自身的 `--permission-mode`、`--tools` 与 `--allowed-tools`。默认 `Bash(*)` 是为了让可信科学任务执行生成脚本，仍然代表当前用户权限下的可信本机代码。
-
-这些措施是应用层约束，不是操作系统级沙箱：任意 Shell、Claude 工具调用或子进程仍可能读取或修改当前用户有权限访问的 attempt 外路径，且无法完全消除并发符号链接替换竞态。不得把 cwd、提示词或越界测试当作“进程只能访问 attempt 目录”的证明；不可信任务需要另行设计 OS/虚拟机隔离。
-
-## 开发约定
-
-- PostgreSQL 是唯一持久状态源；任务通知和 SSE 直接读取 PostgreSQL 事件表。
-- 不运行 GitHub Actions，不推送远端，除非用户另行授权。
-- 项目开发者可使用 `pyenv shell Agent`；普通用户按上面的虚拟环境步骤安装。启动脚本使用当前已激活的 Python，不强制依赖名为 `Agent` 的 pyenv 环境。
+## Code mode (planned, not built yet)
+Code and machine-learning tasks are planned. What is said here about hidden data is limited to what was tested:
+- The evaluator and the hidden data are moved to a private directory with an unguessable name, with a journal, and put back at the end. The agent's shell will run under a profile that denies that one directory (macOS `sandbox-exec`: no read, no write, no rename of the directory or of any ancestor; Linux Landlock), and the file tools get a path check. It does not limit CPU, memory or network.
+- **Tested:** file reads and renames under the macOS profile, on throwaway files; a Landlock read refusal in a Linux container. **Not tested, so not claimed:** processes that the shell asks `launchd`, `osascript` or `open` to start outside the profile (they could read the data), Spotlight indexing, backups and snapshots, Landlock on a bare-metal Linux host.
+- Without the profile (the fallback), an agent that wants the data can read it. Even with it, the evaluator must not return hidden labels in its answer, and a hidden split that can be recomputed from public data is not hidden.
+- The review model is the other boundary for code tasks; it lowers the risk and proves nothing. Code that agents run has the user's rights (network included).

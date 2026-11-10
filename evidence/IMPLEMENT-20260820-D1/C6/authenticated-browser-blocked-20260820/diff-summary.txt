@@ -1,1 +1,0 @@
-Documentation/evidence only. No application code, Task, Worker credential, Artifact, Redis state, D1/R2 record, or deployment changed.

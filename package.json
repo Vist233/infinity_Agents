@@ -1,0 +1,29 @@
+{
+  "name": "infinity-agent",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Run many agents in parallel on one task and rank what they produce (math mode with local Lean 4 first).",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "coverage": "vitest run --coverage --coverage.provider=v8",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "biome lint",
+    "format": "biome format --write",
+    "format:check": "biome format",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test"
+  },
+  "dependencies": {
+    "sakura-agent": "0.1.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.4",
+    "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^3.2.7",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

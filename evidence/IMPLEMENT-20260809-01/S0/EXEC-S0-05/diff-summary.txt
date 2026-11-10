@@ -1,2 +1,0 @@
-Added only a redacted fixture manifest. No fixture content, absolute path,
-database dump, provider response, or user secret was copied.

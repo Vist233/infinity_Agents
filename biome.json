@@ -1,0 +1,14 @@
+{
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 160 },
+  "javascript": { "formatter": { "quoteStyle": "double", "semicolons": "always", "trailingCommas": "all" } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": { "noNonNullAssertion": "off", "useTemplate": "off" },
+      "suspicious": { "noExplicitAny": "off" }
+    }
+  },
+  "files": { "includes": ["src/**/*.ts", "test/**/*.ts", "examples/**/*.ts"] },
+  "assist": { "enabled": false }
+}
