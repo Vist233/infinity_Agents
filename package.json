@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Run many agents in parallel on one task and rank what they produce (math mode with local Lean 4 first).",
+  "license": "MIT",
   "engines": {
     "node": ">=24"
   },
