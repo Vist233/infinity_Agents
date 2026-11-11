@@ -1,6 +1,6 @@
 import type { Usage } from "sakura-agent";
 
-/** Every kind of token counts in full, cache reads included. */
+/** Every kind of token counts in full, cache reads included (owner decision, docs/02 section 13). */
 export function totalTokens(usage: Usage): number {
   return usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 }

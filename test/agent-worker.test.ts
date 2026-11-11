@@ -8,6 +8,7 @@ import { realClock } from "../src/clock.ts";
 import { Gate } from "../src/gate.ts";
 import { runLayout } from "../src/run-layout.ts";
 import { MathMode } from "../src/math-mode.ts";
+import { isCodeSubmission } from "../src/mode.ts";
 import { defineTask } from "../src/task.ts";
 import { fakeVerifier } from "./support/fake-verifier.ts";
 import { createScriptedModel } from "./support/scripted-model.ts";
@@ -45,7 +46,9 @@ function setup(model: ReturnType<typeof createScriptedModel>) {
       seen.replies += 1;
     },
     onCommit: () => {},
+    onDenied: () => {},
     onSubmit: async (submission, info) => {
+      if (isCodeSubmission(submission)) throw new Error("a math worker got a code submission");
       seen.submits.push({ proved: submission.verdict.proved, steps: info.steps });
       if (submission.verdict.proved) (await import("node:fs")).writeFileSync(layout.provedMarker(1), "ok");
     },
@@ -122,3 +125,19 @@ describe("agent worker", () => {
 function throwingStream(error: Error): AsyncIterable<never> {
   return { [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(error) }) };
 }
+
+describe("what a worker does after a run (afterRun)", () => {
+  const run = (reason: "done" | "paused" | "error" | "cancelled", extra: { pause?: string; error?: string } = {}) => ({ reason, ...extra }) as never;
+  it("rescues, ends cancelled, ends at the breaker, waits after a pause, and otherwise ends with the run's own reason", async () => {
+    const { afterRun, MAX_PAUSES_WITHOUT_REPLY } = await import("../src/worker-policy.ts");
+    const base = { cancelled: undefined, gateStopped: false, pausesWithoutReply: 0 };
+    expect(afterRun({ ...base, cancelled: "rescue", run: run("cancelled") })).toEqual({ type: "rescue" });
+    expect(afterRun({ ...base, cancelled: "stuck", run: run("cancelled") })).toEqual({ type: "end", end: { reason: "cancelled", cancelled: "stuck" } });
+    expect(afterRun({ ...base, run: run("paused", { pause: "approval" }) })).toMatchObject({ type: "end", end: { reason: "failed" } });
+    expect(afterRun({ ...base, run: run("paused", { pause: "provider" }) })).toEqual({ type: "wait" });
+    expect(afterRun({ ...base, gateStopped: true, run: run("paused", { pause: "provider" }) })).toMatchObject({ type: "end", end: { reason: "paused" } });
+    expect(afterRun({ ...base, pausesWithoutReply: MAX_PAUSES_WITHOUT_REPLY, run: run("paused", { pause: "provider" }) })).toMatchObject({ type: "end" });
+    expect(afterRun({ ...base, run: run("error", { error: "boom" }) })).toEqual({ type: "end", end: { reason: "error", detail: "boom" } });
+    expect(afterRun({ ...base, run: run("done") })).toEqual({ type: "end", end: { reason: "done" } });
+  });
+});

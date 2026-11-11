@@ -1,7 +1,9 @@
+import { ClusterDetector } from "./error-cluster.ts";
 import { type LlmClient, type LlmEvent, type LlmRequest, ProviderError, type Usage } from "sakura-agent";
 
 export type GateEvent =
-  | { type: "throttle"; delayMs: number; pausedUntil: number }
+  /** `cause` "connection": many connection errors in a short time were read as a limit of what the network or the provider can take (not an answer of the provider). */
+  | { type: "throttle"; delayMs: number; pausedUntil: number; cause?: "provider" | "connection" }
   | { type: "quota"; message: string }
   | { type: "refused"; reason: string }
   | { type: "usage"; usage: Usage; latencyMs: number };
@@ -14,6 +16,9 @@ export interface GateOptions {
   /** Returns a reason to refuse a new request (the budget), or undefined. */
   refusal?: () => string | undefined;
   onEvent?: (event: GateEvent) => void;
+  /** This many connection errors within `connectionWindowMs` count as a capacity signal: everybody pauses and the ladder drops a rung (default 5 in 10 s). */
+  connectionErrors?: number;
+  connectionWindowMs?: number;
 }
 
 const THROTTLE_KINDS = new Set(["rate_limit", "overloaded"]);
@@ -29,11 +34,13 @@ export class Gate {
   private pausedUntil = 0;
   private stopMessage: string | undefined;
   private inflightCount = 0;
+  private readonly connectionCluster: ClusterDetector;
 
   private readonly options: GateOptions;
 
   constructor(options: GateOptions) {
     this.options = options;
+    this.connectionCluster = new ClusterDetector(options.connectionErrors ?? 5, options.connectionWindowMs ?? 10_000);
   }
 
   get inflight(): number {
@@ -70,11 +77,19 @@ export class Gate {
     return { model: client.model, stream: (request, signal) => this.stream(client, request, signal) };
   }
 
-  private pause(delayMs: number): void {
+  private pause(delayMs: number, cause: "provider" | "connection" = "provider"): void {
     const until = this.options.now() + delayMs;
     if (until <= this.pausedUntil) return;
     this.pausedUntil = until;
-    this.options.onEvent?.({ type: "throttle", delayMs, pausedUntil: until });
+    this.options.onEvent?.({ type: "throttle", delayMs, pausedUntil: until, cause });
+  }
+
+  /**
+   * Connection errors in a cluster mean that the machine or the provider cannot take this many connections at once (or something is wrong with the network);
+   * replacing the failed agents at once only adds more connections. So a cluster is treated like a throttle. One error alone is not: the framework retries it.
+   */
+  private noteConnectionError(): void {
+    if (this.connectionCluster.note(this.options.now())) this.pause(this.options.defaultPauseMs, "connection");
   }
 
   private async admit(signal: AbortSignal): Promise<void> {
@@ -111,5 +126,6 @@ export class Gate {
     if (!(error instanceof ProviderError)) return;
     if (error.kind === "quota") this.stop(error.message);
     else if (THROTTLE_KINDS.has(error.kind)) this.pause(error.retryAfterMs ?? this.options.defaultPauseMs);
+    else if (error.kind === "network") this.noteConnectionError();
   }
 }

@@ -9,6 +9,8 @@ export interface RunState {
   hints: string[];
   ladder: LadderState;
   proved: number[];
+  /** Code mode: the best verified score so far. */
+  bestScore?: number | null;
   tokensUsed: number;
   requests: number;
   /** Agents that ended without finishing their goal, for the guard against endless replacement. */

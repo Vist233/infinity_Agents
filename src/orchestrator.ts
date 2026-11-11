@@ -1,22 +1,25 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { type LlmClient, createChatClient } from "sakura-agent";
-import { type AgentEnd, type AgentWorker, startWorker } from "./agent-worker.ts";
+import { type LlmClient, type ModelConfig, createChatClient } from "sakura-agent";
+import { type AgentEnd, type AgentWorker, type WorkerEnvironmentFactory, startWorker } from "./agent-worker.ts";
 import { Budget, totalTokens } from "./budget.ts";
+import { replacementWait } from "./backoff.ts";
 import { type Clock, realClock } from "./clock.ts";
+import type { RunComponent } from "./component.ts";
+import { defaultComponents } from "./defaults.ts";
+import { allowSlowConnects } from "./network.ts";
 import { Gate, type GateEvent } from "./gate.ts";
 import { type LadderEvent, type LadderState, type LadderStep, startLadder, stepLadder } from "./ladder.ts";
-import type { LeanRunner } from "./lean-runner.ts";
-import { createMode } from "./mode-factory.ts";
-import type { Mode } from "./mode.ts";
+import { type ModeContext, createMode, isFinishedBefore, reportKindOf } from "./mode-factory.ts";
+import type { Mode, Progress, Submission, SubmitInfo } from "./mode.ts";
 import { hintFor, planHints } from "./planner.ts";
+import { type BranchReviewer, startBranchReview } from "./review-loop.ts";
 import { RungMeter } from "./rung-meter.ts";
 import { type RunState, loadState, saveState } from "./run-state.ts";
 import { type RunLayout, runLayout } from "./run-layout.ts";
 import { RunRecorder } from "./run-recorder.ts";
 import { RESCUE_MESSAGE, StuckDetector } from "./stuck.ts";
 import type { TaskDefinition } from "./task.ts";
-import type { Verifier } from "./verifier.ts";
 
 export interface RunOptions {
   /** The run directory. Default: a new one under the task's `runsDir`. With `resume` it must be an existing run. */
@@ -25,15 +28,20 @@ export interface RunOptions {
   resume?: boolean;
   /** The user's stop. */
   signal?: AbortSignal;
-  /** For tests: time, the model, Lean or the verifier. */
+  /** Deployment-owned environment for file and shell tools. It must enforce its own access and resource policy. */
+  createEnvironment?: WorkerEnvironmentFactory;
+  /** Parts that watch the run (the machine sampler); default: `defaultComponents()`. */
+  components?: RunComponent[];
+  /** For tests: time, the model, and the mode (for example a math mode with a fake verifier). */
+  mode?: (context: ModeContext) => Mode;
   clock?: Clock;
   createClient?: (gate: Gate) => LlmClient;
-  leanRunner?: LeanRunner;
-  verifier?: Verifier;
   /** How often silence and the state file are looked at (default one minute). */
   checkEveryMs?: number;
   /** How long a paused agent waits before it goes on (default one second). */
   pauseRetryMs?: number;
+  /** The first wait before a failed agent is replaced (default one second; doubles with every failure in a row, up to a minute). */
+  replacementWaitMs?: number;
 }
 
 export interface RunOutcome {
@@ -41,6 +49,8 @@ export interface RunOutcome {
   runDir: string;
   proved: number[];
   tokensUsed: number;
+  /** Code mode: the best score of a scored submit (null when there was none). */
+  bestScore?: number | null;
 }
 
 /** Always plan a full list: a replacement agent needs a new hint even when the ladder is short. */
@@ -50,12 +60,13 @@ const DEFAULT_PAUSE_MS = 5000;
 
 /** Runs a task to the end (or to the user's stop) and returns why it ended. */
 export async function runTask(task: TaskDefinition, options: RunOptions = {}): Promise<RunOutcome> {
+  allowSlowConnects();
   const clock = options.clock ?? realClock;
   const layout = runLayout(options.runDir ?? newRunDir(task, clock));
   mkdirSync(layout.root, { recursive: true });
   const prior = options.resume ? loadState(layout.state) : undefined;
   if (options.resume && !prior) throw new Error(`Nothing to resume in ${layout.root}`);
-  if (prior?.finished === "proved" && task.stop === "first-success") return outcomeOf(layout, prior.finished, prior.proved, prior.tokensUsed);
+  if (prior && isFinishedBefore(task, prior)) return outcomeOf(layout, prior.finished as string, prior.proved, prior.tokensUsed);
 
   const run = new Run(task, options, layout, clock, prior);
   return run.execute();
@@ -70,11 +81,12 @@ function newRunDir(task: TaskDefinition, clock: Clock): string {
   return join(task.runsDir ?? "runs", `${slug}-${new Date(clock.now()).toISOString().replace(/[:.]/g, "-")}`);
 }
 
-const outcomeOf = (layout: RunLayout, reason: string, proved: number[], tokensUsed: number): RunOutcome => ({
+const outcomeOf = (layout: RunLayout, reason: string, proved: number[], tokensUsed: number, bestScore?: number | null): RunOutcome => ({
   reason,
   runDir: layout.root,
   proved,
   tokensUsed,
+  ...(bestScore !== undefined ? { bestScore } : {}),
 });
 
 /** The state of one run and the rules that connect the parts. The parts themselves (ladder, gate, budget, ...) are in their own modules. */
@@ -91,9 +103,10 @@ class Run {
   private readonly stuck: StuckDetector;
   private readonly meter: RungMeter;
   private readonly workers = new Map<number, AgentWorker>();
-  private readonly proved: number[];
   private readonly stopWatching = new AbortController();
   private readonly allEnded: Array<Promise<void>> = [];
+  private branch: BranchReviewer | undefined;
+  private readonly components: RunComponent[];
 
   private ladder!: LadderState;
   /** The ladder as it was when the run was told to stop, so that a resume starts the same agents again. */
@@ -102,6 +115,7 @@ class Run {
   private mode!: Mode;
   private client!: LlmClient;
   private failures: number;
+  private consecutiveFailures = 0;
   private finishing: string | undefined;
   private readonly startedAt: number;
   private budgetRefusalLogged = false;
@@ -117,10 +131,10 @@ class Run {
     this.layout = layout;
     this.clock = clock;
     this.prior = prior;
+    this.components = options.components ?? defaultComponents();
     this.startedAt = prior?.startedAt ?? clock.now();
-    this.proved = [...(prior?.proved ?? [])];
     this.failures = prior?.failures ?? 0;
-    this.recorder = new RunRecorder(layout, clock);
+    this.recorder = new RunRecorder(layout, clock, reportKindOf(task));
     this.gate = new Gate({
       now: () => clock.now(),
       sleep: (ms, signal) => clock.sleep(ms, signal),
@@ -143,7 +157,8 @@ class Run {
     try {
       await this.prepare();
     } catch (error) {
-      this.recorder.event({ type: "run_end", reason: `failed to start: ${String(error)}`, tokensUsed: this.budget.tokensUsed, proved: this.proved });
+      this.mode?.finish?.([]);
+      this.recorder.event({ type: "run_end", reason: `failed to start: ${String(error)}`, tokensUsed: this.budget.tokensUsed, proved: this.progress().proved });
       this.recorder.report();
       throw error;
     }
@@ -154,71 +169,99 @@ class Run {
     this.ladder = state;
     for (const agent of spawn) this.startAgent(agent, this.prior !== undefined);
     this.saveState();
+    for (const component of this.components)
+      component.start({
+        layout: this.layout,
+        clock: this.clock,
+        view: { rung: () => this.ladder.rungs[this.ladder.rungIndex] ?? this.workers.size, agents: () => this.workers.size },
+        note: (message) => this.recorder.event({ type: "warning", message }),
+      });
     if (this.options.signal?.aborted) void this.finish("stopped");
     void this.watchLoop();
     return this.outcome;
   }
 
   private async prepare(): Promise<void> {
-    this.mode = createMode(this.task, this.layout, this.options);
-    await this.mode.prepare();
     this.client = this.gate.wrap(
       this.options.createClient ? this.options.createClient(this.gate) : createChatClient({ ...this.task.model, retry: this.gate.retry }),
     );
+    const clientFor = (model?: ModelConfig) => (model ? this.gate.wrap(createChatClient({ ...model, retry: this.gate.retry })) : this.client);
+    this.mode = (this.options.mode ?? createMode)({ task: this.task, layout: this.layout, clock: this.clock, clientFor });
+    if (this.prior) this.mode.restore({ proved: this.prior.proved, bestScore: this.prior.bestScore ?? null });
+    await this.mode.prepare();
+    for (const message of this.mode.warnings?.() ?? []) this.recorder.event({ type: "warning", message });
+    if (this.mode.branchReview) {
+      this.branch = startBranchReview({
+        settings: this.mode.branchReview,
+        ceiling: this.task.agents,
+        clock: this.clock,
+        layout: this.layout,
+        gate: this.gate,
+        budget: this.budget,
+        workers: this.workers,
+        record: (event) => this.recorder.event(event),
+      });
+    }
     this.hints = this.prior?.hints ?? (await this.plan());
   }
 
   private async plan(): Promise<string[]> {
-    return planHints({ client: this.client, statement: this.mode.plannerSubject, count: MAX_HINTS_PLANNED });
+    return planHints({ client: this.client, statement: this.mode.plannerSubject, count: MAX_HINTS_PLANNED, kind: this.mode.kind });
   }
 
   // ----- agents -----
 
   private startAgent(number: number, resume: boolean): void {
     this.stuck.register(number);
+    this.branch?.agentStarted(number);
     this.recorder.lifecycle(number, "started", resume ? "resumed" : "");
     const worker = startWorker({
       number,
       layout: this.layout,
       client: this.client,
-      setup: this.mode.agentSetup(hintFor(this.hints, number)),
+      setup: this.mode.agentSetup(hintFor(this.hints, number), number),
+      ...(this.options.createEnvironment ? { createEnvironment: this.options.createEnvironment } : {}),
       resume,
       clock: this.clock,
       gate: this.gate,
       pauseRetryMs: this.options.pauseRetryMs ?? 1000,
       hooks: {
         onActivity: () => this.stuck.touch(number),
-        onReply: () => this.apply(stepLadder(this.ladder, { type: "reply", agent: number })),
+        onReply: () => {
+          this.consecutiveFailures = 0;
+          this.apply(stepLadder(this.ladder, { type: "reply", agent: number }));
+        },
         onCommit: (commit, turn) => this.recorder.commit(number, commit, turn),
-        onSubmit: async (submission, info) => this.onSubmit(number, submission.code, submission.verdict, info),
+        onDenied: (denial) => this.recorder.event({ type: "action_denied", agent: number, ...denial }),
+        onSubmit: async (submission, info) => this.onSubmit(number, submission, info),
       },
     });
     this.workers.set(number, worker);
     this.allEnded.push(worker.done.then((end) => this.onAgentEnd(number, end)));
   }
 
-  private async onSubmit(
-    agent: number,
-    code: string,
-    verdict: { proved: boolean; reason: string },
-    info: { commit: string | null; steps: number; elapsedMs: number },
-  ): Promise<void> {
-    this.recorder.submit(agent, { code, proved: verdict.proved, reason: verdict.reason, ...info });
-    if (!verdict.proved) return;
-    writeFileSync(this.layout.provedMarker(agent), `accepted by the orchestrator at ${new Date(this.clock.now()).toISOString()}\n`);
-    this.proved.push(agent);
-    this.saveState();
-    if (this.task.stop === "first-success") void this.finish("proved");
+  /** The mode takes the submit; the orchestrator only obeys what it says about the run. */
+  private async onSubmit(agent: number, submission: Submission, info: SubmitInfo): Promise<void> {
+    const effect = this.mode.accept(agent, submission, info, { recorder: this.recorder, layout: this.layout, clock: this.clock });
+    if (effect.changed) this.saveState();
+    if (effect.finish) void this.finish(effect.finish);
   }
 
-  private onAgentEnd(number: number, end: AgentEnd): void {
+  private async onAgentEnd(number: number, end: AgentEnd): Promise<void> {
     this.workers.delete(number);
     this.stuck.forget(number);
+    this.branch?.agentEnded(number);
     const detail = [end.reason, end.cancelled, end.detail].filter(Boolean).join(": ");
     this.recorder.lifecycle(number, end.cancelled === "stuck" ? "stopped" : "ended", detail);
     if (this.finishing || end.cancelled === "retire") return;
-    if (end.reason !== "done") this.failures += 1;
+    if (end.reason !== "done") {
+      this.failures += 1;
+      this.consecutiveFailures += 1;
+    }
     if (this.failures > this.task.agents * 5 + 10) return void this.finish("too many agent failures");
+    const wait = replacementWait(end.reason !== "done", this.consecutiveFailures, this.options.replacementWaitMs);
+    if (wait > 0) await this.clock.sleep(wait, this.stopWatching.signal).catch(() => undefined);
+    if (this.finishing) return;
     this.apply(stepLadder(this.ladder, { type: "agent_ended", agent: number }));
   }
 
@@ -249,7 +292,7 @@ class Run {
         this.meter.recordReply(event.latencyMs, totalTokens(event.usage));
         return;
       case "throttle":
-        this.recorder.event({ type: "throttle", delayMs: event.delayMs });
+        this.recorder.event({ type: "throttle", delayMs: event.delayMs, ...(event.cause ? { cause: event.cause } : {}) });
         this.meter.recordThrottle();
         if (this.ladder) this.feed({ type: "throttle" });
         return;
@@ -295,12 +338,23 @@ class Run {
     this.stopWatching.abort();
     this.apply(stepLadder(this.ladder, { type: "finish" }));
     this.drainOrCancel(reason);
+    await this.branch?.stop();
+    if (this.branch) this.recorder.event({ type: "review_skips", skips: { ...this.branch.skips } });
+    const live = [...this.workers.keys()];
     await Promise.allSettled(this.allEnded);
-    this.recorder.event({ type: "run_end", reason, tokensUsed: this.budget.tokensUsed, proved: this.proved });
+    await Promise.allSettled(this.components.map((component) => component.stop()));
+    this.mode.finish?.(live);
+    this.recorder.event({
+      type: "run_end",
+      reason,
+      tokensUsed: this.budget.tokensUsed,
+      proved: this.progress().proved,
+      ...this.mode.endFields(),
+    });
     this.saveState(reason);
     this.recorder.report();
     this.closed = true;
-    this.resolveOutcome(outcomeOf(this.layout, reason, this.proved, this.budget.tokensUsed));
+    this.resolveOutcome(outcomeOf(this.layout, reason, this.progress().proved, this.budget.tokensUsed, this.mode.endFields().bestScore));
   }
 
   /** A budget or quota stop is soft: requests in flight finish and nothing new starts. Any other end cancels the agents at once. */
@@ -312,6 +366,11 @@ class Run {
     for (const worker of this.workers.values()) worker.cancel("finish");
   }
 
+  /** What the mode has so far; before the mode exists (a failed start), what the run had when it was resumed. */
+  private progress(): Progress {
+    return this.mode?.progress() ?? { proved: [...(this.prior?.proved ?? [])], bestScore: this.prior?.bestScore ?? null };
+  }
+
   private saveState(finished: string | null = null): void {
     if (this.closed) return;
     saveState(this.layout.state, {
@@ -320,7 +379,8 @@ class Run {
       startedAt: this.startedAt,
       hints: this.hints,
       ladder: this.ladderAtStop ?? this.ladder,
-      proved: this.proved,
+      proved: this.progress().proved,
+      bestScore: this.progress().bestScore,
       tokensUsed: this.budget.tokensUsed,
       requests: this.budget.requestCount,
       failures: this.failures,

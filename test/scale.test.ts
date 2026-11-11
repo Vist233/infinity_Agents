@@ -1,3 +1,4 @@
+import { mathModeWith } from "./support/math-mode-with.ts";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +8,7 @@ import { runTask } from "../src/orchestrator.ts";
 import type { LedgerEntry, RunEvent } from "../src/records.ts";
 import { runLayout } from "../src/run-layout.ts";
 import { loadState } from "../src/run-state.ts";
-import { defineTask } from "../src/task.ts";
+import { type MathTask, defineTask } from "../src/task.ts";
 import { fakeVerifier } from "./support/fake-verifier.ts";
 import { createScriptedModel } from "./support/scripted-model.ts";
 
@@ -17,7 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-const task = (overrides: Partial<Parameters<typeof defineTask>[0]> = {}) =>
+const task = (overrides: Partial<MathTask> = {}) =>
   defineTask({
     name: "scale",
     mode: "math",
@@ -55,7 +56,7 @@ describe("scale with scripted agents", () => {
     const controller = new AbortController();
     const running = runTask(task({ stop: "until-stopped" }), {
       createClient: () => model,
-      verifier: fakeVerifier,
+      mode: mathModeWith({ verifier: fakeVerifier }),
       runDir,
       signal: controller.signal,
       checkEveryMs: 1000,
@@ -89,7 +90,13 @@ describe("scale with scripted agents", () => {
     });
     const runDir = join(root, "run");
     const layout = runLayout(runDir);
-    const outcome = await runTask(task(), { createClient: () => model, verifier: fakeVerifier, runDir, checkEveryMs: 500, pauseRetryMs: 20 });
+    const outcome = await runTask(task(), {
+      createClient: () => model,
+      mode: mathModeWith({ verifier: fakeVerifier }),
+      runDir,
+      checkEveryMs: 500,
+      pauseRetryMs: 20,
+    });
 
     expect(outcome.reason).toBe("proved");
     expect(model.peakConcurrent).toBeLessThanOrEqual(limit);
@@ -114,7 +121,13 @@ describe("scale with scripted agents", () => {
     const model = createScriptedModel({ hints: HINTS, isGood: () => false, latencyMs: 30, quotaAfter: 300, constantContent: true });
     const runDir = join(root, "run");
     const layout = runLayout(runDir);
-    const outcome = await runTask(task(), { createClient: () => model, verifier: fakeVerifier, runDir, checkEveryMs: 500, pauseRetryMs: 20 });
+    const outcome = await runTask(task(), {
+      createClient: () => model,
+      mode: mathModeWith({ verifier: fakeVerifier }),
+      runDir,
+      checkEveryMs: 500,
+      pauseRetryMs: 20,
+    });
 
     expect(outcome.reason).toBe("quota");
     const afterStop = model.requestCount;

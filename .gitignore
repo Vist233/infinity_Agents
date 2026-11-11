@@ -1,3 +1,7 @@
+vendor/*.tgz
 node_modules/
 runs/
 coverage/
+.venv-ml/
+data/
+server-pull/

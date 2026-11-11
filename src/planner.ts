@@ -16,11 +16,29 @@ export const FALLBACK_HINTS: readonly string[] = [
   "Use calc blocks so that each equality step is checked on its own.",
 ];
 
+/** The same for code tasks: no task-specific knowledge, only ways of working that fit most problems with a score. */
+export const CODE_FALLBACK_HINTS: readonly string[] = [
+  "Build a quick, solid baseline first and submit it early, then improve it step by step.",
+  "Look hard at the data first (types, missing values, class balance, leakage), and let what you find choose the method.",
+  "Use gradient boosted trees and spend your time on tuning them with a time limit per run.",
+  "Try a different model family from the usual one (for example linear, nearest neighbours, neural network) and compare on a validation split.",
+  "Work on features: transformations, interactions, encodings; measure each change on a validation split.",
+  "Use cross-validation to choose between ideas, and submit only what is clearly better than your best.",
+  "Build an ensemble of several different models (averaging or stacking) from your own earlier results.",
+  "Search for the best hyper-parameters with a small, time-limited random search before any long training.",
+  "Try to make training much faster (sampling, early stopping, fewer features) so that you can test more ideas.",
+  "Look at the examples your best model gets wrong and design something for them.",
+  "Start from a simple, well-known recipe for this kind of problem and push it as far as it goes before trying anything exotic.",
+  "Use a neural network with careful scaling of the inputs and a learning-rate schedule, and compare it with trees.",
+];
+
 const PLANNER_SYSTEM =
   "You plan a team of agents that each try to prove one statement in Lean 4 (core library only, no Mathlib). Answer with a JSON array of strings and nothing else.";
 
 export interface PlanOptions {
   client: LlmClient;
+  /** What kind of task the hints are for (default math). */
+  kind?: "math" | "code";
   /** The proposition to prove, as Lean source. */
   statement: string;
   /** How many different hints to ask for. */
@@ -36,16 +54,16 @@ export async function planHints(options: PlanOptions): Promise<string[]> {
   const signal = options.signal ?? new AbortController().signal;
   try {
     const text = await askPlanner(options, signal);
-    return completeWithFallback(parseHints(text), options.count);
+    return completeWithFallback(parseHints(text), options.count, options.kind);
   } catch (error) {
     if (signal.aborted) throw error;
-    return completeWithFallback([], options.count);
+    return completeWithFallback([], options.count, options.kind);
   }
 }
 
 async function askPlanner(options: PlanOptions, signal: AbortSignal): Promise<string> {
   const request = {
-    system: PLANNER_SYSTEM,
+    system: options.kind === "code" ? CODE_PLANNER_SYSTEM : PLANNER_SYSTEM,
     messages: [
       {
         role: "user" as const,
@@ -53,7 +71,10 @@ async function askPlanner(options: PlanOptions, signal: AbortSignal): Promise<st
         content: [
           {
             type: "text" as const,
-            text: `Statement:\n${options.statement}\n\nWrite ${options.count} different one-sentence strategy hints, one per agent, each pointing to a different way to prove it.`,
+            text:
+              options.kind === "code"
+                ? `Task:\n${options.statement}\n\nWrite ${options.count} different one-sentence strategy hints, one per agent, each pointing to a different way to get a better score.`
+                : `Statement:\n${options.statement}\n\nWrite ${options.count} different one-sentence strategy hints, one per agent, each pointing to a different way to prove it.`,
           },
         ],
       },
@@ -78,9 +99,12 @@ function parseHints(text: string): string[] {
   }
 }
 
-function completeWithFallback(hints: string[], count: number): string[] {
+const CODE_PLANNER_SYSTEM =
+  "You plan a team of agents that each work on the same task with a score (code, data, machine learning). Answer with a JSON array of strings and nothing else.";
+
+function completeWithFallback(hints: string[], count: number, kind: "math" | "code" = "math"): string[] {
   const unique = [...new Set(hints)];
-  const filler = FALLBACK_HINTS.filter((hint) => !unique.includes(hint));
+  const filler = (kind === "code" ? CODE_FALLBACK_HINTS : FALLBACK_HINTS).filter((hint) => !unique.includes(hint));
   return [...unique, ...filler].slice(0, Math.max(count, 1));
 }
 

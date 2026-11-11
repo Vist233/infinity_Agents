@@ -33,7 +33,7 @@ const task = defineTask({
   },
   stop: "first-success",
   leanPool: 2,
-  sandbox: false, // no sandbox by default; a proof file runs with your rights. true confines Lean on macOS.
+  sandbox: false, // the owner decided: no sandbox; a proof file runs with your rights. true confines Lean on macOS.
   tokens: 3_000_000,
   stuckMinutes: 10,
   runsDir: "runs",

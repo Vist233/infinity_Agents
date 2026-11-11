@@ -2,6 +2,7 @@
 import { runTask } from "../../src/orchestrator.ts";
 import { defineTask } from "../../src/task.ts";
 import { fakeVerifier } from "./fake-verifier.ts";
+import { mathModeWith } from "./math-mode-with.ts";
 import { createScriptedModel } from "./scripted-model.ts";
 
 const [runDir, runsDir] = process.argv.slice(2);
@@ -15,4 +16,4 @@ const task = defineTask({
   stop: "first-success",
   runsDir: runsDir ?? ".",
 });
-await runTask(task, { createClient: () => model, verifier: fakeVerifier, runDir: runDir ?? "run", checkEveryMs: 50 });
+await runTask(task, { createClient: () => model, mode: mathModeWith({ verifier: fakeVerifier }), runDir: runDir ?? "run", checkEveryMs: 50 });

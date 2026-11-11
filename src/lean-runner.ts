@@ -36,7 +36,7 @@ export interface LeanRunnerOptions {
   /** Path of the real `lean` executable (not the elan proxy, which asks the network for updates). */
   leanBin: string;
   pool: Pool;
-  /** Confine the processes with the macOS sandbox when it exists. Default false. */
+  /** Confine the processes with the macOS sandbox when it exists. Default false: the owner decided against it (docs/decisions.md, 28). */
   sandbox?: boolean;
 }
 

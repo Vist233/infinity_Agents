@@ -1,3 +1,4 @@
+import { mathModeWith } from "./support/math-mode-with.ts";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,7 +53,7 @@ describe("resume after a kill", () => {
       stop: "first-success",
       runsDir: root,
     });
-    const outcome = await runTask(task, { createClient: () => model, verifier: fakeVerifier, runDir, resume: true });
+    const outcome = await runTask(task, { createClient: () => model, mode: mathModeWith({ verifier: fakeVerifier }), runDir, resume: true });
 
     expect(outcome.reason).toBe("proved");
     const ledger = new JsonlFile<LedgerEntry>(layout.ledger).readAll();

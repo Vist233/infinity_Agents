@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -31,4 +33,30 @@ export async function headCommit(dir: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/** What a work directory starts with. */
+export interface WorkDirContents {
+  /** Name -> content; put in read-only. */
+  files: Record<string, string>;
+  /** Name -> absolute target of a symbolic link; kept out of Git. */
+  links?: Record<string, string> | undefined;
+  /** More lines for `.gitignore`. */
+  gitignore?: string[] | undefined;
+}
+
+/** Creates the work directory as a Git repository holding read-only copies of the given files, and commits them as "start". Safe to repeat on resume. */
+export async function createWorkDir(workDir: string, contents: WorkDirContents): Promise<void> {
+  mkdirSync(workDir, { recursive: true });
+  if (existsSync(join(workDir, ".git"))) return;
+  for (const [name, content] of Object.entries(contents.files)) {
+    const path = join(workDir, name);
+    writeFileSync(path, content);
+    chmodSync(path, 0o444);
+  }
+  for (const [name, target] of Object.entries(contents.links ?? {})) symlinkSync(target, join(workDir, name));
+  const ignored = [...Object.keys(contents.links ?? {}), ...(contents.gitignore ?? [])];
+  if (ignored.length > 0) writeFileSync(join(workDir, ".gitignore"), `${ignored.join("\n")}\n`);
+  await initWorkRepo(workDir);
+  await commitAll(workDir, "start");
 }

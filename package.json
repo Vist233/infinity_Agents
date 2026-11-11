@@ -18,7 +18,7 @@
     "check": "npm run typecheck && npm run lint && npm run format:check && npm test"
   },
   "dependencies": {
-    "sakura-agent": "0.1.1"
+    "sakura-agent": "file:vendor/sakura-agent-0.1.2.tgz"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",

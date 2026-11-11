@@ -3,12 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolContext } from "sakura-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { realClock } from "../src/clock.ts";
 import { MathMode } from "../src/math-mode.ts";
 import { createMode } from "../src/mode-factory.ts";
 import { runLayout } from "../src/run-layout.ts";
 import { defineTask } from "../src/task.ts";
 import { FakeLeanRunner } from "./support/fake-lean-runner.ts";
 import { fakeVerifier } from "./support/fake-verifier.ts";
+import { createScriptedModel } from "./support/scripted-model.ts";
 
 const task = defineTask({
   name: "m",
@@ -60,7 +62,7 @@ describe("MathMode", () => {
   it("gives the agent one extra tool, lean, whose submit reaches the worker", async () => {
     const received: unknown[] = [];
     const setup = new MathMode({ task, leanDir: root, verifier: fakeVerifier }).agentSetup("h");
-    const [lean, ...others] = setup.tools(async (submission) => void received.push(submission));
+    const [lean, ...others] = setup.tools(async (submission) => void received.push(submission), { commitNow: async () => null, workDir: "." });
     expect(others).toEqual([]);
     expect(lean?.name).toBe("lean");
     const env = { readFile: async () => new TextEncoder().encode("GOOD") };
@@ -70,10 +72,14 @@ describe("MathMode", () => {
 });
 
 describe("createMode", () => {
-  it("builds the math mode for a math task, with the overrides it is given", async () => {
-    const mode = createMode(task, runLayout(root), { verifier: fakeVerifier });
-    expect(mode.name).toBe("math");
-    await mode.prepare();
-    expect(mode.agentSetup("h").prompt).toContain("1 = 1");
+  it("builds the math mode for a math task", () => {
+    const mode = createMode({
+      task,
+      layout: runLayout(root),
+      clock: realClock,
+      clientFor: () => createScriptedModel({ hints: [], isGood: () => false }),
+    });
+    expect(mode.kind).toBe("math");
+    expect(mode.plannerSubject).toContain("1 = 1");
   });
 });

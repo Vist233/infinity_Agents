@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { JsonlFile } from "./jsonl.ts";
 
@@ -19,7 +19,7 @@ export class DifferentFilesystemError extends Error {
 export interface KeeperOptions {
   /** A private directory (created, mode 0700) that holds the hidden things under unguessable names and the journal. Never inside an agent's work directory. */
   dir: string;
-  /** For tests: which device a path is on (default: `stat().dev`). */
+  /** Optional early check of which device a path is on (tests). Without it the rename decides: it fails with EXDEV across filesystems. */
   deviceOf?: (path: string) => number;
   now?: () => number;
 }
@@ -37,17 +37,17 @@ const JOURNAL = "journal.jsonl";
 /**
  * Takes the evaluator and the hidden data away from the places the agents can see while they work, and puts them back afterwards.
  * Moves, never deletes: a rename to `<dir>/<random>`, journalled first. The data stays on disk under a name that cannot be guessed;
- * the evaluator is given that private path. This is not a lock by itself: an agent with a shell and the same rights can still read it unless its shell is confined.
+ * the evaluator is given that private path. This is not a lock: see docs/06-hiding-data-from-agents.md for what it does not stop.
  */
 export class HiddenKeeper {
   private readonly dir: string;
   private readonly journal: JsonlFile<JournalEntry>;
-  private readonly deviceOf: (path: string) => number;
+  private readonly deviceOf: ((path: string) => number) | undefined;
   private readonly now: () => number;
 
   constructor(options: KeeperOptions) {
     this.dir = resolve(options.dir);
-    this.deviceOf = options.deviceOf ?? ((path) => statSync(path).dev);
+    this.deviceOf = options.deviceOf;
     this.now = options.now ?? Date.now;
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     this.journal = new JsonlFile<JournalEntry>(join(this.dir, JOURNAL));
@@ -61,7 +61,15 @@ export class HiddenKeeper {
       const id = randomBytes(16).toString("hex");
       const to = join(this.dir, id);
       this.journal.append({ type: "plan", id, from, to, ts: this.now() });
-      renameSync(from, to);
+      try {
+        renameSync(from, to);
+      } catch (error) {
+        // The real test of "one filesystem" is the rename itself: comparing device numbers is wrong on overlay file systems (Docker), where a file and
+        // a directory of one layer report different ones. Whatever was moved before is put back, so that a bad path hides nothing.
+        this.restore();
+        if ((error as NodeJS.ErrnoException).code === "EXDEV") throw new DifferentFilesystemError(from, this.dir);
+        throw error;
+      }
       this.journal.append({ type: "moved", id, ts: this.now() });
     }
   }
@@ -95,7 +103,7 @@ export class HiddenKeeper {
     if (!existsSync(path)) throw new Error(`Cannot hide ${path}: it does not exist`);
     if (this.openPlans().some((plan) => plan.from === path)) throw new Error(`Cannot hide ${path}: it is already hidden`);
     if (isInside(path, this.dir) || isInside(this.dir, path)) throw new Error(`Cannot hide ${path}: it overlaps the keeper directory ${this.dir}`);
-    if (this.deviceOf(path) !== this.deviceOf(this.dir)) throw new DifferentFilesystemError(path, this.dir);
+    if (this.deviceOf && this.deviceOf(path) !== this.deviceOf(this.dir)) throw new DifferentFilesystemError(path, this.dir);
   }
 
   private openPlans() {

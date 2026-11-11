@@ -9,6 +9,6 @@
       "suspicious": { "noExplicitAny": "off" }
     }
   },
-  "files": { "includes": ["src/**/*.ts", "test/**/*.ts", "examples/**/*.ts"] },
+  "files": { "includes": ["src/**/*.ts", "test/**/*.ts", "examples/**/*.ts", "!.publish-clone"] },
   "assist": { "enabled": false }
 }

@@ -1,4 +1,5 @@
 import type { LedgerEntry } from "./records.ts";
+import { renderCsv } from "./csv.ts";
 
 export interface LeaderboardRow {
   rank: number;
@@ -53,15 +54,11 @@ function compareRows(a: LeaderboardRow, b: LeaderboardRow): number {
   );
 }
 
-const CSV_HEADER = "rank,agent,proved,steps,elapsed_ms,submits,commit,work_dir";
+const CSV_HEADER = ["rank", "agent", "proved", "steps", "elapsed_ms", "submits", "commit", "work_dir"];
 
 export function renderLeaderboardCsv(rows: readonly LeaderboardRow[]): string {
-  const lines = rows.map((row) =>
-    [row.rank, row.agent, row.proved, row.steps ?? "", row.elapsedMs ?? "", row.submits, row.commit ?? "", csvCell(row.workDir)].join(","),
+  return renderCsv(
+    CSV_HEADER,
+    rows.map((row) => [row.rank, row.agent, row.proved, row.steps, row.elapsedMs, row.submits, row.commit, row.workDir]),
   );
-  return `${[CSV_HEADER, ...lines].join("\n")}\n`;
-}
-
-function csvCell(value: string): string {
-  return /[",\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
 }

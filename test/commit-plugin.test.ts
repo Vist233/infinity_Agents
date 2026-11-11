@@ -60,7 +60,7 @@ describe("commit plugin", () => {
   });
 
   it("when git is slower than the next write, the commit holds the directory as it is when git looks, and nothing is lost", async () => {
-    // Exact behaviour: the commit is started at turn_end but git reads the directory a few milliseconds later.
+    // Exact behaviour (docs/decisions.md, 8): the commit is started at turn_end but git reads the directory a few milliseconds later.
     // A file written before turn_end is always in that commit; a file written in between may be in it too. No change is ever lost.
     const commits: string[] = [];
     const plugin = commitPlugin({ dir, onCommit: (id) => commits.push(id) });

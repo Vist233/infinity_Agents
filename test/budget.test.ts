@@ -33,7 +33,7 @@ describe("Budget", () => {
     expect(budget.refusal()).toContain("token budget reached"); // 600 + 2 x 300 = 1200
   });
 
-  it("with two in flight it is the rule: used + 2 x mean >= budget", () => {
+  it("with two in flight it is the owner's rule: used + 2 x mean >= budget", () => {
     const budget = new Budget(900, () => 1); // the candidate makes two
     budget.record(reply(200, 100));
     budget.record(reply(200, 100)); // 600 + 600 = 1200 >= 900

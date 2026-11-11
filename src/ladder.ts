@@ -2,7 +2,7 @@
  * The ladder: how many agents are alive. A pure function over events; it holds no timers and starts nothing itself.
  * The caller feeds events in and obeys the answer (spawn these agent numbers, retire those).
  *
- * Rules:
+ * Rules (docs/02 section 3, confirmed):
  * - Rungs 1, 2, 4, 8, 16, 32, 64, 100, cut at the ceiling.
  * - Advance when the rung is full and every live agent has made at least `repliesToAdvance` replies since the last change, with no throttling answer.
  * - On a throttling answer: record that rung as the provider's limit, drop one rung, and hold (never climb again).
