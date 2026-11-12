@@ -8,6 +8,7 @@ import { type AgentSetup, type Mode, type Progress, type Submission, type Submit
 import { CODE_GOAL_OBJECTIVE, codePrompt, codeRules, strategyRule } from "./prompts.ts";
 import type { Pool } from "./pool.ts";
 import type { RunLayout } from "./run-layout.ts";
+import { type SlotGate, commandLimits } from "./slot-gate.ts";
 import { safetyReview } from "./safety-review.ts";
 import { createSubmitTool } from "./submit-tool.ts";
 import { type CodeTask, better } from "./task.ts";
@@ -15,6 +16,9 @@ import { type CodeTask, better } from "./task.ts";
 /** Large binary results are not worth keeping in every agent's Git history. */
 const GITIGNORE = ["__pycache__/", "*.pyc", "*.pt", "*.pth", "*.ckpt", "*.npy", "*.npz", "*.pkl", "*.joblib", "*.safetensors", "*.onnx", ".venv/", "wandb/"];
 const DEFAULT_EVAL_TIMEOUT_MINUTES = 10;
+export const DEFAULT_COMMAND_TIMEOUT_MINUTES = 120;
+/** The shell tool moves a command to the background after this long; the largest value its timer takes, less room for the extra seconds of a `sleep N` command. */
+const NEVER_BACKGROUND_MS = 2_000_000_000;
 
 export interface CodeModeOptions {
   task: CodeTask;
@@ -26,6 +30,8 @@ export interface CodeModeOptions {
   keeper?: HiddenKeeper | undefined;
   /** The model that reviews the agents' commands; used when the task has review settings. */
   reviewClient: LlmClient;
+  /** Heavy commands wait here for a slot (docs/16 section C); without it they run at once. */
+  gate?: SlotGate | undefined;
 }
 
 /** Code mode: agents with a shell improve a result; each `submit` is scored by the task's evaluator (docs/05). */
@@ -128,7 +134,11 @@ export class CodeMode implements Mode {
       gitignore: GITIGNORE,
       builtinTools: ["read", "write", "edit", "bash"],
       confine: false,
-      plugins: this.reviewPlugins(agent),
+      bashSoftTimeoutMs: NEVER_BACKGROUND_MS,
+      plugins: [
+        commandLimits({ gate: this.options.gate, wallMinutes: task.commandTimeoutMinutes ?? DEFAULT_COMMAND_TIMEOUT_MINUTES, agent }),
+        ...this.reviewPlugins(agent),
+      ],
       tools: (submit, helpers) => [
         createSubmitTool({
           helpers,

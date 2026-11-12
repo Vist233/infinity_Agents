@@ -14,6 +14,7 @@ import { type ModeContext, createMode, isFinishedBefore, reportKindOf } from "./
 import type { Mode, Progress, Submission, SubmitInfo } from "./mode.ts";
 import { hintFor, planHints } from "./planner.ts";
 import { type BranchReviewer, startBranchReview } from "./review-loop.ts";
+import type { SlotGate } from "./slot-gate.ts";
 import { RungMeter } from "./rung-meter.ts";
 import { type RunState, loadState, saveState } from "./run-state.ts";
 import { type RunLayout, runLayout } from "./run-layout.ts";
@@ -30,6 +31,8 @@ export interface RunOptions {
   signal?: AbortSignal;
   /** Deployment-owned environment for file and shell tools. It must enforce its own access and resource policy. */
   createEnvironment?: WorkerEnvironmentFactory;
+  /** The CPU slot gate that heavy commands of code mode wait at (docs/16 section C); the same object the `slotGate` component reports on. Default: none. */
+  gate?: SlotGate;
   /** Parts that watch the run (the machine sampler); default: `defaultComponents()`. */
   components?: RunComponent[];
   /** For tests: time, the model, and the mode (for example a math mode with a fake verifier). */
@@ -175,6 +178,9 @@ class Run {
         clock: this.clock,
         view: { rung: () => this.ladder.rungs[this.ladder.rungIndex] ?? this.workers.size, agents: () => this.workers.size },
         note: (message) => this.recorder.event({ type: "warning", message }),
+        hold: (on) => {
+          if (!this.finishing && this.ladder && Boolean(this.ladder.braked) !== on) this.feed({ type: "brake", on });
+        },
       });
     if (this.options.signal?.aborted) void this.finish("stopped");
     void this.watchLoop();
@@ -186,7 +192,13 @@ class Run {
       this.options.createClient ? this.options.createClient(this.gate) : createChatClient({ ...this.task.model, retry: this.gate.retry }),
     );
     const clientFor = (model?: ModelConfig) => (model ? this.gate.wrap(createChatClient({ ...model, retry: this.gate.retry })) : this.client);
-    this.mode = (this.options.mode ?? createMode)({ task: this.task, layout: this.layout, clock: this.clock, clientFor });
+    this.mode = (this.options.mode ?? createMode)({
+      task: this.task,
+      layout: this.layout,
+      clock: this.clock,
+      clientFor,
+      ...(this.options.gate ? { gate: this.options.gate } : {}),
+    });
     if (this.prior) this.mode.restore({ proved: this.prior.proved, bestScore: this.prior.bestScore ?? null });
     await this.mode.prepare();
     for (const message of this.mode.warnings?.() ?? []) this.recorder.event({ type: "warning", message });

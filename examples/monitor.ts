@@ -9,7 +9,7 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { MachineReader } from "../src/machine-sampler.ts";
+import { MachineReader } from "../src/proc-readings.ts";
 
 /** Agents alive = started minus (ended or stopped), counted per agent from the ledger lines. */
 export function ledgerFacts(text: string): { agentsLive: number; agentsStarted: number; results: number } {
@@ -40,7 +40,7 @@ async function main(): Promise<void> {
   const everyMs = Math.max(1, Number(values.every)) * 1000;
   let stopping = false;
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => (stopping = true));
-  const reader = new MachineReader();
+  const reader = new MachineReader(values.run ? { runRoot: values.run } : {});
   while (!stopping) {
     const ledger = values.run && existsSync(join(values.run, "ledger.jsonl")) ? ledgerFacts(readFileSync(join(values.run, "ledger.jsonl"), "utf8")) : undefined;
     const sample = await reader.read(Date.now(), { rung: ledger?.agentsLive ?? 0, agents: ledger?.agentsLive ?? 0 });

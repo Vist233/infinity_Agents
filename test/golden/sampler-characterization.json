@@ -1,0 +1,616 @@
+{
+  "reader": {
+    "first": {
+      "ts": 1000,
+      "cores": 16,
+      "load1": 2,
+      "load5": 20,
+      "load15": 10,
+      "cpuBusy": null,
+      "memUsedMb": 24937,
+      "memAvailableMb": 39063,
+      "memTotalMb": 64000,
+      "shells": 2,
+      "gpuUtilPercent": 37,
+      "gpuMemUsedMb": 4096,
+      "cpuPressure10": 5,
+      "cpuPressure60": 12.5,
+      "procsRunning": 3,
+      "iowaitShare": null,
+      "stealShare": null,
+      "runProcesses": 2,
+      "runPythonProcesses": 1,
+      "runThreads": 5,
+      "runRssMb": 102,
+      "runCpuSeconds": null,
+      "runCpuCores": null,
+      "gpuProcesses": 2,
+      "gpuProcMaxMb": 2048,
+      "slotsInUse": 2,
+      "slotsWaiting": 1,
+      "gpuSlotsInUse": 1,
+      "gpuSlotsWaiting": 0,
+      "rung": 4,
+      "agents": 4
+    },
+    "second": {
+      "ts": 6000,
+      "cores": 16,
+      "load1": 40,
+      "load5": 20,
+      "load15": 10,
+      "cpuBusy": 0.7169811320754716,
+      "memUsedMb": 25914,
+      "memAvailableMb": 38086,
+      "memTotalMb": 64000,
+      "shells": 2,
+      "gpuUtilPercent": 37,
+      "gpuMemUsedMb": 4096,
+      "cpuPressure10": 55.5,
+      "cpuPressure60": 12.5,
+      "procsRunning": 4,
+      "iowaitShare": 0.04716981132075472,
+      "stealShare": 0.009433962264150943,
+      "runProcesses": 2,
+      "runPythonProcesses": 1,
+      "runThreads": 5,
+      "runRssMb": 102,
+      "runCpuSeconds": 3.55,
+      "runCpuCores": 0.71,
+      "gpuProcesses": 2,
+      "gpuProcMaxMb": 2048,
+      "slotsInUse": 2,
+      "slotsWaiting": 1,
+      "gpuSlotsInUse": 1,
+      "gpuSlotsWaiting": 0,
+      "rung": 4,
+      "agents": 4
+    },
+    "noRun": {
+      "ts": 7000,
+      "cores": 16,
+      "load1": 40,
+      "load5": 20,
+      "load15": 10,
+      "cpuBusy": null,
+      "memUsedMb": 25914,
+      "memAvailableMb": 38086,
+      "memTotalMb": 64000,
+      "shells": 2,
+      "gpuUtilPercent": 37,
+      "gpuMemUsedMb": 4096,
+      "cpuPressure10": 55.5,
+      "cpuPressure60": 12.5,
+      "procsRunning": 4,
+      "iowaitShare": null,
+      "stealShare": null,
+      "runProcesses": null,
+      "runPythonProcesses": null,
+      "runThreads": null,
+      "runRssMb": null,
+      "runCpuSeconds": null,
+      "runCpuCores": null,
+      "gpuProcesses": 2,
+      "gpuProcMaxMb": 2048,
+      "slotsInUse": null,
+      "slotsWaiting": null,
+      "gpuSlotsInUse": null,
+      "gpuSlotsWaiting": null,
+      "rung": 1,
+      "agents": 1
+    }
+  },
+  "component": {
+    "machine": [
+      {
+        "ts": 0,
+        "cores": 16,
+        "load1": 2,
+        "load5": 20,
+        "load15": 10,
+        "cpuBusy": null,
+        "memUsedMb": 24937,
+        "memAvailableMb": 39063,
+        "memTotalMb": 64000,
+        "shells": 2,
+        "gpuUtilPercent": 37,
+        "gpuMemUsedMb": 4096,
+        "cpuPressure10": 5,
+        "cpuPressure60": 12.5,
+        "procsRunning": 3,
+        "iowaitShare": null,
+        "stealShare": null,
+        "runProcesses": 2,
+        "runPythonProcesses": 1,
+        "runThreads": 5,
+        "runRssMb": 102,
+        "runCpuSeconds": null,
+        "runCpuCores": null,
+        "gpuProcesses": 2,
+        "gpuProcMaxMb": 2048,
+        "slotsInUse": 0,
+        "slotsWaiting": 1,
+        "gpuSlotsInUse": null,
+        "gpuSlotsWaiting": null,
+        "rung": 4,
+        "agents": 4
+      },
+      {
+        "ts": 5000,
+        "cores": 16,
+        "load1": 40,
+        "load5": 20,
+        "load15": 10,
+        "cpuBusy": 0.7169811320754716,
+        "memUsedMb": 25914,
+        "memAvailableMb": 38086,
+        "memTotalMb": 64000,
+        "shells": 2,
+        "gpuUtilPercent": 37,
+        "gpuMemUsedMb": 4096,
+        "cpuPressure10": 55.5,
+        "cpuPressure60": 12.5,
+        "procsRunning": 4,
+        "iowaitShare": 0.04716981132075472,
+        "stealShare": 0.009433962264150943,
+        "runProcesses": 2,
+        "runPythonProcesses": 1,
+        "runThreads": 5,
+        "runRssMb": 102,
+        "runCpuSeconds": 3.55,
+        "runCpuCores": 0.71,
+        "gpuProcesses": 2,
+        "gpuProcMaxMb": 2048,
+        "slotsInUse": 1,
+        "slotsWaiting": 1,
+        "gpuSlotsInUse": null,
+        "gpuSlotsWaiting": null,
+        "rung": 4,
+        "agents": 4
+      },
+      {
+        "ts": 10000,
+        "cores": 16,
+        "load1": 40,
+        "load5": 20,
+        "load15": 10,
+        "cpuBusy": 0.7169811320754716,
+        "memUsedMb": 26891,
+        "memAvailableMb": 37109,
+        "memTotalMb": 64000,
+        "shells": 2,
+        "gpuUtilPercent": 37,
+        "gpuMemUsedMb": 4096,
+        "cpuPressure10": 55.5,
+        "cpuPressure60": 12.5,
+        "procsRunning": 5,
+        "iowaitShare": 0.04716981132075472,
+        "stealShare": 0.009433962264150943,
+        "runProcesses": 3,
+        "runPythonProcesses": 2,
+        "runThreads": 7,
+        "runRssMb": 152,
+        "runCpuSeconds": 4.15,
+        "runCpuCores": 0.8300000000000001,
+        "gpuProcesses": 2,
+        "gpuProcMaxMb": 2048,
+        "slotsInUse": 2,
+        "slotsWaiting": 1,
+        "gpuSlotsInUse": 1,
+        "gpuSlotsWaiting": 0,
+        "rung": 4,
+        "agents": 4
+      },
+      {
+        "ts": 15000,
+        "cores": 16,
+        "load1": 2,
+        "load5": 20,
+        "load15": 10,
+        "cpuBusy": 0.7169811320754716,
+        "memUsedMb": 27867,
+        "memAvailableMb": 36133,
+        "memTotalMb": 64000,
+        "shells": 2,
+        "gpuUtilPercent": 37,
+        "gpuMemUsedMb": 4096,
+        "cpuPressure10": 5,
+        "cpuPressure60": 12.5,
+        "procsRunning": 6,
+        "iowaitShare": 0.04716981132075472,
+        "stealShare": 0.009433962264150943,
+        "runProcesses": 3,
+        "runPythonProcesses": 2,
+        "runThreads": 7,
+        "runRssMb": 152,
+        "runCpuSeconds": 3.75,
+        "runCpuCores": 0.75,
+        "gpuProcesses": 2,
+        "gpuProcMaxMb": 2048,
+        "slotsInUse": 3,
+        "slotsWaiting": 1,
+        "gpuSlotsInUse": 1,
+        "gpuSlotsWaiting": 0,
+        "rung": 4,
+        "agents": 4
+      },
+      {
+        "ts": 20000,
+        "cores": 16,
+        "load1": 2,
+        "load5": 20,
+        "load15": 10,
+        "cpuBusy": 0.7169811320754716,
+        "memUsedMb": 28844,
+        "memAvailableMb": 35156,
+        "memTotalMb": 64000,
+        "shells": 2,
+        "gpuUtilPercent": 37,
+        "gpuMemUsedMb": 4096,
+        "cpuPressure10": 5,
+        "cpuPressure60": 12.5,
+        "procsRunning": 7,
+        "iowaitShare": 0.04716981132075472,
+        "stealShare": 0.009433962264150943,
+        "runProcesses": 2,
+        "runPythonProcesses": 1,
+        "runThreads": 3,
+        "runRssMb": 52,
+        "runCpuSeconds": 0.25,
+        "runCpuCores": 0.05,
+        "gpuProcesses": 2,
+        "gpuProcMaxMb": 2048,
+        "slotsInUse": 4,
+        "slotsWaiting": 1,
+        "gpuSlotsInUse": 1,
+        "gpuSlotsWaiting": 0,
+        "rung": 4,
+        "agents": 4
+      },
+      {
+        "ts": 25000,
+        "cores": 16,
+        "load1": 2,
+        "load5": 20,
+        "load15": 10,
+        "cpuBusy": 0.7169811320754716,
+        "memUsedMb": 29820,
+        "memAvailableMb": 34180,
+        "memTotalMb": 64000,
+        "shells": 2,
+        "gpuUtilPercent": 37,
+        "gpuMemUsedMb": 4096,
+        "cpuPressure10": 5,
+        "cpuPressure60": 12.5,
+        "procsRunning": 8,
+        "iowaitShare": 0.04716981132075472,
+        "stealShare": 0.009433962264150943,
+        "runProcesses": 2,
+        "runPythonProcesses": 1,
+        "runThreads": 3,
+        "runRssMb": 52,
+        "runCpuSeconds": 0.25,
+        "runCpuCores": 0.05,
+        "gpuProcesses": 2,
+        "gpuProcMaxMb": 2048,
+        "slotsInUse": 5,
+        "slotsWaiting": 1,
+        "gpuSlotsInUse": 1,
+        "gpuSlotsWaiting": 0,
+        "rung": 4,
+        "agents": 4
+      }
+    ],
+    "events": [
+      {
+        "type": "pressure_hold",
+        "ts": 10000,
+        "on": true,
+        "rung": 4,
+        "loadPerCore": 2.5,
+        "cpuPressure10": 55.5
+      },
+      {
+        "type": "pressure_hold",
+        "ts": 20000,
+        "on": false,
+        "rung": 4,
+        "loadPerCore": 0.125,
+        "cpuPressure10": 5
+      }
+    ],
+    "holds": [
+      true,
+      false
+    ],
+    "notes": [],
+    "facts": {
+      "ts": 0,
+      "cores": 16,
+      "memTotalMb": 64000,
+      "gpuName": "Fake GPU 4090",
+      "gpuMemTotalMb": 24564,
+      "kernel": "6.8.0-fake",
+      "node": "<node version>",
+      "commit": "0123abc",
+      "ceiling": 16,
+      "commandLine": [
+        "--agents",
+        "16"
+      ],
+      "gate": {
+        "enabled": true,
+        "cpuSlots": 8,
+        "gpuSlots": 2,
+        "commandTimeoutMinutes": 120
+      },
+      "foreignBusyCores": 1.5,
+      "unsupported": []
+    }
+  },
+  "facts": {
+    "bare": {
+      "ts": 1234,
+      "cores": 16,
+      "memTotalMb": 64000,
+      "gpuName": "Fake GPU 4090",
+      "gpuMemTotalMb": 24564,
+      "kernel": "6.8.0-fake",
+      "node": "<node version>",
+      "commit": "0123abc",
+      "ceiling": null,
+      "commandLine": [
+        "x"
+      ],
+      "gate": {
+        "enabled": false,
+        "cpuSlots": null,
+        "gpuSlots": null,
+        "commandTimeoutMinutes": null
+      },
+      "foreignBusyCores": null,
+      "unsupported": []
+    },
+    "full": {
+      "ts": 5678,
+      "cores": 16,
+      "memTotalMb": 64000,
+      "gpuName": "Fake GPU 4090",
+      "gpuMemTotalMb": 24564,
+      "kernel": "6.8.0-fake",
+      "node": "<node version>",
+      "commit": "0123abc",
+      "ceiling": 8,
+      "commandLine": [
+        "--a"
+      ],
+      "gate": {
+        "enabled": false,
+        "cpuSlots": null,
+        "gpuSlots": 3,
+        "commandTimeoutMinutes": 30
+      },
+      "foreignBusyCores": 0.25,
+      "unsupported": []
+    },
+    "machine": {
+      "cores": 16,
+      "busyCores": 0,
+      "freeMemMb": 39063,
+      "gpuMemMb": [
+        24564,
+        24564
+      ]
+    }
+  },
+  "brake": {
+    "trace": [
+      {
+        "load": 16,
+        "pressure": null,
+        "over": false,
+        "change": null,
+        "active": false
+      },
+      {
+        "load": 16.01,
+        "pressure": null,
+        "over": true,
+        "change": null,
+        "active": false
+      },
+      {
+        "load": 20,
+        "pressure": null,
+        "over": true,
+        "change": null,
+        "active": false
+      },
+      {
+        "load": 20,
+        "pressure": 5,
+        "over": true,
+        "change": true,
+        "active": true
+      },
+      {
+        "load": 20,
+        "pressure": null,
+        "over": true,
+        "change": null,
+        "active": true
+      },
+      {
+        "load": 1,
+        "pressure": 40,
+        "over": false,
+        "change": null,
+        "active": true
+      },
+      {
+        "load": 1,
+        "pressure": 40.01,
+        "over": true,
+        "change": null,
+        "active": true
+      },
+      {
+        "load": 1,
+        "pressure": 41,
+        "over": true,
+        "change": null,
+        "active": true
+      },
+      {
+        "load": 1,
+        "pressure": 90,
+        "over": true,
+        "change": null,
+        "active": true
+      },
+      {
+        "load": 2,
+        "pressure": 10,
+        "over": false,
+        "change": null,
+        "active": true
+      },
+      {
+        "load": 2,
+        "pressure": 10,
+        "over": false,
+        "change": null,
+        "active": true
+      },
+      {
+        "load": 30,
+        "pressure": 10,
+        "over": true,
+        "change": null,
+        "active": true
+      },
+      {
+        "load": 2,
+        "pressure": 10,
+        "over": false,
+        "change": null,
+        "active": true
+      },
+      {
+        "load": 2,
+        "pressure": 10,
+        "over": false,
+        "change": null,
+        "active": true
+      },
+      {
+        "load": 2,
+        "pressure": 10,
+        "over": false,
+        "change": false,
+        "active": false
+      },
+      {
+        "load": 2,
+        "pressure": 10,
+        "over": false,
+        "change": null,
+        "active": false
+      },
+      {
+        "load": 16,
+        "pressure": 40,
+        "over": false,
+        "change": null,
+        "active": false
+      }
+    ],
+    "custom": [
+      true,
+      null,
+      false,
+      null
+    ]
+  },
+  "summary": {
+    "byRung": [
+      {
+        "rung": 2,
+        "samples": 3,
+        "loadMean": 27.333333333333332,
+        "loadPeak": 40,
+        "cpuMean": 0.7169811320754716,
+        "cpuPeak": 0.7169811320754716,
+        "memPeakMb": 26891,
+        "gpuMemPeakMb": 4096,
+        "pressureMean": 38.666666666666664,
+        "runCoresMean": 0.77,
+        "runRssPeakMb": 152,
+        "jobsMean": 1.3333333333333333,
+        "jobsPeak": 2,
+        "slotsUseMean": 1,
+        "slotsWaitMean": 1,
+        "gpuSlotsUseMean": 1,
+        "gpuSlotsWaitMean": 0
+      },
+      {
+        "rung": 4,
+        "samples": 3,
+        "loadMean": 2,
+        "loadPeak": 2,
+        "cpuMean": 0.7169811320754716,
+        "cpuPeak": 0.7169811320754716,
+        "memPeakMb": 29820,
+        "gpuMemPeakMb": 4096,
+        "pressureMean": 5,
+        "runCoresMean": 0.2833333333333334,
+        "runRssPeakMb": 152,
+        "jobsMean": 1.3333333333333333,
+        "jobsPeak": 2,
+        "slotsUseMean": 4,
+        "slotsWaitMean": 1,
+        "gpuSlotsUseMean": 1,
+        "gpuSlotsWaitMean": 0
+      }
+    ],
+    "history": {
+      "cpuPerAgent": 0.19649999999999998,
+      "memPerAgentGb": 1.192138671875,
+      "heavyShare": 0.5
+    },
+    "peak": 1220.75,
+    "none": null
+  },
+  "leftover": {
+    "signals": [
+      [
+        501,
+        "SIGTERM"
+      ],
+      [
+        502,
+        "SIGTERM"
+      ],
+      [
+        505,
+        "SIGTERM"
+      ],
+      [
+        501,
+        "SIGKILL"
+      ],
+      [
+        502,
+        "SIGKILL"
+      ]
+    ],
+    "events": [
+      {
+        "type": "leftover_processes",
+        "ts": 0,
+        "found": 3,
+        "killedHard": 2
+      }
+    ]
+  }
+}

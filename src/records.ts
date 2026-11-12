@@ -66,6 +66,24 @@ export type RunEvent =
   /** The branch review was switched off for the rest of the run, or ended with these skip counts. */
   | { type: "review_off"; ts: number; reason: string }
   | { type: "review_skips"; ts: number; skips: Record<string, number> }
+  /** At the end of the run: processes still working in the run directory (agents' background jobs) were stopped. `killedHard` needed SIGKILL after the polite stop. */
+  | { type: "leftover_processes"; ts: number; found: number; killedHard: number }
+  /** The pressure brake went on or off (docs/16 section D): the machine was over the limits for three readings in a row, or back under them. */
+  | { type: "pressure_hold"; ts: number; on: boolean; rung: number; loadPerCore: number; cpuPressure10: number | null }
+  /** A heavy command (kind "cpu": a bash command at the gate) or a GPU job (kind "gpu": a command started with the `gpu` shim) waited a second or more for a slot. */
+  | { type: "slot_wait"; ts: number; kind: "cpu" | "gpu"; agent: number; waitMs: number }
+  /** At the end of a run with the gate: heavy commands run, how many waited, the waiting time, and the share of slot time that was busy (0 to 1). */
+  | {
+      type: "slot_summary";
+      ts: number;
+      kind: "cpu" | "gpu";
+      slots: number;
+      commands: number;
+      waited: number;
+      totalWaitMs: number;
+      maxWaitMs: number;
+      utilisation: number;
+    }
   /** A submit reached the task's target score. */
   | { type: "target"; ts: number; agent: number; score: number };
 import type { ReviewSnapshot } from "./review-snapshot.ts";

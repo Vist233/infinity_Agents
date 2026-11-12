@@ -126,6 +126,33 @@ describe("ladder", () => {
     expect(step.spawn[0]).toBeGreaterThan(2);
   });
 
+  it("does not climb while braked, starts no replacement, and starts the missing agents when the brake comes off", () => {
+    const run = drive();
+    run.everyoneReplies(2);
+    run.feed({ type: "brake", on: true });
+    expect(run.feed({ type: "reply", agent: 1 }).spawn).toEqual([]); // the third reply would have climbed
+    expect(run.liveAgents()).toHaveLength(1);
+    expect(run.feed({ type: "agent_ended", agent: 1 }).spawn).toEqual([]);
+    expect(run.liveAgents()).toHaveLength(0);
+    expect(run.feed({ type: "brake", on: false }).spawn).toEqual([2]); // back to the rung it was at
+    expect(run.liveAgents()).toHaveLength(1);
+    expect(run.log).toEqual([]);
+    run.everyoneReplies(REPLIES_TO_ADVANCE);
+    expect(run.log).toEqual(["advance:1->2"]); // and it climbs again
+  });
+
+  it("a brake does not stop a throttle drop or the finish, and is not remembered like a throttle", () => {
+    const run = drive();
+    run.everyoneReplies(3);
+    run.everyoneReplies(3); // rung 4
+    run.feed({ type: "brake", on: true });
+    run.feed({ type: "throttle" });
+    expect(run.log.at(-1)).toBe("throttle:4->2");
+    expect(run.state.limitRung).toBe(4);
+    expect(run.feed({ type: "finish" }).retire).toHaveLength(2);
+    expect(startLadder(4).state.braked).toBeUndefined();
+  });
+
   it("ignores the end of an agent it already retired", () => {
     const run = drive();
     for (let i = 0; i < 4; i++) run.everyoneReplies(1);

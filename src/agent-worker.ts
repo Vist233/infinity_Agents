@@ -130,6 +130,7 @@ export function startWorker(deps: WorkerDeps): AgentWorker {
           cwd: workDir,
           ...(deps.createEnvironment ? { environment: deps.createEnvironment({ workDir, sharedDir: layout.sharedDir }) } : { confine: deps.setup.confine }),
           tools: [...deps.setup.builtinTools, ...tools],
+          ...(deps.setup.bashSoftTimeoutMs === undefined ? {} : { bashSoftTimeoutMs: deps.setup.bashSoftTimeoutMs }),
           plugins,
           rules: deps.setup.rules,
           sessionFile,

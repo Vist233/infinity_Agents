@@ -1,5 +1,6 @@
 import { type CodeRow, type ResultEntry, resultsOf } from "./code-leaderboard.ts";
-import { type MachineSample, peakMemoryPerAgentMb, recommendAgents, summarizeByRung } from "./machine-sampler.ts";
+import { recommendCapacity } from "./capacity.ts";
+import { type MachineSample, historyFromSamples, summarizeByRung } from "./machine-summary.ts";
 import type { LedgerEntry, RunEvent } from "./records.ts";
 import { escapeHtml, formatTime, ladderSection, pageHtml, pressureSection, summaryHtml, summaryLines, table, warningSection } from "./report.ts";
 import type { Direction } from "./task.ts";
@@ -36,6 +37,11 @@ function summary(rows: readonly CodeRow[], events: readonly RunEvent[], results:
   const { task, ended } = summaryLines(events);
   const scored = results.filter((entry) => entry.status === "ok" && !entry.selfReported).length;
   const best = rows.find((row) => row.score !== null);
+  const leftover = events.findLast((event): event is Extract<RunEvent, { type: "leftover_processes" }> => event.type === "leftover_processes");
+  const gates = (["cpu", "gpu"] as const).flatMap((kind) => {
+    const found = events.findLast((event): event is Extract<RunEvent, { type: "slot_summary" }> => event.type === "slot_summary" && event.kind === kind);
+    return found ? [found] : [];
+  });
   return summaryHtml([
     task,
     `Agents seen: ${rows.length}; submits: ${results.length} (${scored} scored by the evaluator, ${results.filter((entry) => entry.selfReported).length} self-reported, ${results.filter((entry) => entry.status === "error").length} with an error)`,
@@ -43,6 +49,12 @@ function summary(rows: readonly CodeRow[], events: readonly RunEvent[], results:
       ? `Best ${escapeHtml(metric.name)} (${metric.direction === "max" ? "higher" : "lower"} is better): ${best.score}${best.selfReported ? " (self-reported)" : ""} by agent ${best.agent}`
       : "No scored result yet",
     ended,
+    ...gates.map(
+      (gate) =>
+        `Slot gate, ${gate.kind.toUpperCase()} (${gate.slots} slots): ${gate.commands} ${gate.kind === "gpu" ? "GPU jobs" : "heavy commands"}, ${gate.waited} waited a second or more, ` +
+        `${Math.round(gate.totalWaitMs / 1000)} s waiting in all, longest ${Math.round(gate.maxWaitMs / 1000)} s; slots busy ${Math.round(100 * gate.utilisation)} % of the time`,
+    ),
+    ...(leftover ? [`Processes still working in the run directory at the end: ${leftover.found} stopped (${leftover.killedHard} needed SIGKILL)`] : []),
   ]);
 }
 
@@ -136,6 +148,8 @@ function reviewSection(events: readonly RunEvent[]): string {
 /** The machine by rung (mean and peak), and the rule-of-thumb agent count. The count is a hint for the next run; nothing applies it. */
 function machineSection(samples: readonly MachineSample[]): string {
   if (samples.length === 0) return "";
+  const gated = samples.some((sample) => sample.slotsInUse !== null && sample.slotsInUse !== undefined);
+  const gpuGated = samples.some((sample) => sample.gpuSlotsInUse !== null && sample.gpuSlotsInUse !== undefined);
   const rows = summarizeByRung(samples).map((row) => [
     String(row.rung),
     String(row.samples),
@@ -143,14 +157,17 @@ function machineSection(samples: readonly MachineSample[]): string {
     row.cpuMean === null ? "-" : `${Math.round(100 * row.cpuMean)} % / ${Math.round(100 * (row.cpuPeak ?? 0))} %`,
     `${(row.memPeakMb / 1024).toFixed(1)} GB`,
     row.gpuMemPeakMb === null ? "-" : `${(row.gpuMemPeakMb / 1024).toFixed(1)} GB`,
+    row.pressureMean === null ? "-" : `${row.pressureMean.toFixed(1)} %`,
+    row.runCoresMean === null ? "-" : row.runCoresMean.toFixed(1),
+    row.runRssPeakMb === null ? "-" : `${(row.runRssPeakMb / 1024).toFixed(1)} GB`,
+    row.jobsMean === null ? "-" : `${row.jobsMean.toFixed(1)} / ${row.jobsPeak}`,
+    ...(gated ? [row.slotsUseMean === null ? "-" : `${row.slotsUseMean.toFixed(1)} / ${(row.slotsWaitMean ?? 0).toFixed(1)}`] : []),
+    ...(gpuGated ? [row.gpuSlotsUseMean === null ? "-" : `${row.gpuSlotsUseMean.toFixed(1)} / ${(row.gpuSlotsWaitMean ?? 0).toFixed(1)}`] : []),
   ]);
   const first = samples[0] as MachineSample;
-  const hint = recommendAgents({ cores: first.cores, freeMemMb: first.memAvailableMb, ...optional("peakMemPerAgentMb", peakMemoryPerAgentMb(samples)) });
-  const memory = hint.byMemory === null ? "memory per agent not measured" : `${hint.byMemory} by memory`;
-  const note =
-    `<p>Rule of thumb for the next run (not applied by anything): ${hint.agents} agents (${hint.byCores} by cores at one core each, ${memory}, limited by ${hint.limitedBy}). ` +
-    `The third limit, the rung where the first-score time and the score rate stop improving, needs analysed runs and is not included.</p>`;
-  return `<h2>Machine by rung</h2>${table(["rung", "samples", "load (mean / peak)", "CPU busy (mean / peak)", "memory peak", "GPU memory peak"], rows)}${note}`;
+  const history = historyFromSamples(samples);
+  const hint = recommendCapacity({ cores: first.cores, freeMemMb: first.memAvailableMb }, undefined, history);
+  const basis = hint.source === "history" ? `measured in this run, limited by ${hint.limitedBy}` : "one per core: this run recorded no per-agent figures";
+  const note = `<p>Rule of thumb for the next run (not applied by anything): ${hint.agents} agents (${basis}; more than ${hint.maxUseful} adds little).</p>`;
+  return `<h2>Machine by rung</h2>${table(["rung", "samples", "load (mean / peak)", "CPU busy (mean / peak)", "memory peak", "GPU memory peak", "CPU pressure (mean)", "run CPU cores (mean)", "run memory peak", "python jobs (mean / peak)", ...(gated ? ["gate slots in use / waiting (mean)"] : []), ...(gpuGated ? ["GPU slots in use / waiting (mean)"] : [])], rows)}${note}`;
 }
-
-const optional = <K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } => (value === undefined ? {} : ({ [key]: value } as { [P in K]?: V }));

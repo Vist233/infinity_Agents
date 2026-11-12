@@ -54,8 +54,10 @@ export interface AgentSetup {
   builtinTools: BuiltinTool[];
   /** Keep the file tools inside the work directory (math: yes; a mode with a shell cannot get this protection). */
   confine: boolean;
-  /** Plugins added to the agent's own (the safety review of code mode). */
+  /** Plugins added to the agent's own (the safety review and the limits on commands of code mode). */
   plugins?: Plugin[];
+  /** After this many milliseconds a running shell command is moved to the background by the shell tool (the framework's default is 120000); code mode sets a huge value so that commands never leave the foreground. */
+  bashSoftTimeoutMs?: number;
   /** The mode's own tools. `submit` is the official call: the worker commits, counts and records, the orchestrator decides what it means. */
   tools(submit: (submission: Submission) => Promise<void>, helpers: ToolHelpers): Tool[];
 }

@@ -15,6 +15,11 @@ export interface ComponentContext {
   view: RunView;
   /** Writes a line to the run's events (the report shows them). */
   note(message: string): void;
+  /**
+   * Asks the ladder to stay where it is: no climb and no replacement agent while `on` is true (docs/16 section D). It is the one thing a component can ask of
+   * the core; the core does not look at why, and the component records the reason.
+   */
+  hold(on: boolean): void;
 }
 
 /**

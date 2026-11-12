@@ -1,7 +1,7 @@
 /**
  * Checks everything a real covertype run needs, before it starts (docs/10 section 10.1, docs/11-runbook.md).
  *
- *   node examples/preflight.ts [--min-cores 16] [--min-free-gb 64] [--min-disk-gb 10] [--cache-floor 0.6] [--dry-seconds 60] [--offline]
+ *   node examples/preflight.ts [--gpu] [--min-cores 16] [--min-free-gb 64] [--min-disk-gb 10] [--cache-floor 0.6] [--dry-seconds 60] [--offline]
  *
  * One line per check; the first failure ends it with exit code 1. Prints versions, counts and sizes, never the key and never the environment
  * (the key is reported only as "set"). `--offline` skips the two checks that call the model. Real model calls: one tiny request and a short probe session (about 15 requests).
@@ -17,6 +17,7 @@ import { commandEvaluator } from "../src/evaluation.ts";
 import { HiddenKeeper } from "../src/hidden-keeper.ts";
 import { CONNECT_ATTEMPT_TIMEOUT_MS, allowSlowConnects } from "../src/network.ts";
 import { runTask } from "../src/orchestrator.ts";
+import { unsupportedFeatures } from "../src/platform.ts";
 import { reviewGuard } from "../src/review-run.ts";
 import { parseReviewSnapshot, readReviewEvidence, reviewQuestion } from "../src/review-snapshot.ts";
 import { defineTask } from "../src/task.ts";
@@ -72,6 +73,11 @@ if (!libraries) fail("python", `${python} cannot import numpy, pandas and scikit
 report("python libraries", `${await versionOf(python, ["--version"])}; ${libraries}`);
 const framework = JSON.parse(readFileSync(resolve("node_modules/sakura-agent/package.json"), "utf8")) as { version: string };
 report("sakura-agent", framework.version);
+
+// ---- 1b. platform: the run side supports Linux only (docs/16) ----------------
+const unsupported = await unsupportedFeatures({ gpu: args.includes("--gpu") });
+if (unsupported.length > 0) fail("platform", unsupported.join("; "));
+report("platform", `Linux with /proc and renice${args.includes("--gpu") ? ", flock and nvidia-smi" : ""}`);
 
 // ---- 2. machine -----------------------------------------------------------
 const cores = cpus().length;

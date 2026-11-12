@@ -1,4 +1,5 @@
 import type { ModelConfig } from "sakura-agent";
+import { type TaskProfile, profileProblems } from "./capacity.ts";
 import type { Evaluator } from "./evaluation.ts";
 import { type ReviewOutputSettings, reviewOutputProblems } from "./review-snapshot.ts";
 
@@ -15,6 +16,8 @@ interface TaskBase {
   stuckMinutes?: number;
   /** Where runs are created; default `runs` in the current directory. */
   runsDir?: string;
+  /** What one heavy command of an agent needs; the capacity hint and the limits on commands (docs/16) read it. */
+  profile?: TaskProfile;
 }
 
 export interface MathTask extends TaskBase {
@@ -83,6 +86,8 @@ export interface CodeTask extends TaskBase {
   submitIntervalMinutes?: number;
   /** An evaluation that takes longer is stopped (default 10 minutes). */
   evalTimeoutMinutes?: number;
+  /** No shell command of an agent runs longer than this; the shell tool stops its whole process group (default 120). Commands never go to the background. */
+  commandTimeoutMinutes?: number;
 }
 
 export type TaskDefinition = MathTask | CodeTask;
@@ -96,6 +101,7 @@ export function defineTask<T extends TaskDefinition>(task: T): T {
   if (!Number.isInteger(task.agents) || task.agents < 1 || task.agents > MAX_AGENTS) problems.push(`agents must be a whole number from 1 to ${MAX_AGENTS}`);
   if (task.tokens !== undefined && !(task.tokens > 0)) problems.push("tokens must be positive");
   if (task.stuckMinutes !== undefined && !(task.stuckMinutes > 0)) problems.push("stuckMinutes must be positive");
+  if (task.profile) problems.push(...profileProblems(task.profile));
   if (task.mode === "math") checkMath(task, problems);
   else checkCode(task, problems);
   if (problems.length > 0) throw new Error(`Invalid task '${task.name}': ${problems.join("; ")}`);
@@ -118,6 +124,7 @@ function checkCode(task: CodeTask, problems: string[]): void {
   if (task.evalSlots !== undefined && !(task.evalSlots >= 1)) problems.push("evalSlots must be at least 1");
   if (task.submitIntervalMinutes !== undefined && !(task.submitIntervalMinutes >= 0)) problems.push("submitIntervalMinutes must not be negative");
   if (task.evalTimeoutMinutes !== undefined && !(task.evalTimeoutMinutes > 0)) problems.push("evalTimeoutMinutes must be positive");
+  if (task.commandTimeoutMinutes !== undefined && !(task.commandTimeoutMinutes > 0)) problems.push("commandTimeoutMinutes must be positive");
   const branch = task.branchReview;
   if (branch?.everyMinutes !== undefined && !(branch.everyMinutes > 0)) problems.push("branchReview.everyMinutes must be positive");
   if (branch?.maxTurns !== undefined && !(branch.maxTurns >= 1)) problems.push("branchReview.maxTurns must be at least 1");

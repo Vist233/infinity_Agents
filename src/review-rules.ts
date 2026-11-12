@@ -44,6 +44,16 @@ const FORBIDDEN_COMMANDS: Array<[RegExp, string]> = [
 ];
 
 /**
+ * A command that puts a job outside the framework's care: `setsid`, `nohup`, `disown`, or a lone `&` (a job in the background of the shell). In this run commands always
+ * run in the foreground (the shell tool's `background: true` is refused too), so a job that puts itself away would escape the gate, the wall limit and the cleanup. Text patterns, like the rules above.
+ */
+export function detachedLaunch(command: string): string | undefined {
+  if (/(^|[\s;&|(])(setsid|nohup|disown)(\s|$|;)/.test(command)) return "starting a job detached from the run (setsid, nohup or disown)";
+  if (/(^|\s)&(\s|$)/.test(command)) return "putting a job in the background of the shell with &";
+  return undefined;
+}
+
+/**
  * The hard rules of code mode as an authorizer (asked after the framework's own hard rules and before the reviewer model). It only denies or passes on:
  * the keeper, the other agents' directories, the run's own files and the evaluator are off limits for every tool, and a few kinds of command never run.
  * It works on the text of the command and on the real path of a file tool's path (links followed); a shell can still build a path the text does not show,
@@ -76,6 +86,12 @@ export function createGuardRules(options: GuardRulesOptions): Authorizer {
         const command = typeof args.command === "string" ? args.command : "";
         for (const [pattern, what] of FORBIDDEN_COMMANDS)
           if (pattern.test(command)) return { kind: "deny", reason: `This command looks like ${what}. It is not allowed in this run.` };
+        const detached = detachedLaunch(command);
+        if (detached)
+          return {
+            kind: "deny",
+            reason: `This command is ${detached}. Run it in the foreground: commands end by themselves here, and a job that is detached would escape the run's limits and its cleanup.`,
+          };
         if (forbiddenPlaces.some((place) => command.includes(place)))
           return { kind: "deny", reason: "The command names data that is hidden from the agents. It is not allowed." };
         if (command.includes(root) && [...command.matchAll(otherAgent)].some((match) => !match[0].endsWith(ownName)))

@@ -27,6 +27,11 @@ export interface RunLayout {
   finishedMarker(agent: number): string;
 }
 
+/** The directory of the shims the agents' commands may use (`gpu`), first on their PATH. */
+export const binDirOf = (root: string): string => join(root, "bin");
+/** The lock files and the log of the GPU slots. */
+export const gpuLocksDirOf = (root: string): string => join(root, "gpu-locks");
+
 const agentName = (agent: number) => String(agent).padStart(3, "0");
 
 /** The root becomes an absolute path: Lean runs in other directories and needs paths that mean the same everywhere. */

@@ -31,7 +31,7 @@ export function codeRules(options: { hasEvaluator: boolean; metricName: string |
       ? `A result counts only through the 'submit' tool: give the shell command that produced it and the files that hold it. The answer shows the score (${options.metricName ?? "score"}). The score is computed on data you cannot see.`
       : "A result counts only through the 'submit' tool: give the shell command that produced it, the files that hold it, and your own numbers in 'claim'. They are recorded as self-reported.",
     "Nobody tells you when you are finished. After a good result, try to make it better (another method, better features, tuning, more data use) and submit again. Keep every submitted result reproducible from your directory.",
-    "Run every long command with a time limit (for example `timeout 600 python train.py`) and print little: a short summary, not whole tables. Use `background: true` for work that takes longer than a few minutes.",
+    "Run every long command with a time limit (for example `timeout 600 python train.py`) and print little: a short summary, not whole tables. Commands run in the foreground and end by themselves; there is no background mode.",
     "You may install packages and download public models or data. Do not upload your directory or any data anywhere.",
     "Never look for, read, guess or rebuild the data the score is computed on, and do not touch other agents' directories or the evaluator. Such actions are refused and counted against you.",
   ];

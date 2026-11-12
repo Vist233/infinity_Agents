@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { renderCodeCsv, rankCodeAgents } from "./code-leaderboard.ts";
 import { renderCodeReportHtml } from "./code-report.ts";
 import { JsonlFile } from "./jsonl.ts";
-import { readMachineSamples } from "./machine-sampler.ts";
+import { readMachineSamples } from "./machine-summary.ts";
 import { type LeaderboardRow, rankAgents, renderLeaderboardCsv } from "./leaderboard.ts";
 import type { LedgerEntry, RunEvent } from "./records.ts";
 import type { RunLayout } from "./run-layout.ts";
@@ -112,6 +112,12 @@ export function pressureSection(events: readonly RunEvent[]): string {
     if (event.type === "throttle") rows.push([formatTime(event.ts), "pause for everybody", `${event.delayMs} ms`]);
     if (event.type === "quota") rows.push([formatTime(event.ts), "stop", escapeHtml(event.message)]);
     if (event.type === "budget_refused") rows.push([formatTime(event.ts), "budget stop", escapeHtml(event.reason)]);
+    if (event.type === "pressure_hold")
+      rows.push([
+        formatTime(event.ts),
+        event.on ? "pressure brake ON (no climb, no replacements)" : "pressure brake off",
+        `rung ${event.rung}, load per core ${event.loadPerCore.toFixed(2)}, CPU pressure ${event.cpuPressure10 ?? "-"} %`,
+      ]);
     if (event.type === "rescue") rows.push([formatTime(event.ts), `rescue ${event.rescue} of agent ${event.agent}`, "stuck"]);
   }
   return `<h2>Throttles, stops and rescues</h2>${table(["time", "what", "detail"], rows)}`;

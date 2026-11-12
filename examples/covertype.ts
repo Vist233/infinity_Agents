@@ -2,7 +2,13 @@
  * The first machine-learning task (docs/10 section 5): forest cover type, 7 classes, scored on hidden labels.
  *
  *   .venv-ml/bin/python examples/covertype/prepare.py 150000          # once; no argument = all 581,012 rows
- *   PATH="$PWD/.venv-ml/bin:$PATH" node examples/covertype.ts [agents] [--tokens N] [--review-minutes N] [--wall-minutes N] [resume <runDir>]
+ *   PATH="$PWD/.venv-ml/bin:$PATH" node examples/covertype.ts [--agents N] [--tokens N] [--review-minutes N] [--wall-minutes N] [--threads N] [--mem-gb N] [--heavy-share X] [--gate | --slots N | --no-gate] [--command-minutes N] [--pressure-brake] [resume <runDir>]
+ *
+ * It prints how many agents this machine can carry for this task (docs/16); --agents N (or a first number) always wins. Without either, the recommendation is used.
+ * --slots N (or --gate for the recommended number) turns on the CPU slot gate: at most N heavy commands run at once (docs/16 section C); it is off without it.
+ * Commands always run in the foreground and none runs longer than --command-minutes (default 120). Linux only.
+ * --pressure-brake holds the ladder (no climb, no replacement) while load per core is above 1 or CPU pressure above 40 % for 3 readings in a row (docs/16 section D).
+ * Every command of an agent runs with the thread variables set to --threads (default 2) and at a lower priority; jobs left over at the end are stopped.
  *
  * The model key is read from OPENCODE_API_KEY and never printed. Needs Python with numpy, pandas and scikit-learn on PATH (the agents use it too).
  * Stop with Ctrl-C: the hidden labels are put back by the keeper; `examples/recover-hidden.ts <runDir>/.keeper` does it after a kill.
@@ -10,8 +16,14 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { commandEvaluator } from "../src/evaluation.ts";
+import { limitedEnvironment, limitsOf } from "../src/command-limits.ts";
+import { defaultComponents } from "../src/defaults.ts";
 import { type RunOptions, runTask } from "../src/orchestrator.ts";
 import { defineTask } from "../src/task.ts";
+import { cpuOf } from "../src/capacity.ts";
+import { DEFAULT_COMMAND_TIMEOUT_MINUTES } from "../src/code-mode.ts";
+import { SlotGate } from "../src/slot-gate.ts";
+import { chooseAgents, profileWithFlags, takeNumber, takeSwitch } from "./capacity-flags.ts";
 import { opencodeModel } from "./model.ts";
 
 const apiKey = process.env.OPENCODE_API_KEY;
@@ -24,16 +36,26 @@ if (environmentModule) {
   if (typeof configured !== "function") throw new Error("The worker environment module must export createEnvironment");
   createEnvironment = configured;
 }
-// usage: node examples/covertype.ts [agents] [--tokens N] [--review-minutes N] [--wall-minutes N] [resume <runDir>]
-const args = process.argv.slice(2);
-const flag = (name: string, fallback: number): number => {
-  const at = args.indexOf(`--${name}`);
-  return at >= 0 ? Number(args.splice(at, 2)[1]) : fallback;
-};
+const commandLine = process.argv.slice(2);
+const args = [...commandLine];
+const flag = (name: string, fallback: number): number => takeNumber(args, name) ?? fallback;
 const tokens = flag("tokens", 3_000_000);
 const reviewMinutes = flag("review-minutes", 3);
 const wallMinutes = flag("wall-minutes", 0);
-const [agentsArgument, resumeWord, resumeDir] = args;
+const agentsFlag = takeNumber(args, "agents");
+const slotsFlag = takeNumber(args, "slots");
+const gateFlag = takeSwitch(args, "gate");
+const noGate = takeSwitch(args, "no-gate");
+const pressureBrake = takeSwitch(args, "pressure-brake");
+const commandMinutes = takeNumber(args, "command-minutes");
+const profile = profileWithFlags({ cpu: { threadsPerJob: 2, memPerJobGb: 3, heavyShare: 0.5 } }, args);
+const [agentsArgument, resumeWord, resumeDir] = args[0] === "resume" ? [undefined, ...args] : args;
+if (noGate && (slotsFlag !== undefined || gateFlag)) throw new Error("--no-gate cannot be used with --slots or --gate");
+const cpu = cpuOf(profile);
+const { agents, capacity, foreignBusyCores } = await chooseAgents(profile, agentsFlag ?? (agentsArgument === undefined ? undefined : Number(agentsArgument)));
+// the CPU gate is off unless asked for: --slots N, or --gate for the recommended number of slots
+const slots = noGate ? undefined : (slotsFlag ?? (gateFlag ? capacity.cpuSlots : undefined));
+const gate = slots === undefined ? undefined : new SlotGate(slots);
 const evaluator = resolve("examples/covertype/evaluate.py");
 
 const task = defineTask({
@@ -44,7 +66,7 @@ const task = defineTask({
     "use it for training and for your own validation. Write your predictions to predictions.csv: one column named Cover_Type, one row per row of test_features.csv, in the same order. " +
     "Choose your own model, features and training procedure. Use bash to run your code and use any accelerator available to that command. " +
     "Submit the command that produced your result, predictions.csv, and the training code. The score is accuracy on hidden labels. " +
-    "The machine is shared by many agents: use at most 2 threads per training process, about 3 GB of memory per process, and at most 10 minutes per command. " +
+    `The machine is shared by many agents: use at most ${cpu.threadsPerJob} threads per training process, about ${cpu.memPerJobGb} GB of memory per process, and at most 10 minutes per command. ` +
     "Do not download the original public covertype data set (fetch_covtype, UCI files) or look up test rows in it: that would be cheating, and it is refused.",
   files: { data: resolve("data/covertype") },
   hidden: [resolve("data/covertype-labels")],
@@ -59,7 +81,9 @@ const task = defineTask({
     },
   },
   branchReview: { everyMinutes: reviewMinutes, maxTurns: 6, maxConcurrent: 2 },
-  agents: Number(agentsArgument ?? 3),
+  agents,
+  profile,
+  ...(commandMinutes === undefined ? {} : { commandTimeoutMinutes: commandMinutes }),
   model: opencodeModel(apiKey),
   stop: "until-stopped",
   tokens,
@@ -76,7 +100,16 @@ process.on("SIGINT", () => stop.abort());
 if (wallMinutes > 0) setTimeout(() => stop.abort(), wallMinutes * 60_000).unref(); // a wall-clock cap ends the run in order, like Ctrl-C
 const outcome = await runTask(task, {
   signal: stop.signal,
-  ...(createEnvironment ? { createEnvironment } : {}),
+  createEnvironment: limitedEnvironment(limitsOf(profile), createEnvironment),
+  ...(gate ? { gate } : {}),
+  components: defaultComponents({
+    ceiling: agents,
+    commandLine,
+    foreignBusyCores,
+    pressureBrake,
+    commandTimeoutMinutes: commandMinutes ?? DEFAULT_COMMAND_TIMEOUT_MINUTES,
+    ...(gate ? { gate } : {}),
+  }),
   ...(resumeWord === "resume" && resumeDir ? { resume: true, runDir: resumeDir } : {}),
 });
 console.log(JSON.stringify(outcome));

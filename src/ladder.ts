@@ -8,6 +8,8 @@
  * - On a throttling answer: record that rung as the provider's limit, drop one rung, and hold (never climb again).
  *   A burst of throttles counts once: another drop needs a successful reply after the last change.
  * - A finished or stopped agent is replaced to stay at the rung's number.
+ * - While braked (a component says the machine is under pressure, docs/16 section D) the ladder does not climb and no replacement is started; when the brake
+ *   comes off, the missing agents are started. Unlike a throttle, a brake is not remembered.
  */
 export const DEFAULT_RUNGS = [1, 2, 4, 8, 16, 32, 64, 100];
 export const REPLIES_TO_ADVANCE = 3;
@@ -21,6 +23,8 @@ export interface LadderState {
   readonly rungs: readonly number[];
   readonly rungIndex: number;
   readonly held: boolean;
+  /** A pressure brake is on (states saved before the brake existed lack the field: that means off). */
+  readonly braked?: boolean;
   readonly finished: boolean;
   /** Agent number -> successful replies since the last change. */
   readonly live: Readonly<Record<number, number>>;
@@ -31,7 +35,12 @@ export interface LadderState {
   readonly limitRung: number | undefined;
 }
 
-export type LadderEvent = { type: "reply"; agent: number } | { type: "agent_ended"; agent: number } | { type: "throttle" } | { type: "finish" };
+export type LadderEvent =
+  | { type: "reply"; agent: number }
+  | { type: "agent_ended"; agent: number }
+  | { type: "throttle" }
+  | { type: "brake"; on: boolean }
+  | { type: "finish" };
 
 export interface RungChange {
   from: number;
@@ -72,6 +81,8 @@ export function stepLadder(state: LadderState, event: LadderEvent): LadderStep {
       return fillToTarget(withoutAgent(state, event.agent));
     case "throttle":
       return onThrottle(state);
+    case "brake":
+      return onBrake(state, event.on);
     case "reply":
       return onReply(state, event.agent);
   }
@@ -83,8 +94,13 @@ function onReply(state: LadderState, agent: number): LadderStep {
   return canAdvance(counted) ? advance(counted) : { state: counted, spawn: [], retire: [] };
 }
 
+function onBrake(state: LadderState, on: boolean): LadderStep {
+  const next = { ...state, braked: on };
+  return on || state.finished ? { state: next, spawn: [], retire: [] } : fillToTarget(next);
+}
+
 function canAdvance(state: LadderState): boolean {
-  if (state.held || state.finished) return false;
+  if (state.held || state.braked || state.finished) return false;
   if (state.rungIndex >= state.rungs.length - 1) return false;
   const counts = Object.values(state.live);
   return counts.length === target(state) && counts.every((replies) => replies >= REPLIES_TO_ADVANCE);
@@ -123,6 +139,7 @@ function withoutAgent(state: LadderState, agent: number): LadderState {
 }
 
 function fillToTarget(state: LadderState): LadderStep {
+  if (state.braked) return { state, spawn: [], retire: [] };
   const missing = target(state) - Object.keys(state.live).length;
   if (missing <= 0) return { state, spawn: [], retire: [] };
   const spawn = Array.from({ length: missing }, (_, index) => state.nextAgent + index);

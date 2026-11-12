@@ -33,6 +33,15 @@ const ask = (name: string, args: Record<string, unknown>) =>
 const kind = async (name: string, args: Record<string, unknown>) => (await ask(name, args)).kind;
 
 describe("guard rules for the agents' commands", () => {
+  it("refuses a job that is detached from the run (setsid, nohup, disown, a lone &) and says to run it in the foreground; the plain commands pass", async () => {
+    for (const command of ["setsid python train.py", "nohup python train.py &", "python train.py &", "python train.py & disown"]) {
+      const decision = await ask("bash", { command });
+      expect(decision.kind, command).toBe("deny");
+      expect((decision as { reason: string }).reason).toContain("foreground");
+    }
+    expect(await kind("bash", { command: "python train.py > log.txt 2>&1 && echo ok" })).toBe("pass");
+  });
+
   it("refuses commands that push, use ssh, kill by name, upload, open raw connections, touch credentials or gain rights", async () => {
     for (const command of [
       "git push origin main",

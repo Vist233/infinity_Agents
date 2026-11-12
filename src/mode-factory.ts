@@ -6,6 +6,7 @@ import { MathMode } from "./math-mode.ts";
 import type { Mode } from "./mode.ts";
 import { Pool } from "./pool.ts";
 import type { ReportKind } from "./report.ts";
+import type { SlotGate } from "./slot-gate.ts";
 import type { RunLayout } from "./run-layout.ts";
 import type { TaskDefinition } from "./task.ts";
 
@@ -15,6 +16,8 @@ export interface ModeContext {
   clock: Clock;
   /** A client behind the Gate for the given model; without a model, the agents' own client. The safety review of code mode asks through it. */
   clientFor(model?: ModelConfig): LlmClient;
+  /** The CPU slot gate of the run, when it has one (code mode only). */
+  gate?: SlotGate;
 }
 
 const DEFAULT_EVAL_SLOTS = 2;
@@ -31,6 +34,7 @@ export function createMode(context: ModeContext): Mode {
     evalPool: new Pool(task.evalSlots ?? DEFAULT_EVAL_SLOTS),
     keeper,
     reviewClient: context.clientFor(task.review ? task.review.model : undefined),
+    ...(context.gate ? { gate: context.gate } : {}),
   });
 }
 
