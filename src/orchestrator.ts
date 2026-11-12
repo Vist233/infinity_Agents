@@ -75,7 +75,7 @@ export async function runTask(task: TaskDefinition, options: RunOptions = {}): P
   return run.execute();
 }
 
-function newRunDir(task: TaskDefinition, clock: Clock): string {
+export function newRunDir(task: TaskDefinition, clock: Clock): string {
   const slug =
     task.name
       .toLowerCase()

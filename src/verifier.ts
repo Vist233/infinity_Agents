@@ -27,7 +27,7 @@ export interface VerifierOptions {
   newNonce?: () => string;
 }
 
-export const ALLOWED_AXIOMS = ["propext", "Classical.choice", "Quot.sound"];
+const ALLOWED_AXIOMS = ["propext", "Classical.choice", "Quot.sound"];
 
 /** `Statement.Goal` is the statement every proof must have as the type of its theorem `main`. */
 export function statementSource(statement: string): string {

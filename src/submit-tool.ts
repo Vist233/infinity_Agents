@@ -4,7 +4,7 @@ import type { EvalResult } from "./evaluation.ts";
 import { better } from "./task.ts";
 
 export const MAX_ENTRY_CHARS_PER_FILE = 20_000;
-export const MAX_ENTRY_CHARS = 60_000;
+const MAX_ENTRY_CHARS = 60_000;
 
 export interface SubmitToolOptions {
   /** Scores a submit. Returns the score and metrics; or the agent's claim (self-reported) when the task has no evaluator. */

@@ -18,7 +18,7 @@ import { runTask } from "../src/orchestrator.ts";
 import { runLayout } from "../src/run-layout.ts";
 import { SlotGate } from "../src/slot-gate.ts";
 import { defineTask } from "../src/task.ts";
-import { chooseAgents, profileWithFlags, takeNumber, takeSwitch } from "./capacity-flags.ts";
+import { chooseAgents, profileWithFlags, takeNumber, takeSwitch } from "../bin/flags.ts";
 
 const commandLine = process.argv.slice(2);
 const args = [...commandLine];

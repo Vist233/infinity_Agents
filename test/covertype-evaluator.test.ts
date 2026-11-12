@@ -15,7 +15,7 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 const evaluate = () =>
-  commandEvaluator({ file: python, args: [resolve("examples/covertype/evaluate.py")] })({
+  commandEvaluator({ file: python, args: [resolve("tasks/covertype/evaluate.py")] })({
     workDir: join(dir, "work"),
     commit: null,
     command: "x",

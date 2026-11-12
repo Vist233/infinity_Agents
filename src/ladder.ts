@@ -11,7 +11,7 @@
  * - While braked (a component says the machine is under pressure, docs/16 section D) the ladder does not climb and no replacement is started; when the brake
  *   comes off, the missing agents are started. Unlike a throttle, a brake is not remembered.
  */
-export const DEFAULT_RUNGS = [1, 2, 4, 8, 16, 32, 64, 100];
+const DEFAULT_RUNGS = [1, 2, 4, 8, 16, 32, 64, 100];
 export const REPLIES_TO_ADVANCE = 3;
 
 export function rungsFor(ceiling: number): number[] {

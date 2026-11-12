@@ -49,7 +49,7 @@ export interface Host {
   gitCommit(): Promise<string | undefined>;
 }
 
-export const PROCESS_CAP = 20_000;
+const PROCESS_CAP = 20_000;
 
 const run = (command: string, args: string[]): Promise<string | undefined> =>
   new Promise((resolve) => execFile(command, args, { timeout: 4000 }, (error, stdout) => resolve(error ? undefined : stdout)));

@@ -45,6 +45,7 @@ const CORE = [
   "review-schedule.ts",
   "run-recorder.ts",
   "run-state.ts",
+  "run-status.ts",
   "rung-meter.ts",
   "stuck.ts",
   "work-repo.ts",
@@ -79,7 +80,10 @@ const GROUPS: Record<string, string[]> = {
 };
 
 /** The one place where components are put together. */
-const COMPOSITION = ["defaults.ts"];
+const COMPOSITION = ["defaults.ts", "launch.ts"];
+
+/** The entry for an Agent: tools that use the library API (launch.ts) and nothing else of src/. */
+const ENTRY = ["sakura-tools.ts"];
 
 /** Known imports that break the rules and are to go in step 2 of docs/18. Each is written down so that no other one can slip in. */
 const KNOWN_EXCEPTIONS: Array<[from: string, to: string, why: string]> = [
@@ -111,7 +115,7 @@ const isComponent = (file: string) => groupOf(file) !== undefined;
 /** The problems of a graph under the rules above, as words. */
 function boundaryProblems(graph: Graph, exceptions = KNOWN_EXCEPTIONS): string[] {
   const problems: string[] = [];
-  const listed = [...LEAVES, ...CORE, ...MODES, ...COMPOSITION, ...Object.values(GROUPS).flat()];
+  const listed = [...LEAVES, ...CORE, ...MODES, ...COMPOSITION, ...ENTRY, ...Object.values(GROUPS).flat()];
   for (const file of graph.keys()) {
     const times = listed.filter((name) => name === file).length;
     if (times === 0) problems.push(`${file} is in no list: say what it is (leaf, core, mode, component, composition)`);
@@ -146,7 +150,13 @@ describe("import boundaries (docs/18)", () => {
   it("only the composition root puts components of several groups together", () => {
     const graph = readGraph();
     const many = [...graph].filter(([, imports]) => new Set(imports.filter((target) => isComponent(target)).map(groupOf)).size > 1).map(([file]) => file);
-    expect(many.sort()).toEqual(["defaults.ts"]);
+    expect(many.sort()).toEqual(["defaults.ts", "launch.ts"]);
+  });
+
+  it("the tools for an Agent import the library API only, and no file of src/ imports them", () => {
+    const graph = readGraph();
+    expect(graph.get("sakura-tools.ts")).toEqual(["launch.ts"]);
+    expect([...graph].filter(([, imports]) => imports.includes("sakura-tools.ts")).map(([file]) => file)).toEqual([]);
   });
 
   it("the Host port imports nothing, and no component touches the operating system (os, child_process) except through it", () => {

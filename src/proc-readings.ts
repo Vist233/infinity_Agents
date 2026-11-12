@@ -88,7 +88,7 @@ export function parseMeminfo(text: string): { totalMb: number; availableMb: numb
 }
 
 /** `nvidia-smi --query-gpu=utilization.gpu,memory.used`: the first GPU's use in percent and memory in MB. */
-export function parseGpuUsage(text: string): { util: number; memMb: number } | undefined {
+function parseGpuUsage(text: string): { util: number; memMb: number } | undefined {
   const [util, memMb] = text.trim().split("\n")[0]?.split(",").map(Number) ?? [];
   return Number.isFinite(util) && Number.isFinite(memMb) ? { util: util as number, memMb: memMb as number } : undefined;
 }
@@ -105,14 +105,14 @@ export function parseGpuFacts(text: string): { name: string; memMb: number } | u
 }
 
 /** `nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits`: one number per GPU, in MB. */
-export const parseGpuMemories = (text: string): number[] =>
+const parseGpuMemories = (text: string): number[] =>
   text
     .split("\n")
     .map((line) => Number(line.trim()))
     .filter((value) => Number.isFinite(value) && value > 0);
 
 /** Memory in MB: from /proc/meminfo, else from the operating system API. */
-export function readMemory(host: Host): { totalMb: number; availableMb: number } {
+function readMemory(host: Host): { totalMb: number; availableMb: number } {
   const info = host.readProc("meminfo");
   return info ? parseMeminfo(info) : { totalMb: Math.round(host.totalMemoryBytes() / 1048576), availableMb: Math.round(host.freeMemoryBytes() / 1048576) };
 }

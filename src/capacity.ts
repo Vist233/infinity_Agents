@@ -72,10 +72,10 @@ export interface Capacity {
   agentsByGpu: number | null;
 }
 
-export const MEMORY_RESERVE_GB = 8;
+const MEMORY_RESERVE_GB = 8;
 /** The owner wants the machine kept full: a little more agents than slots, so the queue is never empty. */
-export const FILL_FACTOR = 1.25;
-export const PROFILE_DEFAULTS = { threadsPerJob: 2, memPerJobGb: 3, heavyShare: 0.8 } as const;
+const FILL_FACTOR = 1.25;
+const PROFILE_DEFAULTS = { threadsPerJob: 2, memPerJobGb: 3, heavyShare: 0.8 } as const;
 
 /** The CPU part of a profile with its defaults. */
 export const cpuOf = (profile?: TaskProfile): Required<CpuProfile> => ({ ...PROFILE_DEFAULTS, ...profile?.cpu });

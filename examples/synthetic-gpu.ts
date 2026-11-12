@@ -17,7 +17,7 @@ import { GpuLedger, gpuDirOf, gpuShim, readNewLines } from "../src/gpu-shim.ts";
 import { readMachineFacts } from "../src/proc-readings.ts";
 import { unsupportedFeatures } from "../src/platform.ts";
 import { runLayout } from "../src/run-layout.ts";
-import { chooseAgents, takeNumber } from "./capacity-flags.ts";
+import { chooseAgents, takeNumber } from "../bin/flags.ts";
 
 const args = process.argv.slice(2);
 const jobs = takeNumber(args, "jobs") ?? 12;

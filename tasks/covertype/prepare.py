@@ -1,6 +1,6 @@
 """Prepares the covertype task (forest cover type, 7 classes) for Infinity Agent.
 
-    python examples/covertype/prepare.py [rows]
+    python tasks/covertype/prepare.py [rows]
 
 Downloads the public data set once (scikit-learn's fetch_covtype, cached under data/cache), keeps `rows` rows (default: all 581,012),
 and writes with a fixed random seed:

@@ -13,7 +13,7 @@ export interface BrakeLimits {
   readings?: number;
 }
 
-export const DEFAULT_BRAKE: Required<BrakeLimits> = { loadPerCore: 1, pressure10: 40, readings: 3 };
+const DEFAULT_BRAKE: Required<BrakeLimits> = { loadPerCore: 1, pressure10: 40, readings: 3 };
 
 /** Decides from successive readings when the ladder should be held. Pure state; the component acts on what it answers. */
 export class PressureBrake {

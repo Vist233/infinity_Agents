@@ -22,7 +22,7 @@ import { reviewGuard } from "../src/review-run.ts";
 import { parseReviewSnapshot, readReviewEvidence, reviewQuestion } from "../src/review-snapshot.ts";
 import { defineTask } from "../src/task.ts";
 import { createScriptedCodeModel } from "../test/support/scripted-code-model.ts";
-import { opencodeModel } from "./model.ts";
+import { opencodeModel } from "../bin/model.ts";
 
 const run = promisify(execFile);
 const args = process.argv.slice(2);
@@ -99,7 +99,7 @@ report("gpu", gpu ? `nvidia-smi lists: ${gpu}` : "none listed (covertype does no
 
 // ---- 3. data --------------------------------------------------------------
 const files = ["data/covertype/train.csv", "data/covertype/test_features.csv", "data/covertype-labels/test_labels.csv"].map((path) => resolve(path));
-for (const file of files) if (!existsSync(file)) fail("data", `${file} is missing (run examples/covertype/prepare.py)`);
+for (const file of files) if (!existsSync(file)) fail("data", `${file} is missing (run tasks/covertype/prepare.py)`);
 const labelsDir = resolve("data/covertype-labels");
 const rows = (path: string) => readFileSync(path, "utf8").split("\n").length - 2;
 report(
@@ -108,7 +108,7 @@ report(
 );
 
 // ---- 4. the evaluator -----------------------------------------------------
-const evaluator = commandEvaluator({ file: python, args: [resolve("examples/covertype/evaluate.py")], timeoutMs: 120_000 });
+const evaluator = commandEvaluator({ file: python, args: [resolve("tasks/covertype/evaluate.py")], timeoutMs: 120_000 });
 const labels = readFileSync(files[2] as string, "utf8")
   .trim()
   .split("\n")

@@ -10,13 +10,14 @@
   },
   "scripts": {
     "test": "vitest run",
-    "view": "node viewer/view.ts",
+    "view": "node bin/infinity.ts view",
     "coverage": "vitest run --coverage --coverage.provider=v8",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "biome lint",
     "format": "biome format --write",
     "format:check": "biome format",
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm test"
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
+    "infinity": "node bin/infinity.ts"
   },
   "dependencies": {
     "sakura-agent": "0.1.2"
@@ -27,5 +28,8 @@
     "@vitest/coverage-v8": "^3.2.7",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
+  },
+  "bin": {
+    "infinity": "bin/infinity.ts"
   }
 }

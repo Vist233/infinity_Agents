@@ -1,10 +1,42 @@
 # infinity-agent (working name)
 
-Run many agents (up to 100) in parallel on one task and rank what they produce. Built on the Sakura agent framework. A task is defined by a piece of TypeScript code; a thin command line only runs it. It runs on the machine where it is started; for a remote machine, install and run it there.
+Run many agents (up to 100) in parallel on one task and rank what they produce. Built on the Sakura agent framework. A task is a small TypeScript package; one command line (`infinity run <task>`) or one library call (`startRun`) runs it. It runs on the machine where it is started; for a remote machine, install and run it there.
 
 Status: math mode is built and tested with scripted and real components (`npm test`); the first real end-to-end check with a real model is next. Code and machine-learning tasks come after. See `docs/`.
 
 Math mode needs a local Lean 4 (installed with `elan`). The program checks `lean --version` and `lake --version` at start and stops with the install command if they are missing; Mathlib is optional and is checked at start when a task asks for it.
+
+## Use it
+
+**A person** (Linux; the model key is read from `OPENCODE_API_KEY`, never printed):
+
+```sh
+npm install
+python3 -m venv .venv-ml && .venv-ml/bin/pip install numpy pandas scikit-learn && .venv-ml/bin/python tasks/covertype/prepare.py 150000   # once, for covertype
+PATH="$PWD/.venv-ml/bin:$PATH" node bin/infinity.ts run covertype --agents 8 --view   # npm link makes it `infinity run ...`
+node bin/infinity.ts --help                      # every flag; conflicting flags are refused with a message
+node bin/infinity.ts view runs                   # the read-only viewer on its own (or: npm run view -- runs)
+```
+
+The machine's recommendation (agents, slots) is printed first; `--agents N` always wins. The slot gate is on by default (`--no-gate` turns it off).
+
+**An Agent** (a Sakura agent, or any program): the same entry as a library call, and ready-made tools.
+
+```ts
+import { startRun } from "./src/launch.ts";
+import { createInfinityTools } from "./src/sakura-tools.ts";
+import covertype from "./tasks/covertype/task.ts";
+
+const run = await startRun(covertype, { model, agents: 8, wallMinutes: 45 });   // returns at once; the run goes on in this process
+console.log(run.runDir, run.recommendation.lines);
+console.log(run.status());                    // read from the run's files: state, agents alive, tokens, best score
+console.log(run.events().events.slice(-3));   // the newest events; run.events(next) gives only what is new
+await run.stop();                             // ends the run in order and waits (run.done settles on its own too)
+
+const tools = createInfinityTools({ packs: [covertype], model });   // infinity_run, infinity_status, infinity_stop for a Sakura agent
+```
+
+A new task is one file that exports a task package (`name`, `summary`, `profile`, `defaults`, `build(context)`): see `tasks/covertype/task.ts`, then `infinity run ./my-task.ts`.
 
 ## Architecture in one picture
 
@@ -25,7 +57,7 @@ Math mode needs a local Lean 4 (installed with `elan`). The program checks `lean
 
 Every agent is started with a **Goal** (the framework's `goal`), otherwise it would stop on its own after a while. For math the goal's check is `test -f ../proved`, a marker that only the orchestrator writes (outside the agent's confined work directory) when the verifier has accepted a proof.
 
-A task is **started by code**: `node task.ts`. There is no command line in version 1.
+A task is **started** by `infinity run <task>`, by a library call (`startRun`) or by code (`runTask`).
 
 Design: `docs/01-owner-decisions.md`, `docs/02-architecture-draft.md`. Dependencies: `sakura-agent` 0.1.1. Note: the machine's npm setting `min-release-age=7` refuses packages younger than 7 days; until then install with `--min-release-age=0` for that one command, or use the tarball in `vendor/`.
 
@@ -56,7 +88,7 @@ The run viewer is a read-only page that shows a run while it goes on: the rungs,
 
 ```
 # started together with a run: the address is printed, the page updates live
-node examples/covertype.ts --view            # --view-port N changes the port (default 4173)
+node bin/infinity.ts run covertype --view     # --view-port N changes the port (default 4173)
 
 # or on its own, in a second terminal, for a running or a finished run
 npm run view -- runs                         # a runs directory (newest run opens first) or one run directory
@@ -65,7 +97,7 @@ npm run view -- runs                         # a runs directory (newest run open
 Then open `http://127.0.0.1:4173/`. Remote machine: forward the port yourself (`ssh -L 4173:127.0.0.1:4173 host`); the viewer opens no other port.
 
 ## Code mode (built; first real check done on a small task)
-Code and machine-learning tasks (`mode: "code"`): every agent has a shell (`read`, `write`, `edit`, `bash`) and the `submit` tool; each submit is scored by your evaluator on data the agents cannot see, and the ranking, the report and the ledger use that score. Plans and decisions: `docs/05-general-mode-plan.md`, `docs/10-branch-review-and-first-ml-run-plan.md`, `docs/decisions.md`. An example: `examples/covertype.ts` (data preparation and evaluator in `examples/covertype/`; needs Python with numpy, pandas and scikit-learn, for instance `python3 -m venv .venv-ml`).
+Code and machine-learning tasks (`mode: "code"`): every agent has a shell (`read`, `write`, `edit`, `bash`) and the `submit` tool; each submit is scored by your evaluator on data the agents cannot see, and the ranking, the report and the ledger use that score. Plans and decisions: `docs/05-general-mode-plan.md`, `docs/10-branch-review-and-first-ml-run-plan.md`, `docs/decisions.md`. The first task package: `tasks/covertype/` (`task.ts`, data preparation and evaluator; needs Python with numpy, pandas and scikit-learn, for instance `python3 -m venv .venv-ml`).
 
 The agent chooses the model and training code. A deployment can supply a Sakura tool environment through `runTask({ ... }, { createEnvironment })` to control shell access and available accelerators. See the [Covertype runbook](docs/11-runbook.md#agent-shell-and-accelerators).
 

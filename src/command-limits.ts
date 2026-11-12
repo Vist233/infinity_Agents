@@ -12,8 +12,8 @@ export interface CommandLimits {
   gpu?: boolean;
 }
 
-export const THREAD_VARIABLES = ["OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"] as const;
-export const DEFAULT_NICE = 10;
+const THREAD_VARIABLES = ["OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"] as const;
+const DEFAULT_NICE = 10;
 
 export const limitsOf = (profile?: TaskProfile): CommandLimits => ({
   threadsPerJob: cpuOf(profile).threadsPerJob,

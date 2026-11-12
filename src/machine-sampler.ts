@@ -11,7 +11,7 @@ import { MachineReader, type MachineReaderOptions, parseGpuFacts, parseMeminfo }
 import type { RunEvent } from "./records.ts";
 
 /** The machine sampler as a run component (docs/18): schedules the readings, writes `machine.jsonl` and `run-facts.json`, and asks the ladder to hold when the brake says so. */
-export const SAMPLE_EVERY_MS = 5000;
+const SAMPLE_EVERY_MS = 5000;
 
 // ----- what is written once per run -----
 
