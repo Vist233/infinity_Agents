@@ -81,6 +81,8 @@ export interface MachineSamplerOptions {
   everyMs?: number;
   /** The operating system (default: this Linux machine). */
   host?: Host;
+  /** Lines written as warning events at the start (what the user chose that the report should say). */
+  notes?: string[];
   /** For tests. */
   reader?: Pick<MachineReader, "read">;
   /** For tests: replaces the reading of the machine and run facts. */
@@ -106,6 +108,7 @@ export function machineSampler(options: MachineSamplerOptions = {}): RunComponen
   return {
     name: "machine-sampler",
     start(context: ComponentContext) {
+      for (const line of options.notes ?? []) context.note(line);
       const reader =
         options.reader ?? new MachineReader({ runRoot: context.layout.root, ...optional("slots", options.slots), ...optional("host", options.host) });
       const every = options.everyMs ?? SAMPLE_EVERY_MS;

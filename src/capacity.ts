@@ -75,7 +75,7 @@ export interface Capacity {
 export const MEMORY_RESERVE_GB = 8;
 /** The owner wants the machine kept full: a little more agents than slots, so the queue is never empty. */
 export const FILL_FACTOR = 1.25;
-export const PROFILE_DEFAULTS = { threadsPerJob: 2, memPerJobGb: 3, heavyShare: 0.5 } as const;
+export const PROFILE_DEFAULTS = { threadsPerJob: 2, memPerJobGb: 3, heavyShare: 0.8 } as const;
 
 /** The CPU part of a profile with its defaults. */
 export const cpuOf = (profile?: TaskProfile): Required<CpuProfile> => ({ ...PROFILE_DEFAULTS, ...profile?.cpu });
@@ -132,8 +132,11 @@ export function recommendCapacity(facts: MachineFacts, profile?: TaskProfile, hi
     if (byCores !== null) limits.push(["cores", byCores]);
     if (byMemory !== null) limits.push(["memory", byMemory]);
     if (history.plateauRung !== undefined) limits.push(["plateau", history.plateauRung]);
-    const [limitedBy, agents] = limits.reduce((best, entry) => (entry[1] < best[1] ? entry : best));
-    return result(history.heavyShare ? agents * history.heavyShare : agents, agents, { source: "history", limitedBy, byCores, byMemory });
+    // a history with no usable figure (for example zero CPU per agent in the first seconds of a run) says nothing: fall through to the profile or the default
+    if (limits.length > 0) {
+      const [limitedBy, agents] = limits.reduce((best, entry) => (entry[1] < best[1] ? entry : best));
+      return result(history.heavyShare ? agents * history.heavyShare : agents, agents, { source: "history", limitedBy, byCores, byMemory });
+    }
   }
   if (!profile) return result(facts.cores, facts.cores, { source: "default", limitedBy: "default", byCores: null, byMemory: null });
   const cpu = cpuOf(profile);

@@ -272,6 +272,50 @@ describe("the pressure brake: edges", () => {
   });
 });
 
+describe("a run with the branch review left out (--no-review, experiment E6)", () => {
+  it("writes the note as a warning, shows 'Branch review: off' in the report, and has no review events, no reviews directory and no reviewer request", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "infinity-noreview-"));
+    try {
+      writeFileSync(join(dir, "truth.txt"), "100");
+      const model = createScriptedCodeModel({ hints: ["h1"], value: (_hint, cycle) => 40 + 30 * cycle });
+      const task = defineTask({
+        name: "no-review",
+        mode: "code",
+        prompt: "p",
+        hidden: [join(dir, "truth.txt")],
+        evaluate: createFakeEvaluator({ original: join(dir, "truth.txt") }).evaluate,
+        metric: { name: "score", direction: "max" },
+        review: false,
+        agents: 1,
+        model: { baseUrl: "http://unused", apiKey: "unused", model: "scripted", contextWindow: 100_000 },
+        stop: { targetScore: 0.9 },
+        runsDir: dir,
+      });
+      expect("branchReview" in task).toBe(false);
+      const { defaultComponents } = await import("../src/defaults.ts");
+      const outcome = await runTask(task, {
+        createClient: () => model,
+        runDir: join(dir, "run"),
+        components: defaultComponents({
+          commandLine: ["--no-review"],
+          notes: ["Branch review: off (--no-review). No outside reviewer looks at the agents' work."],
+        }),
+      });
+      const layout = runLayout(outcome.runDir);
+      const events = new JsonlFile<RunEvent>(layout.events).readAll();
+      expect(events.some((event) => event.type === "warning" && event.message.includes("Branch review: off"))).toBe(true);
+      expect(events.some((event) => event.type === "review" || event.type === "review_off" || event.type === "review_skips")).toBe(false);
+      expect(existsSync(layout.reviewDir)).toBe(false);
+      expect(model.branchRequests).toEqual([]);
+      expect(readFileSync(layout.reportHtml, "utf8")).toContain("Branch review: off");
+      await new Promise((resolve) => setTimeout(resolve, 200)); // run-facts.json is written asynchronously
+      expect(JSON.parse(readFileSync(join(layout.root, "run-facts.json"), "utf8")).commandLine).toEqual(["--no-review"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
 describe("the readers on a FakeHost", () => {
   const stat = (pid: number, comm: string, ticks: number, threads = 1, rss = 256) =>
     `${pid} (${comm}) S 1 1 1 0 -1 0 0 0 0 0 ${ticks} 0 0 0 20 0 ${threads} 0 5 1000 ${rss} 0`;

@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Infinity run viewer</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1b1f27; --muted: #5d6675; --line: #d9dde4; --grid: #e8ebf0;
+    --c1: #2f6fd6; --c2: #d8731a; --c3: #168f80; --c4: #8a5cc7; --bad: #c8372d; --warn: #b7791f; --good: #1d8a4b; --band: rgba(200, 55, 45, 0.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12151a; --card: #1a1e25; --ink: #e6e9ee; --muted: #9aa3b2; --line: #343b47; --grid: #262c36;
+      --c1: #6aa0ff; --c2: #f0a04b; --c3: #4cc7b4; --c4: #b794f0; --bad: #ff7a70; --warn: #e0b04a; --good: #5fd08b; --band: rgba(255, 122, 112, 0.16);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12151a; --card: #1a1e25; --ink: #e6e9ee; --muted: #9aa3b2; --line: #343b47; --grid: #262c36;
+    --c1: #6aa0ff; --c2: #f0a04b; --c3: #4cc7b4; --c4: #b794f0; --bad: #ff7a70; --warn: #e0b04a; --good: #5fd08b; --band: rgba(255, 122, 112, 0.16);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1280px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
+  h1 { font-size: 18px; margin: 0; }
+  h2 { font-size: 14px; margin: 0 0 8px; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+  .tile b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .tile span { color: var(--muted); font-size: 12px; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); }
+  .pill.running { color: var(--good); border-color: var(--good); }
+  .pill.stopped { color: var(--warn); border-color: var(--warn); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; align-items: start; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  svg text { fill: var(--muted); font-size: 11px; font-family: inherit; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .legend i { display: inline-block; width: 10px; height: 3px; margin-right: 4px; vertical-align: middle; border-radius: 2px; }
+  .empty { color: var(--muted); font-size: 12px; padding: 8px 0; }
+  .wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; cursor: pointer; position: sticky; top: 0; background: var(--card); user-select: none; }
+  td:last-child, th:last-child, td.l, th.l { text-align: left; }
+  .tall { max-height: 420px; overflow: auto; }
+  .item { border-bottom: 1px solid var(--grid); padding: 6px 0; }
+  .item small { color: var(--muted); }
+  .badge { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line); margin-right: 4px; }
+  .badge.denied, .badge.error { color: var(--bad); border-color: var(--bad); }
+  .badge.steer { color: var(--warn); border-color: var(--warn); }
+  .tip { position: fixed; pointer-events: none; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 12px; display: none; z-index: 5; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+  select { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
+  .warnings { color: var(--warn); font-size: 12px; margin: 0; padding-left: 18px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1 id="title">Infinity run</h1>
+      <div class="sub" id="subtitle"></div>
+    </div>
+    <div><label class="sub">Run <select id="runs"></select></label> <span id="state" class="pill"></span></div>
+  </header>
+  <section class="tiles" id="tiles"></section>
+  <ul class="warnings" id="warnings"></ul>
+  <section class="card"><h2>Timeline: rung and agents</h2><div id="timeline"></div></section>
+  <section class="card"><h2>Scored submits</h2><div id="scores"></div></section>
+  <section><h2>Machine</h2><div class="grid" id="machine"></div></section>
+  <section class="card"><h2>Agents <span class="sub" id="agentsNote"></span></h2><div class="wrap tall"><table id="agents"></table></div></section>
+  <div class="grid">
+    <section class="card"><h2>Reviews and refusals <select id="evFilter"><option value="">all</option><option value="steer">steer</option><option value="error">error</option><option value="denied">refusals</option></select></h2><div class="tall" id="events"></div></section>
+    <section class="card"><h2>Leaderboard</h2><div class="wrap tall"><table id="board"></table></div></section>
+  </div>
+</main>
+<div class="tip" id="tip"></div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const params = new URLSearchParams(location.search);
+const runParam = params.get("run") || "";
+const q = (path) => fetch(path + (path.includes("?") ? "&" : "?") + "run=" + encodeURIComponent(runParam), { cache: "no-store" }).then((r) => r.json());
+
+let data = null;
+let sortKey = "agent";
+let sortDir = 1;
+
+function fmtDur(ms) {
+  if (ms == null || !Number.isFinite(ms)) return "-";
+  const s = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m ${String(r).padStart(2, "0")}s`;
+}
+const fmtMin = (ts, t0) => (ts == null || t0 == null ? "-" : (Math.round(((ts - t0) / 60000) * 10) / 10).toFixed(1));
+function fmtNum(n) {
+  if (n == null) return "-";
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + " M";
+  if (n >= 1e4) return Math.round(n / 1e3) + " k";
+  return String(Math.round(n));
+}
+const fmtScore = (s) => (s == null ? "-" : String(Math.round(s * 100000) / 100000));
+
+// ---------- charts ----------
+const charts = new Map();
+
+function niceTicks(lo, hi, n) {
+  const span = hi - lo || 1;
+  const raw = span / n;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((s) => s >= raw) || raw;
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-6; v += step) out.push(Math.round(v / step * 1e6) / 1e6 * step);
+  return out;
+}
+function timeTicks(t0, t1) {
+  const spanMin = (t1 - t0) / 60000;
+  const step = [1, 2, 5, 10, 15, 30, 60, 120, 240].find((s) => spanMin / s <= 8) || 240;
+  const out = [];
+  for (let m = 0; m <= spanMin + 1e-6; m += step) out.push(t0 + m * 60000);
+  return out;
+}
+
+/** Draws one chart into `host`. spec: {id, h, t0, t1, yMin, yMax, yFmt, series, marks, hlines, points, extra, ticksY} */
+function drawChart(host, spec) {
+  const W = Math.max(280, host.clientWidth || 600);
+  const H = spec.h || 150;
+  const m = { l: 44, r: 10, t: 14, b: 22 };
+  const pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const x = (t) => m.l + ((t - spec.t0) / Math.max(1, spec.t1 - spec.t0)) * pw;
+  const y = (v) => m.t + ph - ((v - spec.yMin) / Math.max(1e-9, spec.yMax - spec.yMin)) * ph;
+  let g = "";
+  for (const v of spec.ticksY || niceTicks(spec.yMin, spec.yMax, 4)) {
+    g += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)"/><text x="${m.l - 6}" y="${y(v) + 4}" text-anchor="end">${esc(spec.yFmt ? spec.yFmt(v) : v)}</text>`;
+  }
+  for (const t of timeTicks(spec.t0, spec.t1)) {
+    g += `<text x="${x(t)}" y="${H - 6}" text-anchor="middle">${Math.round((t - spec.t0) / 60000)}m</text>`;
+  }
+  for (const b of spec.bands || []) g += `<rect x="${x(b[0])}" y="${m.t}" width="${Math.max(1, x(b[1]) - x(b[0]))}" height="${ph}" fill="var(--band)"/>`;
+  for (const r of spec.marks || []) {
+    g += `<line x1="${x(r.ts)}" x2="${x(r.ts)}" y1="${m.t}" y2="${m.t + ph}" stroke="var(--muted)" stroke-dasharray="3 3" opacity=".6"/>`;
+    if (r.label) g += `<text x="${x(r.ts) + 2}" y="${m.t + 9}">${esc(r.label)}</text>`;
+  }
+  for (const h of spec.hlines || []) g += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(h.v)}" y2="${y(h.v)}" stroke="${h.color || "var(--muted)"}" stroke-dasharray="5 4"/>`;
+  for (const s of spec.series) {
+    const pts = s.pts.filter((p) => p[1] != null);
+    if (pts.length === 0) continue;
+    let d = "";
+    pts.forEach((p, i) => {
+      const px = x(p[0]), py = y(Math.min(spec.yMax, Math.max(spec.yMin, p[1])));
+      if (i === 0) d += `M${px.toFixed(1)} ${py.toFixed(1)}`;
+      else if (s.step) d += `H${px.toFixed(1)}V${py.toFixed(1)}`;
+      else d += `L${px.toFixed(1)} ${py.toFixed(1)}`;
+    });
+    if (s.step && !s.noExtend) d += `H${x(spec.t1).toFixed(1)}`;
+    g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.w || 1.6}" stroke-linejoin="round"/>`;
+  }
+  for (const p of spec.points || []) g += p;
+  g += `<line class="cross" x1="0" x2="0" y1="${m.t}" y2="${m.t + ph}" stroke="var(--ink)" opacity="0" />`;
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(spec.label || "chart")}">${g}<rect class="hit" x="${m.l}" y="${m.t}" width="${pw}" height="${ph}" fill="transparent"/></svg>`;
+  const svg = host.firstElementChild;
+  charts.set(host.id, { spec, x, W });
+  svg.querySelector(".hit").addEventListener("mousemove", (ev) => hover(ev, host, svg, spec, m, W));
+  svg.querySelector(".hit").addEventListener("mouseleave", () => { $("tip").style.display = "none"; svg.querySelector(".cross").setAttribute("opacity", "0"); });
+  return { x, y };
+}
+
+function hover(ev, host, svg, spec, m, W) {
+  const box = svg.getBoundingClientRect();
+  const px = ((ev.clientX - box.left) / box.width) * W;
+  const t = spec.t0 + ((px - m.l) / (W - m.l - m.r)) * (spec.t1 - spec.t0);
+  const rows = [];
+  for (const s of spec.series) {
+    let best = null;
+    for (const p of s.pts) if (p[1] != null && (best === null || Math.abs(p[0] - t) < Math.abs(best[0] - t))) best = p;
+    if (best && Math.abs(best[0] - t) < (spec.t1 - spec.t0) / 20) rows.push(`<span style="color:${s.color}">${esc(s.name)}</span> ${esc(spec.yFmt ? spec.yFmt(best[1]) : best[1])}`);
+  }
+  const cross = svg.querySelector(".cross");
+  cross.setAttribute("x1", px); cross.setAttribute("x2", px); cross.setAttribute("opacity", ".35");
+  const tip = $("tip");
+  tip.innerHTML = `<b>${Math.round(((t - spec.t0) / 60000) * 10) / 10} min</b><br>${rows.join("<br>") || "no reading"}`;
+  tip.style.display = "block";
+  tip.style.left = Math.min(innerWidth - 180, ev.clientX + 12) + "px";
+  tip.style.top = ev.clientY + 12 + "px";
+}
+
+function legend(items) {
+  return `<div class="legend">${items.map((i) => `<span><i style="background:${i[1]}"></i>${esc(i[0])}</span>`).join("")}</div>`;
+}
+
+// ---------- rendering ----------
+function render() {
+  const { run, series, agents, events } = data;
+  const t0 = series.startedAt ?? run.startedAt;
+  const live = run.state === "running";
+  const endTs = run.endedAt ?? run.lastTs ?? t0;
+  const t1 = Math.max(endTs || 0, (series.machine.at(-1) || {}).ts || 0, t0 + 60000);
+  document.title = `${run.task || "run"} - Infinity run viewer`;
+  $("title").textContent = run.task ? `Infinity run: ${run.task}` : "Infinity run";
+  $("subtitle").textContent = run.name + (run.endReason ? ` - ended: ${run.endReason}` : "");
+  const st = $("state"); st.textContent = run.state; st.className = "pill " + run.state;
+  const elapsed = live && t0 ? Math.max(Date.now() - t0, endTs - t0) : endTs - t0;
+  const tiles = [
+    ["Elapsed", fmtDur(elapsed)], ["Tokens", fmtNum(run.tokensUsed)], ["Best score", fmtScore(run.bestScore)],
+    ["Agents live", `${run.agentsLive} / ${run.agentsStarted}` + (run.ceiling ? ` (ceiling ${run.ceiling})` : "")],
+    ["Rung", run.rung ?? "-"], ["Scored submits", `${run.scoredSubmits} of ${run.submits}`], ["Reviews", run.reviews], ["Refusals", run.refusals],
+  ];
+  $("tiles").innerHTML = tiles.map(([k, v]) => `<div class="tile"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join("");
+  $("warnings").innerHTML = run.warnings.map((w) => `<li>${esc(w)}</li>`).join("");
+
+  const rungMarks = series.rungs.map((r) => ({ ts: r.ts, label: String(r.to) }));
+  if (run.endedAt) rungMarks.push({ ts: run.endedAt, label: "end" });
+  drawTimeline(series, t0, t1, rungMarks);
+  drawScores(series, t0, t1, rungMarks);
+  drawMachine(series, run, t0, t1, rungMarks);
+  drawAgents(agents, t0);
+  drawEvents(events, t0);
+  drawBoard(run.leaderboard);
+}
+
+function drawTimeline(series, t0, t1, rungMarks) {
+  const rungPts = [[t0, series.initialRung], ...series.rungs.map((r) => [r.ts, r.to])];
+  const live = series.agentsLive;
+  const top = Math.max(2, ...rungPts.map((p) => p[1]), ...live.map((p) => p[1]));
+  const spec = {
+    h: 190, t0, t1, yMin: 0, yMax: top * 1.08, label: "rung and live agents over time",
+    series: [
+      { name: "rung (target agents)", color: "var(--c1)", pts: rungPts, step: true, w: 2 },
+      { name: "agents live", color: "var(--c2)", pts: live, step: true, w: 1.2, noExtend: true },
+    ],
+    marks: rungMarks,
+    bands: [],
+    points: [],
+  };
+  let on = null;
+  for (const b of series.brakes) { if (b.on) on = b.ts; else if (on !== null) { spec.bands.push([on, b.ts]); on = null; } }
+  if (on !== null) spec.bands.push([on, t1]);
+  const host = $("timeline");
+  host.innerHTML = `<div id="tlLegend"></div><div id="tlChart"></div>`;
+  $("tlLegend").innerHTML = legend([["rung (target agents)", "var(--c1)"], ["agents live", "var(--c2)"], ["throttle", "var(--bad)"], ["pressure brake", "var(--band)"], ["warning", "var(--warn)"]]);
+  const { x, y } = drawChart($("tlChart"), spec);
+  const svg = $("tlChart").firstElementChild;
+  let extra = "";
+  for (const t of series.throttles) extra += `<line x1="${x(t.ts)}" x2="${x(t.ts)}" y1="${y(0) - 8}" y2="${y(0)}" stroke="var(--bad)" stroke-width="2"><title>throttle ${t.delayMs} ms ${esc(t.cause)} at ${fmtMin(t.ts, t0)} min</title></line>`;
+  for (const w of series.warnings) extra += `<path d="M${x(w.ts) - 4} ${y(spec.yMax) - 2}h8l-4 7z" fill="var(--warn)"><title>${esc(w.message)}</title></path>`;
+  svg.querySelector(".hit").insertAdjacentHTML("beforebegin", extra);
+}
+
+function drawScores(series, t0, t1, rungMarks) {
+  const host = $("scores");
+  const ok = series.submits.filter((s) => s.score != null).sort((a, b) => a.ts - b.ts);
+  if (ok.length === 0) {
+    host.innerHTML = `<div class="empty">No scored submit yet (${series.submits.length} submits, none with a score).</div>`;
+    return;
+  }
+  const lo = Math.min(...ok.map((s) => s.score)), hi = Math.max(...ok.map((s) => s.score));
+  const pad = Math.max(0.005, (hi - lo) * 0.1);
+  let best = -Infinity;
+  const bestPts = ok.map((s) => [s.ts, (best = Math.max(best, s.score))]);
+  host.innerHTML = `<div id="scLegend"></div><div id="scChart"></div>`;
+  $("scLegend").innerHTML = legend([["best so far", "var(--c3)"], ["submit (hollow: self-reported)", "var(--c1)"]]);
+  const spec = { h: 190, t0, t1, yMin: lo - pad, yMax: hi + pad, yFmt: (v) => String(Math.round(v * 1000) / 1000), label: "scored submits", marks: rungMarks, series: [{ name: "best so far", color: "var(--c3)", pts: bestPts, step: true, w: 1.6 }], points: [] };
+  const { x, y } = drawChart($("scChart"), spec);
+  let pts = "";
+  for (const s of ok) {
+    pts += `<circle cx="${x(s.ts)}" cy="${y(s.score)}" r="4.5" fill="${s.selfReported ? "var(--card)" : "var(--c1)"}" stroke="var(--c1)" stroke-width="1.6"><title>agent ${s.agent}: ${fmtScore(s.score)} at ${fmtMin(s.ts, t0)} min</title></circle>`;
+  }
+  $("scChart").firstElementChild.querySelector(".hit").insertAdjacentHTML("beforebegin", pts);
+}
+
+function drawMachine(series, run, t0, t1, rungMarks) {
+  const host = $("machine");
+  const M = series.machine;
+  const facts = run.facts || {};
+  const cores = (M.find((s) => s.cores != null) || {}).cores ?? facts.cores ?? null;
+  const col = (key, f = (v) => v) => M.map((s) => [s.ts, s[key] == null ? null : f(s[key])]);
+  const has = (key) => M.some((s) => s[key] != null);
+  const memTotalGb = (M.find((s) => s.memTotalMb != null) || {}).memTotalMb / 1024 || null;
+  const gpuTotal = facts.gpuMemTotalMb || null;
+  const first = M[0] ? M[0].ts : null;
+  const specs = [
+    { id: "m-cpu", title: "CPU busy", ok: has("cpuBusy"), yMax: 100, yFmt: (v) => Math.round(v) + "%", series: [{ name: "CPU busy", color: "var(--c1)", pts: col("cpuBusy", (v) => v * 100) }] },
+    { id: "m-load", title: "Load per core (1 min)", ok: has("loadPerCore"), yFmt: (v) => (Math.round(v * 100) / 100).toString(), hl: [{ v: 1 }], series: [{ name: "load / core", color: "var(--c2)", pts: col("loadPerCore") }] },
+    { id: "m-psi", title: "CPU pressure (some, %)", ok: has("cpuPressure10") || has("cpuPressure60"), yFmt: (v) => Math.round(v) + "%", series: [{ name: "10 s", color: "var(--c4)", pts: col("cpuPressure10") }, { name: "60 s", color: "var(--c3)", pts: col("cpuPressure60") }] },
+    { id: "m-mem", title: "Memory used (GB)", ok: has("memUsedMb"), yMax: memTotalGb || undefined, yFmt: (v) => Math.round(v) + " GB", series: [{ name: "used", color: "var(--c1)", pts: col("memUsedMb", (v) => v / 1024) }] },
+    { id: "m-gpu", title: "GPU", ok: has("gpuUtil") || has("gpuMemMb"), yMax: 100, yFmt: (v) => Math.round(v) + "%", series: [{ name: "GPU util", color: "var(--c3)", pts: col("gpuUtil") }, ...(gpuTotal ? [{ name: "GPU memory", color: "var(--c4)", pts: col("gpuMemMb", (v) => (v / gpuTotal) * 100) }] : [])] },
+    { id: "m-slots", title: "Slots in use and waiting", ok: has("slotsInUse") || has("slotsWaiting") || has("gpuSlotsInUse"), step: true, yFmt: (v) => String(Math.round(v)), series: [{ name: "CPU slots in use", color: "var(--c1)", pts: col("slotsInUse") }, { name: "CPU waiting", color: "var(--bad)", pts: col("slotsWaiting") }, { name: "GPU in use", color: "var(--c3)", pts: col("gpuSlotsInUse") }, { name: "GPU waiting", color: "var(--c4)", pts: col("gpuSlotsWaiting") }] },
+    { id: "m-run", title: "Run's own CPU (cores)", ok: has("runCpuCores"), yFmt: (v) => (Math.round(v * 10) / 10).toString(), hl: cores ? [{ v: cores, color: "var(--bad)" }] : [], series: [{ name: "run CPU cores", color: "var(--c2)", pts: col("runCpuCores") }] },
+  ];
+  host.innerHTML = specs.map((s) => `<div class="card"><h2>${esc(s.title)}</h2>${s.ok ? legend(s.series.filter((x) => x.pts.some((p) => p[1] != null)).map((x) => [x.name, x.color])) : ""}<div id="${s.id}">${s.ok ? "" : `<div class="empty">Not recorded in this run${M.length ? "" : " (no machine readings)"}.</div>`}</div>${s.ok && first - t0 > 120000 ? `<div class="sub">Readings start at minute ${Math.round((first - t0) / 60000)}.</div>` : ""}</div>`).join("");
+  for (const s of specs) {
+    if (!s.ok) continue;
+    const vals = s.series.flatMap((x) => x.pts.map((p) => p[1])).filter((v) => v != null);
+    const hi = Math.max(...vals, ...(s.hl || []).map((h) => h.v), 1e-9);
+    const yMax = s.yMax || hi * 1.1;
+    drawChart($(s.id), { h: 140, t0, t1, yMin: 0, yMax: Math.max(yMax, hi * 1.02), yFmt: s.yFmt, hlines: s.hl || [], marks: rungMarks, series: s.series.map((x) => ({ ...x, step: s.step, noExtend: true, w: 1.4 })), label: s.title });
+  }
+}
+
+function drawAgents(agents, t0) {
+  $("agentsNote").textContent = `${agents.length} agents; click a column to sort`;
+  const cols = [
+    ["agent", "Agent", (a) => a.agent], ["startedAt", "Started (min)", (a) => fmtMin(a.startedAt, t0)], ["endedAt", "Ended (min)", (a) => fmtMin(a.endedAt, t0)],
+    ["commits", "Commits", (a) => a.commits], ["submits", "Submits", (a) => a.submits], ["bestScore", "Best score", (a) => fmtScore(a.bestScore)],
+    ["reviews", "Reviews", (a) => a.reviews], ["denied", "Refused", (a) => a.denied], ["lastTs", "Last event", (a) => `${fmtMin(a.lastTs, t0)} min ${a.lastKind}`],
+  ];
+  const rows = [...agents].sort((a, b) => ((a[sortKey] ?? -Infinity) - (b[sortKey] ?? -Infinity)) * sortDir || a.agent - b.agent);
+  $("agents").innerHTML = `<thead><tr>${cols.map((c, i) => `<th data-k="${c[0]}" class="${i === cols.length - 1 ? "l" : ""}">${esc(c[1])}${c[0] === sortKey ? (sortDir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead><tbody>${rows.map((a) => `<tr>${cols.map((c, i) => `<td class="${i === cols.length - 1 ? "l" : ""}">${esc(c[2](a))}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  $("agents").querySelectorAll("th").forEach((th) => th.addEventListener("click", () => {
+    const k = th.dataset.k;
+    if (k === sortKey) sortDir = -sortDir; else { sortKey = k; sortDir = 1; }
+    drawAgents(data.agents, t0);
+  }));
+}
+
+function drawEvents(events, t0) {
+  const filter = $("evFilter").value;
+  const items = events.filter((e) => (e.type === "review" || e.type === "action_denied") && (filter === "" || (filter === "denied" ? e.type === "action_denied" : e.type === "review" && e.outcome === filter)));
+  const shown = items.slice(-300).reverse();
+  $("events").innerHTML = (items.length > shown.length ? `<div class="sub">Showing the newest ${shown.length} of ${items.length}.</div>` : "") +
+    (shown.map((e) => {
+      const denied = e.type === "action_denied";
+      const kind = denied ? "denied" : e.outcome || "review";
+      const text = denied ? `${e.tool || ""}: ${e.reason || ""}` : e.steer || e.summary || e.text || "";
+      return `<div class="item"><small>${fmtMin(e.ts, t0)} min, agent ${esc(e.agent)}</small> <span class="badge ${esc(kind)}">${esc(kind)}</span>${esc(text)}</div>`;
+    }).join("") || `<div class="empty">None.</div>`);
+}
+
+function drawBoard(rows) {
+  $("board").innerHTML = rows.length === 0 ? `<tr><td class="l">No leaderboard file yet.</td></tr>` :
+    `<thead><tr><th>#</th><th>Agent</th><th>Score</th><th>Submits</th><th class="l">Errors</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${r.rank}</td><td>${r.agent}</td><td>${fmtScore(r.score)}${r.selfReported ? " (self)" : ""}</td><td>${r.submits}</td><td class="l">${r.errors}</td></tr>`).join("")}</tbody>`;
+}
+
+// ---------- loading ----------
+async function load() {
+  try {
+    const [run, series, agents, events] = await Promise.all([q("/api/run"), q("/api/series"), q("/api/agents"), q("/api/events?type=review,action_denied&limit=2000")]);
+    if (run.error) { $("subtitle").textContent = run.error; return; }
+    data = { run, series, agents, events };
+    render();
+  } catch (e) { $("subtitle").textContent = "cannot reach the viewer server: " + e; }
+}
+
+async function loadRuns() {
+  const { runs, current } = await fetch("/api/runs").then((r) => r.json());
+  const sel = $("runs");
+  sel.innerHTML = runs.map((r) => `<option value="${esc(r.name)}">${esc(r.name)}</option>`).join("");
+  sel.value = runParam || current || "";
+  sel.disabled = runs.length < 2;
+  sel.addEventListener("change", () => { location.search = "?run=" + encodeURIComponent(sel.value); });
+}
+
+let timer = null;
+function schedule() { clearTimeout(timer); timer = setTimeout(load, 300); }
+function stream() {
+  try {
+    const es = new EventSource("/api/stream?run=" + encodeURIComponent(runParam));
+    es.addEventListener("update", schedule);
+    es.onerror = () => { es.close(); setTimeout(stream, 5000); };
+  } catch (e) { setInterval(load, 5000); }
+}
+$("evFilter").addEventListener("change", () => data && drawEvents(data.events, data.series.startedAt));
+let resizeTimer = null;
+addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => data && render(), 150); });
+loadRuns().then(load).then(stream);
+</script>
+</body>
+</html>

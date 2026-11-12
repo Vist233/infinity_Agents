@@ -18,6 +18,22 @@ export function takeSwitch(args: string[], name: string): boolean {
   return at >= 0;
 }
 
+/** The default minutes between two branch reviews of one agent in the examples. */
+export const DEFAULT_REVIEW_MINUTES = 3;
+
+/**
+ * The branch review of the command line: `--review-minutes N` sets the time between reviews, `--no-review` leaves the branch review out altogether (no
+ * `branchReview` in the task: no reviewer, no review events, no reviews directory). Both together are an error. `notes` are lines the run writes as warnings
+ * so that the report says what was chosen.
+ */
+export function reviewFlags(args: string[]): { branchReview?: { everyMinutes: number; maxTurns: number; maxConcurrent: number }; notes: string[] } {
+  const minutes = takeNumber(args, "review-minutes");
+  const off = takeSwitch(args, "no-review");
+  if (off && minutes !== undefined) throw new Error("--no-review cannot be used with --review-minutes");
+  if (off) return { notes: ["Branch review: off (--no-review). No outside reviewer looks at the agents' work."] };
+  return { branchReview: { everyMinutes: minutes ?? DEFAULT_REVIEW_MINUTES, maxTurns: 6, maxConcurrent: 2 }, notes: [] };
+}
+
 /** The profile of a task, with the command line's `--threads`, `--mem-gb` and `--heavy-share` laid over what the example says (they change the CPU part). */
 export function profileWithFlags(base: TaskProfile, args: string[]): TaskProfile {
   const threadsPerJob = takeNumber(args, "threads");

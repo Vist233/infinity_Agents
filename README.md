@@ -50,6 +50,20 @@ Tests: `npm test` (about 2 minutes; uses real Lean when it is installed), `npm r
 - The switch is kept: `sandbox: true` in the task confines every Lean process on macOS with `sandbox-exec` (writes only to its scratch directory, no network, no reading of the home directory except the Lean toolchain). There is no sandbox on Linux in this version.
 - The official check (`submit`) accepts a proof only if it compiles, has no `sorry`, depends only on `propext`, `Classical.choice`, `Quot.sound`, and `theorem main` (at the top level) has exactly the type `Statement.Goal`.
 
+## Watch a run in the browser (started by a person, from the terminal)
+
+The run viewer is a read-only page that shows a run while it goes on: the rungs, the scored submits with the best-so-far line, the machine (CPU, load per core, memory, GPU, gate slots in use and waiting), the agents, the reviews and refusals, and the leaderboard. It has no dependencies, binds to `127.0.0.1` only, answers GET only, and never writes into a run directory or controls a run.
+
+```
+# started together with a run: the address is printed, the page updates live
+node examples/covertype.ts --view            # --view-port N changes the port (default 4173)
+
+# or on its own, in a second terminal, for a running or a finished run
+npm run view -- runs                         # a runs directory (newest run opens first) or one run directory
+```
+
+Then open `http://127.0.0.1:4173/`. Remote machine: forward the port yourself (`ssh -L 4173:127.0.0.1:4173 host`); the viewer opens no other port.
+
 ## Code mode (built; first real check done on a small task)
 Code and machine-learning tasks (`mode: "code"`): every agent has a shell (`read`, `write`, `edit`, `bash`) and the `submit` tool; each submit is scored by your evaluator on data the agents cannot see, and the ranking, the report and the ledger use that score. Plans and decisions: `docs/05-general-mode-plan.md`, `docs/10-branch-review-and-first-ml-run-plan.md`, `docs/decisions.md`. An example: `examples/covertype.ts` (data preparation and evaluator in `examples/covertype/`; needs Python with numpy, pandas and scikit-learn, for instance `python3 -m venv .venv-ml`).
 

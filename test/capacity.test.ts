@@ -5,37 +5,41 @@ import { defineTask } from "../src/task.ts";
 const machine = { cores: 16, freeMemMb: 90 * 1024 };
 
 describe("recommendCapacity for a CPU task", () => {
+  it("ignores a history that has no usable figure instead of failing (zero CPU per agent early in a run)", () => {
+    expect(recommendCapacity(machine, undefined, { cpuPerAgent: 0 })).toMatchObject({ agents: 16, source: "default" });
+    expect(recommendCapacity(machine, undefined, {})).toMatchObject({ agents: 16, source: "default" });
+  });
   it("is one agent per core without a profile", () => {
     expect(recommendCapacity(machine)).toMatchObject({ agents: 16, cpuSlots: 16, maxUseful: 32, source: "default", limitedBy: "default" });
   });
 
   it("works out CPU slots from the free cores and memory, and agents from the heavy share with a quarter more", () => {
-    // defaults: 2 threads and 3 GB per job, half the time heavy: 16 / 2 = 8 slots, (90 - 8) / 3 = 27; 8 / 0.5 * 1.25 = 20 agents
+    // defaults: 2 threads and 3 GB per job, 80 % of the time heavy: 16 / 2 = 8 slots, (90 - 8) / 3 = 27; 8 / 0.8 * 1.25 = 12.5, so 13 agents
     expect(recommendCapacity(machine, {})).toMatchObject({
       cpuSlots: 8,
-      agents: 20,
-      maxUseful: 40,
+      agents: 13,
+      maxUseful: 26,
       source: "profile",
       limitedBy: "cores",
       byCores: 8,
       byMemory: 27,
       gpuSlots: 0,
     });
-    // little memory decides: (20 - 8) / 3 = 4 slots, 4 / 0.5 * 1.25 = 10 agents
-    expect(recommendCapacity({ cores: 16, freeMemMb: 20 * 1024 }, {})).toMatchObject({ cpuSlots: 4, agents: 10, limitedBy: "memory" });
+    // little memory decides: (20 - 8) / 3 = 4 slots, 4 / 0.8 * 1.25 = 6.25, so 7 agents
+    expect(recommendCapacity({ cores: 16, freeMemMb: 20 * 1024 }, {})).toMatchObject({ cpuSlots: 4, agents: 7, limitedBy: "memory" });
     // jobs that are heavy all the time: 16 slots of one thread, 16 * 1.25 = 20
     expect(recommendCapacity(machine, { cpu: { threadsPerJob: 1, heavyShare: 1 } })).toMatchObject({ cpuSlots: 16, agents: 20 });
     // the profile defaults are filled in
-    expect(cpuOf({ cpu: { threadsPerJob: 4 } })).toEqual({ threadsPerJob: 4, memPerJobGb: 3, heavyShare: 0.5 });
+    expect(cpuOf({ cpu: { threadsPerJob: 4 } })).toEqual({ threadsPerJob: 4, memPerJobGb: 3, heavyShare: 0.8 });
   });
 
   it("subtracts the cores that foreign load keeps busy and manages only the rest", () => {
-    expect(recommendCapacity({ ...machine, busyCores: 4 }, {})).toMatchObject({ cpuSlots: 6, agents: 15 });
+    expect(recommendCapacity({ ...machine, busyCores: 4 }, {})).toMatchObject({ cpuSlots: 6, agents: 10 });
     expect(recommendCapacity({ ...machine, busyCores: 40 }, {}).cpuSlots).toBe(1);
   });
 
   it("never gives less than one agent or one slot", () => {
-    expect(recommendCapacity({ cores: 1, freeMemMb: 1000 }, { cpu: { memPerJobGb: 50 } })).toMatchObject({ cpuSlots: 1, agents: 3, maxUseful: 6 });
+    expect(recommendCapacity({ cores: 1, freeMemMb: 1000 }, { cpu: { memPerJobGb: 50 } })).toMatchObject({ cpuSlots: 1, agents: 2, maxUseful: 4 });
   });
 
   it("lets what an earlier run measured replace the profile", () => {
@@ -64,7 +68,7 @@ describe("recommendCapacity for a GPU task", () => {
     expect(gpuSlotMapOf([24 * 1024, 24 * 1024], { vramPerJobGb: 6 })).toEqual([0, 0, 0, 0, 1, 1, 1, 1]);
     expect(gpuSlotMapOf([24 * 1024, 8 * 1024], { vramPerJobGb: 6, maxJobsPerGpu: 2 })).toEqual([0, 0, 1]);
     expect(gpuSlotMapOf([4 * 1024], { vramPerJobGb: 6 })).toEqual([]);
-    // 4 slots on one 24 GB card: 4 / 0.5 * 1.25 = 10 agents; the CPU kind alone would allow 20
+    // 4 slots on one 24 GB card: 4 / 0.5 * 1.25 = 10 agents; the CPU kind alone would allow 13
     expect(recommendCapacity({ ...machine, gpuMemMb: [24 * 1024] }, gpu)).toMatchObject({
       cpuSlots: 8,
       gpuSlots: 4,
@@ -76,10 +80,10 @@ describe("recommendCapacity for a GPU task", () => {
     // a cap of 2 jobs per GPU
     expect(recommendCapacity({ ...machine, gpuMemMb: [24 * 1024] }, { ...gpu, gpu: { vramPerJobGb: 6, maxJobsPerGpu: 2 } })).toMatchObject({
       gpuSlots: 2,
-      agents: 5,
+      agents: 4,
     });
     // plenty of GPU room: the CPU kind decides
-    expect(recommendCapacity({ ...machine, gpuMemMb: [24 * 1024, 24 * 1024, 24 * 1024] }, gpu)).toMatchObject({ gpuSlots: 12, agents: 20, limitedBy: "cores" });
+    expect(recommendCapacity({ ...machine, gpuMemMb: [24 * 1024, 24 * 1024, 24 * 1024] }, gpu)).toMatchObject({ gpuSlots: 12, agents: 13, limitedBy: "cores" });
   });
 
   it("a GPU task on a machine without a usable GPU gets one agent and no GPU slot", () => {
@@ -87,16 +91,16 @@ describe("recommendCapacity for a GPU task", () => {
   });
 
   it("a CPU task ignores the GPUs", () => {
-    expect(recommendCapacity({ ...machine, gpuMemMb: [24 * 1024] }, {})).toMatchObject({ gpuSlots: 0, agentsByGpu: null, agents: 20 });
+    expect(recommendCapacity({ ...machine, gpuMemMb: [24 * 1024] }, {})).toMatchObject({ gpuSlots: 0, agentsByGpu: null, agents: 13 });
   });
 });
 
 describe("describing the recommendation", () => {
   it("says in one line what it recommends and what was asked", () => {
     const capacity = recommendCapacity(machine, {});
-    expect(describeCapacity(capacity)).toContain("recommended 20 agents (slots 8, source profile, limited by cores; more than 40 adds nothing)");
+    expect(describeCapacity(capacity)).toContain("recommended 13 agents (slots 8, source profile, limited by cores; more than 26 adds nothing)");
     expect(describeCapacity(capacity, 100)).toContain("you asked for 100");
-    expect(describeCapacity(capacity, 20)).not.toContain("you asked");
+    expect(describeCapacity(capacity, 13)).not.toContain("you asked");
     expect(describeCapacity(recommendCapacity({ ...machine, gpuMemMb: [24 * 1024] }, { kind: "gpu", gpu: { vramPerJobGb: 6 } }))).toContain(
       "CPU slots 8, GPU slots 4",
     );

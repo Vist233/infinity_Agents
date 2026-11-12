@@ -22,6 +22,8 @@ export interface DefaultComponentOptions {
   foreignBusyCores?: number;
   /** Hold the ladder while the machine is under pressure (docs/16 section D); `true` takes the default limits. */
   pressureBrake?: boolean | BrakeLimits;
+  /** Lines the run writes as warnings at its start, so that the report says what the user chose (for example "Branch review: off"). */
+  notes?: string[];
   /** For the facts of the run: the recommendation the example printed. */
   capacity?: Capacity;
 }
@@ -41,6 +43,7 @@ export function defaultComponents(options: DefaultComponentOptions = {}): RunCom
   return [
     machineSampler({
       gate,
+      ...(options.notes ? { notes: options.notes } : {}),
       needsGpu: gpuSlots > 0,
       slots: () => ({
         ...(gate0 ? { cpu: { inUse: gate0.inUse, waiting: gate0.waiting } } : {}),
