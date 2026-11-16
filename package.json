@@ -20,7 +20,7 @@
     "infinity": "node bin/infinity.ts"
   },
   "dependencies": {
-    "sakura-agent": "0.1.2"
+    "sakura-agent": "0.2.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
