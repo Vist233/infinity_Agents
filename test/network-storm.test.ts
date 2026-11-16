@@ -105,11 +105,9 @@ describe("no restart storm when every agent fails with a connection error", () =
     const model = createScriptedModel({ hints: ["h1"], isGood: () => false, failAgentsWith: new ProviderError("network", "fetch failed") });
     const task = defineTask({
       name: "storm",
-      mode: "math",
-      statement: "True",
+      tools: { kind: "lean", statement: "True" },
       agents: 4,
       model: { baseUrl: "http://unused", apiKey: "unused", model: "scripted", contextWindow: 100_000 },
-      stop: "first-success",
       runsDir: root,
     });
     const controller = new AbortController();

@@ -23,7 +23,6 @@ describe("a run with a component that holds the ladder", () => {
     const model = createScriptedCodeModel({ hints: ["h1", "h2", "h3", "h4"], value: (hint, cycle) => Number(hint.slice(1)) * 10 + cycle, latencyMs: 5 });
     const task = defineTask({
       name: "brake",
-      mode: "code",
       prompt: "p",
       hidden: [join(dir, "truth.txt")],
       evaluate: createFakeEvaluator({ original: join(dir, "truth.txt") }).evaluate,

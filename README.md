@@ -2,12 +2,12 @@
 
 Run many agents (1 to 100) in parallel on one task and rank what they produce. Built on the [Sakura agent framework](https://www.npmjs.com/package/sakura-agent). A task is a small TypeScript package; one command (`infinity run <task>`) or one library call (`startRun`) runs it. It runs on the machine where it is started; for a remote machine, install and run it there.
 
-Two kinds of task are built:
+There is one kind of task: agents improve a result and every submit is scored. What differs is the **tools** the agents get:
 
-- **math** (`mode: "math"`): agents try to prove one statement in Lean 4; the run ends at the first proof that the local Lean accepts.
-- **code** (`mode: "code"`): every agent has a shell and a `submit` tool; each submit is scored by your evaluator on data the agents cannot see (machine-learning tasks, for example `tasks/covertype/`).
+- **shell** (the `code` preset): `read`, `write`, `edit`, `bash` and `submit`; each submit is scored by your evaluator on data the agents cannot see (machine learning, a faster program; for example `tasks/covertype/`).
+- **lean** (the `math` preset): file tools and a `lean` check; the evaluator is the Lean verifier (score 1 for an accepted proof), and the run ends at the first proof the local Lean accepts.
 
-Status: both modes work with scripted models (`npm test`) and with a real model. Known limits are listed at the end of the next section.
+The test suite covers both tool kits. Real-model runs have also produced an accepted Lean proof and a scored Covertype submission.
 
 ## Architecture
 
@@ -19,6 +19,8 @@ flowchart TB
     CLI["infinity run / view<br/>(a person)"]
     LIB["startRun + Sakura tools<br/>infinity_run / status / stop<br/>(an Agent)"]
   end
+  FORM["Task form (.ts / .json)<br/>+ machine file<br/>(infinity new / recommend)"] --> CLI
+  FORM --> LIB
   CLI --> LAUNCH
   LIB --> LAUNCH
   LAUNCH["Run launcher (launch.ts)<br/>capacity recommendation, options, task package"] --> ORCH
@@ -35,9 +37,9 @@ flowchart TB
   end
 
   ORCH --> MODES
-  subgraph MODES["Modes (what a submission is)"]
-    MATH["Math mode<br/>lean tool, verifier"]
-    CODE["Code mode<br/>shell, submit, evaluator"]
+  subgraph MODES["One task mode: scores every submit, with a tool kit"]
+    MATH["Lean kit (math preset)<br/>read, write, lean check<br/>verifier = evaluator"]
+    CODE["Shell kit (code preset)<br/>read, write, edit, bash, submit<br/>your evaluator"]
   end
 
   subgraph AGENTS["Sakura agents (1..N)"]
@@ -92,7 +94,7 @@ sequenceDiagram
   O->>A: stop agents in order
   O->>K: restore hidden labels
   O->>D: run_end, final report
-  O-->>U: outcome (reason, proved or best score, tokens)
+  O-->>U: outcome (reason, bestScore, tokensUsed)
 ```
 
 A run starts by hiding the labels, then raises the number of live agents rung by rung while the provider does not throttle. Every submission is checked by the mode (Lean for math, your evaluator for code) and written to the ledger, which feeds the leaderboard and the report. The run ends by a stop rule or by the user; the agents are stopped, the labels are put back, and the final report is written.
@@ -106,9 +108,30 @@ All commands are run in the `infinity-agent/` directory.
 You need Node 24 or newer and git. For math tasks you need Lean 4 (`curl https://elan.lean-lang.org/elan-init.sh -sSf | sh`; the program checks `lean --version` and `lake --version` at start and prints this command if they are missing; Mathlib is not needed). For the code task you need Python 3 with numpy, pandas and scikit-learn.
 
 ```sh
-npm install --min-release-age=0     # the flag is only needed where npm refuses very new packages
+npm ci
 npm run check                        # types, lint, format, tests (about 3 minutes); optional
 ```
+
+### Install on another machine
+
+Use the same commit on each machine when you need to reproduce a run.
+
+```sh
+git clone https://github.com/Vist233/infinity_Agents.git infinity-agent
+cd infinity-agent
+npm ci
+```
+
+GitHub supplies the source. The lockfile supplies the dependency versions. A GitHub Release is optional. Keep your own task, input data and credentials on the machine that will run the agents. Use Node 24 or later and Git. Use Linux for host monitoring and command limits.
+
+With your task and evaluator in `../my-task/`, configure the model as shown below and run:
+
+```sh
+node bin/infinity.ts recommend --task ../my-task/task.ts --write ../my-task/machine.json
+node bin/infinity.ts run ../my-task/task.ts --machine ../my-task/machine.json --agents 3 --wall-minutes 30
+```
+
+Paths in the form are relative to the form file. Install the evaluator's dependencies on that machine before starting. See the [Agent guide](AGENT-GUIDE.md) for the task fields.
 
 ### 2. Configure the model
 
@@ -127,7 +150,7 @@ node bin/infinity.ts run math-parity --agents 3 --view      # prove "n % 2 = 0 o
 node bin/infinity.ts run math-odd-sum --agents 10 --view     # needs induction
 ```
 
-A real run with one agent proved `math-parity` in about 20 seconds for about 9,000 tokens. Your own statement: copy `tasks/math-parity/task.ts` and `tasks/math-task.ts` and change the statement.
+A real run with one agent proved `math-parity` in about 20 seconds for about 9,000 tokens. Your own statement: `node bin/infinity.ts new math my-statement`, edit the `statement` line, then `infinity run ./my-statement`.
 
 ### 4. Run a code task
 
@@ -137,9 +160,21 @@ python3 -m venv .venv-ml && .venv-ml/bin/pip install numpy pandas scikit-learn
 PATH="$PWD/.venv-ml/bin:$PATH" node bin/infinity.ts run covertype --agents 2 --tokens 1000000 --wall-minutes 20 --view
 ```
 
-Covertype asks the agents to predict the forest cover type (7 classes); the score is accuracy on hidden labels. Start small, and use the sample: on a laptop, 2 agents on the full data had no scored submission after 20 minutes (training is slow and one CPU slot is shared), so expect the first scores later than in the math task. Flags: `node bin/infinity.ts --help` (conflicting flags are refused with a message). `--agents N` always wins over the machine's recommendation, which is printed first. `--no-review` leaves the branch review out (it can be about half of the tokens). A new task is one file that exports a task package (`name`, `summary`, `profile`, `defaults`, `build(context)`): see `tasks/covertype/task.ts`, then `infinity run ./my-task.ts`.
+Covertype asks the agents to predict the forest cover type (7 classes); the score is accuracy on hidden labels. Start small, and use the sample: on a laptop, 2 agents on the full data had no scored submission after 20 minutes (training is slow and one CPU slot is shared), so expect the first scores later than in the math task. Flags: `node bin/infinity.ts --help` (conflicting flags are refused with a message). `--agents N` always wins over the machine's recommendation, which is printed first. `--no-review` leaves the branch review out (it can be about half of the tokens).
 
-### 5. Open the viewer
+### 5. Your own task (no TypeScript needed)
+
+A task is a **form** (a `.ts` object or a `.json` file): the problem in words, what the agents may see, what is hidden, and a program that scores a submission. What the computer can carry is a separate **machine file**. The code and the math presets are the same kind of form with different tools; nothing is fixed to one problem, so any "improve a result" task fits (a model's accuracy, the speed of a program, a loss).
+
+```sh
+node bin/infinity.ts recommend --write machine.json         # what this computer can carry (agents, slots, threads); edit by hand if you like
+node bin/infinity.ts new code my-task                        # my-task/task.ts (the form) and my-task/evaluate.py (an example scorer); or: new math my-task
+node bin/infinity.ts run ./my-task --machine machine.json --view
+```
+
+The form's fields and the rules for a good evaluator are in [AGENT-GUIDE.md](AGENT-GUIDE.md), which is written for an AI (or a script) that runs Infinity too. `tasks/covertype/task.ts` is a complete real example.
+
+### 6. Open the viewer
 
 `--view` serves a read-only page at `http://127.0.0.1:4173/` (`--view-port N` changes it; the address is printed). It shows the rungs, scored submissions with the best-so-far line, the machine, the agents, the reviews and the leaderboard. It has no dependencies, binds to `127.0.0.1` only, answers GET only and never writes into a run. On its own, for a running or finished run (or a directory of runs, newest first):
 
@@ -149,7 +184,7 @@ node bin/infinity.ts view runs
 
 On a remote machine forward the port yourself (`ssh -L 4173:127.0.0.1:4173 host`).
 
-### 6. Read the results
+### 7. Read the results
 
 Each run writes `runs/<task>-<time>/`:
 
@@ -163,20 +198,22 @@ Each run writes `runs/<task>-<time>/`:
 | `run-facts.json`, `state.json` | the command line and the facts of the run; the state for resuming |
 | `agents/NNN/work/` | one Git repository per agent, a commit after every turn; the best solution is the commit named in the first row of the leaderboard (`git show <commit>`) |
 
-The last line printed is the outcome, for example `{"reason":"proved","proved":[1],"tokensUsed":8781}`. Check that no key is in the run: `grep -rlF -- "$OPENCODE_API_KEY" runs/<run> | wc -l` must print 0.
+The last line printed is the outcome, for example `{"reason":"target","tokensUsed":8781,"bestScore":1}` (a proof task scores 1 for an accepted proof and ends at the first one). Check that no key is in the run: `grep -rlF -- "$OPENCODE_API_KEY" runs/<run> | wc -l` must print 0.
 
-### 7. Stop and resume
+### 8. Stop and resume
 
-- **Stop:** Ctrl-C (the run ends in order: agents stopped, report written, hidden labels put back), `--wall-minutes N`, the token cap `--tokens N`, or `stop()` from the library.
-- **Resume:** `node bin/infinity.ts run covertype --resume runs/<run> <the same flags>` continues with the same agents where they were.
+- **Stop:** Ctrl-C, SIGTERM, or `stop()` from the library stops the agents, restores hidden labels and writes the report. `--wall-minutes N` records `wall` as the stop reason. Use `--tokens N` to set a budget or `--no-token-limit` to clear the task's default. For `startRun`, set `tokens: null` to clear the default.
+- **Resume:** `node bin/infinity.ts run covertype --resume runs/<run> <the same flags>` opens the existing sessions and work directories. A command that was interrupted must be started again by the agent.
 - After a hard kill (`kill -9`, power loss) put hidden labels back first: `node examples/recover-hidden.ts runs/<run>/.keeper`.
 
-### 8. Use it as an Agent
+### 9. Use it as an Agent
 
 ```ts
 import { startRun } from "./src/launch.ts";
 import { createInfinityTools } from "./src/sakura-tools.ts";
-import covertype from "./tasks/covertype/task.ts";
+import { formPackage } from "./src/form.ts";
+import form from "./tasks/covertype/task.ts";
+const covertype = formPackage(form, "./tasks/covertype");
 
 const run = await startRun(covertype, { model, agents: 8, wallMinutes: 45 });   // returns at once; the run goes on in this process
 console.log(run.runDir, run.recommendation.lines);
@@ -184,7 +221,8 @@ console.log(run.status());                    // read from the run's files: stat
 console.log(run.events().events.slice(-3));   // the newest events; run.events(next) gives only what is new
 await run.stop();                             // ends the run in order and waits (run.done settles on its own too)
 
-const tools = createInfinityTools({ packs: [covertype], model });   // infinity_run, infinity_status, infinity_stop for a Sakura agent
+const tools = createInfinityTools({ packs: [covertype], model });   // infinity_run, infinity_status, infinity_stop, infinity_recommend for a Sakura agent
+// infinity_run also takes a form written by the Agent itself: { form: {...}, formDir: "/abs/folder" }; see AGENT-GUIDE.md
 ```
 
 ### Known limits
@@ -198,19 +236,19 @@ const tools = createInfinityTools({ packs: [covertype], model });   // infinity_
 
 ## Lean and the sandbox
 
-- Math mode needs `lean` and `lake` on the PATH. Mathlib is optional and is checked at start only when a task asks for it.
+- A proof task (the math preset) needs `lean` and `lake` on the PATH. Mathlib is optional and is checked at start only when a task asks for it.
 - **Without the sandbox, a proof file is a program that runs with your rights.** Lean runs code at compile time (`#eval`, macros, `initialize`). The owner decided that there is no sandbox by default. Instead: the Lean process gets a clean environment (only PATH, HOME, LEAN_PATH; no keys), the agents have no shell and their file tools are confined to their work directory, and a deny-list rejects `#eval`, macros, `elab`, `initialize`, `unsafe`, `extern` and other imports at `submit` (it is not a boundary).
 - `sandbox: true` in a task confines every Lean process on macOS with `sandbox-exec`. There is no sandbox on Linux in this version.
 - The official check accepts a proof only if it compiles, has no `sorry`, depends only on `propext`, `Classical.choice`, `Quot.sound`, and `theorem main` has exactly the type `Statement.Goal`.
-- Every agent is started with a **Goal**; for math the check is `test -f ../proved`, a marker that only the orchestrator writes when the verifier has accepted a proof.
+- Every agent checks the orchestrator's `../finished` marker for its Goal. A Lean result scores 1 when the verifier accepts the proof.
 
-## Code mode
+## Shell tasks (the code preset)
 
-Every agent has `read`, `write`, `edit`, `bash` and `submit`; the submit is command + listed files + commit, scored by your evaluator on data the agents cannot see. A deployment can supply a Sakura tool environment through `INFINITY_WORKER_ENVIRONMENT` or `runTask(..., { createEnvironment })` to control shell access and accelerators.
+Every agent has `read`, `write`, `edit`, `bash` and `submit`. The submit records the command, listed files and Git commit. The evaluator scores it with the hidden data. A deployment can supply a Sakura tool environment through `INFINITY_WORKER_ENVIRONMENT` or `startRun(..., { createEnvironment })` to control shell access and accelerators.
 
 - **Branch review (optional):** every few minutes each agent's conversation is forked; a reviewer with the same model, system text and tools (so the provider's cache applies) may only `read` files in the agent's directory and says `OK` or gives short advice, which is steered into the agent marked as not coming from the user. It is not a gatekeeper and its benefit is not measured. It costs tokens: in the one real run, reviews were about half of the tokens counted.
 - **Safety review (`review`):** the framework's review plugin judges risky commands; in front of it Infinity's rules refuse pushing, ssh, uploads, killing by name, credential files, the hidden data, other agents' directories and the run's own files. `review: false` switches it off and the report says so.
 - **Hidden data:** moved away with a journal while the agents run and put back at the end (also on Ctrl-C and on a crash). The evaluator gets the private path. Even with a profile, the evaluator must not return hidden labels in its answer, and a hidden split that can be recomputed from public data is not hidden (covertype is public: the task forbids looking it up, which the rules and the reviewer enforce only as far as they notice).
-- The number of agents is yours to choose; the report only gives a hint.
+- Set the agent count with `--agents` and the number of concurrent heavy commands with `--slots`. Use `infinity recommend` to see the suggested settings.
 
-Tests: `npm test` (about 3 minutes; uses real Lean when it is installed), `npm run check` (types, lint, format, tests), `npm run coverage`.
+Tests: `npm test` (uses real Lean when it is installed), `npm run check` (types, lint, format, tests), `npm run coverage`.

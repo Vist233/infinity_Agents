@@ -5,3 +5,9 @@ coverage/
 .venv-ml/
 data/
 server-pull/
+/.publish-clone/
+/.claude/
+.env
+.env.*
+!.env.example
+__pycache__/

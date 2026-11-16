@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ToolContext, createLocalEnvironment } from "sakura-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type Submission, createLeanTool } from "../src/lean-tool.ts";
+import { createLeanTool } from "../src/lean-tool.ts";
+import type { Submission } from "../src/mode.ts";
 import type { Verdict, Verifier } from "../src/verifier.ts";
 
 let dir: string;
@@ -12,7 +13,7 @@ beforeEach(async () => {
 });
 afterEach(() => rm(dir, { recursive: true, force: true }));
 
-function setup(verdict: Verdict = { proved: true, reason: "proved" }) {
+function setup(verdict: Verdict = { proved: true, reason: "accepted" }) {
   const seen: { checked: string[]; verified: string[]; submissions: Submission[] } = { checked: [], verified: [], submissions: [] };
   const verifier: Verifier = {
     check: async (source) => {
@@ -46,7 +47,15 @@ describe("lean tool", () => {
     await writeFile(join(dir, "Proof.lean"), "code");
     const result = await tool.execute({ action: "submit" }, context);
     expect(textOf(result)).toContain("proved");
-    expect(seen.submissions).toEqual([{ code: "code", verdict: { proved: true, reason: "proved" } }]);
+    expect(seen.submissions).toEqual([
+      {
+        command: "lean submit Proof.lean",
+        files: ["Proof.lean"],
+        entry: "code",
+        result: { status: "ok", score: 1, metrics: {}, details: "accepted" },
+        selfReported: false,
+      },
+    ]);
   });
 
   it("submit reports the reason when the proof is not accepted, and still records the attempt", async () => {

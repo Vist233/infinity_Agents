@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -28,22 +28,18 @@ describe.skipIf(!install)("runTask with real Lean and scripted agents", () => {
     });
     const task = defineTask({
       name: "parity real lean",
-      mode: "math",
-      statement: "∀ n : Nat, n % 2 = 0 ∨ n % 2 = 1",
+      tools: { kind: "lean", statement: "∀ n : Nat, n % 2 = 0 ∨ n % 2 = 1", leanPool: 2 },
       agents: 2,
       model: { baseUrl: "http://unused", apiKey: "unused", model: "scripted", contextWindow: 100_000 },
-      stop: "first-success",
-      leanPool: 2,
       runsDir: root,
     });
     const outcome = await runTask(task, { createClient: () => model, runDir: join(root, "run") });
-    expect(outcome.reason).toBe("proved");
+    expect(outcome.reason).toBe("target");
     const layout = runLayout(outcome.runDir);
-    expect(existsSync(layout.provedMarker(2))).toBe(true);
-    const submits = new JsonlFile<LedgerEntry>(layout.ledger).readAll().filter((entry) => entry.type === "submit");
-    expect(submits.find((entry) => entry.proved)?.agent).toBe(2);
-    const rejected = submits.find((entry) => !entry.proved);
-    expect(rejected?.reason).toContain("no theorem named 'main'"); // the wrong agent's file compiles but has no theorem main
+    const submits = new JsonlFile<LedgerEntry>(layout.ledger).readAll().filter((entry) => entry.type === "result");
+    expect(submits.find((entry) => entry.score === 1)?.agent).toBe(2);
+    const rejected = submits.find((entry) => entry.score !== 1);
+    expect(rejected?.details).toContain("no theorem named 'main'"); // the wrong agent's file compiles but has no theorem main
     expect(readFileSync(layout.reportHtml, "utf8")).toContain("theorem main : Statement.Goal");
   }, 600_000);
 });

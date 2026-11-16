@@ -298,7 +298,6 @@ const dryRoot = mkdtempSync(join(runs, ".preflight-dry-"));
 const model = createScriptedCodeModel({ hints: ["a", "b"], value: (_hint, cycle) => cycle, latencyMs: 20 });
 const dry = defineTask({
   name: "preflight dry run",
-  mode: "code",
   prompt: "Raise the number in pred.txt.",
   evaluate: async ({ workDir }) => ({ status: "ok", score: Number(readFileSync(join(workDir, "pred.txt"), "utf8")) / 100, metrics: {}, details: "" }),
   metric: { name: "score", direction: "max" },

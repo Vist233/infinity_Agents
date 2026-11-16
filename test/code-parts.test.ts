@@ -5,10 +5,10 @@ import { type ToolContext, createLocalEnvironment } from "sakura-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { rankCodeAgents, renderCodeCsv } from "../src/code-leaderboard.ts";
 import { type EvalContext, type EvalResult, commandEvaluator, parseResult } from "../src/evaluation.ts";
-import type { CodeSubmission } from "../src/mode.ts";
+import type { Submission } from "../src/mode.ts";
 import type { LedgerEntry } from "../src/records.ts";
 import { MAX_ENTRY_CHARS_PER_FILE, createSubmitTool } from "../src/submit-tool.ts";
-import { type CodeTask, defineTask } from "../src/task.ts";
+import { type TaskDefinition, defineTask } from "../src/task.ts";
 import { createScriptedCodeModel } from "./support/scripted-code-model.ts";
 
 let dir: string;
@@ -22,14 +22,14 @@ const textOf = (result: { content: Array<{ type: string; text?: string }> }) => 
 describe("submit tool", () => {
   function setup(results: EvalResult[], extra: { minIntervalMs?: number; selfReported?: boolean; direction?: "max" | "min" } = {}) {
     let now = 1000;
-    const seen: { submissions: CodeSubmission[]; inputs: Array<{ commit: string | null; claim: Record<string, number> }>; commits: number } = {
+    const seen: { submissions: Submission[]; inputs: Array<{ commit: string | null; claim: Record<string, number> }>; commits: number } = {
       submissions: [],
       inputs: [],
       commits: 0,
     };
     const tool = createSubmitTool({
       helpers: { workDir: dir, commitNow: async () => `commit${++seen.commits}` },
-      onSubmit: async (submission) => void seen.submissions.push(submission as CodeSubmission),
+      onSubmit: async (submission) => void seen.submissions.push(submission),
       metricName: "accuracy",
       direction: extra.direction ?? "max",
       minIntervalMs: extra.minIntervalMs ?? 0,
@@ -58,7 +58,7 @@ describe("submit tool", () => {
     expect(textOf(first)).toContain("accuracy 0.8");
     expect(textOf(first)).toContain("seconds 3");
     expect(seen.inputs[0]?.commit).toBe("commit1");
-    expect(seen.submissions[0]).toMatchObject({ kind: "code", command: "python run.py", files: ["pred.csv"], selfReported: false });
+    expect(seen.submissions[0]).toMatchObject({ command: "python run.py", files: ["pred.csv"], selfReported: false });
     expect(seen.submissions[0]?.entry).toBe("=== pred.csv ===\n1,2,3");
     const second = await tool.execute({ command: "python run.py --lr 2", files: [] }, context);
     expect(textOf(second)).toContain("Your best so far: 0.8");
@@ -184,9 +184,8 @@ describe("code leaderboard", () => {
 });
 
 describe("defineTask in code mode", () => {
-  const base: CodeTask = {
+  const base: TaskDefinition = {
     name: "t",
-    mode: "code",
     prompt: "p",
     review: false,
     agents: 2,
@@ -210,7 +209,7 @@ describe("defineTask in code mode", () => {
         branchReview: { everyMinutes: 0, maxTurns: 0, maxConcurrent: 0 },
       }),
     ).toThrow(
-      /prompt must not be empty.*metric is required.*targetScore needs a metric.*evalSlots.*submitIntervalMinutes.*evalTimeoutMinutes.*everyMinutes.*maxTurns.*maxConcurrent.*not a plain name/,
+      /prompt must not be empty.*metric is required.*not a plain name.*targetScore needs a metric.*evalSlots.*submitIntervalMinutes.*evalTimeoutMinutes.*everyMinutes.*maxTurns.*maxConcurrent/,
     );
     expect(() => defineTask({ ...base, metric: { name: "acc", direction: "max" } })).toThrow(/needs an evaluate/);
     expect(() => defineTask({ ...base, review: undefined as never })).toThrow(/review must be given/);
@@ -237,27 +236,23 @@ describe("code planner and mode set-up", () => {
     expect(seen[0]).toContain("score (code, data, machine learning)");
   });
 
-  it("CodeMode refuses to set up an agent before prepare, and finish is safe to repeat", async () => {
-    const { CodeMode } = await import("../src/code-mode.ts");
+  it("the mode refuses to set up an agent before prepare, and finish is safe to repeat", async () => {
+    const { TaskMode } = await import("../src/task-mode.ts");
+    const { shellKit } = await import("../src/shell-kit.ts");
     const { Pool } = await import("../src/pool.ts");
     const { realClock } = await import("../src/clock.ts");
     const { runLayout } = await import("../src/run-layout.ts");
     const task = defineTask({
       name: "t",
-      mode: "code",
       prompt: "p",
       review: { breakerConsecutive: 3 },
       agents: 1,
       model: { baseUrl: "http://x", apiKey: "k", model: "m", contextWindow: 1000 },
       stop: "until-stopped",
     });
-    const mode = new CodeMode({
-      task,
-      layout: runLayout(join(dir, "run")),
-      clock: realClock,
-      evalPool: new Pool(1),
-      reviewClient: createScriptedCodeModel({ hints: [], value: () => 0 }),
-    });
+    const layout = runLayout(join(dir, "run"));
+    const reviewClient = createScriptedCodeModel({ hints: [], value: () => 0 });
+    const mode = new TaskMode({ task, layout, clock: realClock, kit: shellKit({ task, layout, clock: realClock, reviewClient }), evalPool: new Pool(1) });
     expect(() => mode.agentSetup("h", 1)).toThrow(/prepare/);
     mode.finish([1, 2]); // the agents' directories do not exist: no error
     mode.finish([1, 2]);

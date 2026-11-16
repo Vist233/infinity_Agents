@@ -280,7 +280,6 @@ describe("a run with the branch review left out (--no-review, experiment E6)", (
       const model = createScriptedCodeModel({ hints: ["h1"], value: (_hint, cycle) => 40 + 30 * cycle });
       const task = defineTask({
         name: "no-review",
-        mode: "code",
         prompt: "p",
         hidden: [join(dir, "truth.txt")],
         evaluate: createFakeEvaluator({ original: join(dir, "truth.txt") }).evaluate,
@@ -588,7 +587,6 @@ describe("the component", () => {
     const model = createScriptedCodeModel({ hints: ["h1", "h2"], value: (hint, cycle) => Number(hint.slice(1)) * 40 + 30 * cycle });
     const task = defineTask({
       name: "machine",
-      mode: "code",
       prompt: "p",
       hidden: [join(dir, "truth.txt")],
       evaluate: evaluator.evaluate,

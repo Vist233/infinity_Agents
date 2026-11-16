@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { type LlmClient, type ModelConfig, createChatClient } from "sakura-agent";
 import { type AgentEnd, type AgentWorker, type WorkerEnvironmentFactory, startWorker } from "./agent-worker.ts";
@@ -10,7 +10,7 @@ import { defaultComponents } from "./defaults.ts";
 import { allowSlowConnects } from "./network.ts";
 import { Gate, type GateEvent } from "./gate.ts";
 import { type LadderEvent, type LadderState, type LadderStep, startLadder, stepLadder } from "./ladder.ts";
-import { type ModeContext, createMode, isFinishedBefore, reportKindOf } from "./mode-factory.ts";
+import { type ModeContext, createMode, isFinishedBefore, metricOf } from "./mode-factory.ts";
 import type { Mode, Progress, Submission, SubmitInfo } from "./mode.ts";
 import { hintFor, planHints } from "./planner.ts";
 import { type BranchReviewer, startBranchReview } from "./review-loop.ts";
@@ -35,7 +35,7 @@ export interface RunOptions {
   gate?: SlotGate;
   /** Parts that watch the run (the machine sampler); default: `defaultComponents()`. */
   components?: RunComponent[];
-  /** For tests: time, the model, and the mode (for example a math mode with a fake verifier). */
+  /** For tests: time, the model, and the mode (for example a proof task with a fake verifier: `(context) => createMode(context, { verifier })`). */
   mode?: (context: ModeContext) => Mode;
   clock?: Clock;
   createClient?: (gate: Gate) => LlmClient;
@@ -50,9 +50,8 @@ export interface RunOptions {
 export interface RunOutcome {
   reason: string;
   runDir: string;
-  proved: number[];
   tokensUsed: number;
-  /** Code mode: the best score of a scored submit (null when there was none). */
+  /** The best score of a scored submit (null when there was none). */
   bestScore?: number | null;
 }
 
@@ -69,7 +68,7 @@ export async function runTask(task: TaskDefinition, options: RunOptions = {}): P
   mkdirSync(layout.root, { recursive: true });
   const prior = options.resume ? loadState(layout.state) : undefined;
   if (options.resume && !prior) throw new Error(`Nothing to resume in ${layout.root}`);
-  if (prior && isFinishedBefore(task, prior)) return outcomeOf(layout, prior.finished as string, prior.proved, prior.tokensUsed);
+  if (prior && isFinishedBefore(task, prior)) return outcomeOf(layout, prior.finished as string, prior.tokensUsed, prior.bestScore);
 
   const run = new Run(task, options, layout, clock, prior);
   return run.execute();
@@ -84,10 +83,9 @@ export function newRunDir(task: TaskDefinition, clock: Clock): string {
   return join(task.runsDir ?? "runs", `${slug}-${new Date(clock.now()).toISOString().replace(/[:.]/g, "-")}`);
 }
 
-const outcomeOf = (layout: RunLayout, reason: string, proved: number[], tokensUsed: number, bestScore?: number | null): RunOutcome => ({
+const outcomeOf = (layout: RunLayout, reason: string, tokensUsed: number, bestScore?: number | null): RunOutcome => ({
   reason,
   runDir: layout.root,
-  proved,
   tokensUsed,
   ...(bestScore !== undefined ? { bestScore } : {}),
 });
@@ -137,7 +135,7 @@ class Run {
     this.components = options.components ?? defaultComponents();
     this.startedAt = prior?.startedAt ?? clock.now();
     this.failures = prior?.failures ?? 0;
-    this.recorder = new RunRecorder(layout, clock, reportKindOf(task));
+    this.recorder = new RunRecorder(layout, clock, metricOf(task));
     this.gate = new Gate({
       now: () => clock.now(),
       sleep: (ms, signal) => clock.sleep(ms, signal),
@@ -156,16 +154,26 @@ class Run {
   }
 
   async execute(): Promise<RunOutcome> {
-    this.recorder.event({ type: "run_start", task: this.task.name, ceiling: this.task.agents, resumed: this.prior !== undefined });
+    this.recorder.event({
+      type: "run_start",
+      task: this.task.name,
+      ceiling: this.task.agents,
+      resumed: this.prior !== undefined,
+      metricDirection: metricOf(this.task).direction,
+    });
     try {
+      for (const agent of Object.keys(this.prior?.ladder.live ?? {})) {
+        rmSync(this.layout.finishedMarker(Number(agent)), { force: true });
+      }
       await this.prepare();
     } catch (error) {
       this.mode?.finish?.([]);
-      this.recorder.event({ type: "run_end", reason: `failed to start: ${String(error)}`, tokensUsed: this.budget.tokensUsed, proved: this.progress().proved });
+      this.recorder.event({ type: "run_end", reason: `failed to start: ${String(error)}`, tokensUsed: this.budget.tokensUsed });
       this.recorder.report();
       throw error;
     }
-    this.options.signal?.addEventListener("abort", () => void this.finish("stopped"), { once: true });
+    const stop = () => void this.finish(this.options.signal?.reason === "wall" ? "wall" : "stopped");
+    this.options.signal?.addEventListener("abort", stop, { once: true });
     const { state, spawn } = this.prior
       ? { state: { ...this.prior.ladder, finished: false }, spawn: Object.keys(this.prior.ladder.live).map(Number) }
       : startLadder(this.task.agents);
@@ -182,7 +190,7 @@ class Run {
           if (!this.finishing && this.ladder && Boolean(this.ladder.braked) !== on) this.feed({ type: "brake", on });
         },
       });
-    if (this.options.signal?.aborted) void this.finish("stopped");
+    if (this.options.signal?.aborted) stop();
     void this.watchLoop();
     return this.outcome;
   }
@@ -197,9 +205,10 @@ class Run {
       layout: this.layout,
       clock: this.clock,
       clientFor,
+      ...(this.options.signal ? { signal: this.options.signal } : {}),
       ...(this.options.gate ? { gate: this.options.gate } : {}),
     });
-    if (this.prior) this.mode.restore({ proved: this.prior.proved, bestScore: this.prior.bestScore ?? null });
+    if (this.prior) this.mode.restore({ bestScore: this.prior.bestScore ?? null });
     await this.mode.prepare();
     for (const message of this.mode.warnings?.() ?? []) this.recorder.event({ type: "warning", message });
     if (this.mode.branchReview) {
@@ -218,7 +227,7 @@ class Run {
   }
 
   private async plan(): Promise<string[]> {
-    return planHints({ client: this.client, statement: this.mode.plannerSubject, count: MAX_HINTS_PLANNED, kind: this.mode.kind });
+    return planHints({ client: this.client, statement: this.mode.plannerSubject, count: MAX_HINTS_PLANNED, kind: this.mode.plannerKind });
   }
 
   // ----- agents -----
@@ -244,6 +253,11 @@ class Run {
           this.apply(stepLadder(this.ladder, { type: "reply", agent: number }));
         },
         onCommit: (commit, turn) => this.recorder.commit(number, commit, turn),
+        onCommitError: (operation) =>
+          this.recorder.event({
+            type: "warning",
+            message: `Agent ${number}: Git ${operation} failed. Check the agent's work directory for uncommitted files.`,
+          }),
         onDenied: (denial) => this.recorder.event({ type: "action_denied", agent: number, ...denial }),
         onSubmit: async (submission, info) => this.onSubmit(number, submission, info),
       },
@@ -360,13 +374,12 @@ class Run {
       type: "run_end",
       reason,
       tokensUsed: this.budget.tokensUsed,
-      proved: this.progress().proved,
       ...this.mode.endFields(),
     });
     this.saveState(reason);
     this.recorder.report();
     this.closed = true;
-    this.resolveOutcome(outcomeOf(this.layout, reason, this.progress().proved, this.budget.tokensUsed, this.mode.endFields().bestScore));
+    this.resolveOutcome(outcomeOf(this.layout, reason, this.budget.tokensUsed, this.mode.endFields().bestScore));
   }
 
   /** A budget or quota stop is soft: requests in flight finish and nothing new starts. Any other end cancels the agents at once. */
@@ -380,7 +393,7 @@ class Run {
 
   /** What the mode has so far; before the mode exists (a failed start), what the run had when it was resumed. */
   private progress(): Progress {
-    return this.mode?.progress() ?? { proved: [...(this.prior?.proved ?? [])], bestScore: this.prior?.bestScore ?? null };
+    return this.mode?.progress() ?? { bestScore: this.prior?.bestScore ?? null };
   }
 
   private saveState(finished: string | null = null): void {
@@ -391,7 +404,6 @@ class Run {
       startedAt: this.startedAt,
       hints: this.hints,
       ladder: this.ladderAtStop ?? this.ladder,
-      proved: this.progress().proved,
       bestScore: this.progress().bestScore,
       tokensUsed: this.budget.tokensUsed,
       requests: this.budget.requestCount,

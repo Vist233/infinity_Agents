@@ -214,7 +214,7 @@ function render() {
   const rungMarks = series.rungs.map((r) => ({ ts: r.ts, label: String(r.to) }));
   if (run.endedAt) rungMarks.push({ ts: run.endedAt, label: "end" });
   drawTimeline(series, t0, t1, rungMarks);
-  drawScores(series, t0, t1, rungMarks);
+  drawScores(series, t0, t1, rungMarks, run.metricDirection);
   drawMachine(series, run, t0, t1, rungMarks);
   drawAgents(agents, t0);
   drawEvents(events, t0);
@@ -249,7 +249,7 @@ function drawTimeline(series, t0, t1, rungMarks) {
   svg.querySelector(".hit").insertAdjacentHTML("beforebegin", extra);
 }
 
-function drawScores(series, t0, t1, rungMarks) {
+function drawScores(series, t0, t1, rungMarks, direction) {
   const host = $("scores");
   const ok = series.submits.filter((s) => s.score != null).sort((a, b) => a.ts - b.ts);
   if (ok.length === 0) {
@@ -258,8 +258,9 @@ function drawScores(series, t0, t1, rungMarks) {
   }
   const lo = Math.min(...ok.map((s) => s.score)), hi = Math.max(...ok.map((s) => s.score));
   const pad = Math.max(0.005, (hi - lo) * 0.1);
-  let best = -Infinity;
-  const bestPts = ok.map((s) => [s.ts, (best = Math.max(best, s.score))]);
+  const better = direction === "min" ? Math.min : Math.max;
+  let best = ok[0].score;
+  const bestPts = ok.map((s) => [s.ts, (best = better(best, s.score))]);
   host.innerHTML = `<div id="scLegend"></div><div id="scChart"></div>`;
   $("scLegend").innerHTML = legend([["best so far", "var(--c3)"], ["submit (hollow: self-reported)", "var(--c1)"]]);
   const spec = { h: 190, t0, t1, yMin: lo - pad, yMax: hi + pad, yFmt: (v) => String(Math.round(v * 1000) / 1000), label: "scored submits", marks: rungMarks, series: [{ name: "best so far", color: "var(--c3)", pts: bestPts, step: true, w: 1.6 }], points: [] };

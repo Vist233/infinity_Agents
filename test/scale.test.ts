@@ -8,7 +8,7 @@ import { runTask } from "../src/orchestrator.ts";
 import type { LedgerEntry, RunEvent } from "../src/records.ts";
 import { runLayout } from "../src/run-layout.ts";
 import { loadState } from "../src/run-state.ts";
-import { type MathTask, defineTask } from "../src/task.ts";
+import { type TaskDefinition, defineTask } from "../src/task.ts";
 import { fakeVerifier } from "./support/fake-verifier.ts";
 import { createScriptedModel } from "./support/scripted-model.ts";
 
@@ -18,14 +18,12 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-const task = (overrides: Partial<MathTask> = {}) =>
+const task = (overrides: Partial<TaskDefinition> = {}) =>
   defineTask({
     name: "scale",
-    mode: "math",
-    statement: "True",
+    tools: { kind: "lean", statement: "True" },
     agents: 100,
     model: { baseUrl: "http://unused", apiKey: "unused", model: "scripted", contextWindow: 100_000 },
-    stop: "first-success",
     runsDir: root,
     ...overrides,
   });
@@ -54,7 +52,7 @@ describe("scale with scripted agents", () => {
     const runDir = join(root, "run");
     const layout = runLayout(runDir);
     const controller = new AbortController();
-    const running = runTask(task({ stop: "until-stopped" }), {
+    const running = runTask(task(), {
       createClient: () => model,
       mode: mathModeWith({ verifier: fakeVerifier }),
       runDir,
@@ -98,7 +96,7 @@ describe("scale with scripted agents", () => {
       pauseRetryMs: 20,
     });
 
-    expect(outcome.reason).toBe("proved");
+    expect(outcome.reason).toBe("target");
     expect(model.peakConcurrent).toBeLessThanOrEqual(limit);
     expect(model.throttled).toBeGreaterThan(0);
     const state = loadState(layout.state);
@@ -111,7 +109,7 @@ describe("scale with scripted agents", () => {
     const ledger = new JsonlFile<LedgerEntry>(layout.ledger).readAll();
     const agents = new Set(ledger.map((entry) => entry.agent));
     for (const agent of agents) {
-      const inLedger = ledger.filter((entry) => entry.type === "submit" && entry.agent === agent).length;
+      const inLedger = ledger.filter((entry) => entry.type === "result" && entry.agent === agent).length;
       const inSession = submitsInSession(layout.sessionFile(agent));
       expect([inSession, inSession + 1]).toContain(inLedger); // a submit cut off by the stop may be in the ledger only
     }

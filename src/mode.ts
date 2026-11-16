@@ -4,28 +4,15 @@ import type { RunRecorder } from "./run-recorder.ts";
 import type { RunLayout } from "./run-layout.ts";
 import type { BranchReviewSettings } from "./task.ts";
 import type { EvalResult } from "./evaluation.ts";
-import type { Verdict } from "./verifier.ts";
 
-/** Math: the proof file as sent and the verifier's verdict. */
-export interface MathSubmission {
-  code: string;
-  verdict: Verdict;
-}
-
-/** Code: the command that produced the result, the contents of the listed files, and what the evaluator (or the agent, if self-reported) said. */
-export interface CodeSubmission {
-  kind: "code";
+/** One official submit: the command that produced the result, the contents of the listed files, and what the evaluator (or the agent, if self-reported) said. The ledger line is made from it. */
+export interface Submission {
   command: string;
   files: string[];
   entry: string;
   result: EvalResult;
   selfReported: boolean;
 }
-
-/** What a mode reports for one official submit; the ledger line is made from it. */
-export type Submission = MathSubmission | CodeSubmission;
-
-export const isCodeSubmission = (submission: Submission): submission is CodeSubmission => "kind" in submission && submission.kind === "code";
 
 /** Helpers the worker gives to a mode's tools. */
 export interface ToolHelpers {
@@ -62,6 +49,38 @@ export interface AgentSetup {
   tools(submit: (submission: Submission) => Promise<void>, helpers: ToolHelpers): Tool[];
 }
 
+/** What the `submit` tool asks the mode to score. */
+export interface ScoreInput {
+  command: string;
+  files: string[];
+  commit: string | null;
+  /** Only when the task has no evaluator: the agent's own numbers. */
+  claim: Record<string, number>;
+  signal: AbortSignal;
+  workDir: string;
+}
+
+export type ScoreFn = (input: ScoreInput) => Promise<{ result: EvalResult; selfReported: boolean }>;
+
+/** The tools of the agents and what goes with them: what a proof task and a program task do not share. The mode owns everything else. */
+export interface Kit {
+  /** What kind of strategies the planner is asked for. */
+  readonly plannerKind: "math" | "code";
+  /** What the planner is told to plan strategy hints for. */
+  readonly plannerSubject: string;
+  /** Start-up work that can fail the run (compile the statement). */
+  prepare(): Promise<void>;
+  /** Things the task author should be told at the start. */
+  warnings(): string[];
+  /** One agent's setup, except the goal's check and the shared links, which are the mode's. */
+  agentSetup(args: {
+    hint: string;
+    agent: number;
+    links: Record<string, string>;
+    score: ScoreFn;
+  }): Omit<AgentSetup, "goal" | "links"> & { goalObjective: string };
+}
+
 /** What the worker tells the mode about one official submit. */
 export interface SubmitInfo {
   commit: string | null;
@@ -76,9 +95,8 @@ export interface SubmitEnv {
   clock: Clock;
 }
 
-/** What a mode says about the run so far: the agents with an accepted result and (code) the best verified score. Saved in the state file. */
+/** What the mode says about the run so far: the best verified score. Saved in the state file. */
 export interface Progress {
-  proved: number[];
   bestScore: number | null;
 }
 
@@ -91,14 +109,14 @@ export interface SubmitEffect {
 }
 
 /**
- * What the orchestrator knows about a kind of task. It runs agents, a ladder, a gate and a ledger; everything specific to
- * proving theorems (or, later, to scoring code) is behind this interface.
+ * What the orchestrator knows about a task. It runs agents, a ladder, a gate and a ledger; everything about the tools of the agents, the files, the hidden
+ * data and the scoring of a submit is behind this interface (one implementation, `TaskMode`; the seam is for tests).
  */
 export interface Mode {
   /** Start-up work that can fail the run (compile the statement, find the keeper's files, ...). */
   prepare(): Promise<void>;
-  /** Which kind of task this is (the planner and the report differ). */
-  readonly kind: "math" | "code";
+  /** What kind of strategies the planner is asked for: proof strategies or experiment strategies. */
+  readonly plannerKind: "math" | "code";
   /** The branch review's settings, when the mode has one. */
   readonly branchReview?: BranchReviewSettings | undefined;
   /** Takes the progress of a run that is resumed. */
@@ -106,7 +124,7 @@ export interface Mode {
   /** Takes one official submit: writes it down, keeps what the mode keeps (accepted proofs, best score) and says whether the run is over. */
   accept(agent: number, submission: Submission, info: SubmitInfo, env: SubmitEnv): SubmitEffect;
   progress(): Progress;
-  /** The extra fields of the end of the run (code: `bestScore`). */
+  /** The extra fields of the end of the run (`bestScore`). */
   endFields(): { bestScore?: number | null };
   /** What the planner is told to plan strategy hints for. */
   readonly plannerSubject: string;

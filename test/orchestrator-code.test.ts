@@ -6,7 +6,7 @@ import { JsonlFile } from "../src/jsonl.ts";
 import { runTask } from "../src/orchestrator.ts";
 import type { LedgerEntry, RunEvent } from "../src/records.ts";
 import { runLayout } from "../src/run-layout.ts";
-import { type CodeTask, defineTask } from "../src/task.ts";
+import { type TaskDefinition, defineTask } from "../src/task.ts";
 import { createFakeEvaluator } from "./support/fake-evaluator.ts";
 import { createScriptedCodeModel } from "./support/scripted-code-model.ts";
 
@@ -27,10 +27,9 @@ const HINTS = ["h1", "h2", "h3", "h4"];
 // agent with hint hN starts at 10 N and gains 15 per cycle: h4 reaches 100 at cycle 4
 const value = (hint: string, cycle: number) => Number(hint.slice(1)) * 10 + 15 * cycle;
 
-const codeTask = (overrides: Partial<CodeTask> = {}, evaluate = createFakeEvaluator({ original: truth })) =>
+const codeTask = (overrides: Partial<TaskDefinition> = {}, evaluate = createFakeEvaluator({ original: truth })) =>
   defineTask({
     name: "raise",
-    mode: "code",
     prompt: "Raise the number in pred.txt.",
     files: { data },
     hidden: [truth],
@@ -45,6 +44,13 @@ const codeTask = (overrides: Partial<CodeTask> = {}, evaluate = createFakeEvalua
   });
 
 describe("runTask in code mode with scripted agents", () => {
+  it("rejects visible directories containing hidden inputs before copying anything", async () => {
+    const runDir = join(root, "run");
+    await expect(runTask(codeTask({ files: { data: root } }), { runDir })).rejects.toThrow("overlaps hidden data");
+    expect(existsSync(runLayout(runDir).sharedDir)).toBe(false);
+    expect(readFileSync(truth, "utf8")).toBe("100");
+  });
+
   it("scores every submit with the evaluator, hides the data meanwhile, and ends at the target score", async () => {
     const evaluator = createFakeEvaluator({ original: truth });
     const model = createScriptedCodeModel({ hints: HINTS, value });
@@ -112,7 +118,6 @@ describe("runTask in code mode with scripted agents", () => {
     const model = createScriptedCodeModel({ hints: HINTS, value, claim: (cycle) => ({ accuracy: cycle / 100 }) });
     const task = defineTask({
       name: "claims",
-      mode: "code",
       prompt: "Do something.",
       review: false,
       agents: 2,

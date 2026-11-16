@@ -110,9 +110,7 @@ describe("describing the recommendation", () => {
 describe("the task profile", () => {
   const base = {
     name: "t",
-    mode: "math",
-    statement: "True",
-    stop: "first-success",
+    tools: { kind: "lean", statement: "True" },
     agents: 1,
     model: { baseUrl: "u", apiKey: "k", model: "m", contextWindow: 1000 },
   } as const;

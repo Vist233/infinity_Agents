@@ -8,8 +8,7 @@ export interface RunState {
   startedAt: number;
   hints: string[];
   ladder: LadderState;
-  proved: number[];
-  /** Code mode: the best verified score so far. */
+  /** The best verified score so far. */
   bestScore?: number | null;
   tokensUsed: number;
   requests: number;

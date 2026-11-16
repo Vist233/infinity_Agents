@@ -2,7 +2,7 @@ import { realClock } from "./clock.ts";
 import { type Capacity, type TaskProfile, cpuOf, describeCapacity, recommendCapacity } from "./capacity.ts";
 import type { ModelConfig } from "sakura-agent";
 import { limitedEnvironment, limitsOf } from "./command-limits.ts";
-import { DEFAULT_COMMAND_TIMEOUT_MINUTES } from "./code-mode.ts";
+import { DEFAULT_COMMAND_TIMEOUT_MINUTES } from "./shell-kit.ts";
 import { defaultComponents } from "./defaults.ts";
 import { type RunOptions, type RunOutcome, newRunDir, runTask } from "./orchestrator.ts";
 import { readMachineFacts } from "./proc-readings.ts";
@@ -43,7 +43,8 @@ export interface LaunchOptions {
   model: ModelConfig;
   /** The number of agents. The caller's number always wins; without it the machine's recommendation is used. */
   agents?: number;
-  tokens?: number;
+  /** A positive budget, or null to run without a token limit. */
+  tokens?: number | null;
   /** The run ends in order after this many minutes. */
   wallMinutes?: number;
   /** `false` leaves the branch review out; otherwise minutes between two reviews of one agent (default 3). */
@@ -85,7 +86,7 @@ export async function recommendRun(profile: TaskProfile, requested?: number): Pr
   return { agents: Math.min(MAX_AGENTS, requested ?? capacity.agents), capacity, foreignBusyCores: busy, lines };
 }
 
-export const DEFAULT_REVIEW_MINUTES = 3;
+const DEFAULT_REVIEW_MINUTES = 3;
 
 /** The reasons these options cannot be used together, as words; empty when they can. */
 export function launchProblems(options: LaunchOptions): string[] {
@@ -96,7 +97,7 @@ export function launchProblems(options: LaunchOptions): string[] {
   if (options.agents !== undefined && !(Number.isInteger(options.agents) && options.agents >= 1 && options.agents <= MAX_AGENTS))
     problems.push(`agents must be a whole number from 1 to ${MAX_AGENTS}`);
   for (const [name, value] of [
-    ["tokens", options.tokens],
+    ["tokens", options.tokens ?? undefined],
     ["wallMinutes", options.wallMinutes],
     ["threads", options.threads],
     ["memGb", options.memGb],
@@ -152,7 +153,7 @@ export async function startRun(pack: TaskPackage, options: LaunchOptions): Promi
     agents,
     profile,
     model: options.model,
-    tokens: options.tokens ?? pack.defaults?.tokens,
+    tokens: options.tokens === null ? undefined : (options.tokens ?? pack.defaults?.tokens),
     branchReview:
       options.review === false ? undefined : { everyMinutes: options.review?.everyMinutes ?? DEFAULT_REVIEW_MINUTES, maxTurns: 6, maxConcurrent: 2 },
     commandMinutes,
@@ -160,9 +161,10 @@ export async function startRun(pack: TaskPackage, options: LaunchOptions): Promi
   });
   const runDir = options.resume ?? newRunDir(task, realClock);
   const stopping = new AbortController();
+  if (options.signal?.aborted) stopping.abort();
   options.signal?.addEventListener("abort", () => stopping.abort(), { once: true });
   const wallMinutes = options.wallMinutes ?? pack.defaults?.wallMinutes ?? 0;
-  const timer = wallMinutes > 0 ? setTimeout(() => stopping.abort(), wallMinutes * 60_000) : undefined;
+  const timer = wallMinutes > 0 ? setTimeout(() => stopping.abort("wall"), wallMinutes * 60_000) : undefined;
   timer?.unref();
   const done = runTask(task, {
     ...options.testing,

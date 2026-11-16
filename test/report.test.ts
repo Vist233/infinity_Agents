@@ -2,26 +2,34 @@ import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { rankCodeAgents } from "../src/code-leaderboard.ts";
+import { renderCodeReportHtml } from "../src/code-report.ts";
 import { JsonlFile } from "../src/jsonl.ts";
-import { rankAgents, renderLeaderboardCsv } from "../src/leaderboard.ts";
 import type { LedgerEntry, RunEvent } from "../src/records.ts";
-import { renderReportHtml, writeReport } from "../src/report.ts";
+import { writeReport } from "../src/report.ts";
 import { runLayout } from "../src/run-layout.ts";
 
-const submit = (agent: number, proved: boolean, steps: number, elapsedMs: number, extra: Partial<LedgerEntry> = {}): LedgerEntry =>
-  ({
-    type: "submit",
-    ts: 1_000,
-    agent,
-    workDir: `w/${agent}`,
-    commit: `c${agent}`,
-    code: `proof ${agent}`,
-    proved,
-    reason: proved ? "proved" : "bad",
-    steps,
-    elapsedMs,
-    ...extra,
-  }) as LedgerEntry;
+const PROOF = { name: "proved", direction: "max" } as const;
+
+/** One scored submit; a proof task writes score 1 for an accepted proof and 0 for a rejected one. */
+const result = (agent: number, score: number, extra: Partial<Extract<LedgerEntry, { type: "result" }>> = {}): LedgerEntry => ({
+  type: "result",
+  ts: 1_000,
+  agent,
+  workDir: `w/${agent}`,
+  commit: `c${agent}`,
+  command: "lean submit Proof.lean",
+  entry: `proof ${agent}`,
+  files: ["Proof.lean"],
+  status: "ok",
+  score,
+  metrics: {},
+  details: score === 1 ? "accepted" : "bad",
+  selfReported: false,
+  steps: 3,
+  elapsedMs: 10,
+  ...extra,
+});
 const started = (agent: number): LedgerEntry => ({ type: "lifecycle", ts: 1, agent, workDir: `w/${agent}`, commit: null, event: "started", detail: "" });
 
 let root: string;
@@ -48,34 +56,7 @@ describe("JsonlFile", () => {
   });
 });
 
-describe("rankAgents", () => {
-  it("ranks proved before unproved, then fewer steps, then less time", () => {
-    const rows = rankAgents([submit(1, false, 2, 10), submit(2, true, 9, 50), submit(3, true, 4, 90), submit(4, true, 4, 60)]);
-    expect(rows.map((row) => row.agent)).toEqual([4, 3, 2, 1]);
-    expect(rows.map((row) => row.rank)).toEqual([1, 2, 3, 4]);
-  });
-  it("uses the best submit of an agent and counts all of them", () => {
-    const rows = rankAgents([submit(1, false, 2, 10), submit(1, true, 8, 80)]);
-    expect(rows[0]).toMatchObject({ agent: 1, proved: true, steps: 8, submits: 2, commit: "c1" });
-  });
-  it("lists agents that never submitted last, with empty cells", () => {
-    const rows = rankAgents([started(7), submit(1, false, 3, 10)]);
-    expect(rows.map((row) => row.agent)).toEqual([1, 7]);
-    expect(rows[1]).toMatchObject({ proved: false, steps: null, submits: 0 });
-  });
-  it("is empty for an empty ledger", () => {
-    expect(rankAgents([])).toEqual([]);
-  });
-});
-
-describe("renderLeaderboardCsv", () => {
-  it("writes a header and one line per row, quoting cells that need it", () => {
-    const rows = rankAgents([submit(1, true, 3, 1500, { workDir: 'dir,with "quote"' } as Partial<LedgerEntry>)]);
-    expect(renderLeaderboardCsv(rows)).toBe('rank,agent,proved,steps,elapsed_ms,submits,commit,work_dir\n1,1,true,3,1500,1,c1,"dir,with ""quote"""\n');
-  });
-});
-
-describe("report.html", () => {
+describe("report.html of a proof task", () => {
   const events: RunEvent[] = [
     { type: "run_start", ts: 0, task: "parity <test>", ceiling: 4, resumed: false },
     { type: "rung", ts: 5_000, from: 1, to: 2, reason: "advance", replies: 3, throttles: 0, latencyP50Ms: 800, latencyP95Ms: 1200, tokensPerMinute: 4000 },
@@ -84,20 +65,19 @@ describe("report.html", () => {
     { type: "rescue", ts: 9_500, agent: 3, rescue: 1 },
     { type: "budget_refused", ts: 9_600, reason: "token budget reached" },
     { type: "quota", ts: 9_700, message: "no balance" },
-    { type: "run_end", ts: 10_000, reason: "proved", tokensUsed: 4242, proved: [2] },
+    { type: "run_end", ts: 10_000, reason: "target", tokensUsed: 4242, bestScore: 1 },
   ];
-  const ledger = [started(1), submit(1, false, 2, 10, { reason: "unsolved goals <x>" } as Partial<LedgerEntry>), submit(2, true, 5, 90)];
-  const html = renderReportHtml(rankAgents(ledger), ledger, events);
+  const ledger = [started(1), result(1, 0, { details: "unsolved goals <x>" }), result(2, 1)];
+  const html = renderCodeReportHtml(rankCodeAgents(ledger, "max"), ledger, events, PROOF);
 
   it("shows the summary with the outcome and the tokens", () => {
-    expect(html).toContain("Ended: proved");
+    expect(html).toContain("Ended: target");
     expect(html).toContain("4242 tokens");
-    expect(html).toContain("proved: 1");
+    expect(html).toContain("Best proved (higher is better): 1 by agent 2");
   });
-  it("shows the leaderboard, the first accepted proof and the rejected submits", () => {
+  it("shows the leaderboard and the best submit, the proof itself", () => {
     expect(html).toContain("<pre>proof 2</pre>");
     expect(html).toContain("unsolved goals &lt;x&gt;");
-    expect(html.indexOf("<td>2</td><td>proved")).toBeGreaterThan(0);
   });
   it("shows the ladder with the throttle that found the limit", () => {
     expect(html).toContain("1 → 2");
@@ -112,29 +92,29 @@ describe("report.html", () => {
     expect(html).toContain("parity &lt;test&gt;");
     expect(html).not.toContain("<test>");
   });
-  it("says so when a run is still going and nothing is proved", () => {
-    const early = renderReportHtml([], [], []);
+  it("says so when a run is still going and nothing is scored", () => {
+    const early = renderCodeReportHtml([], [], [], PROOF);
     expect(early).toContain("Still running");
-    expect(early).toContain("no accepted proof");
+    expect(early).toContain("No scored result yet");
   });
 });
 
 describe("writeReport", () => {
   it("writes both files from the two logs of a run", () => {
     const layout = runLayout(root);
-    new JsonlFile<LedgerEntry>(layout.ledger).append(submit(1, true, 2, 20));
-    new JsonlFile<RunEvent>(layout.events).append({ type: "run_end", ts: 1, reason: "proved", tokensUsed: 10, proved: [1] });
-    writeReport(layout);
-    expect(readFileSync(layout.leaderboardCsv, "utf8")).toContain("1,1,true,2,20,1,c1");
-    expect(readFileSync(layout.reportHtml, "utf8")).toContain("Ended: proved");
+    new JsonlFile<LedgerEntry>(layout.ledger).append(result(1, 1));
+    new JsonlFile<RunEvent>(layout.events).append({ type: "run_end", ts: 1, reason: "target", tokensUsed: 10, bestScore: 1 });
+    writeReport(layout, PROOF);
+    expect(readFileSync(layout.leaderboardCsv, "utf8")).toContain("1,1,1,false,1,0,c1");
+    expect(readFileSync(layout.reportHtml, "utf8")).toContain("Ended: target");
   });
 });
 
 describe("runLayout", () => {
-  it("keeps the proved marker next to, not inside, the work directory", () => {
+  it("keeps the finished marker next to, not inside, the work directory", () => {
     const layout = runLayout("/r");
     expect(layout.workDir(7)).toBe("/r/agents/007/work");
-    expect(layout.provedMarker(7)).toBe("/r/agents/007/proved");
+    expect(layout.finishedMarker(7)).toBe("/r/agents/007/finished");
     expect(layout.sessionFile(7)).toBe("/r/agents/007/session.jsonl");
   });
 });
@@ -142,7 +122,7 @@ describe("runLayout", () => {
 describe("runLayout with a relative root", () => {
   it("makes every path absolute, so that other working directories see the same place (a real run failed on this)", () => {
     const layout = runLayout("runs/relative");
-    for (const path of [layout.root, layout.leanDir, layout.workDir(1), layout.provedMarker(1), layout.sessionFile(1), layout.ledger])
+    for (const path of [layout.root, layout.leanDir, layout.workDir(1), layout.finishedMarker(1), layout.sessionFile(1), layout.ledger])
       expect(path.startsWith("/")).toBe(true);
   });
 });

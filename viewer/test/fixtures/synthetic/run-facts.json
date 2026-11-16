@@ -1,0 +1,33 @@
+{
+  "ts": 1794454571267,
+  "cores": 16,
+  "memTotalMb": 94538,
+  "gpuName": "NVIDIA GeForce RTX 4090",
+  "gpuMemTotalMb": 24564,
+  "kernel": "5.15.0-113-generic",
+  "node": "v24.22.2",
+  "commit": null,
+  "ceiling": 8,
+  "commandLine": [
+    "--agents",
+    "8",
+    "--seconds",
+    "240",
+    "--think",
+    "25",
+    "--burn",
+    "30",
+    "--threads",
+    "2",
+    "--slots",
+    "8"
+  ],
+  "gate": {
+    "enabled": true,
+    "cpuSlots": 8,
+    "gpuSlots": null,
+    "commandTimeoutMinutes": 120
+  },
+  "foreignBusyCores": 0.0798004987531172,
+  "unsupported": []
+}

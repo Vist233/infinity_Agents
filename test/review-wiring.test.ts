@@ -6,7 +6,7 @@ import { JsonlFile } from "../src/jsonl.ts";
 import { runTask } from "../src/orchestrator.ts";
 import type { LedgerEntry, RunEvent } from "../src/records.ts";
 import { runLayout } from "../src/run-layout.ts";
-import { type CodeTask, defineTask } from "../src/task.ts";
+import { type TaskDefinition, defineTask } from "../src/task.ts";
 import { createFakeEvaluator } from "./support/fake-evaluator.ts";
 import { createScriptedCodeModel } from "./support/scripted-code-model.ts";
 
@@ -21,10 +21,9 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 const value = (hint: string, cycle: number) => Number(hint.slice(1)) * 10 + 15 * cycle;
-const task = (overrides: Partial<CodeTask> = {}) =>
+const task = (overrides: Partial<TaskDefinition> = {}) =>
   defineTask({
     name: "reviewed",
-    mode: "code",
     prompt: "Raise the number in pred.txt.",
     hidden: [truth],
     evaluate: createFakeEvaluator({ original: truth }).evaluate,

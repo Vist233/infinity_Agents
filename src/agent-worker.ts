@@ -19,6 +19,7 @@ export interface WorkerHooks {
   /** The agent finished a model reply. */
   onReply(): void;
   onCommit(commit: string, turn: number): void;
+  onCommitError?(operation: string): void;
   /** The safety review refused an action. */
   onDenied(denial: { tool: string; decidedBy: string; reason: string }): void;
   /** Called for every official submit before the agent is told the answer. */
@@ -111,9 +112,11 @@ export function startWorker(deps: WorkerDeps): AgentWorker {
   };
 
   const drive = async (): Promise<AgentEnd> => {
-    const commits = commitPlugin({ dir: workDir, onCommit: hooks.onCommit });
+    const commits = commitPlugin({ dir: workDir, onCommit: hooks.onCommit, onError: (_error, operation) => hooks.onCommitError?.(operation) });
+    let workReady = false;
     try {
       await createWorkDir(workDir, deps.setup);
+      workReady = true;
       const commitNow = async (): Promise<string | null> => {
         await commits.flush();
         return (await commitAll(workDir, "submit")) ?? (await headCommit(workDir)) ?? null;
@@ -154,7 +157,7 @@ export function startWorker(deps: WorkerDeps): AgentWorker {
       return { reason: "failed", detail: String(error) };
     } finally {
       await agent?.close().catch(() => {});
-      await commits.flush();
+      if (workReady) await commits.checkpoint();
     }
   };
 

@@ -2,13 +2,7 @@ import { type CodeRow, type ResultEntry, resultsOf } from "./code-leaderboard.ts
 import { recommendCapacity } from "./capacity.ts";
 import { type MachineSample, historyFromSamples, summarizeByRung } from "./machine-summary.ts";
 import type { LedgerEntry, RunEvent } from "./records.ts";
-import { escapeHtml, formatTime, ladderSection, pageHtml, pressureSection, summaryHtml, summaryLines, table, warningSection } from "./report.ts";
-import type { Direction } from "./task.ts";
-
-interface Metric {
-  name: string;
-  direction: Direction;
-}
+import { type Metric, escapeHtml, formatTime, ladderSection, pageHtml, pressureSection, summaryHtml, summaryLines, table, warningSection } from "./report.ts";
 
 export function renderCodeReportHtml(
   rows: readonly CodeRow[],
@@ -23,6 +17,7 @@ export function renderCodeReportHtml(
       warningSection(events),
       summary(rows, events, results, metric),
       leaderboard(rows, metric),
+      bestEntry(rows, results),
       scoreChart(results, events, metric),
       resultList(results, metric),
       reviewSection(events),
@@ -69,6 +64,14 @@ function leaderboard(rows: readonly CodeRow[], metric: Metric): string {
     `<code>${escapeHtml(row.workDir)}</code>`,
   ]);
   return `<h2>Leaderboard</h2>${table(["#", "agent", escapeHtml(metric.name), "submits", "errors", "commit", "work"], cells)}`;
+}
+
+/** What the best scored submit handed in (the files it listed: the code, or the proof). */
+function bestEntry(rows: readonly CodeRow[], results: readonly ResultEntry[]): string {
+  const best = rows.find((row) => row.score !== null && row.commit !== null);
+  const entry = best ? results.findLast((result) => result.agent === best.agent && result.commit === best.commit && result.score === best.score) : undefined;
+  if (!best || !entry) return "";
+  return `<h2>Best submit</h2><p>Agent ${best.agent}, score ${best.score}, commit <code>${escapeHtml(best.commit?.slice(0, 10) ?? "-")}</code>, command <code>${escapeHtml(entry.command.slice(0, 200))}</code></p><pre>${escapeHtml(entry.entry.slice(0, 20_000))}</pre>`;
 }
 
 const WIDTH = 720;

@@ -21,9 +21,7 @@ export interface RunLayout {
   agentDir(agent: number): string;
   workDir(agent: number): string;
   sessionFile(agent: number): string;
-  /** Written by the orchestrator, outside the agent's confined work directory. */
-  provedMarker(agent: number): string;
-  /** Written by the orchestrator when the run ends (code mode); the goal of every code agent is `test -f ../finished`. */
+  /** Written by the orchestrator, outside the agent's work directory, when the run ends; the goal of every agent is `test -f ../finished`. */
   finishedMarker(agent: number): string;
 }
 
@@ -54,7 +52,6 @@ export function runLayout(rootPath: string): RunLayout {
     agentDir,
     workDir: (agent) => join(agentDir(agent), "work"),
     sessionFile: (agent) => join(agentDir(agent), "session.jsonl"),
-    provedMarker: (agent) => join(agentDir(agent), "proved"),
     finishedMarker: (agent) => join(agentDir(agent), "finished"),
   };
 }

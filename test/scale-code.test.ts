@@ -8,7 +8,7 @@ import { runTask } from "../src/orchestrator.ts";
 import type { LedgerEntry, RunEvent } from "../src/records.ts";
 import { type RunLayout, runLayout } from "../src/run-layout.ts";
 import { loadState } from "../src/run-state.ts";
-import { type CodeTask, defineTask } from "../src/task.ts";
+import { type TaskDefinition, defineTask } from "../src/task.ts";
 import { createFakeEvaluator } from "./support/fake-evaluator.ts";
 import { createScriptedCodeModel } from "./support/scripted-code-model.ts";
 
@@ -22,10 +22,9 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 const HINTS = ["h1", "h2", "h3", "h4"];
-const task = (overrides: Partial<CodeTask> = {}) =>
+const task = (overrides: Partial<TaskDefinition> = {}) =>
   defineTask({
     name: "scale code",
-    mode: "code",
     prompt: "Raise the number in pred.txt.",
     hidden: [truth],
     evaluate: createFakeEvaluator({ original: truth }).evaluate,
@@ -231,7 +230,6 @@ describe("kill and resume of a code run with the branch review on", () => {
     const model = createScriptedCodeModel({ hints: [], value: (_h, cycle) => cycle * 5, latencyMs: 5 });
     const resumedTask = defineTask({
       name: "kill test",
-      mode: "code",
       prompt: "Raise the number in pred.txt.",
       evaluate: async (context) => ({ status: "ok", score: Number(readFileSync(join(context.workDir, "pred.txt"), "utf8")) / 100, metrics: {}, details: "" }),
       metric: { name: "score", direction: "max" },

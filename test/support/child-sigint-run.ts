@@ -9,7 +9,6 @@ const [runDir, runsDir, hidden] = process.argv.slice(2);
 const model = createScriptedCodeModel({ hints: ["h1", "h2"], value: (_hint, cycle) => cycle, latencyMs: 20 });
 const task = defineTask({
   name: "sigint test",
-  mode: "code",
   prompt: "Raise the number in pred.txt.",
   hidden: [hidden as string],
   evaluate: async (context) => ({ status: "ok", score: Number(readFileSync(join(context.workDir, "pred.txt"), "utf8")) / 100, metrics: {}, details: "" }),

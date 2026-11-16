@@ -1,5 +1,5 @@
 import type { Tool, ToolResult } from "sakura-agent";
-import type { CodeSubmission, ToolHelpers } from "./mode.ts";
+import type { Submission, ToolHelpers } from "./mode.ts";
 import type { EvalResult } from "./evaluation.ts";
 import { better } from "./task.ts";
 
@@ -17,7 +17,7 @@ export interface SubmitToolOptions {
     workDir: string;
   }) => Promise<{ result: EvalResult; selfReported: boolean }>;
   /** Records the submit; called before the agent sees the answer. */
-  onSubmit: (submission: CodeSubmission) => Promise<void>;
+  onSubmit: (submission: Submission) => Promise<void>;
   helpers: ToolHelpers;
   metricName: string | undefined;
   direction: "max" | "min";
@@ -74,7 +74,7 @@ export function createSubmitTool(options: SubmitToolOptions): Tool {
         signal: context.signal,
         workDir: options.helpers.workDir,
       });
-      await options.onSubmit({ kind: "code", command: input.command, files: input.files, entry, result, selfReported });
+      await options.onSubmit({ command: input.command, files: input.files, entry, result, selfReported });
       if (!selfReported && result.status === "ok" && result.score !== null && (best === undefined || better(result.score, best, options.direction)))
         best = result.score;
       const answer = describe(result, selfReported, options.metricName);

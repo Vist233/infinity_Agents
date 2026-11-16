@@ -74,6 +74,7 @@ export interface RunSummary {
   requests: number | null;
   bestScore: number | null;
   agentsStarted: number;
+  metricDirection: "min" | "max";
   agentsLive: number;
   rung: number | null;
   rungs: number[];
@@ -293,8 +294,13 @@ export class RunReader {
   }
 
   private endedAt(): number | null {
-    const e = this.events.findLast((x) => x.type === "run_end");
-    return e ? num(e.ts) : null;
+    const boundary = this.events.findLast((x) => x.type === "run_start" || x.type === "run_end");
+    return boundary?.type === "run_end" ? num(boundary.ts) : null;
+  }
+
+  private metricDirection(): "min" | "max" {
+    const start = this.events.findLast((event) => event.type === "run_start" && typeof event.metricDirection === "string");
+    return start?.metricDirection === "min" ? "min" : "max";
   }
 
   private onEvent(r: Rec) {
@@ -352,8 +358,10 @@ export class RunReader {
     if (r.type === "lifecycle") {
       const event = str(r.event);
       if (event === "started") {
+        if (ts !== null && (row.startedAt === null || row.endedAt !== null)) this.liveDeltas.push([ts, 1]);
         row.startedAt = ts;
-        if (ts !== null) this.liveDeltas.push([ts, 1]);
+        row.endedAt = null;
+        row.endDetail = "";
       } else if (event === "ended" || event === "stopped") {
         row.endedAt = ts;
         row.endDetail = clip(str(r.detail));
@@ -367,7 +375,6 @@ export class RunReader {
       row.submits++;
       const score = num(r.score);
       const ok = str(r.status) === "ok" && score !== null;
-      if (ok && (row.bestScore === null || score > row.bestScore)) row.bestScore = score;
       this.submits.push({ ts: ts ?? 0, agent, score: ok ? score : null, status: str(r.status), selfReported: r.selfReported === true });
       touch(ok ? `submit ${score}` : `submit ${str(r.status)}`);
     }
@@ -448,26 +455,29 @@ export class RunReader {
 
   summary(): RunSummary {
     const start = this.startedAt();
-    const runEnd = this.events.findLast((x) => x.type === "run_end");
-    const runStart = this.events.find((x) => x.type === "run_start");
+    const boundary = this.events.findLast((x) => x.type === "run_start" || x.type === "run_end");
+    const runEnd = boundary?.type === "run_end" ? boundary : undefined;
+    const runStart = this.events.findLast((x) => x.type === "run_start");
+    const metricDirection = this.metricDirection();
+    const better = metricDirection === "min" ? Math.min : Math.max;
     const rungEvents = this.events.filter((x) => x.type === "rung");
     const ladder = isRec(this.state?.ladder) ? this.state.ladder : null;
     const ladderRungs = Array.isArray(ladder?.rungs) ? (ladder.rungs as unknown[]).filter((v): v is number => typeof v === "number") : [];
     const lastRung = rungEvents.at(-1);
     const rung = lastRung ? num(lastRung.to) : ladderRungs.length > 0 ? ladderRungs[0]! : null;
-    const scored = this.submits.filter((s) => s.score !== null);
+    const scored = this.submits.flatMap(({ score }) => (score === null ? [] : [score]));
     const best = pick(
       this.state?.bestScore,
       runEnd?.bestScore,
-      scored.reduce<number | null>((m, s) => (m === null || (s.score as number) > m ? (s.score as number) : m), null),
+      scored.reduce<number | null>((best, score) => (best === null ? score : better(best, score)), null),
     );
     const lastTs = Math.max(this.lastEventTs ?? 0, this.lastLedgerTs ?? 0, this.machine.at(-1)?.ts ?? 0) || null;
     const ended = runEnd ? num(runEnd.ts) : null;
     const hasData = this.events.length > 0 || this.agents.size > 0 || this.state !== null;
     let state: RunSummary["state"] = "empty";
+    const endReason = str(runEnd?.reason) || (boundary === undefined ? str(this.state?.finished) : "");
     if (hasData) {
-      if (ended !== null || (this.state && str(this.state.finished) !== "" && this.state.finished !== false && this.state.finished !== null))
-        state = "finished";
+      if (runEnd || endReason) state = "finished";
       else if (lastTs !== null && this.now() - lastTs > STALE_MS) state = "stopped";
       else state = "running";
     }
@@ -484,7 +494,7 @@ export class RunReader {
       name: this.name,
       task: str(runStart?.task) || str(this.state?.task),
       state,
-      endReason: str(runEnd?.reason) || (typeof this.state?.finished === "string" ? this.state.finished : ""),
+      endReason,
       startedAt: start,
       endedAt: ended,
       lastTs,
@@ -492,8 +502,9 @@ export class RunReader {
       tokensUsed: pick(runEnd?.tokensUsed, this.state?.tokensUsed),
       requests: num(this.state?.requests),
       bestScore: best,
+      metricDirection,
       agentsStarted: started,
-      agentsLive: state === "finished" ? 0 : live,
+      agentsLive: state === "running" ? live : 0,
       rung,
       rungs: ladderRungs,
       submits: this.submits.length,
@@ -511,7 +522,12 @@ export class RunReader {
   }
 
   agentRows(): AgentRow[] {
-    return [...this.agents.values()].sort((a, b) => a.agent - b.agent);
+    const better = this.metricDirection() === "min" ? Math.min : Math.max;
+    const best = new Map<number, number>();
+    for (const { agent, score } of this.submits) {
+      if (score !== null) best.set(agent, better(best.get(agent) ?? score, score));
+    }
+    return [...this.agents.values()].sort((a, b) => a.agent - b.agent).map((row) => ({ ...row, bestScore: best.get(row.agent) ?? null }));
   }
 
   /** Everything the charts need. Machine readings are thinned to at most `maxPoints`. */

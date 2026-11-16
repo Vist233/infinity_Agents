@@ -28,7 +28,6 @@ const smallPackage = (seen: { context?: unknown } = {}): TaskPackage => ({
     seen.context = context;
     return defineTask({
       name: "small",
-      mode: "code",
       prompt: "p",
       hidden: [join(dir, "truth.txt")],
       evaluate: createFakeEvaluator({ original: join(dir, "truth.txt") }).evaluate,
@@ -99,6 +98,23 @@ describe("startRun", () => {
     expect(outcome.runDir).toBe(handle.runDir);
     expect(handle.status().state).toBe("finished");
   }, 60_000);
+
+  it("clears the token default and records a wall limit separately from a manual stop", async () => {
+    const seen: { context?: unknown } = {};
+    const handle = await startRun(smallPackage(seen), {
+      model,
+      agents: 1,
+      runsDir: dir,
+      tokens: null,
+      wallMinutes: 0.005,
+      review: false,
+      testing: { createClient: () => createScriptedCodeModel({ hints: ["h1"], value: () => 10 }) },
+    });
+    expect(seen.context).toMatchObject({ tokens: undefined });
+    await expect(handle.done).resolves.toMatchObject({ reason: "wall" });
+    expect(handle.status()).toMatchObject({ state: "finished", agentsLive: 0, reason: "wall" });
+    expect(readFileSync(join(dir, "truth.txt"), "utf8")).toBe("100");
+  }, 60_000);
 });
 
 describe("run status", () => {
@@ -110,7 +126,7 @@ describe("run status", () => {
 describe("the Sakura tools", () => {
   it("start a run by name, report on it from the files and stop it", async () => {
     const tools = createInfinityTools({ packs: [smallPackage()], model, defaults: { runsDir: dir, testing: { createClient: scripted } } });
-    expect(tools.map((tool) => tool.name)).toEqual(["infinity_run", "infinity_status", "infinity_stop"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["infinity_run", "infinity_status", "infinity_stop", "infinity_recommend"]);
     const [run, status, stop] = tools as [(typeof tools)[number], (typeof tools)[number], (typeof tools)[number]];
     const context = { signal: new AbortController().signal } as never;
     const bad = await run.execute({ task: "nope" }, context);
@@ -126,5 +142,31 @@ describe("the Sakura tools", () => {
     const after = await read();
     expect(after.state).toBe("finished");
     expect((await stop.execute({ runDir: "/elsewhere" }, context)).isError).toBe(true);
+  }, 60_000);
+
+  it("start a run from a form the Agent wrote, refuse a bad form with the problems, and recommend", async () => {
+    writeFileSync(join(dir, "score.py"), 'import json, os\nprint(json.dumps({"score": float(open(os.environ["INFINITY_WORK_DIR"] + "/pred.txt").read())}))\n');
+    const tools = createInfinityTools({ packs: [], model, defaults: { runsDir: dir, testing: { createClient: scripted } } });
+    const [run, status, stop, recommend] = tools as [(typeof tools)[number], (typeof tools)[number], (typeof tools)[number], (typeof tools)[number]];
+    const context = { signal: new AbortController().signal } as never;
+    const bad = await run.execute({ form: { preset: "code", name: "f" } }, context);
+    expect(bad.isError).toBe(true);
+    expect((bad.content[0] as { text: string }).text).toContain("prompt is required");
+    const form = {
+      preset: "code",
+      name: "f",
+      prompt: "p",
+      evaluate: { program: "score.py", run: "python3" },
+      metric: { name: "s", direction: "max" },
+      review: false,
+    };
+    const started = await run.execute({ form, formDir: dir, agents: 1, review: false }, context);
+    expect(started.isError).toBeUndefined();
+    const first = JSON.parse(((await status.execute({}, context)).content[0] as { text: string }).text);
+    expect(first.runDir.startsWith(dir)).toBe(true);
+    await stop.execute({}, context);
+    const advice = (await recommend.execute({}, context)).content[0] as { text: string };
+    expect(advice.text).toContain("recommended");
+    expect((await run.execute({}, context)).isError).toBe(true);
   }, 60_000);
 });

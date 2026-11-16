@@ -2,19 +2,10 @@ import { mkdirSync } from "node:fs";
 import type { Clock } from "./clock.ts";
 import { JsonlFile } from "./jsonl.ts";
 import type { LedgerEntry, RunEvent, WithoutTs } from "./records.ts";
-import { type ReportKind, writeReport } from "./report.ts";
+import { type Metric, writeReport } from "./report.ts";
 import type { RunLayout } from "./run-layout.ts";
 
 type LifecycleEvent = Extract<LedgerEntry, { type: "lifecycle" }>["event"];
-
-export interface SubmitRecord {
-  code: string;
-  proved: boolean;
-  reason: string;
-  commit: string | null;
-  steps: number;
-  elapsedMs: number;
-}
 
 export type ResultRecord = Omit<Extract<LedgerEntry, { type: "result" }>, "type" | "ts" | "agent" | "workDir">;
 
@@ -24,14 +15,14 @@ export type ResultRecord = Omit<Extract<LedgerEntry, { type: "result" }>, "type"
  */
 export class RunRecorder {
   private readonly layout: RunLayout;
-  private readonly kind: ReportKind;
+  private readonly metric: Metric;
   private readonly clock: Clock;
   private readonly ledger: JsonlFile<LedgerEntry>;
   private readonly events: JsonlFile<RunEvent>;
   private readonly lastCommit = new Map<number, string>();
 
-  constructor(layout: RunLayout, clock: Clock, kind: ReportKind = { mode: "math" }) {
-    this.kind = kind;
+  constructor(layout: RunLayout, clock: Clock, metric: Metric) {
+    this.metric = metric;
     this.layout = layout;
     this.clock = clock;
     mkdirSync(layout.root, { recursive: true });
@@ -52,11 +43,6 @@ export class RunRecorder {
     this.ledger.append({ type: "commit", ...this.pointer(agent), commit, turn });
   }
 
-  submit(agent: number, record: SubmitRecord): void {
-    if (record.commit) this.lastCommit.set(agent, record.commit);
-    this.ledger.append({ type: "submit", ...this.pointer(agent), ...record });
-  }
-
   result(agent: number, record: ResultRecord): void {
     if (record.commit) this.lastCommit.set(agent, record.commit);
     this.ledger.append({ type: "result", ...this.pointer(agent), ...record });
@@ -64,7 +50,7 @@ export class RunRecorder {
 
   /** Regenerates leaderboard.csv and report.html from the two logs. */
   report(): void {
-    writeReport(this.layout, this.kind);
+    writeReport(this.layout, this.metric);
   }
 
   private pointer(agent: number) {

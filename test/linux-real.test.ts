@@ -125,7 +125,6 @@ describe.skipIf(!onLinux)("[Linux only, skipped on other systems] real renice an
     });
     const task = defineTask({
       name: "group",
-      mode: "code",
       prompt: "p",
       hidden: [join(dir, "truth.txt")],
       evaluate: createFakeEvaluator({ original: join(dir, "truth.txt") }).evaluate,

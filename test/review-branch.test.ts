@@ -7,7 +7,7 @@ import { JsonlFile } from "../src/jsonl.ts";
 import { type RunOptions, type RunOutcome, runTask } from "../src/orchestrator.ts";
 import type { LedgerEntry, RunEvent } from "../src/records.ts";
 import { type RunLayout, runLayout } from "../src/run-layout.ts";
-import { type CodeTask, defineTask } from "../src/task.ts";
+import { type TaskDefinition, defineTask } from "../src/task.ts";
 import { createFakeEvaluator } from "./support/fake-evaluator.ts";
 import { type ScriptedCodeModelOptions, createScriptedCodeModel, scriptedReview } from "./support/scripted-code-model.ts";
 
@@ -24,10 +24,9 @@ const HINTS = ["h1", "h2", "h3"];
 const value = (hint: string, cycle: number) => Number(hint.slice(1)) * 10 + cycle;
 const EVERY = 0.004; // minutes: a review about every 240 ms per agent
 
-const task = (overrides: Partial<CodeTask> = {}) =>
+const task = (overrides: Partial<TaskDefinition> = {}) =>
   defineTask({
     name: "branch",
-    mode: "code",
     prompt: "Raise the number in pred.txt.",
     hidden: [truth],
     evaluate: createFakeEvaluator({ original: truth }).evaluate,
@@ -43,7 +42,7 @@ const task = (overrides: Partial<CodeTask> = {}) =>
 
 /** Runs the task until `done` says so (checked every 25 ms against the events), then stops it like a user would. */
 async function runUntil(
-  definition: CodeTask,
+  definition: TaskDefinition,
   modelOptions: Partial<ScriptedCodeModelOptions>,
   done: (events: RunEvent[], layout: RunLayout, model: ReturnType<typeof createScriptedCodeModel>) => boolean,
   options: { runDir?: string; timeoutMs?: number; createEnvironment?: RunOptions["createEnvironment"] } = {},
@@ -249,7 +248,7 @@ describe("branch review with real agents and a scripted model", () => {
 
   it("with the branch review off nothing changes: no review events, no reviews directory, no Reviews section", async () => {
     const { branchReview: _on, ...withoutReview } = task({ agents: 1 });
-    const off = withoutReview as CodeTask;
+    const off = withoutReview as TaskDefinition;
     const { events, layout, model } = await runUntil(
       off,
       {},

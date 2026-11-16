@@ -161,7 +161,7 @@ export interface ProcessLike {
  * Restores on a normal exit, on SIGINT and SIGTERM, and on an uncaught exception. After a signal it removes its own handler and sends the same
  * signal again, so the process ends the way it would have. SIGKILL and a power loss cannot be caught: `HiddenKeeper.recover(dir)` handles those.
  */
-export function restoreOnExit(keeper: HiddenKeeper, target: ProcessLike = process): ProcessGuard {
+export function restoreOnExit(keeper: HiddenKeeper, target: ProcessLike = process, stopping?: AbortSignal): ProcessGuard {
   const restore = () => {
     try {
       keeper.restore();
@@ -170,6 +170,8 @@ export function restoreOnExit(keeper: HiddenKeeper, target: ProcessLike = proces
     }
   };
   const onSignal = (signal: NodeJS.Signals) => {
+    // A graceful stop is already draining the workers. The run restores the data after they exit.
+    if (stopping?.aborted) return;
     restore();
     target.off("SIGINT", onSignal);
     target.off("SIGTERM", onSignal);

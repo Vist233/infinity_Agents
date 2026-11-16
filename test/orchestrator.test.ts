@@ -8,7 +8,8 @@ import { JsonlFile } from "../src/jsonl.ts";
 import { runTask } from "../src/orchestrator.ts";
 import type { LedgerEntry, RunEvent } from "../src/records.ts";
 import { runLayout } from "../src/run-layout.ts";
-import { type MathTask, defineTask } from "../src/task.ts";
+import { acceptedProofs, provedAgents } from "./support/proofs.ts";
+import { type TaskDefinition, defineTask } from "../src/task.ts";
 import { fakeVerifier } from "./support/fake-verifier.ts";
 import { FakeLeanRunner } from "./support/fake-lean-runner.ts";
 import { createScriptedModel } from "./support/scripted-model.ts";
@@ -19,14 +20,12 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-const task = (overrides: Partial<MathTask> = {}) =>
+const task = (overrides: Partial<TaskDefinition> = {}) =>
   defineTask({
     name: "parity",
-    mode: "math",
-    statement: "∀ n : Nat, n % 2 = 0 ∨ n % 2 = 1",
+    tools: { kind: "lean", statement: "∀ n : Nat, n % 2 = 0 ∨ n % 2 = 1" },
     agents: 4,
     model: { baseUrl: "http://unused", apiKey: "unused", model: "scripted", contextWindow: 100_000 },
-    stop: "first-success",
     runsDir: root,
     ...overrides,
   });
@@ -38,29 +37,28 @@ describe("runTask with scripted agents", () => {
     const model = createScriptedModel({ hints: HINTS, isGood: (hint) => hint === "h2" });
     const outcome = await runTask(task(), { createClient: () => model, mode: mathModeWith({ verifier: fakeVerifier }), runDir: join(root, "run") });
 
-    expect(outcome.reason).toBe("proved");
-    expect(outcome.proved).toEqual([2]);
+    expect(outcome.reason).toBe("target");
+    expect(outcome.bestScore).toBe(1);
+    expect(provedAgents(outcome.runDir)).toEqual([2]);
     const layout = runLayout(outcome.runDir);
-    expect(existsSync(layout.provedMarker(2))).toBe(true);
-    expect(existsSync(layout.provedMarker(1))).toBe(false);
 
     const ledger = new JsonlFile<LedgerEntry>(layout.ledger).readAll();
-    const submits = ledger.filter((entry) => entry.type === "submit");
-    expect(submits.some((entry) => entry.proved && entry.agent === 2 && entry.code.includes("GOOD"))).toBe(true);
-    expect(submits.filter((entry) => !entry.proved).every((entry) => entry.reason === "this is a bad proof")).toBe(true);
+    const submits = ledger.filter((entry) => entry.type === "result");
+    expect(submits.some((entry) => entry.score === 1 && entry.agent === 2 && entry.entry.includes("GOOD"))).toBe(true);
+    expect(submits.filter((entry) => entry.score !== 1).every((entry) => entry.details === "this is a bad proof")).toBe(true);
     expect(ledger.every((entry) => entry.workDir.includes("agents/") && "commit" in entry)).toBe(true);
-    const accepted = submits.find((entry) => entry.proved);
+    const accepted = acceptedProofs(outcome.runDir)[0];
     expect(accepted?.commit).toMatch(/^[0-9a-f]{40}$/);
 
     const events = new JsonlFile<RunEvent>(layout.events).readAll();
     expect(events.map((event) => event.type)).toContain("rung");
-    expect(events.at(-1)).toMatchObject({ type: "run_end", reason: "proved", proved: [2] });
+    expect(events.at(-1)).toMatchObject({ type: "run_end", reason: "target", bestScore: 1 });
 
     const csv = readFileSync(layout.leaderboardCsv, "utf8");
-    expect(csv.split("\n")[1]).toMatch(/^1,2,true,/);
+    expect(csv.split("\n")[1]).toMatch(/^1,2,1,/);
     expect(readFileSync(layout.reportHtml, "utf8")).toContain("GOOD");
     const savedState = JSON.parse(readFileSync(layout.state, "utf8"));
-    expect(savedState.finished).toBe("proved");
+    expect(savedState.finished).toBe("target");
     expect(savedState.startedAt).toBeLessThan(events.at(-1)?.ts ?? 0); // the start time is kept, not the time of the last save (found in the first real run)
 
     const history = execFileSync("git", ["log", "--format=%s"], { cwd: layout.workDir(2) }).toString();
@@ -68,44 +66,29 @@ describe("runTask with scripted agents", () => {
     expect(history).toContain("turn 1");
     // the commit the ledger points to holds exactly the submitted file
     const committed = execFileSync("git", ["show", `${accepted?.commit}:Proof.lean`], { cwd: layout.workDir(2) }).toString();
-    expect(committed).toBe(accepted?.code);
+    expect(committed).toBe(accepted?.entry);
     expect(readFileSync(join(layout.workDir(2), "Statement.lean"), "utf8")).toContain("abbrev Goal");
   });
 
   it("climbs the ladder while nobody has proved anything, and starts each agent with its own hint", async () => {
     const model = createScriptedModel({ hints: HINTS, isGood: (hint, attempt) => hint === "h4" && attempt >= 2 });
     const outcome = await runTask(task(), { createClient: () => model, mode: mathModeWith({ verifier: fakeVerifier }), runDir: join(root, "run") });
-    expect(outcome.proved).toEqual([4]);
+    expect(provedAgents(outcome.runDir)).toEqual([4]);
     const events = new JsonlFile<RunEvent>(runLayout(outcome.runDir).events).readAll();
     const rungs = events.filter((event) => event.type === "rung").map((event) => (event.type === "rung" ? `${event.from}->${event.to}` : ""));
     expect(rungs).toEqual(["1->2", "2->4"]);
   });
 
-  it("keeps going after a proof when the rule is until-stopped, and stops on the user's signal", async () => {
-    const model = createScriptedModel({ hints: HINTS, isGood: () => true });
-    const controller = new AbortController();
-    const running = runTask(task({ stop: "until-stopped", agents: 2 }), {
-      createClient: () => model,
-      mode: mathModeWith({ verifier: fakeVerifier }),
-      runDir: join(root, "run"),
-      signal: controller.signal,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    controller.abort();
-    const outcome = await running;
-    expect(outcome.reason).toBe("stopped");
-    expect(outcome.proved.length).toBeGreaterThan(1);
-  }, 20_000);
-
   it("refuses to start when the task is invalid", () => {
     expect(() => task({ agents: 0 })).toThrow("agents must be");
-    expect(() => task({ statement: " " })).toThrow("statement must not be empty");
+    expect(() => task({ tools: { kind: "lean", statement: " " } })).toThrow("statement must not be empty");
+    expect(() => task({ stop: "until-stopped" })).toThrow("stops at the first accepted proof");
   });
 });
 
 describe("runTask: ends and rescues", () => {
   const fast = { checkEveryMs: 20, pauseRetryMs: 5, replacementWaitMs: 1 };
-  const quick = (overrides: Partial<MathTask> = {}) => task({ stuckMinutes: 0.001, ...overrides });
+  const quick = (overrides: Partial<TaskDefinition> = {}) => task({ stuckMinutes: 0.001, ...overrides });
 
   it("rescues an agent that goes silent, with the rescue message, and the agent then proves", async () => {
     const model = createScriptedModel({ hints: HINTS, isGood: () => true, hangs: (_hint, request) => request === 1 });
@@ -115,7 +98,7 @@ describe("runTask: ends and rescues", () => {
       runDir: join(root, "run"),
       ...fast,
     });
-    expect(outcome.reason).toBe("proved");
+    expect(outcome.reason).toBe("target");
     const layout = runLayout(outcome.runDir);
     const events = new JsonlFile<RunEvent>(layout.events).readAll();
     expect(events.filter((event) => event.type === "rescue")).toEqual([expect.objectContaining({ agent: 1, rescue: 1 })]);
@@ -131,8 +114,8 @@ describe("runTask: ends and rescues", () => {
       runDir: join(root, "run"),
       ...fast,
     });
-    expect(outcome.reason).toBe("proved");
-    expect(outcome.proved).toEqual([2]);
+    expect(outcome.reason).toBe("target");
+    expect(provedAgents(outcome.runDir)).toEqual([2]);
     const ledger = new JsonlFile<LedgerEntry>(runLayout(outcome.runDir).ledger).readAll();
     const rescued = ledger.filter((entry) => entry.type === "lifecycle" && entry.agent === 1 && entry.event === "rescued");
     expect(rescued).toHaveLength(3);
@@ -169,16 +152,21 @@ describe("runTask: ends and rescues", () => {
     });
     expect(first.reason).toBe("budget");
     expect(first.tokensUsed).toBeLessThan(1000 + 120);
-    expect(first.proved).toEqual([]);
+    expect(provedAgents(first.runDir)).toEqual([]);
+    const finishedMarker = runLayout(runDir).finishedMarker(1);
+    expect(existsSync(finishedMarker)).toBe(true);
 
     const second = await runTask(task({ agents: 1, tokens: 100_000 }), {
-      createClient: () => model,
+      createClient: () => {
+        expect(existsSync(finishedMarker)).toBe(false);
+        return model;
+      },
       mode: mathModeWith({ verifier: fakeVerifier }),
       runDir,
       resume: true,
       ...fast,
     });
-    expect(second.reason).toBe("proved");
+    expect(second.reason).toBe("target");
     expect(second.tokensUsed).toBeGreaterThan(first.tokensUsed);
     const ledger = new JsonlFile<LedgerEntry>(runLayout(runDir).ledger).readAll();
     expect(ledger.filter((entry) => entry.type === "lifecycle" && entry.event === "started" && entry.detail === "resumed")).toHaveLength(1);
@@ -222,7 +210,7 @@ describe("runTask: ends and rescues", () => {
     await runTask(task(), { createClient: () => model, mode: mathModeWith({ verifier: fakeVerifier }), runDir });
     const before = model.requestCount;
     const again = await runTask(task(), { createClient: () => model, mode: mathModeWith({ verifier: fakeVerifier }), runDir, resume: true });
-    expect(again.reason).toBe("proved");
+    expect(again.reason).toBe("target");
     expect(model.requestCount).toBe(before);
   });
 

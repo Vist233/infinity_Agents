@@ -1,7 +1,5 @@
 import type { Tool, ToolContext, ToolResult } from "sakura-agent";
 import type { Submission } from "./mode.ts";
-
-export type { Submission } from "./mode.ts";
 import type { Verifier } from "./verifier.ts";
 
 export interface LeanToolOptions {
@@ -43,7 +41,13 @@ export function createLeanTool(options: LeanToolOptions): Tool {
       if (source === undefined) return text(`Cannot read '${file}'. Write the proof file first.`, true);
       if (action === "check") return text(await options.verifier.check(source, context.signal));
       const verdict = await options.verifier.verify(source, context.signal);
-      await options.onSubmit({ code: source, verdict });
+      await options.onSubmit({
+        command: `lean submit ${file}`,
+        files: [file],
+        entry: source,
+        result: { status: "ok", score: verdict.proved ? 1 : 0, metrics: {}, details: verdict.reason },
+        selfReported: false,
+      });
       return text(verdict.proved ? "proved: the proof is accepted." : `Not accepted: ${verdict.reason}`);
     },
   };

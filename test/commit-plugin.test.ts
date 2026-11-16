@@ -97,17 +97,20 @@ describe("commit plugin", () => {
     expect(errors).toHaveLength(1);
   });
 
-  it("keeps committing after one commit failed", async () => {
+  it("reports an index lock and checkpoints the unsaved file after the lock clears", async () => {
     const commits: number[] = [];
-    const plugin = commitPlugin({ dir, onCommit: (_id, turn) => commits.push(turn), onError: () => {} });
+    const failures: string[] = [];
+    const plugin = commitPlugin({ dir, onCommit: (_id, turn) => commits.push(turn), onError: (_error, operation) => failures.push(operation) });
     const fire = install(plugin);
     await writeFile(join(dir, "a.txt"), "one");
+    await writeFile(join(dir, ".git", "index.lock"), "");
     fire({ type: "turn_end" });
     await plugin.flush();
+    expect(failures).toEqual(["turn 1"]);
+    expect(commits).toEqual([]);
     await rm(join(dir, ".git", "index.lock"), { force: true });
-    await writeFile(join(dir, "a.txt"), "two");
-    fire({ type: "turn_end" });
-    await plugin.flush();
-    expect(commits).toEqual([1, 2]);
+    await plugin.checkpoint();
+    expect(log()).toEqual(["checkpoint|infinity-agent"]);
+    expect(commits).toEqual([1]);
   });
 });

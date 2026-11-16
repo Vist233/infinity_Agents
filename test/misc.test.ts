@@ -56,24 +56,22 @@ describe("findLean", () => {
 describe("defineTask", () => {
   const base = {
     name: "t",
-    mode: "math" as const,
-    statement: "True",
+    tools: { kind: "lean", statement: "True" } as const,
     agents: 2,
     model: { baseUrl: "x", apiKey: "k", model: "m", contextWindow: 1 },
-    stop: "first-success" as const,
   };
   it("accepts a good task and returns it", () => {
-    expect(defineTask(base)).toBe(base);
+    expect(defineTask(base)).toMatchObject(base);
   });
   it.each([
     [{ name: " " }, "name must not be empty"],
     [{ agents: 101 }, "agents must be"],
     [{ agents: 1.5 }, "agents must be"],
     [{ tokens: 0 }, "tokens must be positive"],
-    [{ leanPool: 0 }, "leanPool must be at least 1"],
+    [{ tools: { kind: "lean", statement: "True", leanPool: 0 } }, "leanPool must be at least 1"],
     [{ stuckMinutes: -1 }, "stuckMinutes must be positive"],
   ])("rejects %j", (change, message) => {
-    expect(() => defineTask({ ...base, ...change })).toThrow(message);
+    expect(() => defineTask({ ...base, ...(change as object) })).toThrow(message);
   });
   it("lists every problem at once", () => {
     expect(() => defineTask({ ...base, name: "", agents: 0 })).toThrow(/name must not be empty; agents must be/);

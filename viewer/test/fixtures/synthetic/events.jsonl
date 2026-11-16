@@ -1,0 +1,9 @@
+{"type":"run_start","task":"synthetic-load","ceiling":8,"resumed":false,"ts":1794454571261}
+{"type":"warning","message":"The safety review is OFF: the agents' shell commands run unchecked, with your rights.","ts":1794454571261}
+{"type":"warning","message":"There is no evaluator: the ranking uses the agents' own claims (self-reported).","ts":1794454571261}
+{"type":"rung","from":1,"to":2,"reason":"advance","replies":4,"throttles":0,"latencyP50Ms":4,"latencyP95Ms":5,"tokensPerMinute":334883.72093023255,"ts":1794454571347}
+{"type":"rung","from":2,"to":4,"reason":"advance","replies":7,"throttles":0,"latencyP50Ms":4,"latencyP95Ms":5,"tokensPerMinute":690410.9589041095,"ts":1794454571420}
+{"type":"rung","from":4,"to":8,"reason":"advance","replies":16,"throttles":0,"latencyP50Ms":6,"latencyP95Ms":8,"tokensPerMinute":847058.8235294117,"ts":1794454571556}
+{"type":"leftover_processes","ts":1794454812027,"found":0,"killedHard":0}
+{"type":"slot_summary","ts":1794454812027,"kind":"cpu","slots":8,"commands":32,"waited":4,"totalWaitMs":4,"maxWaitMs":1,"utilisation":0.49936920604066987}
+{"type":"run_end","reason":"stopped","tokensUsed":8640,"proved":[],"bestScore":null,"ts":1794454812028}

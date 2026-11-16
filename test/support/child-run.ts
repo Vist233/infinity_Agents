@@ -9,11 +9,9 @@ const [runDir, runsDir] = process.argv.slice(2);
 const model = createScriptedModel({ hints: ["h1", "h2", "h3", "h4"], isGood: () => false, latencyMs: 5 });
 const task = defineTask({
   name: "kill test",
-  mode: "math",
-  statement: "True",
+  tools: { kind: "lean", statement: "True" },
   agents: 4,
   model: { baseUrl: "http://unused", apiKey: "unused", model: "scripted", contextWindow: 100_000 },
-  stop: "first-success",
   runsDir: runsDir ?? ".",
 });
 await runTask(task, { createClient: () => model, mode: mathModeWith({ verifier: fakeVerifier }), runDir: runDir ?? "run", checkEveryMs: 50 });

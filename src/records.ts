@@ -9,9 +9,7 @@ interface WorkPointer {
 }
 
 export type LedgerEntry =
-  /** One official submit: the proof file as sent and the result of the formal verification. */
-  | (WorkPointer & { type: "submit"; code: string; proved: boolean; reason: string; steps: number; elapsedMs: number })
-  /** Code mode: one official submit. `entry` is the contents of the files the agent listed (cut at a size limit), the commit holds everything. */
+  /** One official submit, scored. `entry` is the contents of the files the agent listed (cut at a size limit; for a proof, the proof file), the commit holds everything. */
   | (WorkPointer & {
       type: "result";
       command: string;
@@ -29,7 +27,7 @@ export type LedgerEntry =
   | (WorkPointer & { type: "lifecycle"; event: "started" | "ended" | "stopped" | "rescued"; detail: string });
 
 export type RunEvent =
-  | { type: "run_start"; ts: number; task: string; ceiling: number; resumed: boolean }
+  | { type: "run_start"; ts: number; task: string; ceiling: number; resumed: boolean; metricDirection?: "min" | "max" }
   | {
       type: "rung";
       ts: number;
@@ -46,7 +44,7 @@ export type RunEvent =
   | { type: "quota"; ts: number; message: string }
   | { type: "budget_refused"; ts: number; reason: string }
   | { type: "rescue"; ts: number; agent: number; rescue: number }
-  | { type: "run_end"; ts: number; reason: string; tokensUsed: number; proved: number[]; bestScore?: number | null }
+  | { type: "run_end"; ts: number; reason: string; tokensUsed: number; bestScore?: number | null }
   /** Said loudly at the start and in the report: something is weaker than the task author may expect (no review, hidden data not protected, ...). */
   | { type: "warning"; ts: number; message: string }
   /** The safety review (or the hard rules in front of it) refused an action of an agent. */

@@ -17,7 +17,7 @@ describe("infinity run: the arguments", () => {
   it("a task alone takes every default: the gate on, the review on, the agents left to the recommendation", () => {
     const { task, options, view } = parseRunArgs(["covertype"]);
     expect(task).toBe("covertype");
-    expect(options.gate).toBe(true);
+    expect(options.gate).toBeUndefined();
     expect(options.agents).toBeUndefined();
     expect(options.review).toBeUndefined();
     expect(view).toBeUndefined();
@@ -50,6 +50,11 @@ describe("infinity run: the arguments", () => {
   it("--no-review and --no-gate are read; --resume and --runs-dir take a path", () => {
     const { options } = parseRunArgs(["covertype", "--no-review", "--no-gate", "--resume", "runs/x", "--runs-dir", "elsewhere"]);
     expect(options).toMatchObject({ review: false, gate: false, resume: "runs/x", runsDir: "elsewhere" });
+  });
+
+  it("overrides the task token default or refuses an explicit conflict", () => {
+    expect(parseRunArgs(["t", "--no-token-limit"]).options.tokens).toBeNull();
+    expect(() => parseRunArgs(["t", "--no-token-limit", "--tokens", "10"])).toThrow("--no-token-limit cannot be used with --tokens");
   });
 
   it("refuses conflicting flags, unknown flags, a missing task and a missing value, with a message that says what is wrong", () => {

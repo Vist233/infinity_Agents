@@ -50,7 +50,6 @@ const CORE = [
   "stuck.ts",
   "work-repo.ts",
   "worker-policy.ts",
-  "leaderboard.ts",
   "code-leaderboard.ts",
   "report.ts",
   "code-report.ts",
@@ -58,8 +57,9 @@ const CORE = [
 
 /** The modes: what a task is (prompts, tools, evaluator, hidden data, review rules). */
 const MODES = [
-  "code-mode.ts",
-  "math-mode.ts",
+  "lean-kit.ts",
+  "shell-kit.ts",
+  "task-mode.ts",
   "hidden-keeper.ts",
   "lean-runner.ts",
   "lean-setup.ts",
@@ -82,15 +82,15 @@ const GROUPS: Record<string, string[]> = {
 /** The one place where components are put together. */
 const COMPOSITION = ["defaults.ts", "launch.ts"];
 
-/** The entry for an Agent: tools that use the library API (launch.ts) and nothing else of src/. */
-const ENTRY = ["sakura-tools.ts"];
+/** The entries: tools for an Agent, the task form and the machine file. They are read by the entries (bin/, tools) and use the library API and plain task types, never the run's inside. */
+const ENTRY = ["sakura-tools.ts", "form.ts", "machine-config.ts"];
 
 /** Known imports that break the rules and are to go in step 2 of docs/18. Each is written down so that no other one can slip in. */
 const KNOWN_EXCEPTIONS: Array<[from: string, to: string, why: string]> = [
   ["orchestrator.ts", "defaults.ts", "the default list of components comes from the composition root"],
   ["orchestrator.ts", "slot-gate.ts", "type SlotGate in RunOptions.gate"],
   ["mode-factory.ts", "slot-gate.ts", "type SlotGate passed on to the code mode"],
-  ["code-mode.ts", "slot-gate.ts", "the commandLimits plugin and the SlotGate it waits at"],
+  ["shell-kit.ts", "slot-gate.ts", "the commandLimits plugin and the SlotGate it waits at"],
 ];
 
 type Graph = Map<string, string[]>;
@@ -153,10 +153,19 @@ describe("import boundaries (docs/18)", () => {
     expect(many.sort()).toEqual(["defaults.ts", "launch.ts"]);
   });
 
-  it("the tools for an Agent import the library API only, and no file of src/ imports them", () => {
+  it("the tools for an Agent import the library API and the task form only, and no file of src/ imports them", () => {
     const graph = readGraph();
-    expect(graph.get("sakura-tools.ts")).toEqual(["launch.ts"]);
+    expect(graph.get("sakura-tools.ts")).toEqual(["form.ts", "launch.ts"]);
     expect([...graph].filter(([, imports]) => imports.includes("sakura-tools.ts")).map(([file]) => file)).toEqual([]);
+  });
+
+  it("the task form and the machine file use the task types and the library API only, and only the Agent tools import them", () => {
+    const graph = readGraph();
+    expect(graph.get("form.ts")).toEqual(["capacity.ts", "evaluation.ts", "launch.ts", "task.ts"]);
+    expect(graph.get("machine-config.ts")).toEqual(["capacity.ts", "launch.ts"]);
+    expect([...graph].filter(([, imports]) => imports.includes("form.ts") || imports.includes("machine-config.ts")).map(([file]) => file)).toEqual([
+      "sakura-tools.ts",
+    ]);
   });
 
   it("the Host port imports nothing, and no component touches the operating system (os, child_process) except through it", () => {

@@ -32,11 +32,11 @@ export function readRunStatus(runDir: string, now: number = Date.now()): RunStat
   const state = loadState(layout.state);
   const events = new JsonlFile<RunEvent>(layout.events).readAll();
   const results = new JsonlFile<LedgerEntry>(layout.ledger).readAll().filter((entry) => entry.type === "result");
-  const end = events.findLast((event) => event.type === "run_end");
+  const boundary = events.findLast((event) => event.type === "run_start" || event.type === "run_end");
   const warnings = events.flatMap((event) => (event.type === "warning" ? [event.message] : []));
   const touched = [layout.state, layout.events].filter(existsSync).map((file) => statSync(file).mtimeMs);
   const quiet = touched.length === 0 || now - Math.max(...touched) > QUIET_MS;
-  const finished = state?.finished ?? (end?.type === "run_end" ? end.reason : null);
+  const finished = boundary?.type === "run_end" ? boundary.reason : boundary?.type === "run_start" ? null : (state?.finished ?? null);
   const rung = state ? (state.ladder.rungs[state.ladder.rungIndex] ?? null) : null;
   return {
     runDir: layout.root,
@@ -47,7 +47,7 @@ export function readRunStatus(runDir: string, now: number = Date.now()): RunStat
     tokensUsed: state?.tokensUsed ?? 0,
     requests: state?.requests ?? 0,
     bestScore: state?.bestScore ?? null,
-    agentsLive: state ? Object.keys(state.ladder.live).length : 0,
+    agentsLive: state && finished === null && !quiet ? Object.keys(state.ladder.live).length : 0,
     rung,
     results: results.length,
     warnings,

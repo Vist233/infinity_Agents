@@ -7,26 +7,21 @@ import { type WorkerHooks, startWorker } from "../src/agent-worker.ts";
 import { realClock } from "../src/clock.ts";
 import { Gate } from "../src/gate.ts";
 import { runLayout } from "../src/run-layout.ts";
-import { MathMode } from "../src/math-mode.ts";
-import { isCodeSubmission } from "../src/mode.ts";
-import { defineTask } from "../src/task.ts";
+import { leanKit } from "../src/lean-kit.ts";
 import { fakeVerifier } from "./support/fake-verifier.ts";
 import { createScriptedModel } from "./support/scripted-model.ts";
 
-/** The setup a math agent gets, with the fake verifier. */
-const mathSetup = (hint: string) =>
-  new MathMode({
-    task: defineTask({
-      name: "w",
-      mode: "math",
-      statement: "True",
-      agents: 1,
-      model: { baseUrl: "x", apiKey: "x", model: "x", contextWindow: 1 },
-      stop: "first-success",
-    }),
-    leanDir: "unused",
-    verifier: fakeVerifier,
-  }).agentSetup(hint);
+/** The setup a proof agent gets, with the fake verifier (the goal checks the marker the run writes at its end). */
+const mathSetup = (hint: string) => {
+  const kit = leanKit({ tools: { kind: "lean", statement: "True" }, leanDir: "unused", verifier: fakeVerifier });
+  const { goalObjective, ...setup } = kit.agentSetup({
+    hint,
+    agent: 1,
+    links: {},
+    score: async () => ({ result: { status: "error", score: null, metrics: {}, details: "" }, selfReported: false }),
+  });
+  return { ...setup, goal: { objective: goalObjective, verify: "test -f ../finished" } };
+};
 
 let root: string;
 beforeEach(() => {
@@ -48,9 +43,9 @@ function setup(model: ReturnType<typeof createScriptedModel>) {
     onCommit: () => {},
     onDenied: () => {},
     onSubmit: async (submission, info) => {
-      if (isCodeSubmission(submission)) throw new Error("a math worker got a code submission");
-      seen.submits.push({ proved: submission.verdict.proved, steps: info.steps });
-      if (submission.verdict.proved) (await import("node:fs")).writeFileSync(layout.provedMarker(1), "ok");
+      const proved = submission.result.score === 1;
+      seen.submits.push({ proved, steps: info.steps });
+      if (proved) (await import("node:fs")).writeFileSync(layout.finishedMarker(1), "ok");
     },
   };
   const start = (overrides: object = {}) =>

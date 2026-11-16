@@ -168,7 +168,6 @@ describe("a run with the limits", () => {
     });
     const task = defineTask({
       name: "limits",
-      mode: "code",
       prompt: "p",
       hidden: [join(dir, "truth.txt")],
       evaluate: createFakeEvaluator({ original: join(dir, "truth.txt") }).evaluate,

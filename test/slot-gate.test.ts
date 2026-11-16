@@ -182,7 +182,6 @@ describe("a run with the gate", () => {
     });
     const task = defineTask({
       name: "gate",
-      mode: "code",
       prompt: "p",
       hidden: [join(dir, "truth.txt")],
       evaluate: createFakeEvaluator({ original: join(dir, "truth.txt") }).evaluate,
@@ -233,7 +232,6 @@ describe("a run with the gate", () => {
     });
     const task = defineTask({
       name: "wall",
-      mode: "code",
       prompt: "p",
       hidden: [join(dir, "truth.txt")],
       evaluate: createFakeEvaluator({ original: join(dir, "truth.txt") }).evaluate,
@@ -269,8 +267,8 @@ describe("the default components", () => {
 
 describe("what a task must not rely on", () => {
   it("the background grace of the shell tool is huge but below the timer limit, with room for a `sleep N` command", async () => {
-    const { CodeMode } = await import("../src/code-mode.ts");
-    expect(CodeMode).toBeDefined();
+    const { shellKit } = await import("../src/shell-kit.ts");
+    expect(shellKit).toBeDefined();
     expect(existsSync(dir)).toBe(true);
     expect(2_000_000_000 + 3600 * 1000).toBeLessThan(2 ** 31 - 1);
   });

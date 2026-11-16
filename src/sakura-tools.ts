@@ -1,5 +1,6 @@
 import type { ModelConfig, Tool, ToolResult } from "sakura-agent";
-import { type LaunchOptions, type RunHandle, type TaskPackage, readRunEvents, readRunStatus, startRun } from "./launch.ts";
+import { formPackage, formProblems, type TaskForm } from "./form.ts";
+import { type LaunchOptions, type RunHandle, type TaskPackage, readRunEvents, readRunStatus, recommendRun, startRun } from "./launch.ts";
 
 /**
  * The same entry as `infinity run`, as tools of a Sakura agent: `infinity_run` starts a run in this process, `infinity_status` reads any run directory,
@@ -26,26 +27,40 @@ export function createInfinityTools(options: InfinityToolsOptions): Tool[] {
   const run: Tool = {
     name: "infinity_run",
     description:
-      "Starts a run of many agents on one task and returns at once; the run goes on in the background. Give the task name. The number of agents is yours to choose; " +
+      "Starts a run of many agents on one task and returns at once; the run goes on in the background. Give the name of a known task, or a task form of your own (see the form parameter). The number of agents is yours to choose; " +
       "without it the machine's recommendation is used. Watch the run with infinity_status; end it with infinity_stop.",
     parameters: {
       type: "object",
       properties: {
-        task: { type: "string", description: `One of: ${options.packs.map((pack) => `${pack.name} (${pack.summary})`).join("; ")}` },
+        task: {
+          type: "string",
+          description: `A known task, one of: ${options.packs.map((pack) => `${pack.name} (${pack.summary})`).join("; ") || "(none)"}. Leave out when you give a form.`,
+        },
+        form: {
+          type: "object",
+          description:
+            "A task form of your own instead of a known task: { preset: 'code' | 'math', name, prompt (code) or statement (math), data?, hidden?, evaluate?: { program, run?, args? }, metric?: { name, direction }, stop?, tokens?, ... }. " +
+            "Paths are relative to formDir. The evaluator program must exist already (write it first).",
+        },
+        formDir: { type: "string", description: "The folder that the form's relative paths refer to (default: the current directory)." },
         agents: { type: "number", description: "Number of agents (always wins over the recommendation)." },
         tokens: { type: "number", description: "Token budget." },
         wallMinutes: { type: "number", description: "End the run in order after this many minutes." },
         review: { type: "boolean", description: "false leaves the branch review out (default true)." },
       },
-      required: ["task"],
       additionalProperties: false,
     },
     effect: "exec",
     executionMode: "serial",
     async execute(rawArgs) {
       const args = inputOf(rawArgs);
-      const pack = options.packs.find((candidate) => candidate.name === args.task);
-      if (!pack) return text(`Unknown task. Choose one of: ${options.packs.map((candidate) => candidate.name).join(", ")}`, true);
+      let pack: TaskPackage | undefined;
+      if (args.form !== undefined) {
+        const problems = formProblems(args.form);
+        if (problems.length > 0) return text(`The form is not valid: ${problems.join("; ")}`, true);
+        pack = formPackage(args.form as TaskForm, typeof args.formDir === "string" ? args.formDir : process.cwd());
+      } else pack = options.packs.find((candidate) => candidate.name === args.task);
+      if (!pack) return text(`Unknown task. Choose one of: ${options.packs.map((candidate) => candidate.name).join(", ") || "(none)"}, or give a form.`, true);
       const agents = asNumber(args.agents);
       const tokens = asNumber(args.tokens);
       const wallMinutes = asNumber(args.wallMinutes);
@@ -114,5 +129,17 @@ export function createInfinityTools(options: InfinityToolsOptions): Tool[] {
       }
     },
   };
-  return [run, status, stop];
+  const recommend: Tool = {
+    name: "infinity_recommend",
+    description:
+      "Says what this computer can carry for a task: how many agents, how many heavy commands at once, how many threads and how much memory one command may use. Use it before infinity_run when you choose the number of agents.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    effect: "read",
+    executionMode: "parallel",
+    async execute() {
+      const recommendation = await recommendRun({});
+      return text(`${recommendation.lines.join("\n")}\n${JSON.stringify({ agents: recommendation.agents, slots: recommendation.capacity.cpuSlots })}`);
+    },
+  };
+  return [run, status, stop, recommend];
 }
