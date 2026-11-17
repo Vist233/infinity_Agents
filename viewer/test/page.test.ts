@@ -15,14 +15,14 @@ describe("the page", () => {
     const base = `http://127.0.0.1:${handle.port}`;
     const html = await (await fetch(`${base}/`)).text();
     expect(html).toContain("<title>Infinity run viewer</title>");
-    for (const id of ["tiles", "timeline", "scores", "machine", "agents", "events", "board"]) expect(html).toContain(`id="${id}"`);
+    for (const id of ["result", "progress", "attention", "scores", "board", "machine"]) expect(html).toContain(`id="${id}"`);
     // Read-only: nothing that sends or changes anything.
     expect(html).not.toMatch(/<(button|form|textarea)\b/i);
     expect(html).not.toMatch(/method:\s*["'](POST|PUT|DELETE|PATCH)/i);
     // The inline script is valid JavaScript and uses the endpoints the server offers.
     const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1] ?? "";
     expect(() => new Script(script)).not.toThrow();
-    for (const path of ["/api/run", "/api/series", "/api/agents", "/api/events", "/api/stream"]) expect(script).toContain(path);
+    for (const path of ["/api/run", "/api/series", "/api/agents", "/api/stream"]) expect(script).toContain(path);
     // The numbers the page shows (tiles, timeline marks, machine panel start) are in these answers.
     const run = await (await fetch(`${base}/api/run`)).json();
     expect([run.agentsStarted, run.scoredSubmits, run.bestScore, run.rung]).toEqual([8, 0, null, 8]);

@@ -1,9 +1,8 @@
 {
-  "name": "infinity-agent",
-  "version": "0.0.1",
-  "private": true,
+  "name": "sakura-infinity",
+  "version": "0.1.0",
   "type": "module",
-  "description": "Run many agents in parallel on one task and rank what they produce (math mode with local Lean 4 first).",
+  "description": "Run many agents in parallel on one task and keep the best result: a code task scored by your evaluator, or a Lean 4 proof. Built on sakura-agent.",
   "license": "MIT",
   "engines": {
     "node": ">=24"
@@ -17,10 +16,12 @@
     "format": "biome format --write",
     "format:check": "biome format",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
-    "infinity": "node bin/infinity.ts"
+    "infinity": "node bin/infinity.ts",
+    "build": "node scripts/build.mjs",
+    "prepack": "npm run build"
   },
   "dependencies": {
-    "sakura-agent": "0.2.0"
+    "sakura-agent": "^0.2.2"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
@@ -30,6 +31,24 @@
     "vitest": "^3.2.0"
   },
   "bin": {
-    "infinity": "bin/infinity.ts"
-  }
+    "infinity": "dist/bin/infinity.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vist233/infinity_Agents.git"
+  },
+  "keywords": [
+    "agents",
+    "llm",
+    "parallel",
+    "benchmark",
+    "lean4",
+    "sakura-agent"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "AGENT-GUIDE.md",
+    "LICENSE"
+  ]
 }

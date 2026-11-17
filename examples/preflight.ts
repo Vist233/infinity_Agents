@@ -22,7 +22,7 @@ import { reviewGuard } from "../src/review-run.ts";
 import { parseReviewSnapshot, readReviewEvidence, reviewQuestion } from "../src/review-snapshot.ts";
 import { defineTask } from "../src/task.ts";
 import { createScriptedCodeModel } from "../test/support/scripted-code-model.ts";
-import { opencodeModel } from "../bin/model.ts";
+import { modelFromEnv } from "../bin/model.ts";
 
 const run = promisify(execFile);
 const args = process.argv.slice(2);
@@ -179,10 +179,13 @@ report("keeper", "hid a dummy file from the labels directory into runs/ and rest
 if (offline) {
   console.log("--   skipped (offline): the model request and the cache probe");
 } else {
-  const key = process.env.OPENCODE_API_KEY;
-  if (!key) fail("model key", "OPENCODE_API_KEY is not set");
+  let model: ReturnType<typeof modelFromEnv>;
+  try {
+    model = modelFromEnv({ ...process.env });
+  } catch (error) {
+    fail("model key", error instanceof Error ? error.message : String(error));
+  }
   report("model key", "set");
-  const model = opencodeModel(key);
   const client = createChatClient(model);
   let answer = "";
   let tokens = 0;

@@ -91,7 +91,7 @@ Library: `startRun(formPackage(form, baseDir), { model, agents, wallMinutes })`,
 - Agents' shells run with the user's rights; there is no sandbox. The safety review and Infinity's rules lower the risk and prove nothing. Do not run it where secrets are within reach.
 - Hidden data is protected by a private path and by review rules, not by the operating system.
 - Machine readings and process cleanup need Linux; elsewhere a warning says what is missing.
-- The model key is read from the environment (`OPENCODE_API_KEY`, or `COMMANDCODE_API_KEY` with `INFINITY_PROVIDER=commandcode`) and never printed. Do not print the environment.
+- The model key is read from the environment (`DEEPSEEK_API_KEY` by default; `INFINITY_PROVIDER=openai` with `OPENAI_API_KEY`, or `anthropic` with `ANTHROPIC_API_KEY`) and never printed. Do not print the environment.
 
 ## Common mistakes
 

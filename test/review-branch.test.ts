@@ -75,6 +75,10 @@ const reviews = (events: RunEvent[]) => events.filter((event) => event.type === 
 const count = (events: RunEvent[], n: number) => reviews(events).length >= n;
 const noForks = (layout: RunLayout) => (existsSync(layout.reviewDir) ? readdirSync(layout.reviewDir) : []);
 
+/** The run note is added at the end of every request of an agent and never kept in its log, so a review's fork does not have it. */
+const withoutRunNote = <T extends { role: string; content: unknown }>(messages: readonly T[]): T[] =>
+  messages.at(-1)?.role === "user" && JSON.stringify(messages.at(-1)?.content).includes("[Run: ") ? messages.slice(0, -1) : [...messages];
+
 describe("branch review with real agents and a scripted model", () => {
   it("the reviewer's request is the agent's request plus the review question: same system text, same tools, same earlier messages", async () => {
     const { model } = await runUntil(task(), {}, (events) => count(events, 2));
@@ -89,12 +93,12 @@ describe("branch review with real agents and a scripted model", () => {
           (main) =>
             main.system === review.system &&
             JSON.stringify(main.tools) === JSON.stringify(review.tools) &&
-            main.messages.length <= before.length &&
-            main.messages.every((message, index) => JSON.stringify(message) === JSON.stringify(before[index])),
+            withoutRunNote(main.messages).length <= before.length &&
+            withoutRunNote(main.messages).every((message, index) => JSON.stringify(message) === JSON.stringify(before[index])),
         );
       expect(match, "a main request that is a prefix of the review request").toBeDefined();
       // and nothing else was added to the conversation except what the fork file already held
-      expect(before.length - (match?.messages.length ?? 0)).toBeLessThanOrEqual(2);
+      expect(before.length - (match ? withoutRunNote(match.messages).length : 0)).toBeLessThanOrEqual(2);
     }
   });
 
@@ -130,6 +134,11 @@ describe("branch review with real agents and a scripted model", () => {
             spawn(value, options) {
               observation.commands.push(value);
               return env.spawn(value, options);
+            },
+            // foreground commands run in the shell that stays (exec); background ones are spawned
+            exec(value, options) {
+              observation.commands.push(value);
+              return env.exec(value, options);
             },
             readFile(path) {
               observation.reads.push(path);

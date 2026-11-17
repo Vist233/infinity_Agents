@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, renameSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { JsonlFile } from "./jsonl.ts";
 
 /** One line of the journal. The journal is written BEFORE a move, so a crash at any moment can be put right from it. */
@@ -100,10 +100,36 @@ export class HiddenKeeper {
   }
 
   private check(path: string): void {
-    if (!existsSync(path)) throw new Error(`Cannot hide ${path}: it does not exist`);
+    if (!existsSync(path)) {
+      const holder = this.holderOf(path);
+      throw new Error(
+        holder
+          ? `Cannot hide ${path}: it does not exist. The run ${holder.run} holds ${holder.from} (hidden data is moved away while a run's agents work and comes back when that run ends), so a task copied during that run has no hidden data. Stop that run first, or copy the task when no run is using it.`
+          : `Cannot hide ${path}: it does not exist`,
+      );
+    }
     if (this.openPlans().some((plan) => plan.from === path)) throw new Error(`Cannot hide ${path}: it is already hidden`);
     if (isInside(path, this.dir) || isInside(this.dir, path)) throw new Error(`Cannot hide ${path}: it overlaps the keeper directory ${this.dir}`);
     if (this.deviceOf && this.deviceOf(path) !== this.deviceOf(this.dir)) throw new DifferentFilesystemError(path, this.dir);
+  }
+
+  /** The other run (beside this one in the runs directory) whose keeper has taken this path, or a file of the same name (a copy of the task), away. */
+  private holderOf(path: string): { run: string; from: string } | undefined {
+    const runsDir = dirname(dirname(this.dir));
+    let names: string[];
+    try {
+      names = readdirSync(runsDir);
+    } catch {
+      return undefined;
+    }
+    for (const name of names) {
+      const journal = join(runsDir, name, basename(this.dir), JOURNAL);
+      if (journal === join(this.dir, JOURNAL) || !existsSync(journal)) continue;
+      const plans = openPlans(new JsonlFile<JournalEntry>(journal));
+      const plan = plans.find((candidate) => candidate.from === path) ?? plans.find((candidate) => basename(candidate.from) === basename(path));
+      if (plan) return { run: join(runsDir, name), from: plan.from };
+    }
+    return undefined;
   }
 
   private openPlans() {

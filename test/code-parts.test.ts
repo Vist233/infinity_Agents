@@ -121,8 +121,8 @@ describe("evaluator", () => {
   const node = (code: string, extra: { timeoutMs?: number } = {}) => commandEvaluator({ file: process.execPath, args: ["-e", code], ...extra });
 
   it("runs a program with the work directory, commit and private paths in its environment and reads the last JSON line", async () => {
-    const program = `console.log("noise"); console.log(JSON.stringify({score: 0.5, metrics: {a: 1, b: "x"}, details: [process.env.INFINITY_WORK_DIR, process.env.INFINITY_COMMIT, process.env.INFINITY_HIDDEN_0, process.env.OPENCODE_API_KEY ?? "nokey"].join("|")}))`;
-    process.env.OPENCODE_API_KEY ??= "test-value-that-must-not-leak";
+    const program = `console.log("noise"); console.log(JSON.stringify({score: 0.5, metrics: {a: 1, b: "x"}, details: [process.env.INFINITY_WORK_DIR, process.env.INFINITY_COMMIT, process.env.INFINITY_HIDDEN_0, process.env.DEEPSEEK_API_KEY ?? "nokey"].join("|")}))`;
+    process.env.DEEPSEEK_API_KEY ??= "test-value-that-must-not-leak";
     const result = await node(program)(context());
     expect(result).toEqual({ status: "ok", score: 0.5, metrics: { a: 1 }, details: `${dir}|abc|/private/one|nokey` });
   });

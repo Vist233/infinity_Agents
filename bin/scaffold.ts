@@ -6,7 +6,7 @@ import { recommendRun } from "../src/launch.ts";
 import { loadTaskPackage } from "./load-task.ts";
 
 export const NEW_HELP = `usage: infinity new <code|math> <folder>
-  writes a task form (task.ts) into <folder>, with an example evaluator for the code preset; edit them, then: infinity run <folder>/task.ts`;
+  writes a task form (task.mts) into <folder>, with an example evaluator for the code preset; edit them, then: infinity run <folder>`;
 
 export const RECOMMEND_HELP = `usage: infinity recommend [--task <task>] [--write machine.json]
   looks at this computer (cores, memory, GPU, other load) and says how many agents, how many heavy commands at once and how many threads
@@ -14,7 +14,7 @@ export const RECOMMEND_HELP = `usage: infinity recommend [--task <task>] [--writ
   (edit it by hand if you like; use it with: infinity run <task> --machine machine.json). Flags of a run always win over the file.`;
 
 const CODE_FORM = `// A task form: what to do and how it is scored. What the machine can carry is a separate file (infinity recommend --write machine.json).
-// Paths are relative to this folder. Run it with:  infinity run ./task.ts --machine machine.json --view
+// Paths are relative to this folder. Run it with:  infinity run . --machine machine.json --view   (task.mts: always an ES module, whatever package.json is above)
 export default {
   preset: "code",
   name: "my-task",
@@ -44,7 +44,7 @@ export default {
 `;
 
 const MATH_FORM = `// A math task: agents prove one statement in Lean 4 (core library, no Mathlib). The run ends at the first proof the local Lean accepts.
-// Run it with:  infinity run ./task.ts --agents 3 --view
+// Run it with:  infinity run . --agents 3 --view
 export default {
   preset: "math",
   name: "my-statement",
@@ -86,7 +86,7 @@ export function scaffold(argv: string[]): string[] {
   const [preset, folder, ...rest] = argv;
   if ((preset !== "code" && preset !== "math") || !folder || rest.length > 0) throw new Error(NEW_HELP);
   const dir = resolve(folder);
-  const files: [string, string][] = [[join(dir, "task.ts"), preset === "code" ? CODE_FORM : MATH_FORM]];
+  const files: [string, string][] = [[join(dir, "task.mts"), preset === "code" ? CODE_FORM : MATH_FORM]];
   if (preset === "code") files.push([join(dir, "evaluate.py"), EVALUATE_PY]);
   for (const [path] of files) if (existsSync(path)) throw new Error(`${path} exists already; nothing was written`);
   mkdirSync(dir, { recursive: true });

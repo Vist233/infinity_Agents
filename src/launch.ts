@@ -9,6 +9,7 @@ import { readMachineFacts } from "./proc-readings.ts";
 import type { RunEvent } from "./records.ts";
 import { readRunEvents, readRunStatus, type RunStatus } from "./run-status.ts";
 import { SlotGate } from "./slot-gate.ts";
+import { claimSlots } from "./slot-leases.ts";
 import { MAX_AGENTS, type BranchReviewSettings, type TaskDefinition } from "./task.ts";
 
 /**
@@ -52,7 +53,9 @@ export interface LaunchOptions {
   threads?: number;
   memGb?: number;
   heavyShare?: number;
-  /** The CPU slot gate: `true` (default) takes the recommended number of slots, a number sets it, `false` turns it off. */
+  /** Where runs on this machine write the slots they hold (tests); default a folder in the temporary directory. */
+  slotLeaseDir?: string;
+  /** The CPU slot gate: `true` (default) takes the recommended number of slots, a number sets it, `false` turns it off. Other live runs' slots are taken off. */
   gate?: boolean | number;
   pressureBrake?: boolean;
   commandMinutes?: number;
@@ -146,7 +149,6 @@ export async function startRun(pack: TaskPackage, options: LaunchOptions): Promi
   const recommendation = await recommendRun(profile, options.agents);
   const agents = recommendation.agents;
   const gateSlots = options.gate === false ? undefined : typeof options.gate === "number" ? options.gate : recommendation.capacity.cpuSlots;
-  const gate = gateSlots === undefined ? undefined : new SlotGate(gateSlots);
   const notes = options.review === false ? ["Branch review: off. No outside reviewer looks at the agents' work."] : [];
   const commandMinutes = options.commandMinutes;
   const task = pack.build({
@@ -160,6 +162,10 @@ export async function startRun(pack: TaskPackage, options: LaunchOptions): Promi
     runsDir: options.runsDir ?? "runs",
   });
   const runDir = options.resume ?? newRunDir(task, realClock);
+  // the slots are shared with the other live runs of this machine
+  const claim = gateSlots === undefined ? undefined : claimSlots(gateSlots, runDir, options.slotLeaseDir ? { dir: options.slotLeaseDir } : {});
+  if (claim?.note) recommendation.lines.push(claim.note);
+  const gate = claim === undefined ? undefined : new SlotGate(claim.slots);
   const stopping = new AbortController();
   if (options.signal?.aborted) stopping.abort();
   options.signal?.addEventListener("abort", () => stopping.abort(), { once: true });
@@ -170,6 +176,7 @@ export async function startRun(pack: TaskPackage, options: LaunchOptions): Promi
     ...options.testing,
     runDir,
     signal: stopping.signal,
+    ...(wallMinutes > 0 ? { wallMinutes } : {}),
     createEnvironment: limitedEnvironment(limitsOf(profile), options.createEnvironment),
     ...(gate ? { gate } : {}),
     ...(options.resume ? { resume: true } : {}),
@@ -182,7 +189,10 @@ export async function startRun(pack: TaskPackage, options: LaunchOptions): Promi
       commandTimeoutMinutes: commandMinutes ?? DEFAULT_COMMAND_TIMEOUT_MINUTES,
       ...(gate ? { gate } : {}),
     }),
-  }).finally(() => clearTimeout(timer));
+  }).finally(() => {
+    clearTimeout(timer);
+    claim?.release();
+  });
   return {
     runDir,
     agents,

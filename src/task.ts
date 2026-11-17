@@ -58,6 +58,10 @@ export interface TaskDefinition {
   model: ModelConfig;
   /** Token budget; the run stops softly when it is reached. Default: none. */
   tokens?: number;
+  /** code: each agent's share of the disk for its work directory, in GB (default 20); above it the agent is asked to clean up. */
+  workDirGb?: number;
+  /** One direction per agent (agent n gets hints[(n - 1) % length]); without it the planner writes them at the start. */
+  hints?: string[];
   /** Minutes of silence after which a running agent counts as stuck; default 10. */
   stuckMinutes?: number;
   /** Where runs are created; default `runs` in the current directory. */

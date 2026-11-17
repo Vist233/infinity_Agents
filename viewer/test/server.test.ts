@@ -60,6 +60,31 @@ describe("endpoints", () => {
 });
 
 describe("server-sent events", () => {
+  it("with a token: any Host works (a proxy as it is), the token is asked for, and a first visit with ?token= leaves a cookie", async () => {
+    const handle = await startViewer({ root: fixtures, pollMs: 30, token: "s3cret" });
+    handles.push(handle);
+    const ask = (path: string, headers: Record<string, string> = {}) =>
+      new Promise<{ status: number; cookie: string }>((resolve, reject) => {
+        const req = request({ host: "127.0.0.1", port: handle.port, path, headers: { host: "view.example.org", ...headers } }, (res) => {
+          res.resume();
+          resolve({ status: res.statusCode ?? 0, cookie: String(res.headers["set-cookie"] ?? "") });
+        });
+        req.on("error", reject);
+        req.end();
+      });
+    expect((await ask("/api/run")).status).toBe(401);
+    expect((await ask("/api/run?token=wrong")).status).toBe(401);
+    const first = await ask("/?token=s3cret");
+    expect(first.status).toBe(200);
+    expect(first.cookie).toContain("infinity_view=s3cret");
+    expect((await ask("/api/run", { cookie: "infinity_view=s3cret" })).status).toBe(200);
+    expect((await ask("/api/run", { authorization: "Bearer s3cret" })).status).toBe(200);
+  });
+
+  it("refuses to listen beyond this machine without a token", async () => {
+    await expect(startViewer({ root: fixtures, host: "0.0.0.0" })).rejects.toThrow(/only with a token/);
+  });
+
   it("delivers an update when a run file grows", async () => {
     const dir = mkdtempSync(join(tmpdir(), "viewer-sse-"));
     temps.push(dir);

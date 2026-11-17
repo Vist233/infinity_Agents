@@ -36,6 +36,14 @@ describe("limits in front of every command", () => {
     expect(runPlaceOf("/x/runs/r1/agents/007/work")).toEqual({ root: "/x/runs/r1", agent: 7 });
   });
 
+  it("in the shell that stays, the priority is lowered once: a second command does not lower it again", async () => {
+    const env = limitCommands(createLocalEnvironment(dir), { threadsPerJob: 1, niceLevel: 3 });
+    const first = Number((await env.exec("ps -o ni= -p $$", {})).output.trim());
+    const second = Number((await env.exec("ps -o ni= -p $$", {})).output.trim());
+    expect(second).toBe(first);
+    await env.dispose();
+  });
+
   it("a real command sees the variables and a lower priority than an unlimited command started the same way, through exec and spawn; output and exit code are unchanged", async () => {
     // The niceness is measured against a baseline from the same process, never against a fixed number: another test (or the machine) may have changed the
     // niceness of this process. Linux sets the value (renice -n 5 gives 5, unless the niceness is already higher); macOS adds it.

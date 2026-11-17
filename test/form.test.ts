@@ -63,6 +63,13 @@ describe("formProblems", () => {
     );
   });
 
+  it("takes hints as a non-empty list of text", () => {
+    const form = { preset: "math", name: "p", statement: "True" };
+    expect(formProblems({ ...form, hints: ["induction", "cases"] })).toEqual([]);
+    expect(formProblems({ ...form, hints: [] })).toContain("hints must be a non-empty list of text, one per agent");
+    expect(formProblems({ ...form, hints: ["ok", 3] })).toContain("hints must be a non-empty list of text, one per agent");
+  });
+
   it("refuses a form that is not an object", () => {
     expect(formProblems("text")).toEqual(["a form must be an object"]);
     expect(formProblems(null)).toEqual(["a form must be an object"]);

@@ -27,7 +27,17 @@ export type LedgerEntry =
   | (WorkPointer & { type: "lifecycle"; event: "started" | "ended" | "stopped" | "rescued"; detail: string });
 
 export type RunEvent =
-  | { type: "run_start"; ts: number; task: string; ceiling: number; resumed: boolean; metricDirection?: "min" | "max" }
+  | {
+      type: "run_start";
+      ts: number;
+      task: string;
+      ceiling: number;
+      resumed: boolean;
+      metricDirection?: "min" | "max";
+      /** The limits the run ends at, so that a reader can say how much is left: tokens of the whole run, and minutes of this start. */
+      tokenBudget?: number;
+      wallMinutes?: number;
+    }
   | {
       type: "rung";
       ts: number;

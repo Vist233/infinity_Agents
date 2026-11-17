@@ -6,13 +6,31 @@ import { CODE_GOAL_OBJECTIVE, codePrompt, codeRules, strategyRule } from "./prom
 import type { RunLayout } from "./run-layout.ts";
 import { safetyReview } from "./safety-review.ts";
 import { type SlotGate, commandLimits } from "./slot-gate.ts";
+import { JsonlFile } from "./jsonl.ts";
+import type { LedgerEntry } from "./records.ts";
+import { runNotesPlugin } from "./run-notes.ts";
 import { createSubmitTool } from "./submit-tool.ts";
 import type { TaskDefinition } from "./task.ts";
 
 /** Large binary results are not worth keeping in every agent's Git history. */
-const GITIGNORE = ["__pycache__/", "*.pyc", "*.pt", "*.pth", "*.ckpt", "*.npy", "*.npz", "*.pkl", "*.joblib", "*.safetensors", "*.onnx", ".venv/", "wandb/"];
+const GITIGNORE = [
+  "cache/",
+  "__pycache__/",
+  "*.pyc",
+  "*.pt",
+  "*.pth",
+  "*.ckpt",
+  "*.npy",
+  "*.npz",
+  "*.pkl",
+  "*.joblib",
+  "*.safetensors",
+  "*.onnx",
+  ".venv/",
+  "wandb/",
+];
 export const DEFAULT_COMMAND_TIMEOUT_MINUTES = 120;
-/** The shell tool moves a command to the background after this long; the largest value its timer takes, less room for the extra seconds of a `sleep N` command. */
+/** The shell tool's own interrupt, set beyond reach: the command limits (commandTimeoutMinutes) stop a command instead. The largest value a timer takes, less room for a `sleep N`. */
 const NEVER_BACKGROUND_MS = 2_000_000_000;
 
 export interface ShellKitOptions {
@@ -40,6 +58,16 @@ export function shellKit(options: ShellKitOptions): Kit {
       return warnings;
     },
     agentSetup({ hint, agent, links, score }) {
+      // a resumed agent keeps the submits it made before
+      const submitsBefore = new JsonlFile<LedgerEntry>(options.layout.ledger)
+        .readAll()
+        .filter((entry) => entry.type === "result" && entry.agent === agent).length;
+      const notes = runNotesPlugin({
+        workDir: options.layout.workDir(agent),
+        submitsBefore,
+        ...(task.workDirGb === undefined ? {} : { workDirGb: task.workDirGb }),
+        now: () => clock.now(),
+      });
       return {
         prompt: codePrompt(task.prompt ?? ""),
         rules: [
@@ -58,13 +86,18 @@ export function shellKit(options: ShellKitOptions): Kit {
         confine: false,
         bashSoftTimeoutMs: NEVER_BACKGROUND_MS,
         plugins: [
+          notes,
           commandLimits({ gate: options.gate, wallMinutes: task.commandTimeoutMinutes ?? DEFAULT_COMMAND_TIMEOUT_MINUTES, agent }),
           ...reviewPlugins(options, agent),
         ],
         tools: (submit, helpers) => [
           createSubmitTool({
             helpers,
-            onSubmit: submit,
+            onSubmit: async (...args: Parameters<typeof submit>) => {
+              const outcome = await submit(...args);
+              notes.submitted();
+              return outcome;
+            },
             metricName: task.metric?.name,
             direction: task.metric?.direction ?? "max",
             minIntervalMs: intervalMinutes * 60_000,

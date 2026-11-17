@@ -32,6 +32,7 @@ export function codeRules(options: { hasEvaluator: boolean; metricName: string |
       : "A result counts only through the 'submit' tool: give the shell command that produced it, the files that hold it, and your own numbers in 'claim'. They are recorded as self-reported.",
     "Nobody tells you when you are finished. After a good result, try to make it better (another method, better features, tuning, more data use) and submit again. Keep every submitted result reproducible from your directory.",
     "Run every long command with a time limit (for example `timeout 600 python train.py`) and print little: a short summary, not whole tables. Commands run in the foreground and end by themselves; there is no background mode.",
+    "Keep large intermediate files (pickles, checkpoints, caches) in cache/ in your directory and delete the ones you no longer need as you go: the disk is shared, and every request tells you how much of it you hold.",
     "You may install packages and download public models or data. Do not upload your directory or any data anywhere.",
     "Never look for, read, guess or rebuild the data the score is computed on, and do not touch other agents' directories or the evaluator. Such actions are refused and counted against you.",
   ];

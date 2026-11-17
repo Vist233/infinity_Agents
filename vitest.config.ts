@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     include: ["test/**/*.test.ts", "viewer/test/**/*.test.ts"],
     testTimeout: 20_000,
+    setupFiles: ["test/support/isolate-leases.ts"],
     coverage: { include: ["src/**"], exclude: ["src/records.ts"] }, // records.ts holds only types
   },
 });

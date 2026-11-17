@@ -162,13 +162,56 @@ describe("tolerance", () => {
     expect(reader.summary().state).toBe("stopped");
   });
 
-  it("works with a damaged state.json and a leaderboard with quoted cells", () => {
-    const dir = tempRun({ "state.json": "{broken", "events.jsonl": line({ type: "run_start", ts: 1, task: "t", ceiling: 1, resumed: false }) });
+  it("ranks from the ledger at every read: a stale leaderboard.csv is ignored and a new result shows at once", () => {
+    const result = (ts: number, agent: number, score: number) =>
+      line({ type: "result", ts, agent, workDir: `/w/${agent}`, commit: "c", status: "ok", score, selfReported: false });
+    const dir = tempRun({
+      "state.json": "{broken",
+      "events.jsonl": line({ type: "run_start", ts: 1, task: "t", ceiling: 1, resumed: false, metricDirection: "max" }),
+      "ledger.jsonl": result(2, 1, 0.2) + result(3, 2, 0.25),
+    });
     mkdirSync(join(dir, "report"));
-    writeFileSync(join(dir, "report", "leaderboard.csv"), 'rank,agent,score,self_reported,submits,errors,commit,work_dir\n1,2,0.5,true,3,1,abc,"/a,b"\n');
+    writeFileSync(join(dir, "report", "leaderboard.csv"), "rank,agent,score,self_reported,submits,errors,commit,work_dir\n1,9,0.1,false,1,0,abc,/a\n");
     const reader = new RunReader(dir);
     reader.poll();
-    expect(reader.summary().leaderboard).toEqual([{ rank: 1, agent: 2, score: 0.5, selfReported: true, submits: 3, errors: 1 }]);
+    expect(reader.summary().leaderboard.map((row) => [row.agent, row.score])).toEqual([
+      [2, 0.25],
+      [1, 0.2],
+    ]);
+    appendFileSync(join(dir, "ledger.jsonl"), result(4, 1, 0.328));
+    reader.poll();
+    expect(reader.summary().leaderboard[0]).toEqual({ rank: 1, agent: 1, score: 0.328, selfReported: false, submits: 2, errors: 0 });
+    expect(reader.summary().bestScore).toBe(0.328);
+  });
+
+  it("the best result says where it is (command, files, folder, commit), and the budget comes from run_start", () => {
+    const start = line({ type: "run_start", ts: 0, task: "t", ceiling: 2, resumed: false, metricDirection: "max", tokenBudget: 5_000_000, wallMinutes: 60 });
+    const result = line({
+      type: "result",
+      ts: 120_000,
+      agent: 2,
+      workDir: "/w/2",
+      commit: "abc123",
+      command: "python train.py",
+      files: ["predictions.csv", "train.py"],
+      status: "ok",
+      score: 0.9,
+      selfReported: false,
+    });
+    const reader = new RunReader(tempRun({ "events.jsonl": start, "ledger.jsonl": result }));
+    reader.poll();
+    const summary = reader.summary();
+    expect(summary.best).toEqual({
+      agent: 2,
+      score: 0.9,
+      selfReported: false,
+      ts: 120_000,
+      command: "python train.py",
+      files: ["predictions.csv", "train.py"],
+      workDir: "/w/2",
+      commit: "abc123",
+    });
+    expect([summary.tokenBudget, summary.wallMinutes]).toEqual([5_000_000, 60]);
   });
 });
 

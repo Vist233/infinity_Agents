@@ -1,11 +1,15 @@
-// Start the run viewer: node viewer/view.ts <runs dir or run dir> [--port N] [--machine FILE]
+// Start the run viewer: node viewer/view.ts <runs dir or run dir> [--port N] [--host ADDR] [--token T] [--machine FILE]
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { isRunDir, listRuns } from "./run-reader.ts";
 import { startViewer } from "./server.ts";
 
 function usage(): never {
-  console.error("usage: node viewer/view.ts <runs dir or run dir> [--port N] [--machine FILE]");
+  console.error(
+    "usage: infinity view <runs dir or run dir> [--port N] [--host ADDR --token T] [--machine FILE]\n" +
+      "  --host ADDR  listen on another address than 127.0.0.1 (needs a token)\n" +
+      "  --token T    every request must carry it (open the page once with ?token=T); INFINITY_VIEW_TOKEN works too and keeps it out of the process list",
+  );
   process.exit(2);
 }
 
@@ -14,9 +18,13 @@ export async function runViewerCommand(args: string[]): Promise<void> {
   let root = "";
   let port = 4173;
   let machineFile: string | undefined;
+  let host: string | undefined;
+  let token = process.env.INFINITY_VIEW_TOKEN || undefined;
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === "--port") port = Number(args[++i]);
+    else if (a === "--host") host = args[++i];
+    else if (a === "--token") token = args[++i];
     else if (a === "--machine") machineFile = resolve(args[++i] ?? "");
     else if (a.startsWith("--")) usage();
     else root = resolve(a);
@@ -31,9 +39,10 @@ export async function runViewerCommand(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const viewer = await startViewer({ root, port, ...(machineFile ? { machineFile } : {}) });
+  const viewer = await startViewer({ root, port, ...(machineFile ? { machineFile } : {}), ...(host ? { host } : {}), ...(token ? { token } : {}) });
   const runs = isRunDir(root) ? 1 : listRuns(root).length;
-  console.log(`Run viewer (read-only): http://127.0.0.1:${viewer.port}/  (${runs} run${runs === 1 ? "" : "s"}; newest opens first; Ctrl-C stops)`);
+  const address = `http://${host && host !== "0.0.0.0" ? host : "127.0.0.1"}:${viewer.port}/${token ? "?token=<your token>" : ""}`;
+  console.log(`Run viewer (read-only): ${address}  (${runs} run${runs === 1 ? "" : "s"}; newest opens first; Ctrl-C stops)`);
 }
 
 if (import.meta.main) await runViewerCommand(process.argv.slice(2));

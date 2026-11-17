@@ -45,6 +45,13 @@ export interface TaskForm {
   leanPool?: number;
   sandbox?: boolean;
   stuckMinutes?: number;
+  /**
+   * One direction per agent, so that parallel agents explore different routes instead of all taking the easiest one: agent 1 gets hints[0], agent 2 hints[1],
+   * and a replacement agent the next one (the list repeats). Without it a model call at the start writes them.
+   */
+  hints?: readonly string[];
+  /** code: each agent's share of the disk for its work directory, in GB (default 20). The agent sees its size in every request and is asked to clean up above it. */
+  workDirGb?: number;
 }
 
 const KEYS = [
@@ -69,8 +76,10 @@ const KEYS = [
   "leanPool",
   "sandbox",
   "stuckMinutes",
+  "hints",
+  "workDirGb",
 ];
-const CODE_ONLY = ["data", "hidden", "evaluate", "metric", "review", "branchReview", "evalSlots", "submitIntervalMinutes", "evalTimeoutMinutes"];
+const CODE_ONLY = ["workDirGb", "data", "hidden", "evaluate", "metric", "review", "branchReview", "evalSlots", "submitIntervalMinutes", "evalTimeoutMinutes"];
 const MATH_ONLY = ["statement", "leanPool", "sandbox"];
 
 const isText = (value: unknown): value is string => typeof value === "string" && value.trim() !== "";
@@ -117,8 +126,10 @@ export function formProblems(raw: unknown): string[] {
   if (isRecord(stop) && metric === undefined) problems.push("stop.targetScore needs a metric");
   if (raw.data !== undefined && !(isRecord(raw.data) && Object.values(raw.data).every(isText))) problems.push("data must map a name to a path");
   if (raw.hidden !== undefined && !(Array.isArray(raw.hidden) && raw.hidden.every(isText))) problems.push("hidden must be a list of paths");
+  if (raw.hints !== undefined && !(Array.isArray(raw.hints) && raw.hints.length > 0 && raw.hints.every(isText)))
+    problems.push("hints must be a non-empty list of text, one per agent");
   if (isRecord(raw.profile)) problems.push(...profileProblems(raw.profile as TaskProfile));
-  for (const key of ["tokens", "wallMinutes", "evalSlots", "evalTimeoutMinutes", "leanPool", "stuckMinutes"])
+  for (const key of ["workDirGb", "tokens", "wallMinutes", "evalSlots", "evalTimeoutMinutes", "leanPool", "stuckMinutes"])
     if (raw[key] !== undefined && !(typeof raw[key] === "number" && (raw[key] as number) > 0)) problems.push(`${key} must be a number above 0`);
   if (raw.submitIntervalMinutes !== undefined && !(typeof raw.submitIntervalMinutes === "number" && raw.submitIntervalMinutes >= 0))
     problems.push("submitIntervalMinutes must not be negative");
@@ -157,6 +168,7 @@ export function formPackage(form: TaskForm, baseDir: string): TaskPackage {
         model,
         ...(tokens === undefined ? {} : { tokens }),
         ...(form.stuckMinutes === undefined ? {} : { stuckMinutes: form.stuckMinutes }),
+        ...(form.hints === undefined ? {} : { hints: form.hints.map((hint) => hint.trim()) }),
         runsDir,
       };
       if (form.preset === "math")
@@ -196,6 +208,7 @@ export function formPackage(form: TaskForm, baseDir: string): TaskPackage {
         profile,
         stop: typeof form.stop === "object" ? form.stop : "until-stopped",
         ...(form.evalSlots === undefined ? {} : { evalSlots: form.evalSlots }),
+        ...(form.workDirGb === undefined ? {} : { workDirGb: form.workDirGb }),
         ...(form.submitIntervalMinutes === undefined ? {} : { submitIntervalMinutes: form.submitIntervalMinutes }),
         ...(form.evalTimeoutMinutes === undefined ? {} : { evalTimeoutMinutes: form.evalTimeoutMinutes }),
         ...(commandMinutes === undefined ? {} : { commandTimeoutMinutes: commandMinutes }),

@@ -32,7 +32,8 @@ export function limitPrefix(limits: CommandLimits, context?: { root: string; age
   const exports = [...THREAD_VARIABLES.map((name) => `${name}=${threads}`)];
   if (limits.gpu && context) exports.push("CUDA_VISIBLE_DEVICES=-1", `INFINITY_AGENT=${context.agent}`, `PATH=${quote(binDirOf(context.root))}:"$PATH"`);
   const line = `export ${exports.join(" ")}; `;
-  return nice > 0 ? `${line}renice -n ${Math.floor(nice)} -p $$ >/dev/null 2>&1; ` : line;
+  // once per shell: in the shell that stays (Sakura's foreground commands) a second renice would add to the first where -n is an increment
+  return nice > 0 ? `${line}[ "\${INFINITY_NICED:-}" = 1 ] || { renice -n ${Math.floor(nice)} -p $$ >/dev/null 2>&1; INFINITY_NICED=1; }; ` : line;
 }
 
 /**

@@ -11,3 +11,4 @@ server-pull/
 .env.*
 !.env.example
 __pycache__/
+dist/

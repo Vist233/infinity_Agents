@@ -1,7 +1,9 @@
-// Reads the files of one run directory into a model for the viewer. Read-only, no imports from src/.
+// Reads the files of one run directory into a model for the viewer. Read-only; from src/ it takes only pure functions (the ranking), so the page and the report rank the same way.
 // Every file is optional; every line may be half written, unknown or missing fields; the model never throws on bad input.
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { rankCodeAgents } from "../src/code-leaderboard.ts";
+import type { LedgerEntry } from "../src/records.ts";
 
 export type Rec = Record<string, unknown>;
 
@@ -59,6 +61,18 @@ export interface LeaderRow {
   errors: number;
 }
 
+/** The run's deliverable: the best result so far and where to find it. */
+export interface BestResult {
+  agent: number;
+  score: number;
+  selfReported: boolean;
+  ts: number | null;
+  command: string;
+  files: string[];
+  workDir: string;
+  commit: string | null;
+}
+
 export interface RunSummary {
   dir: string;
   name: string;
@@ -88,6 +102,10 @@ export interface RunSummary {
   machineSource: string;
   machineSamples: number;
   leaderboard: LeaderRow[];
+  best: BestResult | null;
+  /** The limits the run ends at, when they were recorded. */
+  tokenBudget: number | null;
+  wallMinutes: number | null;
   version: number;
 }
 
@@ -219,7 +237,8 @@ export class RunReader {
   private machinePath: string | null = null;
   private state: Rec | null = null;
   private facts: Rec | null = null;
-  private leaderboard: LeaderRow[] = [];
+  /** The ledger lines the ranking needs (every agent's work directory, and the results), read as they arrive. */
+  private ranked: LedgerEntry[] = [];
   private lastLedgerTs: number | null = null;
   private lastEventTs: number | null = null;
 
@@ -242,9 +261,6 @@ export class RunReader {
     this.readWhole(join(this.dir, "run-facts.json"), (text) => {
       const parsed = tryJson(text);
       this.facts = isRec(parsed) ? parsed : this.facts;
-    });
-    this.readWhole(join(this.dir, "report", "leaderboard.csv"), (text) => {
-      this.leaderboard = parseLeaderboard(text);
     });
     const machinePath = this.machineOverride ?? this.findMachineFile();
     if (machinePath) {
@@ -348,6 +364,18 @@ export class RunReader {
     if (typeof r.type !== "string" || agent === null) return;
     this.version++;
     if (ts !== null) this.lastLedgerTs = Math.max(this.lastLedgerTs ?? 0, ts);
+    this.ranked.push({
+      type: r.type === "result" ? "result" : "lifecycle",
+      agent,
+      workDir: str(r.workDir),
+      status: str(r.status),
+      score: num(r.score),
+      selfReported: r.selfReported === true,
+      commit: typeof r.commit === "string" ? r.commit : null,
+      ts,
+      command: str(r.command),
+      files: Array.isArray(r.files) ? r.files.filter((f): f is string => typeof f === "string") : [],
+    } as unknown as LedgerEntry);
     const row = this.agentRow(agent);
     const touch = (kind: string) => {
       if (ts !== null && (row.lastTs === null || ts >= row.lastTs)) {
@@ -489,6 +517,14 @@ export class RunReader {
         if (a.endedAt === null) live++;
       }
     }
+    const leaderboard: LeaderRow[] = rankCodeAgents(this.ranked, metricDirection).map(({ rank, agent, score, selfReported, submits, errors }) => ({
+      rank,
+      agent,
+      score,
+      selfReported,
+      submits,
+      errors,
+    }));
     return {
       dir: this.dir,
       name: this.name,
@@ -516,8 +552,32 @@ export class RunReader {
       facts: this.facts,
       machineSource: this.machinePath ?? "",
       machineSamples: this.machine.length,
-      leaderboard: this.leaderboard,
+      // computed from the ledger at every read, so it is never behind the scores (report/leaderboard.csv is only a snapshot)
+      leaderboard,
+      best: this.bestResult(leaderboard),
+      tokenBudget: num(runStart?.tokenBudget),
+      wallMinutes: num(runStart?.wallMinutes),
       version: this.version,
+    };
+  }
+
+  /** The result line behind the top of the ranking: its command, files, folder and commit. */
+  private bestResult(leaderboard: LeaderRow[]): BestResult | null {
+    const top = leaderboard[0];
+    if (!top || top.score === null) return null;
+    const line = this.ranked.findLast(
+      (entry) => entry.type === "result" && entry.agent === top.agent && (entry as { score: number | null }).score === top.score,
+    ) as (LedgerEntry & { ts: number | null; command: string; files: string[]; commit: string | null }) | undefined;
+    if (!line) return null;
+    return {
+      agent: top.agent,
+      score: top.score,
+      selfReported: top.selfReported,
+      ts: line.ts,
+      command: line.command,
+      files: line.files,
+      workDir: line.workDir,
+      commit: line.commit,
     };
   }
 
@@ -597,24 +657,6 @@ function jsonlRange(path: string): [number, number] | null {
   } catch {
     return null;
   }
-}
-
-function parseLeaderboard(text: string): LeaderRow[] {
-  const rows = parseCsv(text);
-  const header = rows[0];
-  if (!header) return [];
-  const col = (name: string) => header.indexOf(name);
-  const [iRank, iAgent, iScore, iSelf, iSubmits, iErrors] = ["rank", "agent", "score", "self_reported", "submits", "errors"].map(col);
-  const cell = (row: string[], i: number | undefined) => (i === undefined || i < 0 ? "" : (row[i] ?? ""));
-  const toNum = (s: string) => (s !== "" && Number.isFinite(Number(s)) ? Number(s) : null);
-  return rows.slice(1).map((row, n) => ({
-    rank: toNum(cell(row, iRank)) ?? n + 1,
-    agent: toNum(cell(row, iAgent)) ?? 0,
-    score: toNum(cell(row, iScore)),
-    selfReported: cell(row, iSelf) === "true",
-    submits: toNum(cell(row, iSubmits)) ?? 0,
-    errors: toNum(cell(row, iErrors)) ?? 0,
-  }));
 }
 
 /** True when the directory looks like a run directory (has one of the run files). */

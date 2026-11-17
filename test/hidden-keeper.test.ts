@@ -25,6 +25,16 @@ afterEach(() => rmSync(root, { recursive: true, force: true }));
 const journal = () => new JsonlFile<{ type: string; id: string; from?: string; to?: string }>(join(keeperDir, "journal.jsonl")).readAll();
 
 describe("HiddenKeeper", () => {
+  it("a task copied while another run holds its hidden data: the error names that run and the original", () => {
+    const runs = join(root, "runs");
+    const first = new HiddenKeeper({ dir: join(runs, "run-a", ".keeper") });
+    first.hide([secretFile]);
+    const copy = join(root, "copy");
+    mkdirSync(copy);
+    const second = new HiddenKeeper({ dir: join(runs, "run-b", ".keeper") });
+    expect(() => second.hide([join(copy, "labels.csv")])).toThrow(new RegExp(`run ${join(runs, "run-a")} holds ${secretFile}`));
+  });
+
   it("moves a file and a directory away, to unguessable names inside a private directory, and tells where they are", () => {
     const keeper = new HiddenKeeper({ dir: keeperDir });
     keeper.hide([secretFile, secretDir]);

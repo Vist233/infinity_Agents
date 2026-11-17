@@ -43,7 +43,7 @@ describe("loadTaskPackage", () => {
 
   it("says what is wrong in words: a missing task, an empty folder, a file that is neither", async () => {
     await expect(loadTaskPackage(join(dir, "nothing.ts"))).rejects.toThrow("no task");
-    await expect(loadTaskPackage(dir)).rejects.toThrow("has no task.ts or task.json");
+    await expect(loadTaskPackage(dir)).rejects.toThrow("has no task.ts, task.mts, task.js or task.json");
     writeFileSync(join(dir, "odd.ts"), "export default 5;\n");
     await expect(loadTaskPackage(join(dir, "odd.ts"))).rejects.toThrow("must export a form");
     writeFileSync(join(dir, "bad.json"), JSON.stringify({ preset: "math", name: "m" }));
@@ -52,9 +52,15 @@ describe("loadTaskPackage", () => {
 });
 
 describe("infinity new", () => {
+  it("the written form loads even under a package.json that says CommonJS (it is task.mts, always an ES module)", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "someone-elses-project", type: "commonjs" }));
+    scaffold(["code", join(dir, "t")]);
+    expect((await loadTaskPackage(join(dir, "t"))).name).toBe("my-task");
+  });
+
   it("writes a code form and an example evaluator that load and build, and never overwrites", async () => {
     const written = scaffold(["code", join(dir, "t")]);
-    expect(written.map((path) => path.split("/").pop())).toEqual(["task.ts", "evaluate.py"]);
+    expect(written.map((path) => path.split("/").pop())).toEqual(["task.mts", "evaluate.py"]);
     const task = (await loadTaskPackage(join(dir, "t"))).build(context);
     expect(task.protect).toEqual([join(dir, "t", "evaluate.py")]);
     expect(() => scaffold(["code", join(dir, "t")])).toThrow("exists already; nothing was written");
@@ -86,7 +92,7 @@ describe("infinity new", () => {
     const refused = await evaluate(ctx);
     expect(refused).toMatchObject({ status: "error", score: null });
     expect(refused.details).toContain("between 0 and 100");
-    expect(readFileSync(join(dir, "t", "task.ts"), "utf8")).toContain("preset");
+    expect(readFileSync(join(dir, "t", "task.mts"), "utf8")).toContain("preset");
   });
 });
 

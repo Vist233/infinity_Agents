@@ -42,7 +42,7 @@ export async function chooseAgents(profile: TaskProfile, requested: number | und
 
 export const RUN_HELP = `usage: infinity run <task> [flags]
 
-<task>  a task of tasks/ (for example covertype), or the path of a form (.json or .ts) or of a module that exports a task package
+<task>  a bundled example (math-parity, math-odd-sum; covertype in the repository), or the path of a form (.json or .ts) or of a module that exports a task package
 Flags:
   --agents N          number of agents; always wins over the machine's recommendation (printed first)
   --tokens N          token budget
@@ -58,7 +58,8 @@ Flags:
   --runs-dir DIR      where runs are created (default runs)
   --resume DIR        continue a stopped run
   --view [--view-port N]  also serve the read-only run viewer while the run goes on (default port 4173)
-The model key is read from OPENCODE_API_KEY (COMMANDCODE_API_KEY with INFINITY_PROVIDER=commandcode) and never printed.`;
+The model: DEEPSEEK_API_KEY (the default provider); INFINITY_PROVIDER=openai with OPENAI_API_KEY, or anthropic with ANTHROPIC_API_KEY;
+INFINITY_MODEL replaces the provider's default model. The key is read once and never printed.`;
 
 export interface RunCommand {
   task: string;

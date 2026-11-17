@@ -29,6 +29,8 @@ export interface RunOptions {
   resume?: boolean;
   /** The user's stop. */
   signal?: AbortSignal;
+  /** The time limit of this start in minutes, when the caller set one (it stops the run through `signal`); only recorded. */
+  wallMinutes?: number;
   /** Deployment-owned environment for file and shell tools. It must enforce its own access and resource policy. */
   createEnvironment?: WorkerEnvironmentFactory;
   /** The CPU slot gate that heavy commands of code mode wait at (docs/16 section C); the same object the `slotGate` component reports on. Default: none. */
@@ -160,6 +162,8 @@ class Run {
       ceiling: this.task.agents,
       resumed: this.prior !== undefined,
       metricDirection: metricOf(this.task).direction,
+      ...(this.task.tokens === undefined ? {} : { tokenBudget: this.task.tokens }),
+      ...(this.options.wallMinutes ? { wallMinutes: this.options.wallMinutes } : {}),
     });
     try {
       for (const agent of Object.keys(this.prior?.ladder.live ?? {})) {
@@ -223,7 +227,8 @@ class Run {
         record: (event) => this.recorder.event(event),
       });
     }
-    this.hints = this.prior?.hints ?? (await this.plan());
+    // the task's own hints win over the planner: a person who split the work knows best
+    this.hints = this.prior?.hints ?? (this.task.hints && this.task.hints.length > 0 ? [...this.task.hints] : await this.plan());
   }
 
   private async plan(): Promise<string[]> {

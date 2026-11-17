@@ -6,13 +6,14 @@ import type { TaskPackage } from "../src/launch.ts";
 
 const ROOT = resolve(import.meta.dirname, "..");
 
-/** The file a name stands for: a folder of tasks/ (bare name), a folder with a task.ts or task.json, or a form or module file. */
+/** The file a name stands for: a folder of tasks/ (bare name), a folder with a task.ts, task.mts, task.js or task.json, or a form or module file. */
 function taskFile(name: string): string {
-  const bare = !name.includes("/") && !name.endsWith(".ts") && !name.endsWith(".js") && !name.endsWith(".json");
+  const bare = !name.includes("/") && !/\.(m?ts|m?js)$/.test(name) && !name.endsWith(".json");
   const path = bare ? resolve(ROOT, "tasks", name) : resolve(name);
   if (existsSync(path) && statSync(path).isDirectory()) {
-    for (const file of ["task.ts", "task.json"]) if (existsSync(join(path, file))) return join(path, file);
-    throw new Error(`${path} has no task.ts or task.json`);
+    // task.js: the bundled tasks of the published package are compiled (Node does not run TypeScript inside node_modules)
+    for (const file of ["task.ts", "task.mts", "task.js", "task.json"]) if (existsSync(join(path, file))) return join(path, file);
+    throw new Error(`${path} has no task.ts, task.mts, task.js or task.json`);
   }
   if (!existsSync(path))
     throw new Error(

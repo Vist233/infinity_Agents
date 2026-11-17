@@ -1,16 +1,16 @@
-{"type":"lifecycle","ts":1794454571262,"agent":1,"workDir":"/fixture/runs/synthetic/agents/001/work","commit":null,"event":"started","detail":""}
-{"type":"lifecycle","ts":1794454571349,"agent":2,"workDir":"/fixture/runs/synthetic/agents/002/work","commit":null,"event":"started","detail":""}
-{"type":"lifecycle","ts":1794454571421,"agent":3,"workDir":"/fixture/runs/synthetic/agents/003/work","commit":null,"event":"started","detail":""}
-{"type":"lifecycle","ts":1794454571423,"agent":4,"workDir":"/fixture/runs/synthetic/agents/004/work","commit":null,"event":"started","detail":""}
-{"type":"lifecycle","ts":1794454571557,"agent":5,"workDir":"/fixture/runs/synthetic/agents/005/work","commit":null,"event":"started","detail":""}
-{"type":"lifecycle","ts":1794454571559,"agent":6,"workDir":"/fixture/runs/synthetic/agents/006/work","commit":null,"event":"started","detail":""}
-{"type":"lifecycle","ts":1794454571562,"agent":7,"workDir":"/fixture/runs/synthetic/agents/007/work","commit":null,"event":"started","detail":""}
-{"type":"lifecycle","ts":1794454571564,"agent":8,"workDir":"/fixture/runs/synthetic/agents/008/work","commit":null,"event":"started","detail":""}
-{"type":"lifecycle","ts":1794454812026,"agent":2,"workDir":"/fixture/runs/synthetic/agents/002/work","commit":null,"event":"ended","detail":"cancelled: finish"}
-{"type":"lifecycle","ts":1794454812026,"agent":3,"workDir":"/fixture/runs/synthetic/agents/003/work","commit":null,"event":"ended","detail":"cancelled: finish"}
-{"type":"lifecycle","ts":1794454812026,"agent":1,"workDir":"/fixture/runs/synthetic/agents/001/work","commit":null,"event":"ended","detail":"cancelled: finish"}
-{"type":"lifecycle","ts":1794454812026,"agent":4,"workDir":"/fixture/runs/synthetic/agents/004/work","commit":null,"event":"ended","detail":"cancelled: finish"}
-{"type":"lifecycle","ts":1794454812027,"agent":5,"workDir":"/fixture/runs/synthetic/agents/005/work","commit":null,"event":"ended","detail":"cancelled: finish"}
-{"type":"lifecycle","ts":1794454812027,"agent":6,"workDir":"/fixture/runs/synthetic/agents/006/work","commit":null,"event":"ended","detail":"cancelled: finish"}
-{"type":"lifecycle","ts":1794454812027,"agent":7,"workDir":"/fixture/runs/synthetic/agents/007/work","commit":null,"event":"ended","detail":"cancelled: finish"}
-{"type":"lifecycle","ts":1794454812027,"agent":8,"workDir":"/fixture/runs/synthetic/agents/008/work","commit":null,"event":"ended","detail":"cancelled: finish"}
+{"type":"lifecycle","ts":1794454571262,"agent":1,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/001/work","commit":null,"event":"started","detail":""}
+{"type":"lifecycle","ts":1794454571349,"agent":2,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/002/work","commit":null,"event":"started","detail":""}
+{"type":"lifecycle","ts":1794454571421,"agent":3,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/003/work","commit":null,"event":"started","detail":""}
+{"type":"lifecycle","ts":1794454571423,"agent":4,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/004/work","commit":null,"event":"started","detail":""}
+{"type":"lifecycle","ts":1794454571557,"agent":5,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/005/work","commit":null,"event":"started","detail":""}
+{"type":"lifecycle","ts":1794454571559,"agent":6,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/006/work","commit":null,"event":"started","detail":""}
+{"type":"lifecycle","ts":1794454571562,"agent":7,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/007/work","commit":null,"event":"started","detail":""}
+{"type":"lifecycle","ts":1794454571564,"agent":8,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/008/work","commit":null,"event":"started","detail":""}
+{"type":"lifecycle","ts":1794454812026,"agent":2,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/002/work","commit":null,"event":"ended","detail":"cancelled: finish"}
+{"type":"lifecycle","ts":1794454812026,"agent":3,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/003/work","commit":null,"event":"ended","detail":"cancelled: finish"}
+{"type":"lifecycle","ts":1794454812026,"agent":1,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/001/work","commit":null,"event":"ended","detail":"cancelled: finish"}
+{"type":"lifecycle","ts":1794454812026,"agent":4,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/004/work","commit":null,"event":"ended","detail":"cancelled: finish"}
+{"type":"lifecycle","ts":1794454812027,"agent":5,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/005/work","commit":null,"event":"ended","detail":"cancelled: finish"}
+{"type":"lifecycle","ts":1794454812027,"agent":6,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/006/work","commit":null,"event":"ended","detail":"cancelled: finish"}
+{"type":"lifecycle","ts":1794454812027,"agent":7,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/007/work","commit":null,"event":"ended","detail":"cancelled: finish"}
+{"type":"lifecycle","ts":1794454812027,"agent":8,"workDir":"/tmp/infinity-agent.mqEOTR/runs/synthetic-load-2026-11-12T03-36-11-260Z/agents/008/work","commit":null,"event":"ended","detail":"cancelled: finish"}

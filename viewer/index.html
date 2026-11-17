@@ -21,31 +21,40 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 1280px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+  main { max-width: 1180px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
   header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
   h1 { font-size: 18px; margin: 0; }
   h2 { font-size: 14px; margin: 0 0 8px; }
   .sub { color: var(--muted); font-size: 12px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
-  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
-  .tile b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(160px, 45%), 1fr)); gap: 10px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  .tile b { display: block; font-size: 26px; font-variant-numeric: tabular-nums; line-height: 1.2; }
   .tile span { color: var(--muted); font-size: 12px; }
-  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); }
+  .pill { display: inline-block; padding: 1px 10px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); }
   .pill.running { color: var(--good); border-color: var(--good); }
   .pill.stopped { color: var(--warn); border-color: var(--warn); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; align-items: start; }
+  .attention { border-left: 3px solid var(--warn); }
+  .attention ul { margin: 0; padding-left: 18px; }
+  .attention li { margin: 2px 0; }
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); gap: 16px; align-items: start; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 16px; align-items: start; }
   svg { display: block; width: 100%; height: auto; overflow: visible; }
   svg text { fill: var(--muted); font-size: 11px; font-family: inherit; }
   .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
   .legend i { display: inline-block; width: 10px; height: 3px; margin-right: 4px; vertical-align: middle; border-radius: 2px; }
   .empty { color: var(--muted); font-size: 12px; padding: 8px 0; }
-  .wrap { overflow-x: auto; }
+  .wrap { overflow-x: auto; max-height: 460px; overflow-y: auto; }
   table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-  th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
-  th { color: var(--muted); font-weight: 500; cursor: pointer; position: sticky; top: 0; background: var(--card); user-select: none; }
-  td:last-child, th:last-child, td.l, th.l { text-align: left; }
-  .tall { max-height: 420px; overflow: auto; }
+  th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--card); }
+  td.l, th.l { text-align: left; white-space: normal; }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; background: var(--muted); vertical-align: middle; }
+  .dot.live { background: var(--good); }
+  .quiet { color: var(--muted); }
+  details.card > summary { cursor: pointer; font-weight: 600; }
+  details.card[open] > summary { margin-bottom: 12px; }
+  details .grid, details section { margin-top: 12px; }
   .item { border-bottom: 1px solid var(--grid); padding: 6px 0; }
   .item small { color: var(--muted); }
   .badge { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line); margin-right: 4px; }
@@ -53,7 +62,19 @@
   .badge.steer { color: var(--warn); border-color: var(--warn); }
   .tip { position: fixed; pointer-events: none; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 12px; display: none; z-index: 5; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
   select { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
-  .warnings { color: var(--warn); font-size: 12px; margin: 0; padding-left: 18px; }
+  .tall { max-height: 380px; overflow: auto; }
+  .result { display: grid; gap: 10px; }
+  .result .score { font-size: 40px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .result .who { color: var(--muted); }
+  .result dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
+  .result dt { color: var(--muted); }
+  .result dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+  .status { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; }
+  .status b { font-variant-numeric: tabular-nums; }
+  .bar { height: 4px; background: var(--grid); border-radius: 2px; overflow: hidden; margin-top: 8px; }
+  .bar i { display: block; height: 100%; background: var(--c1); }
+  .footnote { color: var(--muted); font-size: 12px; margin: 0; padding-left: 18px; }
 </style>
 </head>
 <body>
@@ -65,20 +86,24 @@
     </div>
     <div><label class="sub">Run <select id="runs"></select></label> <span id="state" class="pill"></span></div>
   </header>
-  <section class="tiles" id="tiles"></section>
-  <ul class="warnings" id="warnings"></ul>
-  <section class="card"><h2>Timeline: rung and agents</h2><div id="timeline"></div></section>
-  <section class="card"><h2>Scored submits</h2><div id="scores"></div></section>
-  <section><h2>Machine</h2><div class="grid" id="machine"></div></section>
-  <section class="card"><h2>Agents <span class="sub" id="agentsNote"></span></h2><div class="wrap tall"><table id="agents"></table></div></section>
-  <div class="grid">
-    <section class="card"><h2>Reviews and refusals <select id="evFilter"><option value="">all</option><option value="steer">steer</option><option value="error">error</option><option value="denied">refusals</option></select></h2><div class="tall" id="events"></div></section>
-    <section class="card"><h2>Leaderboard</h2><div class="wrap tall"><table id="board"></table></div></section>
+  <section class="card result" id="result"></section>
+  <section class="card" id="progress"></section>
+  <section class="card attention" id="attention" hidden><h2>Needs you</h2><ul id="attentionList"></ul></section>
+  <div class="two">
+    <section class="card"><h2>Score over time</h2><div id="scores"></div></section>
+    <section class="card"><h2>Agents, best first</h2><div class="wrap"><table id="board"></table></div></section>
   </div>
+  <details class="card" id="more">
+    <summary>Machine</summary>
+    <div class="grid" id="machine"></div>
+  </details>
+  <ul class="footnote" id="notes"></ul>
 </main>
 <div class="tip" id="tip"></div>
 <script>
 "use strict";
+// The page answers what a person running many agents on one task wants to know, in this order:
+// what is the best result and where is it; how far the run is and how much is left; is anything waiting on me; is it still getting better; who is ahead.
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const params = new URLSearchParams(location.search);
@@ -86,8 +111,8 @@ const runParam = params.get("run") || "";
 const q = (path) => fetch(path + (path.includes("?") ? "&" : "?") + "run=" + encodeURIComponent(runParam), { cache: "no-store" }).then((r) => r.json());
 
 let data = null;
-let sortKey = "agent";
-let sortDir = 1;
+/** An agent that has worked this long without a submit is worth a look (the agents are reminded at the same point). */
+const NO_SUBMIT_MINUTES = 20;
 
 function fmtDur(ms) {
   if (ms == null || !Number.isFinite(ms)) return "-";
@@ -193,63 +218,100 @@ function legend(items) {
 
 // ---------- rendering ----------
 function render() {
-  const { run, series, agents, events } = data;
+  const { run, series, agents } = data;
   const t0 = series.startedAt ?? run.startedAt;
   const live = run.state === "running";
   const endTs = run.endedAt ?? run.lastTs ?? t0;
   const t1 = Math.max(endTs || 0, (series.machine.at(-1) || {}).ts || 0, t0 + 60000);
+  const now = live ? Math.max(Date.now(), endTs) : endTs;
   document.title = `${run.task || "run"} - Infinity run viewer`;
-  $("title").textContent = run.task ? `Infinity run: ${run.task}` : "Infinity run";
-  $("subtitle").textContent = run.name + (run.endReason ? ` - ended: ${run.endReason}` : "");
-  const st = $("state"); st.textContent = run.state; st.className = "pill " + run.state;
-  const elapsed = live && t0 ? Math.max(Date.now() - t0, endTs - t0) : endTs - t0;
-  const tiles = [
-    ["Elapsed", fmtDur(elapsed)], ["Tokens", fmtNum(run.tokensUsed)], ["Best score", fmtScore(run.bestScore)],
-    ["Agents live", `${run.agentsLive} / ${run.agentsStarted}` + (run.ceiling ? ` (ceiling ${run.ceiling})` : "")],
-    ["Rung", run.rung ?? "-"], ["Scored submits", `${run.scoredSubmits} of ${run.submits}`], ["Reviews", run.reviews], ["Refusals", run.refusals],
-  ];
-  $("tiles").innerHTML = tiles.map(([k, v]) => `<div class="tile"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join("");
-  $("warnings").innerHTML = run.warnings.map((w) => `<li>${esc(w)}</li>`).join("");
+  $("title").textContent = run.task || "Infinity run";
+  $("subtitle").textContent = run.name;
+  const st = $("state"); st.textContent = run.state === "finished" && run.endReason ? `finished: ${run.endReason}` : run.state; st.className = "pill " + run.state;
 
-  const rungMarks = series.rungs.map((r) => ({ ts: r.ts, label: String(r.to) }));
-  if (run.endedAt) rungMarks.push({ ts: run.endedAt, label: "end" });
-  drawTimeline(series, t0, t1, rungMarks);
-  drawScores(series, t0, t1, rungMarks, run.metricDirection);
-  drawMachine(series, run, t0, t1, rungMarks);
-  drawAgents(agents, t0);
-  drawEvents(events, t0);
-  drawBoard(run.leaderboard);
+  drawResult(run, t0);
+  drawProgress(run, series, now, t0, live);
+  const items = attention(run, series, agents, now);
+  $("attention").hidden = items.length === 0;
+  $("attentionList").innerHTML = items.map((text) => `<li>${esc(text)}</li>`).join("");
+  drawScores(series, t0, t1, run.metricDirection);
+  drawBoard(run.leaderboard, agents, now, live);
+  if ($("more").open) drawMachine(series, run, t0, t1);
+  $("notes").innerHTML = run.warnings.map((w) => `<li>${esc(w)}</li>`).join("");
 }
 
-function drawTimeline(series, t0, t1, rungMarks) {
-  const rungPts = [[t0, series.initialRung], ...series.rungs.map((r) => [r.ts, r.to])];
-  const live = series.agentsLive;
-  const top = Math.max(2, ...rungPts.map((p) => p[1]), ...live.map((p) => p[1]));
-  const spec = {
-    h: 190, t0, t1, yMin: 0, yMax: top * 1.08, label: "rung and live agents over time",
-    series: [
-      { name: "rung (target agents)", color: "var(--c1)", pts: rungPts, step: true, w: 2 },
-      { name: "agents live", color: "var(--c2)", pts: live, step: true, w: 1.2, noExtend: true },
-    ],
-    marks: rungMarks,
-    bands: [],
-    points: [],
-  };
-  let on = null;
-  for (const b of series.brakes) { if (b.on) on = b.ts; else if (on !== null) { spec.bands.push([on, b.ts]); on = null; } }
-  if (on !== null) spec.bands.push([on, t1]);
-  const host = $("timeline");
-  host.innerHTML = `<div id="tlLegend"></div><div id="tlChart"></div>`;
-  $("tlLegend").innerHTML = legend([["rung (target agents)", "var(--c1)"], ["agents live", "var(--c2)"], ["throttle", "var(--bad)"], ["pressure brake", "var(--band)"], ["warning", "var(--warn)"]]);
-  const { x, y } = drawChart($("tlChart"), spec);
-  const svg = $("tlChart").firstElementChild;
-  let extra = "";
-  for (const t of series.throttles) extra += `<line x1="${x(t.ts)}" x2="${x(t.ts)}" y1="${y(0) - 8}" y2="${y(0)}" stroke="var(--bad)" stroke-width="2"><title>throttle ${t.delayMs} ms ${esc(t.cause)} at ${fmtMin(t.ts, t0)} min</title></line>`;
-  for (const w of series.warnings) extra += `<path d="M${x(w.ts) - 4} ${y(spec.yMax) - 2}h8l-4 7z" fill="var(--warn)"><title>${esc(w.message)}</title></path>`;
-  svg.querySelector(".hit").insertAdjacentHTML("beforebegin", extra);
+/** The deliverable: the best result, who made it, and how to get it back. */
+function drawResult(run, t0) {
+  const best = run.best;
+  if (!best) {
+    $("result").innerHTML = `<h2>Best result</h2><div class="score">-</div><div class="who">No scored result yet${run.submits ? ` (${run.submits} submits so far)` : ""}.</div>`;
+    return;
+  }
+  const short = best.commit ? best.commit.slice(0, 10) : "";
+  $("result").innerHTML =
+    `<h2>Best result</h2><div><span class="score">${esc(fmtScore(best.score))}</span>${best.selfReported ? ` <span class="quiet">self-reported</span>` : ""}</div>` +
+    `<div class="who">agent ${best.agent}${best.ts != null && t0 != null ? `, at minute ${Math.round((best.ts - t0) / 60000)}` : ""} · ${run.scoredSubmits} scored submits in all</div>` +
+    `<dl>${best.command ? `<dt>Command</dt><dd><code>${esc(best.command)}</code></dd>` : ""}` +
+    `${best.files.length ? `<dt>Files</dt><dd>${best.files.map((f) => `<code>${esc(f)}</code>`).join(" ")}</dd>` : ""}` +
+    `<dt>Folder</dt><dd><code>${esc(best.workDir)}</code>${short ? ` at commit <code>${esc(short)}</code>` : ""}</dd></dl>`;
 }
 
-function drawScores(series, t0, t1, rungMarks, direction) {
+/** How far the run is: time and tokens against their limits, the agents at work, the machine. */
+function drawProgress(run, series, now, t0, live) {
+  const elapsed = now - t0;
+  const parts = [];
+  const shares = [];
+  parts.push(`<span>${live ? "Running" : "Ran"} <b>${fmtDur(elapsed)}</b>${run.wallMinutes ? ` of ${fmtDur(run.wallMinutes * 60000)}` : ""}</span>`);
+  if (run.wallMinutes) shares.push(elapsed / (run.wallMinutes * 60000));
+  if (run.tokensUsed != null) {
+    parts.push(`<span><b>${fmtNum(run.tokensUsed)}</b>${run.tokenBudget ? ` of ${fmtNum(run.tokenBudget)}` : ""} tokens</span>`);
+    if (run.tokenBudget) shares.push(run.tokensUsed / run.tokenBudget);
+  }
+  parts.push(`<span><b>${run.agentsLive}</b> of ${run.agentsStarted} agents working</span>`);
+  const last = series.machine.at(-1) || {};
+  if (live && last.cpuBusy != null && now - last.ts < 5 * 60000) parts.push(`<span>machine CPU <b>${Math.round(last.cpuBusy * 100)}%</b></span>`);
+  const share = shares.length ? Math.min(1, Math.max(...shares)) : null;
+  $("progress").innerHTML = `<div class="status">${parts.join("")}</div>${share != null ? `<div class="bar" title="the limit that is closest"><i style="width:${(share * 100).toFixed(1)}%"></i></div>` : ""}`;
+}
+
+/** Only what a person can act on; empty when nothing. */
+function attention(run, series, agents, now) {
+  const out = [];
+  if (run.state === "stopped") out.push("Nothing was written for several minutes. Check the machine's CPU and the agents' folders before restarting anything: a long training writes no log lines.");
+  const silent = agents.filter((a) => a.endedAt == null && a.startedAt != null && a.submits === 0 && now - a.startedAt > NO_SUBMIT_MINUTES * 60000);
+  if (run.state === "running" && silent.length > 0)
+    out.push(`${silent.length === 1 ? "Agent" : "Agents"} ${silent.map((a) => a.agent).join(", ")} ${silent.length === 1 ? "has" : "have"} worked over ${NO_SUBMIT_MINUTES} minutes without a submit (they are reminded in every request).`);
+  const last = series.machine.at(-1) || {};
+  if (run.state === "running" && last.slotsWaiting > 0) out.push(`${last.slotsWaiting} heavy command${last.slotsWaiting === 1 ? " is" : "s are"} waiting for a CPU slot.`);
+  if (last.memUsedMb != null && last.memTotalMb && last.memUsedMb / last.memTotalMb > 0.9) out.push(`Memory is ${Math.round((last.memUsedMb / last.memTotalMb) * 100)}% used.`);
+  return out;
+}
+
+/** One table for the agents: the ranking, and when each agent last did something. */
+function drawBoard(ranking, agents, now, live) {
+  const byAgent = new Map(agents.map((a) => [a.agent, a]));
+  const ranked = ranking.map((r) => r.agent);
+  const rows = [...ranking, ...agents.filter((a) => !ranked.includes(a.agent)).map((a) => ({ rank: null, agent: a.agent, score: null, selfReported: false, submits: a.submits, errors: 0 }))];
+  if (rows.length === 0) {
+    $("board").innerHTML = `<tr><td class="l empty">No agent has started yet.</td></tr>`;
+    return;
+  }
+  const lastWords = (a) => (!a ? "" : a.endedAt != null ? "ended" : a.lastTs == null ? "started" : `${fmtDur(now - a.lastTs)} ago`);
+  $("board").innerHTML =
+    `<thead><tr><th>#</th><th class="l">Agent</th><th>Best</th><th>Submits</th><th class="l">Last seen</th></tr></thead><tbody>` +
+    rows
+      .map((r) => {
+        const a = byAgent.get(r.agent);
+        const working = live && a && a.startedAt != null && a.endedAt == null;
+        const score = r.score == null ? `<span class="quiet">-</span>` : `${fmtScore(r.score)}${r.selfReported ? ` <span class="quiet">self</span>` : ""}`;
+        const submits = `${r.submits}${r.errors ? ` <span class="quiet">(${r.errors} failed)</span>` : ""}`;
+        return `<tr><td>${r.rank ?? ""}</td><td class="l"><span class="dot${working ? " live" : ""}"></span>${r.agent}</td><td>${score}</td><td>${submits}</td><td class="l quiet">${esc(lastWords(a))}</td></tr>`;
+      })
+      .join("") +
+    `</tbody>`;
+}
+
+function drawScores(series, t0, t1, direction) {
   const host = $("scores");
   const ok = series.submits.filter((s) => s.score != null).sort((a, b) => a.ts - b.ts);
   if (ok.length === 0) {
@@ -263,7 +325,7 @@ function drawScores(series, t0, t1, rungMarks, direction) {
   const bestPts = ok.map((s) => [s.ts, (best = better(best, s.score))]);
   host.innerHTML = `<div id="scLegend"></div><div id="scChart"></div>`;
   $("scLegend").innerHTML = legend([["best so far", "var(--c3)"], ["submit (hollow: self-reported)", "var(--c1)"]]);
-  const spec = { h: 190, t0, t1, yMin: lo - pad, yMax: hi + pad, yFmt: (v) => String(Math.round(v * 1000) / 1000), label: "scored submits", marks: rungMarks, series: [{ name: "best so far", color: "var(--c3)", pts: bestPts, step: true, w: 1.6 }], points: [] };
+  const spec = { h: 190, t0, t1, yMin: lo - pad, yMax: hi + pad, yFmt: (v) => String(Math.round(v * 1000) / 1000), label: "scored submits", series: [{ name: "best so far", color: "var(--c3)", pts: bestPts, step: true, w: 1.6 }], points: [] };
   const { x, y } = drawChart($("scChart"), spec);
   let pts = "";
   for (const s of ok) {
@@ -272,75 +334,38 @@ function drawScores(series, t0, t1, rungMarks, direction) {
   $("scChart").firstElementChild.querySelector(".hit").insertAdjacentHTML("beforebegin", pts);
 }
 
-function drawMachine(series, run, t0, t1, rungMarks) {
+/** The machine in three charts: is the CPU used, is memory short, are commands queueing for a slot (and the GPU when there is one). */
+function drawMachine(series, run, t0, t1) {
   const host = $("machine");
   const M = series.machine;
-  const facts = run.facts || {};
-  const cores = (M.find((s) => s.cores != null) || {}).cores ?? facts.cores ?? null;
   const col = (key, f = (v) => v) => M.map((s) => [s.ts, s[key] == null ? null : f(s[key])]);
   const has = (key) => M.some((s) => s[key] != null);
   const memTotalGb = (M.find((s) => s.memTotalMb != null) || {}).memTotalMb / 1024 || null;
-  const gpuTotal = facts.gpuMemTotalMb || null;
-  const first = M[0] ? M[0].ts : null;
+  const gpuTotal = (run.facts || {}).gpuMemTotalMb || null;
   const specs = [
     { id: "m-cpu", title: "CPU busy", ok: has("cpuBusy"), yMax: 100, yFmt: (v) => Math.round(v) + "%", series: [{ name: "CPU busy", color: "var(--c1)", pts: col("cpuBusy", (v) => v * 100) }] },
-    { id: "m-load", title: "Load per core (1 min)", ok: has("loadPerCore"), yFmt: (v) => (Math.round(v * 100) / 100).toString(), hl: [{ v: 1 }], series: [{ name: "load / core", color: "var(--c2)", pts: col("loadPerCore") }] },
-    { id: "m-psi", title: "CPU pressure (some, %)", ok: has("cpuPressure10") || has("cpuPressure60"), yFmt: (v) => Math.round(v) + "%", series: [{ name: "10 s", color: "var(--c4)", pts: col("cpuPressure10") }, { name: "60 s", color: "var(--c3)", pts: col("cpuPressure60") }] },
-    { id: "m-mem", title: "Memory used (GB)", ok: has("memUsedMb"), yMax: memTotalGb || undefined, yFmt: (v) => Math.round(v) + " GB", series: [{ name: "used", color: "var(--c1)", pts: col("memUsedMb", (v) => v / 1024) }] },
+    { id: "m-mem", title: "Memory used", ok: has("memUsedMb"), yMax: memTotalGb || undefined, yFmt: (v) => Math.round(v) + " GB", series: [{ name: "used", color: "var(--c1)", pts: col("memUsedMb", (v) => v / 1024) }] },
+    { id: "m-slots", title: "Commands: running and waiting for a slot", ok: has("slotsInUse") || has("slotsWaiting"), step: true, yFmt: (v) => String(Math.round(v)), series: [{ name: "running", color: "var(--c1)", pts: col("slotsInUse") }, { name: "waiting", color: "var(--bad)", pts: col("slotsWaiting") }] },
     { id: "m-gpu", title: "GPU", ok: has("gpuUtil") || has("gpuMemMb"), yMax: 100, yFmt: (v) => Math.round(v) + "%", series: [{ name: "GPU util", color: "var(--c3)", pts: col("gpuUtil") }, ...(gpuTotal ? [{ name: "GPU memory", color: "var(--c4)", pts: col("gpuMemMb", (v) => (v / gpuTotal) * 100) }] : [])] },
-    { id: "m-slots", title: "Slots in use and waiting", ok: has("slotsInUse") || has("slotsWaiting") || has("gpuSlotsInUse"), step: true, yFmt: (v) => String(Math.round(v)), series: [{ name: "CPU slots in use", color: "var(--c1)", pts: col("slotsInUse") }, { name: "CPU waiting", color: "var(--bad)", pts: col("slotsWaiting") }, { name: "GPU in use", color: "var(--c3)", pts: col("gpuSlotsInUse") }, { name: "GPU waiting", color: "var(--c4)", pts: col("gpuSlotsWaiting") }] },
-    { id: "m-run", title: "Run's own CPU (cores)", ok: has("runCpuCores"), yFmt: (v) => (Math.round(v * 10) / 10).toString(), hl: cores ? [{ v: cores, color: "var(--bad)" }] : [], series: [{ name: "run CPU cores", color: "var(--c2)", pts: col("runCpuCores") }] },
-  ];
-  host.innerHTML = specs.map((s) => `<div class="card"><h2>${esc(s.title)}</h2>${s.ok ? legend(s.series.filter((x) => x.pts.some((p) => p[1] != null)).map((x) => [x.name, x.color])) : ""}<div id="${s.id}">${s.ok ? "" : `<div class="empty">Not recorded in this run${M.length ? "" : " (no machine readings)"}.</div>`}</div>${s.ok && first - t0 > 120000 ? `<div class="sub">Readings start at minute ${Math.round((first - t0) / 60000)}.</div>` : ""}</div>`).join("");
-  for (const s of specs) {
-    if (!s.ok) continue;
-    const vals = s.series.flatMap((x) => x.pts.map((p) => p[1])).filter((v) => v != null);
-    const hi = Math.max(...vals, ...(s.hl || []).map((h) => h.v), 1e-9);
-    const yMax = s.yMax || hi * 1.1;
-    drawChart($(s.id), { h: 140, t0, t1, yMin: 0, yMax: Math.max(yMax, hi * 1.02), yFmt: s.yFmt, hlines: s.hl || [], marks: rungMarks, series: s.series.map((x) => ({ ...x, step: s.step, noExtend: true, w: 1.4 })), label: s.title });
+  ].filter((s) => s.ok);
+  if (specs.length === 0) {
+    host.innerHTML = `<div class="empty">No machine readings in this run.</div>`;
+    return;
   }
-}
-
-function drawAgents(agents, t0) {
-  $("agentsNote").textContent = `${agents.length} agents; click a column to sort`;
-  const cols = [
-    ["agent", "Agent", (a) => a.agent], ["startedAt", "Started (min)", (a) => fmtMin(a.startedAt, t0)], ["endedAt", "Ended (min)", (a) => fmtMin(a.endedAt, t0)],
-    ["commits", "Commits", (a) => a.commits], ["submits", "Submits", (a) => a.submits], ["bestScore", "Best score", (a) => fmtScore(a.bestScore)],
-    ["reviews", "Reviews", (a) => a.reviews], ["denied", "Refused", (a) => a.denied], ["lastTs", "Last event", (a) => `${fmtMin(a.lastTs, t0)} min ${a.lastKind}`],
-  ];
-  const rows = [...agents].sort((a, b) => ((a[sortKey] ?? -Infinity) - (b[sortKey] ?? -Infinity)) * sortDir || a.agent - b.agent);
-  $("agents").innerHTML = `<thead><tr>${cols.map((c, i) => `<th data-k="${c[0]}" class="${i === cols.length - 1 ? "l" : ""}">${esc(c[1])}${c[0] === sortKey ? (sortDir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead><tbody>${rows.map((a) => `<tr>${cols.map((c, i) => `<td class="${i === cols.length - 1 ? "l" : ""}">${esc(c[2](a))}</td>`).join("")}</tr>`).join("")}</tbody>`;
-  $("agents").querySelectorAll("th").forEach((th) => th.addEventListener("click", () => {
-    const k = th.dataset.k;
-    if (k === sortKey) sortDir = -sortDir; else { sortKey = k; sortDir = 1; }
-    drawAgents(data.agents, t0);
-  }));
-}
-
-function drawEvents(events, t0) {
-  const filter = $("evFilter").value;
-  const items = events.filter((e) => (e.type === "review" || e.type === "action_denied") && (filter === "" || (filter === "denied" ? e.type === "action_denied" : e.type === "review" && e.outcome === filter)));
-  const shown = items.slice(-300).reverse();
-  $("events").innerHTML = (items.length > shown.length ? `<div class="sub">Showing the newest ${shown.length} of ${items.length}.</div>` : "") +
-    (shown.map((e) => {
-      const denied = e.type === "action_denied";
-      const kind = denied ? "denied" : e.outcome || "review";
-      const text = denied ? `${e.tool || ""}: ${e.reason || ""}` : e.steer || e.summary || e.text || "";
-      return `<div class="item"><small>${fmtMin(e.ts, t0)} min, agent ${esc(e.agent)}</small> <span class="badge ${esc(kind)}">${esc(kind)}</span>${esc(text)}</div>`;
-    }).join("") || `<div class="empty">None.</div>`);
-}
-
-function drawBoard(rows) {
-  $("board").innerHTML = rows.length === 0 ? `<tr><td class="l">No leaderboard file yet.</td></tr>` :
-    `<thead><tr><th>#</th><th>Agent</th><th>Score</th><th>Submits</th><th class="l">Errors</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${r.rank}</td><td>${r.agent}</td><td>${fmtScore(r.score)}${r.selfReported ? " (self)" : ""}</td><td>${r.submits}</td><td class="l">${r.errors}</td></tr>`).join("")}</tbody>`;
+  host.innerHTML = specs.map((s) => `<div><h2>${esc(s.title)}</h2>${s.series.length > 1 ? legend(s.series.map((x) => [x.name, x.color])) : ""}<div id="${s.id}"></div></div>`).join("");
+  for (const s of specs) {
+    const vals = s.series.flatMap((x) => x.pts.map((p) => p[1])).filter((v) => v != null);
+    const hi = Math.max(...vals, 1e-9);
+    drawChart($(s.id), { h: 130, t0, t1, yMin: 0, yMax: Math.max(s.yMax || hi * 1.1, hi * 1.02), yFmt: s.yFmt, series: s.series.map((x) => ({ ...x, step: s.step, noExtend: true, w: 1.4 })), label: s.title });
+  }
 }
 
 // ---------- loading ----------
 async function load() {
   try {
-    const [run, series, agents, events] = await Promise.all([q("/api/run"), q("/api/series"), q("/api/agents"), q("/api/events?type=review,action_denied&limit=2000")]);
+    const [run, series, agents] = await Promise.all([q("/api/run"), q("/api/series"), q("/api/agents")]);
     if (run.error) { $("subtitle").textContent = run.error; return; }
-    data = { run, series, agents, events };
+    data = { run, series, agents };
     render();
   } catch (e) { $("subtitle").textContent = "cannot reach the viewer server: " + e; }
 }
@@ -363,7 +388,7 @@ function stream() {
     es.onerror = () => { es.close(); setTimeout(stream, 5000); };
   } catch (e) { setInterval(load, 5000); }
 }
-$("evFilter").addEventListener("change", () => data && drawEvents(data.events, data.series.startedAt));
+$("more").addEventListener("toggle", () => data && render());
 let resizeTimer = null;
 addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => data && render(), 150); });
 loadRuns().then(load).then(stream);

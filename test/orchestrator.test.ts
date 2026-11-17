@@ -33,6 +33,18 @@ const task = (overrides: Partial<TaskDefinition> = {}) =>
 const HINTS = ["h1", "h2", "h3", "h4"];
 
 describe("runTask with scripted agents", () => {
+  it("the task's own hints go to the agents in order, and the planner is not asked", async () => {
+    // the planner of the scripted model would give h2 to agent 2; the task gives it to agent 1
+    const model = createScriptedModel({ hints: HINTS, isGood: (hint) => hint === "h2" });
+    const outcome = await runTask(task({ hints: ["h2", "h1", "h3", "h4"] }), {
+      createClient: () => model,
+      mode: mathModeWith({ verifier: fakeVerifier }),
+      runDir: join(root, "run"),
+    });
+    expect(outcome.reason).toBe("target");
+    expect(provedAgents(outcome.runDir)).toEqual([1]);
+  });
+
   it("stops at the first accepted proof: marker, ledger, events, report, git history", async () => {
     const model = createScriptedModel({ hints: HINTS, isGood: (hint) => hint === "h2" });
     const outcome = await runTask(task(), { createClient: () => model, mode: mathModeWith({ verifier: fakeVerifier }), runDir: join(root, "run") });

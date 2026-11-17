@@ -1,6 +1,6 @@
-# infinity-agent (working name)
+# Infinity (`sakura-infinity`)
 
-Run many agents (1 to 100) in parallel on one task and rank what they produce. Built on the [Sakura agent framework](https://www.npmjs.com/package/sakura-agent). A task is a small TypeScript package; one command (`infinity run <task>`) or one library call (`startRun`) runs it. It runs on the machine where it is started; for a remote machine, install and run it there.
+Run many agents (1 to 100) in parallel on one task and keep the best result. Built on the [Sakura agent framework](https://www.npmjs.com/package/sakura-agent). A task is a small TypeScript package; one command (`infinity run <task>`) or one library call (`startRun`) runs it. It runs on the machine where it is started; for a remote machine, install and run it there.
 
 There is one kind of task: agents improve a result and every submit is scored. What differs is the **tools** the agents get:
 
@@ -8,6 +8,25 @@ There is one kind of task: agents improve a result and every submit is scored. W
 - **lean** (the `math` preset): file tools and a `lean` check; the evaluator is the Lean verifier (score 1 for an accepted proof), and the run ends at the first proof the local Lean accepts.
 
 The test suite covers both tool kits. Real-model runs have also produced an accepted Lean proof and a scored Covertype submission.
+
+## Quick start
+
+You need Node 24 or newer, and a key of DeepSeek, OpenAI or Anthropic. Math tasks also need Lean 4 (`curl https://elan.lean-lang.org/elan-init.sh -sSf | sh`); code tasks need whatever your evaluator runs (Python for the template).
+
+```sh
+npm install -g sakura-infinity
+export DEEPSEEK_API_KEY=...                      # or INFINITY_PROVIDER=openai with OPENAI_API_KEY, or anthropic with ANTHROPIC_API_KEY
+
+infinity run math-parity --agents 3 --view       # a bundled example: prove "n % 2 = 0 or n % 2 = 1"; ends at the first accepted proof
+
+infinity new code my-task                        # my-task/task.mts (the form) and my-task/evaluate.py (an example scorer)
+# edit the prompt in task.mts and the scoring in evaluate.py, then:
+infinity run ./my-task --agents 4 --wall-minutes 30 --view
+```
+
+`--view` opens the run page at `http://127.0.0.1:4173/`: the best result first (score, agent, command, files, folder, commit), then time and tokens against their limits, what needs you, the score over time and the agents. The best solution is a Git commit in the agent's folder; the page shows where. `infinity --help` lists every flag; `infinity recommend --write machine.json` saves what this computer can carry.
+
+What a real install did on 2026-11-16 (macOS, DeepSeek): `math-parity` with one agent proved the statement for 9,104 tokens; the code template with one agent reached the top score of 100 and stopped at its 300,000-token budget. No key was written into either run.
 
 ## Architecture
 
@@ -99,22 +118,24 @@ sequenceDiagram
 
 A run starts by hiding the labels, then raises the number of live agents rung by rung while the provider does not throttle. Every submission is checked by the mode (Lean for math, your evaluator for code) and written to the ledger, which feeds the leaderboard and the report. The run ends by a stop rule or by the user; the agents are stopped, the labels are put back, and the final report is written.
 
+More detail: `docs/archive/02-architecture-draft.md`, `docs/13-design-review.md`, `docs/18-target-architecture.md`.
+
 ## How to run a test
 
-All commands are run in the `infinity-agent/` directory.
+The sections below work from a clone of the repository (for development, and for the Covertype example, which prepares a data set next to the repository). From a clone, `node bin/infinity.ts` takes the place of `infinity`. All commands are run in the repository's directory.
 
-### 1. Install
+### 1. Install from the repository
 
 You need Node 24 or newer and git. For math tasks you need Lean 4 (`curl https://elan.lean-lang.org/elan-init.sh -sSf | sh`; the program checks `lean --version` and `lake --version` at start and prints this command if they are missing; Mathlib is not needed). For the code task you need Python 3 with numpy, pandas and scikit-learn.
 
 ```sh
-npm ci
+npm install                          # sakura-agent comes from npm
 npm run check                        # types, lint, format, tests (about 3 minutes); optional
 ```
 
 ### Install on another machine
 
-Use the same commit on each machine when you need to reproduce a run.
+Clone the public repository after the update has been pushed. Use the same commit on each machine when you need to reproduce a run.
 
 ```sh
 git clone https://github.com/Vist233/infinity_Agents.git infinity-agent
@@ -135,12 +156,13 @@ Paths in the form are relative to the form file. Install the evaluator's depende
 
 ### 2. Configure the model
 
-The model is DeepSeek through a provider; the key is read from the environment once, removed from it, and never printed or written.
+The providers are the official APIs of DeepSeek (the default), OpenAI and Anthropic. The key is read from the environment once, removed from it (the agents' commands never see it), and never printed or written.
 
 ```sh
-export OPENCODE_API_KEY=...                                  # default provider (OpenCode Go)
-# or, when that quota is used up:
-export INFINITY_PROVIDER=commandcode COMMANDCODE_API_KEY=... # Command Code
+export DEEPSEEK_API_KEY=...                                   # default: DeepSeek, model deepseek-flash
+export INFINITY_PROVIDER=openai OPENAI_API_KEY=...            # or OpenAI (gpt-5)
+export INFINITY_PROVIDER=anthropic ANTHROPIC_API_KEY=...      # or Anthropic (claude-sonnet-5-5)
+export INFINITY_MODEL=...                                     # optional: another model of the chosen provider
 ```
 
 ### 3. Run a math task
@@ -182,7 +204,7 @@ The form's fields and the rules for a good evaluator are in [AGENT-GUIDE.md](AGE
 node bin/infinity.ts view runs
 ```
 
-On a remote machine forward the port yourself (`ssh -L 4173:127.0.0.1:4173 host`).
+On a remote machine forward the port (`ssh -L 4173:127.0.0.1:4173 host`), or show it to others with a token: `infinity view runs --host 0.0.0.0 --token <secret>` (or `INFINITY_VIEW_TOKEN`); open it once with `?token=<secret>`. With a token any Host is accepted, so a reverse proxy works without rewriting it.
 
 ### 7. Read the results
 
@@ -190,7 +212,7 @@ Each run writes `runs/<task>-<time>/`:
 
 | File | What it holds |
 |---|---|
-| `report/report.html` | leaderboard, score over time, reviews, warnings; rewritten at each rung change and at the end |
+| `report/report.html` | leaderboard, score over time, reviews, warnings; a snapshot, rewritten at most once a minute after results, at each rung change and at the end (the viewer ranks live from the ledger) |
 | `report/leaderboard.csv` | one row per scored result: agent, score, commit, work directory |
 | `ledger.jsonl` | what each agent did; `result` lines are submissions |
 | `events.jsonl` | rungs, throttles, reviews, refusals, warnings, `run_end` |
@@ -198,7 +220,7 @@ Each run writes `runs/<task>-<time>/`:
 | `run-facts.json`, `state.json` | the command line and the facts of the run; the state for resuming |
 | `agents/NNN/work/` | one Git repository per agent, a commit after every turn; the best solution is the commit named in the first row of the leaderboard (`git show <commit>`) |
 
-The last line printed is the outcome, for example `{"reason":"target","tokensUsed":8781,"bestScore":1}` (a proof task scores 1 for an accepted proof and ends at the first one). Check that no key is in the run: `grep -rlF -- "$OPENCODE_API_KEY" runs/<run> | wc -l` must print 0.
+The last line printed is the outcome, for example `{"reason":"target","tokensUsed":8781,"bestScore":1}` (a proof task scores 1 for an accepted proof and ends at the first one). Check that no key is in the run: `grep -rlF -- "$DEEPSEEK_API_KEY" runs/<run> | wc -l` must print 0.
 
 ### 8. Stop and resume
 
@@ -244,11 +266,11 @@ const tools = createInfinityTools({ packs: [covertype], model });   // infinity_
 
 ## Shell tasks (the code preset)
 
-Every agent has `read`, `write`, `edit`, `bash` and `submit`. The submit records the command, listed files and Git commit. The evaluator scores it with the hidden data. A deployment can supply a Sakura tool environment through `INFINITY_WORKER_ENVIRONMENT` or `startRun(..., { createEnvironment })` to control shell access and accelerators.
+Every agent has `read`, `write`, `edit`, `bash` and `submit`; the submit is command + listed files + commit, scored by your evaluator on data the agents cannot see. Plans and decisions: `docs/05-general-mode-plan.md`, `docs/10-branch-review-and-first-ml-run-plan.md`, `docs/decisions.md`. A deployment can supply a Sakura tool environment through `INFINITY_WORKER_ENVIRONMENT` or `runTask(..., { createEnvironment })` to control shell access and accelerators (`docs/11-runbook.md`).
 
 - **Branch review (optional):** every few minutes each agent's conversation is forked; a reviewer with the same model, system text and tools (so the provider's cache applies) may only `read` files in the agent's directory and says `OK` or gives short advice, which is steered into the agent marked as not coming from the user. It is not a gatekeeper and its benefit is not measured. It costs tokens: in the one real run, reviews were about half of the tokens counted.
 - **Safety review (`review`):** the framework's review plugin judges risky commands; in front of it Infinity's rules refuse pushing, ssh, uploads, killing by name, credential files, the hidden data, other agents' directories and the run's own files. `review: false` switches it off and the report says so.
 - **Hidden data:** moved away with a journal while the agents run and put back at the end (also on Ctrl-C and on a crash). The evaluator gets the private path. Even with a profile, the evaluator must not return hidden labels in its answer, and a hidden split that can be recomputed from public data is not hidden (covertype is public: the task forbids looking it up, which the rules and the reviewer enforce only as far as they notice).
-- Set the agent count with `--agents` and the number of concurrent heavy commands with `--slots`. Use `infinity recommend` to see the suggested settings.
+- The number of agents is yours to choose; the report only gives a hint (`docs/11-runbook.md`, "How many agents?"). Run-side limits (slots, thread limits, cleanup) are described in `docs/16-capacity-and-command-limits.md`. Where things stand: `docs/08-current-state.md`.
 
-Tests: `npm test` (uses real Lean when it is installed), `npm run check` (types, lint, format, tests), `npm run coverage`.
+Tests: `npm test` (about 3 minutes; uses real Lean when it is installed), `npm run check` (types, lint, format, tests), `npm run coverage`. Real-run evidence: `docs/test-report.md`.

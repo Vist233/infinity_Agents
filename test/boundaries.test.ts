@@ -26,6 +26,7 @@ const LEAVES = [
   "run-layout.ts",
   "task.ts",
   "evaluation.ts",
+  "slot-leases.ts",
 ];
 
 /** The core: the run itself (ladder, gate, budget, stuck detection, fleet, records and reports) and the oversight of agents. */
@@ -58,6 +59,7 @@ const CORE = [
 /** The modes: what a task is (prompts, tools, evaluator, hidden data, review rules). */
 const MODES = [
   "lean-kit.ts",
+  "run-notes.ts",
   "shell-kit.ts",
   "task-mode.ts",
   "hidden-keeper.ts",
