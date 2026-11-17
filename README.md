@@ -11,7 +11,7 @@ The test suite covers both tool kits. Real-model runs have also produced an acce
 
 ## Quick start
 
-You need Node 24 or newer, and a key of DeepSeek, OpenAI or Anthropic. Math tasks also need Lean 4 (`curl https://elan.lean-lang.org/elan-init.sh -sSf | sh`); code tasks need whatever your evaluator runs (Python for the template).
+You need Node 22.18 or newer, and a key of DeepSeek, OpenAI or Anthropic. Math tasks also need Lean 4 (`curl https://elan.lean-lang.org/elan-init.sh -sSf | sh`); code tasks need whatever your evaluator runs (Python for the template).
 
 ```sh
 npm install -g sakura-infinity
@@ -126,7 +126,7 @@ The sections below work from a clone of the repository (for development, and for
 
 ### 1. Install from the repository
 
-You need Node 24 or newer and git. For math tasks you need Lean 4 (`curl https://elan.lean-lang.org/elan-init.sh -sSf | sh`; the program checks `lean --version` and `lake --version` at start and prints this command if they are missing; Mathlib is not needed). For the code task you need Python 3 with numpy, pandas and scikit-learn.
+You need Node 22.18 or newer and git. For math tasks you need Lean 4 (`curl https://elan.lean-lang.org/elan-init.sh -sSf | sh`; the program checks `lean --version` and `lake --version` at start and prints this command if they are missing; Mathlib is not needed). For the code task you need Python 3 with numpy, pandas and scikit-learn.
 
 ```sh
 npm install                          # sakura-agent comes from npm
@@ -143,7 +143,7 @@ cd infinity-agent
 npm ci
 ```
 
-GitHub supplies the source. The lockfile supplies the dependency versions. A GitHub Release is optional. Keep your own task, input data and credentials on the machine that will run the agents. Use Node 24 or later and Git. Use Linux for host monitoring and command limits.
+GitHub supplies the source. The lockfile supplies the dependency versions. A GitHub Release is optional. Keep your own task, input data and credentials on the machine that will run the agents. Use Node 22.18 or later and Git. Use Linux for host monitoring and command limits.
 
 With your task and evaluator in `../my-task/`, configure the model as shown below and run:
 
