@@ -6,6 +6,7 @@ import type { Gate } from "./gate.ts";
 import { type AgentEnd, type CancelReason, afterRun } from "./worker-policy.ts";
 import type { AgentSetup, Submission } from "./mode.ts";
 import type { ReviewTarget } from "./review-run.ts";
+import { handoffTool } from "./handoff.ts";
 import type { RunLayout } from "./run-layout.ts";
 import { commitAll, createWorkDir, headCommit } from "./work-repo.ts";
 
@@ -132,7 +133,7 @@ export function startWorker(deps: WorkerDeps): AgentWorker {
           model: client,
           cwd: workDir,
           ...(deps.createEnvironment ? { environment: deps.createEnvironment({ workDir, sharedDir: layout.sharedDir }) } : { confine: deps.setup.confine }),
-          tools: [...deps.setup.builtinTools, ...tools],
+          tools: [...deps.setup.builtinTools, ...tools, handoffTool(layout.root, number, workDir)],
           ...(deps.setup.bashSoftTimeoutMs === undefined ? {} : { bashSoftTimeoutMs: deps.setup.bashSoftTimeoutMs }),
           plugins,
           rules: deps.setup.rules,

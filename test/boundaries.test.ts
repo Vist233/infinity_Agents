@@ -27,6 +27,7 @@ const LEAVES = [
   "task.ts",
   "evaluation.ts",
   "slot-leases.ts",
+  "handoff.ts",
 ];
 
 /** The core: the run itself (ladder, gate, budget, stuck detection, fleet, records and reports) and the oversight of agents. */
