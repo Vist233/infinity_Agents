@@ -1,5 +1,7 @@
 # Infinity
 
+[English](README.md) · [简体中文](README.zh-CN.md)
+
 [![npm](https://img.shields.io/npm/v/sakura-infinity)](https://www.npmjs.com/package/sakura-infinity)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22.18-3c873a)](package.json)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)

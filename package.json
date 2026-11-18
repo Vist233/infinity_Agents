@@ -49,6 +49,7 @@
   "files": [
     "dist",
     "README.md",
+    "README.zh-CN.md",
     "AGENT-GUIDE.md",
     "LICENSE"
   ]
