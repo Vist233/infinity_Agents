@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./assets/readme-banner.png" alt="Infinity — Long-horizon research that runs to completion." width="100%" />
+</p>
+
 # Infinity
 
 [English](README.md) · [简体中文](README.zh-CN.md)
